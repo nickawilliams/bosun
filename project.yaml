@@ -1,0 +1,7 @@
+binary: bosun
+description: Automate SDLC lifecycle tasks across issue trackers, version control, CI/CD, and notification systems.
+homepage: https://github.com/rogwilco/bosun
+license: BSD-3-Clause
+maintainer:
+  name: Nick Williams
+  email: nickawilliams@users.noreply.github.com
