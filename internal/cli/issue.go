@@ -45,6 +45,11 @@ func resolveIssue(cmd *cobra.Command) (string, error) {
 		return issue, nil
 	}
 
+	// (5) Interactive prompt (terminal only).
+	if issue := promptRequired("Issue"); issue != "" {
+		return issue, nil
+	}
+
 	return "", fmt.Errorf(
 		"issue not specified: use --issue, set BOSUN_ISSUE, or run from a workspace",
 	)

@@ -64,7 +64,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 
 		if interactive {
-			input := prompt(scanner,
+			input := promptValue(scanner,
 				"Repo patterns (comma-separated globs, e.g. ./* or ~/Projects/myorg/*)",
 				firstNonEmpty(detectedGlob, "./*"))
 			for _, g := range strings.Split(input, ",") {
@@ -79,7 +79,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Prompt for globs if we still have none and aren't in interactive mode.
 	if len(repoGlobs) == 0 && !interactive {
-		input := prompt(scanner,
+		input := promptValue(scanner,
 			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
 			"")
 		if input != "" {
@@ -97,7 +97,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		defaultWS := "_workspaces"
 
 		if interactive {
-			wsRoot = prompt(scanner,
+			wsRoot = promptValue(scanner,
 				"Workspace root (where workspaces are created)",
 				defaultWS)
 		} else {
@@ -157,24 +157,6 @@ func detectRepos(dir string) []string {
 		}
 	}
 	return repos
-}
-
-// prompt displays a prompt and returns the user's input, or the default value
-// if the user enters nothing.
-func prompt(scanner *bufio.Scanner, label, defaultVal string) string {
-	if defaultVal != "" {
-		fmt.Printf("%s [%s]: ", label, defaultVal)
-	} else {
-		fmt.Printf("%s: ", label)
-	}
-
-	if scanner.Scan() {
-		input := strings.TrimSpace(scanner.Text())
-		if input != "" {
-			return input
-		}
-	}
-	return defaultVal
 }
 
 // firstNonEmpty returns the first non-empty string from the arguments.
