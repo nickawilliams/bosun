@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/rogwilco/bosun/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -13,6 +14,9 @@ func NewRootCmd(version string) *cobra.Command {
 		Short:         "Automate SDLC lifecycle tasks",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return config.Load()
+		},
 	}
 
 	cmd.Flags().BoolP("version", "v", false, "print version information")
