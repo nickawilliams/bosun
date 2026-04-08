@@ -1,8 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -15,10 +14,10 @@ func newReviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("[stub] Would submit %s for review\n", issue)
-			fmt.Println("  - Create pull request(s)")
-			fmt.Println("  - Notify review channel")
-			fmt.Println("  - Set issue status to Review")
+			ui.Muted("[stub] Would submit %s for review", issue)
+			ui.Muted("  - Create pull request(s)")
+			ui.Muted("  - Notify review channel")
+			ui.Muted("  - Set issue status to Review")
 			return nil
 		},
 	}

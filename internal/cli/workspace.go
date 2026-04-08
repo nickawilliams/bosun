@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -45,7 +45,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would create workspace %q for repos %v (from-head: %v)\n",
+				ui.DryRun("Would create workspace %q for repos %v (from-head: %v)",
 					name, repoNames, fromHead)
 				return nil
 			}
@@ -60,11 +60,14 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				return err
 			}
 
-			if err := mgr.Create(context.Background(), name, repos, fromHead); err != nil {
+			err = ui.WithSpinner("Creating workspace...", func() error {
+				return mgr.Create(context.Background(), name, repos, fromHead)
+			})
+			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Created workspace %q\n", name)
+			ui.Success("Created workspace %q", name)
 			return nil
 		},
 	}
@@ -88,7 +91,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			repoNames := args[1:]
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would add repos %v to workspace %q\n", repoNames, name)
+				ui.DryRun("Would add repos %v to workspace %q", repoNames, name)
 				return nil
 			}
 
@@ -102,11 +105,14 @@ func newWorkspaceAddCmd() *cobra.Command {
 				return err
 			}
 
-			if err := mgr.Add(context.Background(), name, repos, fromHead); err != nil {
+			err = ui.WithSpinner("Adding repos...", func() error {
+				return mgr.Add(context.Background(), name, repos, fromHead)
+			})
+			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Added repos to workspace %q\n", name)
+			ui.Success("Added repos to workspace %q", name)
 			return nil
 		},
 	}
@@ -137,18 +143,25 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			}
 
 			if len(statuses) == 0 {
-				fmt.Printf("No repos found in workspace %q\n", name)
+				ui.Warning("No repos found in workspace %q", name)
 				return nil
 			}
 
-			fmt.Printf("Workspace: %s\n\n", name)
+			ui.Bold("Workspace: %s", name)
+
+			table := ui.NewTable(
+				ui.Column{Header: "Repo"},
+				ui.Column{Header: "Branch"},
+				ui.Column{Header: "Status"},
+			)
 			for _, s := range statuses {
 				state := "clean"
 				if s.Dirty {
 					state = "dirty"
 				}
-				fmt.Printf("  %-20s %-40s %s\n", s.Name, s.Branch, state)
+				table.AddRow(s.Name, s.Branch, state)
 			}
+			table.Render()
 
 			return nil
 		},
@@ -167,7 +180,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would remove workspace %q (force: %v)\n", name, force)
+				ui.DryRun("Would remove workspace %q (force: %v)", name, force)
 				return nil
 			}
 
@@ -182,11 +195,14 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			if err := mgr.Remove(context.Background(), name, wsRepos, force); err != nil {
+			err = ui.WithSpinner("Removing workspace...", func() error {
+				return mgr.Remove(context.Background(), name, wsRepos, force)
+			})
+			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Removed workspace %q\n", name)
+			ui.Success("Removed workspace %q", name)
 			return nil
 		},
 	}

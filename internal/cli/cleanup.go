@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -26,9 +26,9 @@ func newCleanupCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would clean up %s\n", issue)
-				fmt.Printf("  Remove workspace: %s\n", branchName)
-				fmt.Printf("  Delete branches in: %s\n", repoNames(repos))
+				ui.DryRun("Would clean up %s", issue)
+				ui.Item("Workspace:", branchName)
+				ui.Item("Repos:", repoNames(repos))
 				return nil
 			}
 
@@ -38,11 +38,14 @@ func newCleanupCmd() *cobra.Command {
 			}
 
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			if err := mgr.Remove(context.Background(), branchName, wsRepos, force); err != nil {
+			err = ui.WithSpinner("Removing workspace...", func() error {
+				return mgr.Remove(context.Background(), branchName, wsRepos, force)
+			})
+			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Cleaned up %s\n", issue)
+			ui.Success("Cleaned up %s", issue)
 			return nil
 		},
 	}

@@ -1,8 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -15,11 +14,11 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("[stub] Would show status for %s\n", issue)
-			fmt.Println("  - Issue tracker: ticket details + status")
-			fmt.Println("  - VCS: branch status per repo")
-			fmt.Println("  - Code host: PR status per repo")
-			fmt.Println("  - CI/CD: build/deploy status")
+			ui.Muted("[stub] Would show status for %s", issue)
+			ui.Muted("  - Issue tracker: ticket details + status")
+			ui.Muted("  - VCS: branch status per repo")
+			ui.Muted("  - Code host: PR status per repo")
+			ui.Muted("  - CI/CD: build/deploy status")
 			return nil
 		},
 	}

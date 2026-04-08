@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -26,17 +27,14 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
-			// Build the branch name. For now, use the issue directly.
-			// Pattern-based naming (branch.pattern config) will be added
-			// when issue tracking provides the ticket type and title.
 			branchName := issue
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would start work on %s\n", issue)
-				fmt.Printf("  Branch: %s\n", branchName)
-				fmt.Printf("  Repos: %s\n", repoNames(repos))
-				fmt.Println("  [stub] Set issue status to In Progress")
+				ui.DryRun("Would start work on %s", issue)
+				ui.Item("Branch:", branchName)
+				ui.Item("Repos:", repoNames(repos))
+				ui.Muted("  [stub] Set issue status to In Progress")
 				return nil
 			}
 
@@ -53,7 +51,7 @@ func newStartCmd() *cobra.Command {
 				if scanner.Scan() {
 					answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 					if answer != "" && answer != "y" && answer != "yes" {
-						fmt.Println("Aborted.")
+						ui.Warning("Aborted.")
 						return nil
 					}
 				}
@@ -65,17 +63,20 @@ func newStartCmd() *cobra.Command {
 			}
 
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			if err := mgr.Create(context.Background(), branchName, wsRepos, fromHead); err != nil {
+			err = ui.WithSpinner("Creating workspace...", func() error {
+				return mgr.Create(context.Background(), branchName, wsRepos, fromHead)
+			})
+			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Created workspace for %s\n", issue)
+			ui.Success("Created workspace for %s", issue)
 			for _, r := range repos {
-				fmt.Printf("  %s → %s\n", r.Name, r.Path)
+				ui.Item(r.Name, r.Path)
 			}
 
 			// TODO(nick): Set issue status to In Progress (phase 3)
-			fmt.Println("[stub] Set issue status to In Progress")
+			ui.Muted("  [stub] Set issue status to In Progress")
 
 			return nil
 		},

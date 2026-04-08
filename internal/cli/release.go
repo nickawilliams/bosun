@@ -1,8 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -16,10 +15,10 @@ func newReleaseCmd() *cobra.Command {
 				return err
 			}
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
-			fmt.Printf("[stub] Would release %s (migrations-done: %v)\n", issue, migrationsDone)
-			fmt.Println("  - Confirm migrations (if applicable)")
-			fmt.Println("  - Trigger production deployment")
-			fmt.Println("  - Set issue status to Done")
+			ui.Muted("[stub] Would release %s (migrations-done: %v)", issue, migrationsDone)
+			ui.Muted("  - Confirm migrations (if applicable)")
+			ui.Muted("  - Trigger production deployment")
+			ui.Muted("  - Set issue status to Done")
 			return nil
 		},
 	}

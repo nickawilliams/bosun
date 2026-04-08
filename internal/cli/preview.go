@@ -1,8 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -15,9 +14,9 @@ func newPreviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("[stub] Would deploy %s to preview\n", issue)
-			fmt.Println("  - Trigger ephemeral environment deployment")
-			fmt.Println("  - Reply to review notification with preview URL")
+			ui.Muted("[stub] Would deploy %s to preview", issue)
+			ui.Muted("  - Trigger ephemeral environment deployment")
+			ui.Muted("  - Reply to review notification with preview URL")
 			return nil
 		},
 	}

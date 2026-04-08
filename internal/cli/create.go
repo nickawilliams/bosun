@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ func newCreateCmd() *cobra.Command {
 
 			issueType, _ := cmd.Flags().GetString("type")
 
-			fmt.Printf("[stub] Would create %s issue: %q\n", issueType, title)
+			ui.Muted("[stub] Would create %s issue: %q", issueType, title)
 			return nil
 		},
 	}

@@ -1,8 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -16,10 +15,10 @@ func newPrereleaseCmd() *cobra.Command {
 				return err
 			}
 			bump, _ := cmd.Flags().GetString("bump")
-			fmt.Printf("[stub] Would prepare release for %s (bump: %s)\n", issue, bump)
-			fmt.Println("  - Create release/tag per repo")
-			fmt.Println("  - Notify release channel")
-			fmt.Println("  - Set issue status to Ready for Release")
+			ui.Muted("[stub] Would prepare release for %s (bump: %s)", issue, bump)
+			ui.Muted("  - Create release/tag per repo")
+			ui.Muted("  - Notify release channel")
+			ui.Muted("  - Set issue status to Ready for Release")
 			return nil
 		},
 	}

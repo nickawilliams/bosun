@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -106,10 +107,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if isDryRun(cmd) {
-		fmt.Println("[dry-run] Would initialize bosun project:")
-		fmt.Printf("  .bosun/config.yaml\n")
-		fmt.Printf("  repos: %v\n", repoGlobs)
-		fmt.Printf("  workspace_root: %s\n", wsRoot)
+		ui.DryRun("Would initialize bosun project:")
+		ui.Item("config:", ".bosun/config.yaml")
+		ui.Item("repos:", strings.Join(repoGlobs, ", "))
+		ui.Item("workspace_root:", wsRoot)
 		return nil
 	}
 
@@ -124,16 +125,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	fmt.Printf("Initialized bosun project in %s\n\n", bosunDir)
-	fmt.Printf("  config: %s\n", configPath)
+	ui.Success("Initialized bosun project in %s", bosunDir)
+	ui.Item("config:", configPath)
 	if len(repoGlobs) > 0 {
-		fmt.Printf("  repos:  %s\n", strings.Join(repoGlobs, ", "))
+		ui.Item("repos:", strings.Join(repoGlobs, ", "))
 	} else {
-		fmt.Printf("  repos:  (none — add repo patterns to .bosun/config.yaml)\n")
+		ui.Item("repos:", "(none — add repo patterns to .bosun/config.yaml)")
 	}
-	fmt.Printf("\nNext steps:\n")
-	fmt.Printf("  Edit .bosun/config.yaml to configure Jira, Slack, etc.\n")
-	fmt.Printf("  Run: bosun start --issue <issue>\n")
+	fmt.Println()
+	ui.Info("Next steps:")
+	ui.Muted("  Edit .bosun/config.yaml to configure Jira, Slack, etc.")
+	ui.Muted("  Run: bosun start --issue <issue>")
 
 	return nil
 }
