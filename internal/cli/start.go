@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -35,6 +38,25 @@ func newStartCmd() *cobra.Command {
 				fmt.Printf("  Repos: %s\n", repoNames(repos))
 				fmt.Println("  [stub] Set issue status to In Progress")
 				return nil
+			}
+
+			// Confirm when operating on multiple unfiltered repos.
+			if len(repos) > 1 && len(filterRepos) == 0 {
+				names := make([]string, len(repos))
+				for i, r := range repos {
+					names[i] = r.Name
+				}
+				fmt.Printf("Starting %s in %d repos:\n", issue, len(repos))
+				fmt.Printf("  %s\n\n", strings.Join(names, ", "))
+				fmt.Print("Proceed? [Y/n] ")
+				scanner := bufio.NewScanner(os.Stdin)
+				if scanner.Scan() {
+					answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+					if answer != "" && answer != "y" && answer != "yes" {
+						fmt.Println("Aborted.")
+						return nil
+					}
+				}
 			}
 
 			mgr, err := newWorkspaceManager()
