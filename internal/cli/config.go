@@ -139,9 +139,9 @@ func newConfigPathCmd() *cobra.Command {
 		Use:   "path",
 		Short: "Show configuration file paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configDir, err := os.UserConfigDir()
+			configDir, err := config.GlobalConfigDir()
 			if err == nil {
-				globalPath := filepath.Join(configDir, "bosun", "config.yaml")
+				globalPath := filepath.Join(configDir, "config.yaml")
 				if _, err := os.Stat(globalPath); err == nil {
 					ui.Item("Global:", globalPath)
 				} else {
@@ -171,11 +171,10 @@ func newConfigPathCmd() *cobra.Command {
 // resolveConfigPath returns the path to the config file to write to.
 func resolveConfigPath(global bool) (string, error) {
 	if global {
-		configDir, err := os.UserConfigDir()
+		dir, err := config.GlobalConfigDir()
 		if err != nil {
 			return "", fmt.Errorf("finding config directory: %w", err)
 		}
-		dir := filepath.Join(configDir, "bosun")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", fmt.Errorf("creating config directory: %w", err)
 		}
