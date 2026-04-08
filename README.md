@@ -39,13 +39,13 @@ bosun workspace --help
 
 ### Phase 2: VCS + Workspace
 
-- [ ] `--dry-run` persistent flag on root command
-- [ ] `vcs.VCS` interface and domain types
-- [ ] Git adapter (branch creation, status, deletion)
-- [ ] Workspace management (worktree create, add, status, rm)
-- [ ] Wire `start` and `cleanup` to real VCS/workspace operations
-- [ ] Issue resolution from workspace path and branch name
-- [ ] Tests for VCS and workspace operations
+- [x] `--dry-run` persistent flag on root command
+- [x] `vcs.VCS` interface and domain types
+- [x] Git adapter (branch creation, status, deletion)
+- [x] Workspace management (worktree create, add, status, rm)
+- [x] Wire `start` and `cleanup` to real VCS/workspace operations
+- [x] Issue resolution from workspace path and branch name
+- [x] Tests for VCS and workspace operations
 
 ```sh
 # Create a workspace with worktrees (requires repos configured in .bosun/)
