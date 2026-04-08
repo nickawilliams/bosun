@@ -10,20 +10,21 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 )
 
-// setupTestProject creates a project with a repo root containing test repos,
-// and a workspace root. Returns (repoRoot, workspaceRoot).
-func setupTestProject(t *testing.T, repoNames ...string) (string, string) {
+// setupTestProject creates a project with repos and a workspace root.
+// Returns (wsRoot, repos).
+func setupTestProject(t *testing.T, repoNames ...string) (string, []Repo) {
 	t.Helper()
 	base := t.TempDir()
 	base, _ = filepath.EvalSymlinks(base)
 
-	repoRoot := filepath.Join(base, "repos")
+	repoDir := filepath.Join(base, "repos")
 	wsRoot := filepath.Join(base, "workspaces")
-	os.MkdirAll(repoRoot, 0o755)
+	os.MkdirAll(repoDir, 0o755)
 	os.MkdirAll(wsRoot, 0o755)
 
+	var repos []Repo
 	for _, name := range repoNames {
-		repoPath := filepath.Join(repoRoot, name)
+		repoPath := filepath.Join(repoDir, name)
 		steps := [][]string{
 			{"git", "init", repoPath},
 			{"git", "-C", repoPath, "config", "user.email", "test@test.com"},
@@ -36,23 +37,24 @@ func setupTestProject(t *testing.T, repoNames ...string) (string, string) {
 				t.Fatalf("%v failed: %s\n%s", args, err, out)
 			}
 		}
+		repos = append(repos, Repo{Name: name, Path: repoPath})
 	}
 
-	return repoRoot, wsRoot
+	return wsRoot, repos
 }
 
 func TestCreateAndStatus(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api", "web")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	if err := mgr.Create(ctx, "test-branch", []string{"api", "web"}, true); err != nil {
+	if err := mgr.Create(ctx, "test-branch", repos, true); err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
 
 	// Verify workspace directory structure.
-	for _, repo := range []string{"api", "web"} {
-		wtPath := filepath.Join(wsRoot, "test-branch", repo)
+	for _, repo := range repos {
+		wtPath := filepath.Join(wsRoot, "test-branch", repo.Name)
 		if _, err := os.Stat(wtPath); err != nil {
 			t.Errorf("worktree %s should exist", wtPath)
 		}
@@ -77,28 +79,28 @@ func TestCreateAndStatus(t *testing.T) {
 }
 
 func TestCreateIdempotent(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	if err := mgr.Create(ctx, "idem-branch", []string{"api"}, true); err != nil {
+	if err := mgr.Create(ctx, "idem-branch", repos, true); err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
 
 	// Second call should not error.
-	if err := mgr.Create(ctx, "idem-branch", []string{"api"}, true); err != nil {
+	if err := mgr.Create(ctx, "idem-branch", repos, true); err != nil {
 		t.Fatalf("Create() second call error: %v", err)
 	}
 }
 
 func TestRemove(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "rm-branch", []string{"api"}, true)
+	mgr.Create(ctx, "rm-branch", repos, true)
 
-	if err := mgr.Remove(ctx, "rm-branch", false); err != nil {
+	if err := mgr.Remove(ctx, "rm-branch", repos, false); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
 
@@ -110,35 +112,35 @@ func TestRemove(t *testing.T) {
 }
 
 func TestRemoveBlockedByDirtyRepo(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "dirty-branch", []string{"api"}, true)
+	mgr.Create(ctx, "dirty-branch", repos, true)
 
 	// Make the worktree dirty.
 	wtPath := filepath.Join(wsRoot, "dirty-branch", "api")
 	os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("x"), 0o644)
 
 	// Should fail without force.
-	if err := mgr.Remove(ctx, "dirty-branch", false); err == nil {
+	if err := mgr.Remove(ctx, "dirty-branch", repos, false); err == nil {
 		t.Error("Remove() should fail with dirty repo")
 	}
 
 	// Should succeed with force.
-	if err := mgr.Remove(ctx, "dirty-branch", true); err != nil {
+	if err := mgr.Remove(ctx, "dirty-branch", repos, true); err != nil {
 		t.Fatalf("Remove(force=true) error: %v", err)
 	}
 }
 
 func TestRemoveWithNestedBranchName(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-123", []string{"api"}, true)
+	mgr.Create(ctx, "feature/PROJ-123", repos, true)
 
-	if err := mgr.Remove(ctx, "feature/PROJ-123", false); err != nil {
+	if err := mgr.Remove(ctx, "feature/PROJ-123", repos, false); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
 
@@ -149,21 +151,22 @@ func TestRemoveWithNestedBranchName(t *testing.T) {
 }
 
 func TestMissingRepo(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t)
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, _ := setupTestProject(t)
+	mgr := NewManager(git.New(), wsRoot)
 
-	err := mgr.Create(context.Background(), "test", []string{"nonexistent"}, true)
+	missing := []Repo{{Name: "nonexistent", Path: "/tmp/does-not-exist"}}
+	err := mgr.Create(context.Background(), "test", missing, true)
 	if err == nil {
 		t.Error("Create() should fail for missing repo")
 	}
 }
 
 func TestDetectName(t *testing.T) {
-	repoRoot, wsRoot := setupTestProject(t, "api")
-	mgr := NewManager(git.New(), repoRoot, wsRoot)
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-123", []string{"api"}, true)
+	mgr.Create(ctx, "feature/PROJ-123", repos, true)
 
 	wtPath := filepath.Join(wsRoot, "feature", "PROJ-123", "api")
 	name, err := DetectName(wsRoot, wtPath)

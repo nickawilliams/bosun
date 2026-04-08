@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -11,19 +12,94 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Repo represents a resolved repository with a short name and absolute path.
+type Repo struct {
+	Name string // Directory basename, used for worktree directory names.
+	Path string // Absolute path to the repo.
+}
+
+// resolveRepos expands the repos: globs from config, filters to directories
+// containing .git/, and returns the resolved set. If filterNames is non-empty,
+// only repos whose names match are returned.
+func resolveRepos(filterNames []string) ([]Repo, error) {
+	patterns := viper.GetStringSlice("repos")
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("no repo patterns configured: set repos in .bosun/config.yaml")
+	}
+
+	projectRoot := config.FindProjectRoot()
+
+	var repos []Repo
+	seen := make(map[string]bool)
+
+	for _, pattern := range patterns {
+		// Resolve relative patterns against project root.
+		if !filepath.IsAbs(pattern) && projectRoot != "" {
+			pattern = filepath.Join(projectRoot, pattern)
+		}
+
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid glob %q: %w", pattern, err)
+		}
+
+		for _, match := range matches {
+			abs, err := filepath.Abs(match)
+			if err != nil {
+				continue
+			}
+
+			// Must be a directory with .git/.
+			info, err := os.Stat(abs)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(abs, ".git")); err != nil {
+				continue
+			}
+
+			name := filepath.Base(abs)
+			if seen[abs] {
+				continue
+			}
+			seen[abs] = true
+
+			repos = append(repos, Repo{Name: name, Path: abs})
+		}
+	}
+
+	if len(filterNames) > 0 {
+		filter := make(map[string]bool, len(filterNames))
+		for _, n := range filterNames {
+			filter[n] = true
+		}
+		var filtered []Repo
+		for _, r := range repos {
+			if filter[r.Name] {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf(
+				"no repos matched filter %v (available: %s)",
+				filterNames, repoNames(repos),
+			)
+		}
+		repos = filtered
+	}
+
+	if len(repos) == 0 {
+		return nil, fmt.Errorf("no repos found matching configured patterns")
+	}
+
+	return repos, nil
+}
+
 // newWorkspaceManager creates a workspace.Manager from current config.
 func newWorkspaceManager() (*workspace.Manager, error) {
 	projectRoot := config.FindProjectRoot()
 	if projectRoot == "" {
 		return nil, fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
-	}
-
-	repoRoot := viper.GetString("repository_root")
-	if repoRoot == "" {
-		repoRoot = filepath.Join(projectRoot, ".bosun", "repos")
-	}
-	if !filepath.IsAbs(repoRoot) {
-		repoRoot = filepath.Join(projectRoot, repoRoot)
 	}
 
 	wsRoot := viper.GetString("workspace_root")
@@ -34,24 +110,7 @@ func newWorkspaceManager() (*workspace.Manager, error) {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
 	}
 
-	return workspace.NewManager(git.New(), repoRoot, wsRoot), nil
-}
-
-// repoRoot returns the resolved repository root path.
-func repoRoot() (string, error) {
-	projectRoot := config.FindProjectRoot()
-	if projectRoot == "" {
-		return "", fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
-	}
-
-	root := viper.GetString("repository_root")
-	if root == "" {
-		root = filepath.Join(projectRoot, ".bosun", "repos")
-	}
-	if !filepath.IsAbs(root) {
-		root = filepath.Join(projectRoot, root)
-	}
-	return root, nil
+	return workspace.NewManager(git.New(), wsRoot), nil
 }
 
 // resolveWorkspaceName returns the workspace name from args or auto-detects
@@ -80,4 +139,22 @@ func resolveWorkspaceName(args []string) (string, error) {
 	}
 
 	return workspace.DetectName(wsRoot, cwd)
+}
+
+// cliReposToWorkspaceRepos converts CLI Repo types to workspace Repo types.
+func cliReposToWorkspaceRepos(repos []Repo) []workspace.Repo {
+	result := make([]workspace.Repo, len(repos))
+	for i, r := range repos {
+		result[i] = workspace.Repo{Name: r.Name, Path: r.Path}
+	}
+	return result
+}
+
+// repoNames returns a comma-separated string of repo names.
+func repoNames(repos []Repo) string {
+	names := make([]string, len(repos))
+	for i, r := range repos {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
 }

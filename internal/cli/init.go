@@ -20,9 +20,8 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().BoolP("interactive", "I", false, "prompt for every value")
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
 	cmd.Flags().Bool("force", false, "overwrite existing .bosun/ directory")
-	cmd.Flags().String("repository-root", "", "where source repos live")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")
-	cmd.Flags().StringSlice("repos", nil, "repo names to include")
+	cmd.Flags().StringSlice("repos", nil, "repo glob patterns (e.g. ./* or ~/Projects/myorg/*)")
 
 	return cmd
 }
@@ -44,54 +43,42 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Resolve repository_root.
-	repoRoot, _ := cmd.Flags().GetString("repository-root")
-	if repoRoot == "" {
-		detected := ""
+	// Resolve repo globs.
+	repoGlobs, _ := cmd.Flags().GetStringSlice("repos")
+	if len(repoGlobs) == 0 {
+		detectedGlob := ""
 		if !noDetect {
 			if repos := detectRepos(cwd); len(repos) > 0 {
-				detected = "."
+				detectedGlob = "./*"
+				fmt.Printf("Detected repos: %s\n", strings.Join(repos, ", "))
 			}
 		}
 
 		if interactive {
-			repoRoot = prompt(scanner,
-				"Repository root (where source repos live)",
-				firstNonEmpty(detected, "."))
-		} else if detected != "" {
-			repoRoot = detected
-		} else {
-			repoRoot = "."
+			input := prompt(scanner,
+				"Repo patterns (comma-separated globs, e.g. ./* or ~/Projects/myorg/*)",
+				firstNonEmpty(detectedGlob, "./*"))
+			for _, g := range strings.Split(input, ",") {
+				if trimmed := strings.TrimSpace(g); trimmed != "" {
+					repoGlobs = append(repoGlobs, trimmed)
+				}
+			}
+		} else if detectedGlob != "" {
+			repoGlobs = []string{detectedGlob}
 		}
 	}
 
-	// Resolve repos.
-	repos, _ := cmd.Flags().GetStringSlice("repos")
-	if len(repos) == 0 {
-		var detected []string
-		if !noDetect {
-			absRepoRoot := repoRoot
-			if !filepath.IsAbs(absRepoRoot) {
-				absRepoRoot = filepath.Join(cwd, absRepoRoot)
-			}
-			detected = detectRepos(absRepoRoot)
-		}
-
-		if interactive {
-			defaultVal := strings.Join(detected, ", ")
-			input := prompt(scanner,
-				"Repos (comma-separated)",
-				defaultVal)
-			if input != "" {
-				for _, r := range strings.Split(input, ",") {
-					if trimmed := strings.TrimSpace(r); trimmed != "" {
-						repos = append(repos, trimmed)
-					}
+	// Prompt for globs if we still have none and aren't in interactive mode.
+	if len(repoGlobs) == 0 && !interactive {
+		input := prompt(scanner,
+			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
+			"")
+		if input != "" {
+			for _, g := range strings.Split(input, ",") {
+				if trimmed := strings.TrimSpace(g); trimmed != "" {
+					repoGlobs = append(repoGlobs, trimmed)
 				}
 			}
-		} else if len(detected) > 0 {
-			repos = detected
-			fmt.Printf("Detected repos: %s\n", strings.Join(repos, ", "))
 		}
 	}
 
@@ -109,27 +96,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Prompt for repos if we still have none and aren't in interactive mode
-	// (interactive mode already asked above).
-	if len(repos) == 0 && !interactive {
-		input := prompt(scanner,
-			"No repos detected. Enter repo names (comma-separated, or leave blank)",
-			"")
-		if input != "" {
-			for _, r := range strings.Split(input, ",") {
-				if trimmed := strings.TrimSpace(r); trimmed != "" {
-					repos = append(repos, trimmed)
-				}
-			}
-		}
-	}
-
 	if isDryRun(cmd) {
 		fmt.Println("[dry-run] Would initialize bosun project:")
 		fmt.Printf("  .bosun/config.yaml\n")
-		fmt.Printf("  repository_root: %s\n", repoRoot)
+		fmt.Printf("  repos: %v\n", repoGlobs)
 		fmt.Printf("  workspace_root: %s\n", wsRoot)
-		fmt.Printf("  repos: %v\n", repos)
 		return nil
 	}
 
@@ -140,16 +111,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Write config.
 	configPath := filepath.Join(bosunDir, "config.yaml")
-	if err := writeInitConfig(configPath, repoRoot, wsRoot, repos); err != nil {
+	if err := writeInitConfig(configPath, wsRoot, repoGlobs); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
 	fmt.Printf("Initialized bosun project in %s\n\n", bosunDir)
 	fmt.Printf("  config: %s\n", configPath)
-	if len(repos) > 0 {
-		fmt.Printf("  repos:  %s\n", strings.Join(repos, ", "))
+	if len(repoGlobs) > 0 {
+		fmt.Printf("  repos:  %s\n", strings.Join(repoGlobs, ", "))
 	} else {
-		fmt.Printf("  repos:  (none — add repos to .bosun/config.yaml)\n")
+		fmt.Printf("  repos:  (none — add repo patterns to .bosun/config.yaml)\n")
 	}
 	fmt.Printf("\nNext steps:\n")
 	fmt.Printf("  Edit .bosun/config.yaml to configure Jira, Slack, etc.\n")
@@ -208,22 +179,19 @@ func firstNonEmpty(values ...string) string {
 }
 
 // writeInitConfig writes the initial .bosun/config.yaml.
-func writeInitConfig(path, repoRoot, wsRoot string, repos []string) error {
+func writeInitConfig(path, wsRoot string, repoGlobs []string) error {
 	var b strings.Builder
 
-	b.WriteString("# Repos in this project\n")
+	b.WriteString("# Repo patterns (globs resolved to directories containing .git/)\n")
 	b.WriteString("repos:\n")
-	if len(repos) > 0 {
-		for _, r := range repos {
-			fmt.Fprintf(&b, "  - %s\n", r)
+	if len(repoGlobs) > 0 {
+		for _, g := range repoGlobs {
+			fmt.Fprintf(&b, "  - %s\n", g)
 		}
 	} else {
-		b.WriteString("  # - my-service\n")
-		b.WriteString("  # - my-frontend\n")
+		b.WriteString("  # - ./*\n")
+		b.WriteString("  # - ~/Projects/myorg/*\n")
 	}
-
-	b.WriteString("\n# Where source repos live (default: .bosun/repos/)\n")
-	fmt.Fprintf(&b, "repository_root: %s\n", repoRoot)
 
 	b.WriteString("\n# Where workspaces are created (default: project root)\n")
 	fmt.Fprintf(&b, "workspace_root: %s\n", wsRoot)

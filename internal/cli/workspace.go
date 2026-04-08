@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,16 @@ func newWorkspaceCmd() *cobra.Command {
 	return cmd
 }
 
+// argsToWorkspaceRepos converts repo name arguments into workspace.Repo
+// by resolving them against the configured repo globs.
+func argsToWorkspaceRepos(names []string) ([]workspace.Repo, error) {
+	repos, err := resolveRepos(names)
+	if err != nil {
+		return nil, err
+	}
+	return cliReposToWorkspaceRepos(repos), nil
+}
+
 func newWorkspaceCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <name> <repos...>",
@@ -30,16 +41,21 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			repos := args[1:]
+			repoNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 
 			if isDryRun(cmd) {
 				fmt.Printf("[dry-run] Would create workspace %q for repos %v (from-head: %v)\n",
-					name, repos, fromHead)
+					name, repoNames, fromHead)
 				return nil
 			}
 
 			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			repos, err := argsToWorkspaceRepos(repoNames)
 			if err != nil {
 				return err
 			}
@@ -69,14 +85,19 @@ func newWorkspaceAddCmd() *cobra.Command {
 			// TODO(nick): distinguish name vs repo args when auto-detect is
 			// implemented. For now, first arg is always the name.
 			name := args[0]
-			repos := args[1:]
+			repoNames := args[1:]
 
 			if isDryRun(cmd) {
-				fmt.Printf("[dry-run] Would add repos %v to workspace %q\n", repos, name)
+				fmt.Printf("[dry-run] Would add repos %v to workspace %q\n", repoNames, name)
 				return nil
 			}
 
 			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			repos, err := argsToWorkspaceRepos(repoNames)
 			if err != nil {
 				return err
 			}
@@ -155,7 +176,13 @@ func newWorkspaceRmCmd() *cobra.Command {
 				return err
 			}
 
-			if err := mgr.Remove(context.Background(), name, force); err != nil {
+			repos, err := resolveRepos(nil)
+			if err != nil {
+				return err
+			}
+
+			wsRepos := cliReposToWorkspaceRepos(repos)
+			if err := mgr.Remove(context.Background(), name, wsRepos, force); err != nil {
 				return err
 			}
 

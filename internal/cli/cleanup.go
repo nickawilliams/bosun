@@ -3,11 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
-	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 func newCleanupCmd() *cobra.Command {
@@ -20,52 +17,32 @@ func newCleanupCmd() *cobra.Command {
 				return err
 			}
 
-			repos := viper.GetStringSlice("repos")
-			if len(repos) == 0 {
-				return fmt.Errorf("no repos configured: set repos in .bosun/config.yaml")
+			repos, err := resolveRepos(nil)
+			if err != nil {
+				return err
 			}
 
 			branchName := issue
 			force, _ := cmd.Flags().GetBool("force")
 
-			wsRoot := viper.GetString("workspace_root")
-			useWorkspaces := wsRoot != ""
-
 			if isDryRun(cmd) {
 				fmt.Printf("[dry-run] Would clean up %s\n", issue)
-				if useWorkspaces {
-					fmt.Printf("  Remove workspace: %s/%s/\n", wsRoot, branchName)
-				}
-				fmt.Printf("  Delete branches: %s in %v\n", branchName, repos)
+				fmt.Printf("  Remove workspace: %s\n", branchName)
+				fmt.Printf("  Delete branches in: %s\n", repoNames(repos))
 				return nil
 			}
 
-			ctx := context.Background()
-
-			if useWorkspaces {
-				mgr, err := newWorkspaceManager()
-				if err != nil {
-					return err
-				}
-				if err := mgr.Remove(ctx, branchName, force); err != nil {
-					return err
-				}
-				fmt.Printf("Removed workspace for %s\n", issue)
-			} else {
-				root, err := repoRoot()
-				if err != nil {
-					return err
-				}
-				g := git.New()
-				for _, repo := range repos {
-					repoPath := filepath.Join(root, repo)
-					if err := g.DeleteBranch(ctx, repoPath, branchName); err != nil {
-						return fmt.Errorf("deleting branch in %s: %w", repo, err)
-					}
-					fmt.Printf("Deleted branch %s in %s\n", branchName, repo)
-				}
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
 			}
 
+			wsRepos := cliReposToWorkspaceRepos(repos)
+			if err := mgr.Remove(context.Background(), branchName, wsRepos, force); err != nil {
+				return err
+			}
+
+			fmt.Printf("Cleaned up %s\n", issue)
 			return nil
 		},
 	}
