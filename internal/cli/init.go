@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,8 +50,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
-
 	// Resolve repo globs.
 	repoGlobs, _ := cmd.Flags().GetStringSlice("repos")
 	if len(repoGlobs) == 0 {
@@ -65,7 +62,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 
 		if interactive {
-			input := promptValue(scanner,
+			input := promptValue(
 				"Repo patterns (comma-separated globs, e.g. ./* or ~/Projects/myorg/*)",
 				firstNonEmpty(detectedGlob, "./*"))
 			for _, g := range strings.Split(input, ",") {
@@ -80,7 +77,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Prompt for globs if we still have none and aren't in interactive mode.
 	if len(repoGlobs) == 0 && !interactive {
-		input := promptValue(scanner,
+		input := promptValue(
 			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
 			"")
 		if input != "" {
@@ -98,7 +95,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		defaultWS := "_workspaces"
 
 		if interactive {
-			wsRoot = promptValue(scanner,
+			wsRoot = promptValue(
 				"Workspace root (where workspaces are created)",
 				defaultWS)
 		} else {
