@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func newCreateCmd() *cobra.Command {
@@ -61,7 +63,43 @@ func newCreateCmd() *cobra.Command {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
 
-			ui.Muted("[stub] Would create %s issue: %q", issueType, title)
+			project := viper.GetString("jira.project")
+			if project == "" {
+				return fmt.Errorf("jira.project not configured in .bosun/config.yaml")
+			}
+
+			if isDryRun(cmd) {
+				ui.DryRun("Would create %s issue: %q", issueType, title)
+				ui.Item("Project:", project)
+				ui.Item("Description:", description)
+				ui.Item("Size:", size)
+				return nil
+			}
+
+			tracker, err := newIssueTracker()
+			if err != nil {
+				return err
+			}
+
+			ctx := cmd.Context()
+			created, err := ui.WithSpinnerResult("Creating issue...", func() (issuepkg.Issue, error) {
+				return tracker.CreateIssue(ctx, issuepkg.CreateRequest{
+					Project:     project,
+					Title:       title,
+					Description: description,
+					Type:        issueType,
+					Size:        size,
+				})
+			})
+			if err != nil {
+				return err
+			}
+
+			ui.Success("Created %s", created.Key)
+			ui.Item("Title:", created.Title)
+			ui.Item("Status:", created.Status)
+			ui.Item("URL:", created.URL)
+
 			return nil
 		},
 	}

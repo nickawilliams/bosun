@@ -31,7 +31,9 @@ func newStartCmd() *cobra.Command {
 				ui.DryRun("Would start work on %s", issue)
 				ui.Item("Branch:", branchName)
 				ui.Item("Repos:", repoNames(repos))
-				ui.Muted("  [stub] Set issue status to In Progress")
+				if statusName, err := resolveStatus("in_progress"); err == nil {
+					ui.Item("Status:", fmt.Sprintf("→ %s", statusName))
+				}
 				return nil
 			}
 
@@ -63,8 +65,29 @@ func newStartCmd() *cobra.Command {
 				ui.Item(r.Name, r.Path)
 			}
 
-			// TODO(nick): Set issue status to In Progress (phase 3)
-			ui.Muted("  [stub] Set issue status to In Progress")
+			// Transition issue status (graceful — warn on error, don't fail).
+			ctx := cmd.Context()
+			tracker, trackerErr := newIssueTracker()
+			if trackerErr != nil {
+				ui.Warning("Issue tracker not configured: %v", trackerErr)
+			} else {
+				statusName, err := resolveStatus("in_progress")
+				if err != nil {
+					ui.Warning("Status mapping: %v", err)
+				} else {
+					if err := validateStageTransition(ctx, tracker, issue, "ready"); err != nil {
+						return err
+					}
+					err = ui.WithSpinner(fmt.Sprintf("Setting status to %s...", statusName), func() error {
+						return tracker.SetStatus(ctx, issue, statusName)
+					})
+					if err != nil {
+						ui.Warning("Failed to set status: %v", err)
+					} else {
+						ui.Success("Set %s to %s", issue, statusName)
+					}
+				}
+			}
 
 			return nil
 		},

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -14,11 +15,29 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ui.Muted("[stub] Would show status for %s", issue)
-			ui.Muted("  - Issue tracker: ticket details + status")
-			ui.Muted("  - VCS: branch status per repo")
-			ui.Muted("  - Code host: PR status per repo")
-			ui.Muted("  - CI/CD: build/deploy status")
+
+			tracker, err := newIssueTracker()
+			if err != nil {
+				return err
+			}
+
+			ctx := cmd.Context()
+			detail, err := ui.WithSpinnerResult("Fetching issue...", func() (issuepkg.Issue, error) {
+				return tracker.GetIssue(ctx, issue)
+			})
+			if err != nil {
+				return err
+			}
+
+			ui.Bold("%s  %s", detail.Key, detail.Title)
+			ui.Item("Status:", detail.Status)
+			ui.Item("Type:", detail.Type)
+			ui.Item("URL:", detail.URL)
+
+			// TODO: VCS branch status per repo (phase 2 data available)
+			// TODO: Code host PR status (phase 4)
+			// TODO: CI/CD status (phase 6)
+
 			return nil
 		},
 	}
