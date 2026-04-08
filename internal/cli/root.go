@@ -39,6 +39,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newCleanupCmd(),
 		newStatusCmd(),
 		newWorkspaceCmd(),
+		newConfigCmd(),
 	)
 
 	return cmd
