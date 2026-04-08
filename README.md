@@ -161,8 +161,15 @@ bosun release --issue PROJ-123 --dry-run
 
 - [ ] `status` command aggregating all capabilities
 - [ ] Charmbracelet UI (spinners, tables, colors)
+- [ ] Man page generation (`tools/gen-man/`, restore `man` dep to `link`/`install/all` in Makefile)
+- [ ] Shell completions generation (`tools/gen-completions/`)
 
 ```sh
 # Full status across all providers
 bosun status --issue PROJ-123
+
+# Generate man page and completions
+make man
+make completions
+man bosun
 ```
