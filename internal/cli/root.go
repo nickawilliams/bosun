@@ -28,5 +28,17 @@ func NewRootCmd(version string) *cobra.Command {
 		return cmd.Help()
 	}
 
+	cmd.AddCommand(
+		newCreateCmd(),
+		newStartCmd(),
+		newReviewCmd(),
+		newPreviewCmd(),
+		newPrereleaseCmd(),
+		newReleaseCmd(),
+		newCleanupCmd(),
+		newStatusCmd(),
+		newWorkspaceCmd(),
+	)
+
 	return cmd
 }

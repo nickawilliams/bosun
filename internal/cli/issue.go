@@ -7,18 +7,22 @@ import (
 	"github.com/spf13/viper"
 )
 
-// addIssueFlag adds the shared --issue flag to a command and binds it to Viper.
+// addIssueFlag adds the shared --issue flag to a command.
 func addIssueFlag(cmd *cobra.Command) {
 	cmd.Flags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
-	viper.BindPFlag("issue", cmd.Flags().Lookup("issue"))
 }
 
 // resolveIssue returns the issue identifier from the resolution chain:
 // (1) --issue flag, (2) BOSUN_ISSUE env var. Workspace path and branch
 // name derivation will be added in a later phase.
-func resolveIssue() (string, error) {
-	issue := viper.GetString("issue")
-	if issue != "" {
+func resolveIssue(cmd *cobra.Command) (string, error) {
+	// Check the flag first.
+	if issue, _ := cmd.Flags().GetString("issue"); issue != "" {
+		return issue, nil
+	}
+
+	// Check Viper (env var BOSUN_ISSUE via AutomaticEnv).
+	if issue := viper.GetString("issue"); issue != "" {
 		return issue, nil
 	}
 
