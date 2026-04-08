@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -104,7 +105,8 @@ func (a *Adapter) BranchExists(ctx context.Context, repoPath, branchName string)
 	err := run(ctx, repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 	if err != nil {
 		// Exit code 1 means the ref doesn't exist (not an error).
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return false, nil
 		}
 		return false, err

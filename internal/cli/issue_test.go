@@ -102,3 +102,28 @@ func TestResolveIssue(t *testing.T) {
 		}
 	})
 }
+
+func TestExtractIssue(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"PROJ-123", "PROJ-123"},
+		{"feature/PROJ-123_add-widget", "PROJ-123"},
+		{"fix/CS-42_broken-auth", "CS-42"},
+		{"main", ""},
+		{"develop", ""},
+		{"", ""},
+		{"feature/no-ticket-here", ""},
+		{"ABC-1", "ABC-1"},
+		{"A-1", ""},  // single letter prefix — not a match
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := extractIssue(tt.input)
+			if got != tt.want {
+				t.Errorf("extractIssue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
