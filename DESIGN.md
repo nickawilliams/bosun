@@ -139,7 +139,8 @@ cicd: github_actions
 # Provider-specific settings
 jira:
   base_url: https://mycompany.atlassian.net
-  # Auth: token from env var BOSUN_JIRA_TOKEN or keychain
+  email: you@company.com
+  # Auth: token from env var BOSUN_JIRA_TOKEN
 
 github:
   # Relies on gh CLI auth or GITHUB_TOKEN

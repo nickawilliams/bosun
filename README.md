@@ -76,11 +76,11 @@ bosun workspace create feature/PROJ-123 api web --dry-run
 
 ### Phase 3: Issue Tracking
 
-- [ ] `issue.Tracker` interface and domain types
-- [ ] Jira adapter
-- [ ] Wire `create` and lifecycle status transitions
-- [ ] Stage validation (check current status before transitioning)
-- [ ] Tests for issue tracking
+- [x] `issue.Tracker` interface and domain types
+- [x] Jira adapter
+- [x] Wire `create` and lifecycle status transitions
+- [x] Stage validation (check current status before transitioning)
+- [x] Tests for issue tracking
 
 ```sh
 # Create an issue in Jira
