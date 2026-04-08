@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/issue/jira"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/viper"
@@ -157,4 +161,70 @@ func repoNames(repos []Repo) string {
 		names[i] = r.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// newIssueTracker creates an issue.Tracker from current config.
+func newIssueTracker() (issue.Tracker, error) {
+	provider := viper.GetString("issue_tracker")
+	if provider == "" {
+		return nil, fmt.Errorf("no issue tracker configured: set issue_tracker in config")
+	}
+
+	switch provider {
+	case "jira":
+		baseURL := viper.GetString("jira.base_url")
+		if baseURL == "" {
+			return nil, fmt.Errorf("jira.base_url not configured")
+		}
+		email := viper.GetString("jira.email")
+		if email == "" {
+			return nil, fmt.Errorf("jira.email not configured")
+		}
+		token := os.Getenv("BOSUN_JIRA_TOKEN")
+		if token == "" {
+			return nil, fmt.Errorf("BOSUN_JIRA_TOKEN environment variable not set")
+		}
+		return jira.New(baseURL, email, token), nil
+	default:
+		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
+	}
+}
+
+// resolveStatus maps a bosun lifecycle status key (e.g., "in_progress") to
+// the provider-specific status name from config (e.g., "In Progress").
+func resolveStatus(key string) (string, error) {
+	name := viper.GetString("statuses." + key)
+	if name == "" {
+		return "", fmt.Errorf("status %q not mapped in config statuses section", key)
+	}
+	return name, nil
+}
+
+// validateStageTransition checks the issue's current status against the
+// expected status for a lifecycle command. If the status is unexpected, warns
+// and prompts for confirmation. In non-interactive mode, logs a warning and
+// proceeds.
+func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKey, expectedStatusKey string) error {
+	current, err := tracker.GetIssue(ctx, issueKey)
+	if err != nil {
+		return fmt.Errorf("checking issue status: %w", err)
+	}
+
+	expectedStatus, err := resolveStatus(expectedStatusKey)
+	if err != nil {
+		return err
+	}
+
+	if !strings.EqualFold(current.Status, expectedStatus) {
+		ui.Warning("Issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus)
+		if isInteractive() {
+			if !promptConfirm("Proceed anyway?", false) {
+				return fmt.Errorf("aborted: unexpected issue status")
+			}
+		} else {
+			ui.Warning("Proceeding (non-interactive mode)")
+		}
+	}
+
+	return nil
 }
