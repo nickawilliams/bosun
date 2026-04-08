@@ -1,0 +1,227 @@
+package workspace
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/nickawilliams/bosun/internal/vcs"
+)
+
+// RepoStatus describes the state of a single repo within a workspace.
+type RepoStatus struct {
+	Name   string
+	Branch string
+	Dirty  bool
+	Path   string
+}
+
+// Manager handles workspace lifecycle operations.
+type Manager struct {
+	vcs           vcs.VCS
+	repoRoot      string // Where source repos live.
+	workspaceRoot string // Where workspaces are created.
+}
+
+// NewManager creates a workspace manager.
+func NewManager(v vcs.VCS, repoRoot, workspaceRoot string) *Manager {
+	return &Manager{
+		vcs:           v,
+		repoRoot:      repoRoot,
+		workspaceRoot: workspaceRoot,
+	}
+}
+
+// Create creates a new workspace with worktrees for each repo.
+// The branch name is the workspace name (can include slashes).
+func (m *Manager) Create(ctx context.Context, name string, repos []string, fromHead bool) error {
+	for _, repo := range repos {
+		repoPath := filepath.Join(m.repoRoot, repo)
+		if _, err := os.Stat(repoPath); err != nil {
+			return fmt.Errorf("repo %q not found at %s", repo, repoPath)
+		}
+
+		worktreePath := filepath.Join(m.workspaceRoot, name, repo)
+
+		// Skip if worktree already exists.
+		if _, err := os.Stat(worktreePath); err == nil {
+			continue
+		}
+
+		// Create the branch if it doesn't exist.
+		if fromHead {
+			if err := m.vcs.CreateBranchFromHead(ctx, repoPath, name); err != nil {
+				return fmt.Errorf("creating branch in %s: %w", repo, err)
+			}
+		} else {
+			if err := m.vcs.CreateBranch(ctx, repoPath, name); err != nil {
+				return fmt.Errorf("creating branch in %s: %w", repo, err)
+			}
+		}
+
+		// Create the worktree directory (parent dirs).
+		if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+			return fmt.Errorf("creating workspace directory: %w", err)
+		}
+
+		if err := m.vcs.CreateWorktree(ctx, repoPath, worktreePath, name); err != nil {
+			return fmt.Errorf("creating worktree for %s: %w", repo, err)
+		}
+	}
+
+	return nil
+}
+
+// Add adds repos to an existing workspace.
+func (m *Manager) Add(ctx context.Context, name string, repos []string, fromHead bool) error {
+	wsPath := filepath.Join(m.workspaceRoot, name)
+	if _, err := os.Stat(wsPath); err != nil {
+		return fmt.Errorf("workspace %q not found at %s", name, wsPath)
+	}
+
+	return m.Create(ctx, name, repos, fromHead)
+}
+
+// Status returns the status of all repos in a workspace.
+func (m *Manager) Status(ctx context.Context, name string) ([]RepoStatus, error) {
+	wsPath := filepath.Join(m.workspaceRoot, name)
+	entries, err := os.ReadDir(wsPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading workspace %q: %w", name, err)
+	}
+
+	var statuses []RepoStatus
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		repoPath := filepath.Join(wsPath, entry.Name())
+
+		// Check if it looks like a worktree (has .git entry).
+		if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+			continue
+		}
+
+		branch, err := m.vcs.GetCurrentBranch(ctx, repoPath)
+		if err != nil {
+			branch = "(unknown)"
+		}
+
+		dirty, err := m.vcs.IsDirty(ctx, repoPath)
+		if err != nil {
+			dirty = false
+		}
+
+		statuses = append(statuses, RepoStatus{
+			Name:   entry.Name(),
+			Branch: branch,
+			Dirty:  dirty,
+			Path:   repoPath,
+		})
+	}
+
+	return statuses, nil
+}
+
+// Remove removes a workspace: worktrees, local branches, remote branches.
+// Returns an error if any repo has uncommitted changes (unless force is true).
+func (m *Manager) Remove(ctx context.Context, name string, force bool) error {
+	wsPath := filepath.Join(m.workspaceRoot, name)
+
+	statuses, err := m.Status(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	// Check for dirty repos unless force is set.
+	if !force {
+		var dirty []string
+		for _, s := range statuses {
+			if s.Dirty {
+				dirty = append(dirty, s.Name)
+			}
+		}
+		if len(dirty) > 0 {
+			return fmt.Errorf(
+				"repos have uncommitted changes: %s (use --force to override)",
+				strings.Join(dirty, ", "),
+			)
+		}
+	}
+
+	// Remove worktrees and branches.
+	for _, s := range statuses {
+		repoPath := filepath.Join(m.repoRoot, s.Name)
+		worktreePath := filepath.Join(wsPath, s.Name)
+
+		if err := m.vcs.RemoveWorktree(ctx, repoPath, worktreePath, force); err != nil {
+			return fmt.Errorf("removing worktree for %s: %w", s.Name, err)
+		}
+
+		if err := m.vcs.DeleteBranch(ctx, repoPath, name); err != nil {
+			return fmt.Errorf("deleting branch in %s: %w", s.Name, err)
+		}
+	}
+
+	// Clean up workspace directory (and empty parent dirs).
+	if err := os.RemoveAll(wsPath); err != nil {
+		return fmt.Errorf("removing workspace directory: %w", err)
+	}
+	cleanEmptyParents(m.workspaceRoot, wsPath)
+
+	return nil
+}
+
+// DetectName attempts to determine the workspace name from a path within
+// a workspace. Walks up from the given path looking for the workspace root.
+func DetectName(workspaceRoot, currentPath string) (string, error) {
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(currentPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Walk up from currentPath until we find a directory that is a direct
+	// child of workspaceRoot (accounting for nested branch names like
+	// feature/PROJ-123).
+	dir := absPath
+	for {
+		// Check if this directory contains a .git entry (worktree marker).
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			// This is a worktree — its parent structure above workspaceRoot
+			// is the workspace name.
+			parent := filepath.Dir(dir)
+			if rel, err := filepath.Rel(absRoot, parent); err == nil && !strings.HasPrefix(rel, "..") {
+				return rel, nil
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("not inside a workspace under %s", workspaceRoot)
+}
+
+// cleanEmptyParents removes empty directories between child and stopAt,
+// walking upward. Stops at stopAt or the first non-empty directory.
+func cleanEmptyParents(stopAt, child string) {
+	dir := filepath.Dir(child)
+	for dir != stopAt && dir != filepath.Dir(dir) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			break
+		}
+		os.Remove(dir)
+		dir = filepath.Dir(dir)
+	}
+}
