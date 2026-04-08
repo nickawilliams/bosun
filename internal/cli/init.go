@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -39,6 +40,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	bosunDir := filepath.Join(cwd, ".bosun")
 	if _, err := os.Stat(bosunDir); err == nil && !force {
 		return fmt.Errorf(".bosun/ already exists (use --force to overwrite)")
+	}
+
+	// Check if we're inside an existing bosun project.
+	if existing := config.FindProjectRoot(); existing != "" && existing != cwd {
+		return fmt.Errorf(
+			"already inside a bosun project at %s (nested projects are not supported)",
+			existing,
+		)
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
