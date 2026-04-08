@@ -32,26 +32,23 @@ directs the crew and signals state changes.
   being the modularity seam.
 - **Toolchain**: Follow patterns from diffscribe/shedoc — Makefile with
   project.yaml, goreleaser, git-cliff, LDFLAGS version injection.
-- **Repo association**: Project config lists repos by name, resolved relative
-  to `repository_root`. Resolution order for which repos to operate on:
-  `--repo` flag > project config `repos:` list > CWD (if inside a git repo).
-  Project config is the only mechanism that can discover all repos for a
-  multi-repo issue.
-- **Workspace management**: Optional. Absorbed from standalone `workspace`
-  utility into bosun as a subcommand
-  (`bosun workspace {create,add,status,rm}`). Manages git worktrees under
-  `<workspace_root>/<branch>/<repo>/`.
-  `bosun start` creates a workspace when workspace support is configured,
-  otherwise just creates a branch in the repo directly. Lifecycle commands
-  work regardless of whether workspaces are in use — they only need a repo
-  with the right branch.
+- **Repo association**: `repos:` config is a list of glob patterns resolved
+  to directories containing `.git/`. Replaces both `repository_root` and
+  explicit repo names with a single flexible mechanism. `--repo` flag on
+  `start` filters which glob-matched repos to operate on for a given issue.
+- **Workspace management**: Absorbed from standalone `workspace` utility
+  into bosun as a subcommand (`bosun workspace {create,add,status,rm}`).
+  Manages git worktrees under `<workspace_root>/<branch>/<repo>/`.
+  `bosun start` creates a workspace (branches + worktrees) for the resolved
+  repos. `workspace *` commands function independently from lifecycle
+  commands.
 - **Project root**: Identified by the presence of a `.bosun/` directory.
   Discovered by walking up from CWD. Houses project-level config overrides.
   Not required — bosun works with global config alone.
-- **Repo/workspace layout**: Configurable via `repository_root` and
-  `workspace_root` in project config. Defaults assume a managed layout
-  (repos in `.bosun/repos/`, workspaces at project root). Existing setups
-  override these paths to point at repos wherever they already live.
+- **Repo/workspace layout**: `repos:` globs define where repos are.
+  `workspace_root` in project config sets where workspaces are created
+  (defaults to project root). Workspaces are always on when `.bosun/`
+  exists.
 - **Subcommand structure**: All commands are top-level Cobra subcommands.
   Lifecycle commands (`start`, `review`, `preview`, `cleanup`, etc.) share an
   `--issue`
@@ -185,16 +182,12 @@ slack:
   channel_review: bb-prs
   channel_release: release_coordination
 
-# Where source repos live (default: .bosun/repos/)
-repository_root: .
+# Repo patterns (globs resolved to directories containing .git/)
+repos:
+  - ./*
 
 # Where workspaces are created (default: project root)
 workspace_root: _workspaces
-
-# Repos in this project (resolved relative to repository_root)
-repos:
-  - my-service
-  - my-frontend
 ```
 
 ### Project Structure
@@ -395,47 +388,26 @@ Displays:
 
 ## Workspace Management
 
-Optional subcommand for managing git worktree workspaces. Used internally by
-`bosun start` when workspace support is configured, but also usable directly
-for worktree operations without the issue lifecycle. Lifecycle commands work
-with or without workspaces.
+Subcommand for managing git worktree workspaces. Used internally by
+`bosun start`, but also usable directly for worktree operations without
+the issue lifecycle.
 
 ### Layout
 
-Configurable via `repository_root` and `workspace_root` in project config.
-
-**Default (managed) layout:**
+Repos are discovered via `repos:` globs. `workspace_root` sets where
+workspaces are created (defaults to project root).
 
 ```
-<project-root>/
+<project-root>/                         # contains .bosun/
 ├── .bosun/
-│   ├── config.yaml
-│   └── repos/                          # repository_root (default)
-│       ├── my-service/
-│       └── my-frontend/
-├── feature/
-│   └── PROJ-123_add-widget/            # workspace = branch name
-│       ├── my-service/                 # worktree (one per repo)
-│       └── my-frontend/               # worktree
-└── fix/
-    └── PROJ-456_broken-auth/
-        └── my-service/
-```
-
-**Existing repos layout** (e.g., `repository_root: .`, `workspace_root:
-_workspaces`):
-
-```
-<project-root>/
-├── .bosun/
-│   └── config.yaml
-├── my-service/                         # existing repos, untouched
+│   └── config.yaml                     # repos: [./*], workspace_root: _workspaces
+├── my-service/                         # repos matched by glob
 ├── my-frontend/
 └── _workspaces/
     └── feature/
-        └── PROJ-123_add-widget/
-            ├── my-service/
-            └── my-frontend/
+        └── PROJ-123_add-widget/        # workspace = branch name
+            ├── my-service/             # worktree
+            └── my-frontend/            # worktree
 ```
 
 Uniform structure regardless of repo count. Branch name can include slashes
