@@ -268,7 +268,7 @@ format:
 ## Install just the binary
 install: install/binary
 
-install/all: install/binary install/completions/all install/man
+install/all: install/binary install/completions/all
 
 install/binary: build
 	@echo "Installing binary -> $(INSTALL_BIN)"
@@ -335,7 +335,7 @@ install/man: man
 	@echo "NOTE: View it via 'man bosun'"
 
 ## Symlink every artifact (binary + all completions) back to the repo
-link: build man
+link: build
 	@echo "Linking binary -> $(INSTALL_BIN)"
 	@src="$(CURDIR)/$(BUILD_BIN)"; \
 	if [ -w $(INSTALL_BIN_DIR) ]; then \
