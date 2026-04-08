@@ -4,12 +4,23 @@ import (
 	"os"
 
 	"github.com/charmbracelet/huh"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"golang.org/x/term"
 )
+
+// formTheme is the shared huh theme derived from the app palette.
+var formTheme = ui.FormTheme()
 
 // isInteractive returns true if stdin is a terminal.
 func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// runForm runs a huh form with the app theme applied.
+func runForm(fields ...huh.Field) error {
+	return huh.NewForm(huh.NewGroup(fields...)).
+		WithTheme(formTheme).
+		Run()
 }
 
 // promptRequired prompts for a value if stdin is a terminal. If stdin is not
@@ -21,11 +32,7 @@ func promptRequired(label string) string {
 	}
 
 	var value string
-	err := huh.NewInput().
-		Title(label).
-		Value(&value).
-		Run()
-	if err != nil {
+	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
 		return ""
 	}
 	return value
@@ -38,55 +45,28 @@ func promptConfirm(label string, defaultVal bool) bool {
 		return defaultVal
 	}
 
-	var confirmed bool
-	err := huh.NewConfirm().
-		Title(label).
-		Affirmative("Yes").
-		Negative("No").
-		Value(&confirmed).
-		Run()
+	confirmed := defaultVal
+	err := runForm(
+		huh.NewConfirm().
+			Title(label).
+			Affirmative("Yes").
+			Negative("No").
+			Value(&confirmed),
+	)
 	if err != nil {
 		return defaultVal
 	}
 	return confirmed
 }
 
-// promptSelect shows a selection prompt. Returns the selected value.
-// Returns empty string in non-interactive mode.
-func promptSelect(label string, options []string) string {
-	if !isInteractive() {
-		return ""
-	}
-
-	opts := make([]huh.Option[string], len(options))
-	for i, o := range options {
-		opts[i] = huh.NewOption(o, o)
-	}
-
-	var value string
-	err := huh.NewSelect[string]().
-		Title(label).
-		Options(opts...).
-		Value(&value).
-		Run()
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
-// promptValue displays a prompt with a default value. Used by init.
+// promptValue displays a prompt with a default value.
 func promptValue(label, defaultVal string) string {
 	if !isInteractive() {
 		return defaultVal
 	}
 
 	value := defaultVal
-	err := huh.NewInput().
-		Title(label).
-		Value(&value).
-		Run()
-	if err != nil {
+	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
 		return defaultVal
 	}
 	return value

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -52,31 +53,62 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Resolve repo globs.
 	repoGlobs, _ := cmd.Flags().GetStringSlice("repos")
-	if len(repoGlobs) == 0 {
-		detectedGlob := ""
-		if !noDetect {
-			if repos := detectRepos(cwd); len(repos) > 0 {
-				detectedGlob = "./*"
-				fmt.Printf("Detected repos: %s\n", strings.Join(repos, ", "))
+	detectedGlob := ""
+	if len(repoGlobs) == 0 && !noDetect {
+		if repos := detectRepos(cwd); len(repos) > 0 {
+			detectedGlob = "./*"
+			ui.Info("Detected repos:")
+			for _, r := range repos {
+				ui.Item("", r)
 			}
 		}
+	}
 
-		if interactive {
-			input := promptValue(
-				"Repo patterns (comma-separated globs, e.g. ./* or ~/Projects/myorg/*)",
-				firstNonEmpty(detectedGlob, "./*"))
-			for _, g := range strings.Split(input, ",") {
+	// Resolve workspace_root.
+	wsRoot, _ := cmd.Flags().GetString("workspace-root")
+
+	// Prompt for all missing values in a single form.
+	needRepos := len(repoGlobs) == 0
+	needWS := wsRoot == ""
+	if (needRepos || needWS) && interactive && isInteractive() {
+		repoInput := firstNonEmpty(detectedGlob, "./*")
+		wsInput := "_workspaces"
+
+		var fields []huh.Field
+		if needRepos {
+			fields = append(fields, huh.NewInput().
+				Title("Repo patterns").
+				Description("Comma-separated globs, e.g. ./* or ~/Projects/myorg/*").
+				Value(&repoInput))
+		}
+		if needWS {
+			fields = append(fields, huh.NewInput().
+				Title("Workspace root").
+				Description("Directory where workspaces are created").
+				Value(&wsInput))
+		}
+
+		if err := runForm(fields...); err != nil {
+			return err
+		}
+
+		if needRepos {
+			for _, g := range strings.Split(repoInput, ",") {
 				if trimmed := strings.TrimSpace(g); trimmed != "" {
 					repoGlobs = append(repoGlobs, trimmed)
 				}
 			}
-		} else if detectedGlob != "" {
-			repoGlobs = []string{detectedGlob}
+		}
+		if needWS {
+			wsRoot = wsInput
 		}
 	}
 
-	// Prompt for globs if we still have none and aren't in interactive mode.
-	if len(repoGlobs) == 0 && !interactive {
+	// Apply defaults for anything still unresolved.
+	if len(repoGlobs) == 0 && detectedGlob != "" {
+		repoGlobs = []string{detectedGlob}
+	}
+	if len(repoGlobs) == 0 && !interactive && isInteractive() {
 		input := promptValue(
 			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
 			"")
@@ -88,19 +120,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-
-	// Resolve workspace_root.
-	wsRoot, _ := cmd.Flags().GetString("workspace-root")
 	if wsRoot == "" {
-		defaultWS := "_workspaces"
-
-		if interactive {
-			wsRoot = promptValue(
-				"Workspace root (where workspaces are created)",
-				defaultWS)
-		} else {
-			wsRoot = defaultWS
-		}
+		wsRoot = "_workspaces"
 	}
 
 	if isDryRun(cmd) {
@@ -129,7 +150,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	} else {
 		ui.Item("repos:", "(none — add repo patterns to .bosun/config.yaml)")
 	}
-	fmt.Println()
 	ui.Info("Next steps:")
 	ui.Muted("  Edit .bosun/config.yaml to configure Jira, Slack, etc.")
 	ui.Muted("  Run: bosun start --issue <issue>")
