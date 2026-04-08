@@ -447,6 +447,9 @@ handle by using their own branch names.
 
 ## Future Ideas
 
+- OAuth authentication for Jira (browser-based 3LO flow via `bosun auth
+  jira`, refresh token storage in system keychain, abstract auth method
+  behind an interface so Basic and OAuth are swappable)
 - Auto-configure local development environments for affected repos
 - Code coverage checks against minimums
 - Local dev orchestration (start backends, point frontends at them)
