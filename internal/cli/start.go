@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -24,8 +25,32 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
-			branchName := issue
 			fromHead, _ := cmd.Flags().GetBool("from-head")
+			ctx := cmd.Context()
+
+			// Fetch issue details to build branch name.
+			var detail issuepkg.Issue
+			tracker, trackerErr := newIssueTracker()
+			if trackerErr == nil {
+				fetched, err := ui.WithSpinnerResult("Fetching issue...", func() (issuepkg.Issue, error) {
+					return tracker.GetIssue(ctx, issue)
+				})
+				if err != nil {
+					return fmt.Errorf("fetching issue: %w", err)
+				}
+				detail = fetched
+			}
+
+			// Build branch name from pattern + issue metadata.
+			branchName := issue
+			if detail.Key != "" {
+				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
+				if err != nil {
+					ui.Warning("Branch naming: %v (falling back to %s)", err, issue)
+				} else {
+					branchName = name
+				}
+			}
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would start work on %s", issue)
@@ -66,8 +91,6 @@ func newStartCmd() *cobra.Command {
 			}
 
 			// Transition issue status (graceful — warn on error, don't fail).
-			ctx := cmd.Context()
-			tracker, trackerErr := newIssueTracker()
 			if trackerErr != nil {
 				ui.Warning("Issue tracker not configured: %v", trackerErr)
 			} else {
