@@ -37,7 +37,7 @@ func (t *Table) Render() {
 
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(Theme.Muted)
+		Foreground(Palette.Muted)
 
 	// Auto-calculate widths if not set.
 	widths := make([]int, len(t.columns))

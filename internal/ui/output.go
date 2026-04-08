@@ -8,36 +8,36 @@ import (
 )
 
 var (
-	successStyle = lipgloss.NewStyle().Foreground(Theme.Success)
-	errorStyle   = lipgloss.NewStyle().Foreground(Theme.Error)
-	warningStyle = lipgloss.NewStyle().Foreground(Theme.Warning)
-	mutedStyle   = lipgloss.NewStyle().Foreground(Theme.Muted)
-	primaryStyle = lipgloss.NewStyle().Foreground(Theme.Primary)
+	successStyle = lipgloss.NewStyle().Foreground(Palette.Success)
+	errorStyle   = lipgloss.NewStyle().Foreground(Palette.Error)
+	warningStyle = lipgloss.NewStyle().Foreground(Palette.Warning)
+	mutedStyle   = lipgloss.NewStyle().Foreground(Palette.Muted)
+	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
 	boldStyle    = lipgloss.NewStyle().Bold(true)
 )
 
 // Success prints a success message with a check mark.
 func Success(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
-	fmt.Println(successStyle.Render(Theme.Check) + " " + text)
+	fmt.Println(successStyle.Render(Palette.Check) + " " + text)
 }
 
 // Error prints an error message with an X mark to stderr.
 func Error(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
-	fmt.Fprintln(os.Stderr, errorStyle.Render(Theme.Cross) + " " + text)
+	fmt.Fprintln(os.Stderr, errorStyle.Render(Palette.Cross)+" "+text)
 }
 
 // Warning prints a warning message to stderr.
 func Warning(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
-	fmt.Fprintln(os.Stderr, warningStyle.Render("!") + " " + text)
+	fmt.Fprintln(os.Stderr, warningStyle.Render("!")+" "+text)
 }
 
 // Info prints an informational message.
 func Info(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
-	fmt.Println(primaryStyle.Render(Theme.Bullet) + " " + text)
+	fmt.Println(primaryStyle.Render(Palette.Bullet) + " " + text)
 }
 
 // Muted prints a dimmed/secondary message.
@@ -52,7 +52,7 @@ func Bold(msg string, args ...any) {
 	fmt.Println(boldStyle.Render(text))
 }
 
-// Item prints an indented item with an arrow, typically under a heading.
+// Item prints an indented item with a label and value.
 func Item(label, value string) {
 	fmt.Printf("  %s %s\n",
 		mutedStyle.Render(label),

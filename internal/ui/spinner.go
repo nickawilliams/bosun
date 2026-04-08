@@ -23,7 +23,7 @@ type taskDoneMsg struct{ err error }
 func newSpinnerModel(message string, resultCh <-chan error) spinnerModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(Theme.Primary)
+	s.Style = lipgloss.NewStyle().Foreground(Palette.Primary)
 	return spinnerModel{
 		spinner:  s,
 		message:  message,
@@ -123,6 +123,6 @@ func WithSpinnerResult[T any](message string, fn func() (T, error)) (T, error) {
 // SimulateSpinner prints a simple message with a brief delay for contexts
 // where a real spinner isn't appropriate (e.g., very fast operations).
 func SimulateSpinner(message string, d time.Duration) {
-	fmt.Printf("%s %s\n", lipgloss.NewStyle().Foreground(Theme.Primary).Render(Theme.Dot), message)
+	fmt.Printf("%s %s\n", lipgloss.NewStyle().Foreground(Palette.Primary).Render(Palette.Dot), message)
 	time.Sleep(d)
 }

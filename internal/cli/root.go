@@ -1,9 +1,8 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +22,7 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.Flags().BoolP("version", "v", false, "print version information")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if v, _ := cmd.Flags().GetBool("version"); v {
-			fmt.Println(version)
+			ui.Bold("%s", version)
 			return nil
 		}
 		return cmd.Help()
