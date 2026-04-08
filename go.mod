@@ -1,4 +1,4 @@
-module github.com/rogwilco/bosun
+module github.com/nickawilliams/bosun
 
 go 1.26.2
 

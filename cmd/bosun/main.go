@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rogwilco/bosun/internal/cli"
+	"github.com/nickawilliams/bosun/internal/cli"
 )
 
 var (

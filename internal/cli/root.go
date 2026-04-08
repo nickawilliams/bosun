@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/rogwilco/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/spf13/cobra"
 )
 
