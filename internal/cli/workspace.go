@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -28,9 +29,26 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Short: "Create a new workspace",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			repos := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
-			fmt.Printf("[stub] Would create workspace %q for repos %v (from-head: %v)\n",
-				args[0], args[1:], fromHead)
+
+			if isDryRun(cmd) {
+				fmt.Printf("[dry-run] Would create workspace %q for repos %v (from-head: %v)\n",
+					name, repos, fromHead)
+				return nil
+			}
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			if err := mgr.Create(context.Background(), name, repos, fromHead); err != nil {
+				return err
+			}
+
+			fmt.Printf("Created workspace %q\n", name)
 			return nil
 		},
 	}
@@ -41,15 +59,40 @@ func newWorkspaceCreateCmd() *cobra.Command {
 }
 
 func newWorkspaceAddCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "add [name] <repos...>",
 		Short: "Add repos to an existing workspace",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("[stub] Would add repos to workspace: %v\n", args)
+			fromHead, _ := cmd.Flags().GetBool("from-head")
+
+			// TODO(nick): distinguish name vs repo args when auto-detect is
+			// implemented. For now, first arg is always the name.
+			name := args[0]
+			repos := args[1:]
+
+			if isDryRun(cmd) {
+				fmt.Printf("[dry-run] Would add repos %v to workspace %q\n", repos, name)
+				return nil
+			}
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			if err := mgr.Add(context.Background(), name, repos, fromHead); err != nil {
+				return err
+			}
+
+			fmt.Printf("Added repos to workspace %q\n", name)
 			return nil
 		},
 	}
+
+	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
+
+	return cmd
 }
 
 func newWorkspaceStatusCmd() *cobra.Command {
@@ -57,11 +100,35 @@ func newWorkspaceStatusCmd() *cobra.Command {
 		Use:   "status [name]",
 		Short: "Show workspace status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := "(auto-detect)"
-			if len(args) > 0 {
-				name = args[0]
+			name, err := resolveWorkspaceName(args)
+			if err != nil {
+				return err
 			}
-			fmt.Printf("[stub] Would show status for workspace %q\n", name)
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			statuses, err := mgr.Status(context.Background(), name)
+			if err != nil {
+				return err
+			}
+
+			if len(statuses) == 0 {
+				fmt.Printf("No repos found in workspace %q\n", name)
+				return nil
+			}
+
+			fmt.Printf("Workspace: %s\n\n", name)
+			for _, s := range statuses {
+				state := "clean"
+				if s.Dirty {
+					state = "dirty"
+				}
+				fmt.Printf("  %-20s %-40s %s\n", s.Name, s.Branch, state)
+			}
+
 			return nil
 		},
 	}
@@ -72,12 +139,27 @@ func newWorkspaceRmCmd() *cobra.Command {
 		Use:   "rm [name]",
 		Short: "Remove a workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := "(auto-detect)"
-			if len(args) > 0 {
-				name = args[0]
+			name, err := resolveWorkspaceName(args)
+			if err != nil {
+				return err
 			}
 			force, _ := cmd.Flags().GetBool("force")
-			fmt.Printf("[stub] Would remove workspace %q (force: %v)\n", name, force)
+
+			if isDryRun(cmd) {
+				fmt.Printf("[dry-run] Would remove workspace %q (force: %v)\n", name, force)
+				return nil
+			}
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			if err := mgr.Remove(context.Background(), name, force); err != nil {
+				return err
+			}
+
+			fmt.Printf("Removed workspace %q\n", name)
 			return nil
 		},
 	}
