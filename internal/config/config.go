@@ -8,18 +8,17 @@ import (
 	"github.com/spf13/viper"
 )
 
-// GlobalConfigDir returns the bosun global config directory. Prefers
-// $XDG_CONFIG_HOME/bosun on all platforms (including macOS), falling back
-// to os.UserConfigDir()/bosun.
+// GlobalConfigDir returns the bosun global config directory.
+// Uses $XDG_CONFIG_HOME/bosun if set, otherwise ~/.config/bosun.
 func GlobalConfigDir() (string, error) {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "bosun"), nil
 	}
-	configDir, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(configDir, "bosun"), nil
+	return filepath.Join(home, ".config", "bosun"), nil
 }
 
 // Load initializes configuration from global and project-level sources.
