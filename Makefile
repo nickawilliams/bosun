@@ -75,7 +75,7 @@ OMZ_PLUGIN_DEST := $(OMZ_PLUGIN_DIR)/bosun.plugin.zsh
 		uninstall/completions/bash uninstall/completions/fish uninstall/completions/oh-my-zsh \
 		uninstall/man \
 		deps changelog releasenotes version version/bump_type version/github_actions \
-		release/commit release/tag test bench lint format prep help vars _print-var
+		release/commit release/tag test bench lint format prep watch help vars _print-var
 
 ## Build all artifacts
 all: build
@@ -231,6 +231,10 @@ release/tag:
 		git tag -d "$(RELEASE_VERSION)" >/dev/null 2>&1 || true; \
 	fi
 	@git tag -a "$(RELEASE_VERSION)" -m "Release $(RELEASE_VERSION)"
+
+## Watch source files and rebuild on changes
+watch:
+	@cd "$$(pwd -P)" && $(GO) tool air
 
 ## Remove all build artifacts
 clean:

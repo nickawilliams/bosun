@@ -1,0 +1,15 @@
+#:schema https://json.schemastore.org/any.json
+
+root = "."
+tmp_dir = ".out/air"
+
+[build]
+cmd = "make build"
+entrypoint = ["/usr/bin/true"]
+include_ext = ["go", "toml", "yaml"]
+
+[log]
+main_only = false
+
+[misc]
+clean_on_exit = true
