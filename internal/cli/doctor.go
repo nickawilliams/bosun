@@ -72,33 +72,53 @@ func renderDoctorResults(results []checkResult) {
 	passStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
 	warnStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
 	failStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	nameStyle := lipgloss.NewStyle().Bold(true)
-	detailStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 
 	passed, warned, failed := 0, 0, 0
+
+	tbl := ui.NewTable(
+		ui.Column{Header: "Check"},
+		ui.Column{Header: ""},
+		ui.Column{Header: "Detail"},
+	)
+
+	tbl.SetStyleFunc(func(row, col int) lipgloss.Style {
+		base := lipgloss.NewStyle().Padding(0, 1)
+		if row < 0 {
+			return base.Bold(true).Foreground(ui.Palette.Primary)
+		}
+		if col == 1 && row < len(results) {
+			switch results[row].status {
+			case "pass":
+				return base.Foreground(ui.Palette.Success)
+			case "warn":
+				return base.Foreground(ui.Palette.Warning)
+			case "fail":
+				return base.Foreground(ui.Palette.Error)
+			}
+		}
+		if col == 2 {
+			return base.Foreground(ui.Palette.Muted)
+		}
+		return base
+	})
 
 	for _, r := range results {
 		var symbol string
 		switch r.status {
 		case "pass":
-			symbol = passStyle.Render(ui.Palette.Check)
+			symbol = ui.Palette.Check
 			passed++
 		case "warn":
-			symbol = warnStyle.Render("!")
+			symbol = "!"
 			warned++
 		case "fail":
-			symbol = failStyle.Render(ui.Palette.Cross)
+			symbol = ui.Palette.Cross
 			failed++
 		}
-
-		name := nameStyle.Render(r.name)
-		if r.detail != "" {
-			detail := detailStyle.Render(r.detail)
-			fmt.Printf("  %s  %-24s %s\n", symbol, name, detail)
-		} else {
-			fmt.Printf("  %s  %s\n", symbol, name)
-		}
+		tbl.AddRow(r.name, symbol, r.detail)
 	}
+
+	tbl.Render()
 
 	// Summary line.
 	fmt.Println()
