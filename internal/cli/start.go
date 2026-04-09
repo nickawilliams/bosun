@@ -69,9 +69,13 @@ func newStartCmd() *cobra.Command {
 
 			// When no --repo filter and multiple repos, let user pick.
 			if len(repos) > 1 && len(filterRepos) == 0 && isInteractive() {
-				opts := make([]huh.Option[string], len(repos))
-				for i, r := range repos {
-					opts[i] = huh.NewOption(r.Name, r.Name).Selected(true)
+				const allValue = "*"
+
+				opts := []huh.Option[string]{
+					huh.NewOption("All repos", allValue),
+				}
+				for _, r := range repos {
+					opts = append(opts, huh.NewOption(r.Name, r.Name))
 				}
 
 				var selected []string
@@ -89,10 +93,20 @@ func newStartCmd() *cobra.Command {
 					return nil
 				}
 
-				// Re-filter repos to just the selected ones.
-				repos, err = resolveRepos(selected)
-				if err != nil {
-					return err
+				// "All repos" selected — use everything.
+				allSelected := false
+				for _, s := range selected {
+					if s == allValue {
+						allSelected = true
+						break
+					}
+				}
+
+				if !allSelected {
+					repos, err = resolveRepos(selected)
+					if err != nil {
+						return err
+					}
 				}
 			}
 
