@@ -97,7 +97,7 @@ func requireEnv(envVar, label string) (string, error) {
 	// Set for current process only.
 	os.Setenv(envVar, val)
 	ui.Complete(fmt.Sprintf("Set %s for this session", envVar))
-	ui.Muted(fmt.Sprintf("  Add to your shell profile to persist: export %s=...", envVar))
+	ui.Muted("  Add to your shell profile to persist: export %s=...", envVar)
 
 	return val, nil
 }

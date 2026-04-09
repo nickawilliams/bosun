@@ -163,26 +163,27 @@ func repoNames(repos []Repo) string {
 	return strings.Join(names, ", ")
 }
 
-// newIssueTracker creates an issue.Tracker from current config.
+// newIssueTracker creates an issue.Tracker from current config. Prompts for
+// missing values interactively and saves them for future use.
 func newIssueTracker() (issue.Tracker, error) {
-	provider := viper.GetString("issue_tracker")
-	if provider == "" {
-		return nil, fmt.Errorf("no issue tracker configured: set issue_tracker in config")
+	provider, err := requireConfig("issue_tracker", "Issue tracker (e.g. jira)", withGlobal())
+	if err != nil {
+		return nil, err
 	}
 
 	switch provider {
 	case "jira":
-		baseURL := viper.GetString("jira.base_url")
-		if baseURL == "" {
-			return nil, fmt.Errorf("jira.base_url not configured")
+		baseURL, err := requireConfig("jira.base_url", "Jira base URL (e.g. https://mycompany.atlassian.net)", withGlobal())
+		if err != nil {
+			return nil, err
 		}
-		email := viper.GetString("jira.email")
-		if email == "" {
-			return nil, fmt.Errorf("jira.email not configured")
+		email, err := requireConfig("jira.email", "Jira email", withGlobal())
+		if err != nil {
+			return nil, err
 		}
-		token := os.Getenv("BOSUN_JIRA_TOKEN")
-		if token == "" {
-			return nil, fmt.Errorf("BOSUN_JIRA_TOKEN environment variable not set")
+		token, err := requireEnv("BOSUN_JIRA_TOKEN", "Jira API token")
+		if err != nil {
+			return nil, err
 		}
 		return jira.New(baseURL, email, token), nil
 	default:
