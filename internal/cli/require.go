@@ -31,7 +31,7 @@ func requireConfig(key string) error {
 		if viper.GetString(fullKey(groupName, ck)) != "" {
 			return nil
 		}
-		return resolveConfigKey(groupName, ck)
+		return resolveConfigKey(groupName, ck, 0)
 	}
 
 	// Unknown key — just check if it's set.
@@ -53,6 +53,14 @@ func requireConfig(key string) error {
 
 // resolveGroup ensures all required keys in a config group are populated.
 func resolveGroup(groupName string, group ConfigGroup) error {
+	// Compute max label width for alignment across the group.
+	labelWidth := 0
+	for _, ck := range group.Keys {
+		if len(ck.Label) > labelWidth {
+			labelWidth = len(ck.Label)
+		}
+	}
+
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
@@ -73,7 +81,7 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 		}
 
 		// Need to resolve (prompt or error).
-		if err := resolveConfigKey(groupName, ck); err != nil {
+		if err := resolveConfigKey(groupName, ck, labelWidth); err != nil {
 			if ck.Required {
 				return err
 			}
@@ -86,8 +94,15 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 
 // resolveConfigKey prompts for a single config key using its schema metadata
 // and saves the result to the appropriate config file (or env for secrets).
-func resolveConfigKey(groupName string, ck ConfigKey) error {
+// labelWidth controls alignment — 0 means no padding.
+func resolveConfigKey(groupName string, ck ConfigKey, labelWidth int) error {
 	fk := fullKey(groupName, ck)
+
+	// Pad label for alignment within a group.
+	paddedLabel := ck.Label
+	if labelWidth > 0 {
+		paddedLabel = fmt.Sprintf("%-*s", labelWidth, ck.Label)
+	}
 
 	if !isInteractive() {
 		if ck.Default != "" {
@@ -102,13 +117,13 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 
 	// Secret env var — prompt with masked input, don't save to file.
 	if ck.Secret && ck.EnvVar != "" {
-		val := promptSecret(fmt.Sprintf("%s (set %s to persist)", ck.Label, ck.EnvVar))
+		val := promptSecret(fmt.Sprintf("  %s (set %s to persist)", paddedLabel, ck.EnvVar))
 		if val == "" {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
-		ui.Saved(ck.Label, "(set for this session)")
-		ui.Muted("  Add to your shell profile to persist: export %s=...", ck.EnvVar)
+		ui.Saved(paddedLabel, "(set for this session)")
+		ui.Muted("    Add to your shell profile to persist: export %s=...", ck.EnvVar)
 		return nil
 	}
 
@@ -119,7 +134,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		for i, o := range ck.Options {
 			opts[i] = huh.NewOption(o, o)
 		}
-		if err := runForm(huh.NewSelect[string]().Title(ck.Label).Options(opts...).Value(&val)); err != nil {
+		if err := runForm(huh.NewSelect[string]().Title("  "+paddedLabel).Options(opts...).Value(&val)); err != nil {
 			return err
 		}
 	} else {
@@ -127,7 +142,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		if defaultVal == "" {
 			defaultVal = ck.Example
 		}
-		val = promptValue(ck.Label, defaultVal)
+		val = promptValue("  "+paddedLabel, defaultVal)
 	}
 
 	if val == "" {
@@ -149,7 +164,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	}
 
 	viper.Set(fk, val)
-	ui.Saved(ck.Label, val)
+	ui.Saved(paddedLabel, val)
 
 	return nil
 }
