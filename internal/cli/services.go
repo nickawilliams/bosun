@@ -170,7 +170,8 @@ func newIssueTracker() (issue.Tracker, error) {
 		return nil, err
 	}
 
-	switch viper.GetString("issue_tracker") {
+	provider := viper.GetString("issue_tracker")
+	switch provider {
 	case "jira":
 		if err := requireConfig("jira"); err != nil {
 			return nil, err
@@ -181,7 +182,7 @@ func newIssueTracker() (issue.Tracker, error) {
 			os.Getenv("BOSUN_JIRA_TOKEN"),
 		), nil
 	default:
-		return nil, fmt.Errorf("unsupported issue tracker: %q", viper.GetString("issue_tracker"))
+		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
 	}
 }
 

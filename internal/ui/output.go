@@ -62,11 +62,11 @@ func Item(label, value string) {
 }
 
 // Saved prints a confirmation that a value was set, styled to match huh form
-// inputs: check + bold primary label + muted value.
+// inputs: check + bold primary label on one line, muted value on the next.
 func Saved(label, value string) {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
 	valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	fmt.Printf("  %s %s %s\n",
+	fmt.Printf("  %s %s\n    %s\n",
 		stepCheckStyle.Render(Palette.Check),
 		titleStyle.Render(label),
 		valueStyle.Render(value),
