@@ -166,20 +166,22 @@ func repoNames(repos []Repo) string {
 // newIssueTracker creates an issue.Tracker from current config. Prompts for
 // missing values interactively and saves them for future use.
 func newIssueTracker() (issue.Tracker, error) {
-	provider, err := requireConfig("issue_tracker")
-	if err != nil {
+	if err := requireConfig("issue_tracker"); err != nil {
 		return nil, err
 	}
 
-	switch provider {
+	switch viper.GetString("issue_tracker") {
 	case "jira":
-		cfg, err := requireGroup("jira")
-		if err != nil {
+		if err := requireConfig("jira"); err != nil {
 			return nil, err
 		}
-		return jira.New(cfg["base_url"], cfg["email"], cfg["token"]), nil
+		return jira.New(
+			viper.GetString("jira.base_url"),
+			viper.GetString("jira.email"),
+			os.Getenv("BOSUN_JIRA_TOKEN"),
+		), nil
 	default:
-		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
+		return nil, fmt.Errorf("unsupported issue tracker: %q", viper.GetString("issue_tracker"))
 	}
 }
 

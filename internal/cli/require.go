@@ -11,106 +11,105 @@ import (
 	"github.com/spf13/viper"
 )
 
-// requireConfig resolves a single config key by name. If the key belongs to
-// a known group in the schema, its metadata (label, options, scope, etc.) is
-// used automatically. Otherwise it falls back to a plain text prompt.
-func requireConfig(key string) (string, error) {
-	// Already set — return immediately.
-	if val := viper.GetString(key); val != "" {
-		return val, nil
+// requireConfig ensures that the config key (or group) is populated. If
+// the key matches a group in the schema, all required keys in that group
+// are resolved. If it matches a single key, just that key is resolved.
+// Missing values are prompted for interactively and saved. Callers read
+// the resolved values from viper / os.Getenv afterward.
+func requireConfig(key string) error {
+	// Check if this is a group name.
+	if group, ok := lookupGroup(key); ok {
+		return resolveGroup(key, group)
 	}
 
-	// Look for this key in the schema.
+	// Check if this is a known single key.
 	if ck, groupName, ok := findConfigKey(key); ok {
+		// Already set?
+		if ck.EnvVar != "" && os.Getenv(ck.EnvVar) != "" {
+			return nil
+		}
+		if viper.GetString(fullKey(groupName, ck)) != "" {
+			return nil
+		}
 		return resolveConfigKey(groupName, ck)
 	}
 
-	// Unknown key — prompt with just the key name.
+	// Unknown key — just check if it's set.
+	if viper.GetString(key) != "" {
+		return nil
+	}
+
+	// Prompt as plain text.
 	if !isInteractive() {
-		return "", fmt.Errorf("%s not configured", key)
+		return fmt.Errorf("%s not configured", key)
 	}
 	val := promptValue(key, "")
 	if val == "" {
-		return "", fmt.Errorf("%s is required", key)
+		return fmt.Errorf("%s is required", key)
 	}
 	viper.Set(key, val)
-	return val, nil
+	return nil
 }
 
-// requireGroup resolves all required keys in a config group, prompting for
-// any that are missing. Returns a map of key → value (using the short key
-// names, not fully qualified).
-func requireGroup(groupName string) (map[string]string, error) {
-	group, ok := lookupGroup(groupName)
-	if !ok {
-		return nil, fmt.Errorf("unknown config group: %s", groupName)
-	}
-
-	result := make(map[string]string)
-
+// resolveGroup ensures all required keys in a config group are populated.
+func resolveGroup(groupName string, group ConfigGroup) error {
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
-		// Try env var first for secret keys.
-		if ck.EnvVar != "" {
-			if val := os.Getenv(ck.EnvVar); val != "" {
-				result[ck.Key] = val
-				continue
-			}
-		}
-
-		// Try viper.
-		if val := viper.GetString(fk); val != "" {
-			result[ck.Key] = val
+		// Already set via env var?
+		if ck.EnvVar != "" && os.Getenv(ck.EnvVar) != "" {
 			continue
 		}
 
-		// Use default if available and not required to prompt.
+		// Already set in viper?
+		if viper.GetString(fk) != "" {
+			continue
+		}
+
+		// Apply default for optional keys without prompting.
 		if ck.Default != "" && !ck.Required {
-			result[ck.Key] = ck.Default
 			viper.Set(fk, ck.Default)
 			continue
 		}
 
-		// Need to prompt.
-		val, err := resolveConfigKey(groupName, ck)
-		if err != nil {
+		// Need to resolve (prompt or error).
+		if err := resolveConfigKey(groupName, ck); err != nil {
 			if ck.Required {
-				return nil, err
+				return err
 			}
 			continue
 		}
-		result[ck.Key] = val
 	}
 
-	return result, nil
+	return nil
 }
 
-// resolveConfigKey prompts for a single config key using its schema metadata.
-func resolveConfigKey(groupName string, ck ConfigKey) (string, error) {
+// resolveConfigKey prompts for a single config key using its schema metadata
+// and saves the result to the appropriate config file (or env for secrets).
+func resolveConfigKey(groupName string, ck ConfigKey) error {
 	fk := fullKey(groupName, ck)
 
 	if !isInteractive() {
 		if ck.Default != "" {
 			viper.Set(fk, ck.Default)
-			return ck.Default, nil
+			return nil
 		}
 		if ck.EnvVar != "" {
-			return "", fmt.Errorf("%s not set (set %s env var)", ck.Label, ck.EnvVar)
+			return fmt.Errorf("%s not set (set %s env var)", ck.Label, ck.EnvVar)
 		}
-		return "", fmt.Errorf("%s not configured (set %s in config)", ck.Label, fk)
+		return fmt.Errorf("%s not configured (set %s in config)", ck.Label, fk)
 	}
 
 	// Secret env var — prompt with masked input, don't save to file.
 	if ck.Secret && ck.EnvVar != "" {
 		val := promptSecret(fmt.Sprintf("%s (set %s to persist)", ck.Label, ck.EnvVar))
 		if val == "" {
-			return "", fmt.Errorf("%s is required", ck.Label)
+			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
 		ui.Complete(fmt.Sprintf("Set %s for this session", ck.EnvVar))
 		ui.Muted("  Add to your shell profile to persist: export %s=...", ck.EnvVar)
-		return val, nil
+		return nil
 	}
 
 	// Select from options.
@@ -121,7 +120,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) (string, error) {
 			opts[i] = huh.NewOption(o, o)
 		}
 		if err := runForm(huh.NewSelect[string]().Title(ck.Label).Options(opts...).Value(&val)); err != nil {
-			return "", err
+			return err
 		}
 	} else {
 		defaultVal := ck.Default
@@ -132,7 +131,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) (string, error) {
 	}
 
 	if val == "" {
-		return "", fmt.Errorf("%s is required", ck.Label)
+		return fmt.Errorf("%s is required", ck.Label)
 	}
 
 	// Determine scope from the group in the schema.
@@ -146,19 +145,19 @@ func resolveConfigKey(groupName string, ck ConfigKey) (string, error) {
 	if err != nil {
 		viper.Set(fk, val)
 		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
-		return val, nil
+		return nil
 	}
 
 	if err := setConfigValue(configPath, fk, val); err != nil {
 		viper.Set(fk, val)
 		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
-		return val, nil
+		return nil
 	}
 
 	viper.Set(fk, val)
 	ui.Complete(fmt.Sprintf("Saved %s", fk))
 
-	return val, nil
+	return nil
 }
 
 // findConfigKey searches the schema for a fully-qualified key (e.g.,
@@ -190,7 +189,6 @@ func configPathForScope(global bool) (string, error) {
 
 	projectRoot := config.FindProjectRoot()
 	if projectRoot == "" {
-		// Fall back to global if no project root.
 		return configPathForScope(true)
 	}
 	return filepath.Join(projectRoot, ".bosun", "config.yaml"), nil
