@@ -40,6 +40,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newStatusCmd(),
 		newWorkspaceCmd(),
 		newConfigCmd(),
+		newDoctorCmd(),
 	)
 
 	return cmd
