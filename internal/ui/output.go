@@ -61,6 +61,18 @@ func Item(label, value string) {
 	)
 }
 
+// Saved prints a confirmation that a value was set, styled to match huh form
+// inputs: check + bold primary label + muted value.
+func Saved(label, value string) {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	fmt.Printf("  %s %s %s\n",
+		stepCheckStyle.Render(Palette.Check),
+		titleStyle.Render(label),
+		valueStyle.Render(value),
+	)
+}
+
 // Header prints a styled command header. Pass the command name and optional
 // context (e.g., issue key, workspace name).
 func Header(command string, context ...string) {

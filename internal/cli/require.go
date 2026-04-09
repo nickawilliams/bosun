@@ -107,7 +107,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
-		ui.Complete(fmt.Sprintf("Set %s for this session", ck.EnvVar))
+		ui.Saved(ck.Label, "(set for this session)")
 		ui.Muted("  Add to your shell profile to persist: export %s=...", ck.EnvVar)
 		return nil
 	}
@@ -155,7 +155,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	}
 
 	viper.Set(fk, val)
-	ui.Complete(fmt.Sprintf("Saved %s", fk))
+	ui.Saved(ck.Label, val)
 
 	return nil
 }
