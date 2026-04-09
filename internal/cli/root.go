@@ -28,6 +28,8 @@ func NewRootCmd(version string) *cobra.Command {
 		return cmd.Help()
 	}
 
+	setStyledHelp(cmd)
+
 	cmd.AddCommand(
 		newInitCmd(),
 		newCreateCmd(),

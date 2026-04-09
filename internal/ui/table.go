@@ -2,26 +2,40 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
+)
+
+var (
+	tableHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("99")).
+				Padding(0, 1)
+
+	tableCellStyle = lipgloss.NewStyle().Padding(0, 1)
+
+	tableBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
 
 // Column defines a table column.
 type Column struct {
 	Header string
-	Width  int
 }
 
-// Table renders a simple styled table to stdout.
+// Table renders a styled table to stdout.
 type Table struct {
-	columns []Column
+	headers []string
 	rows    [][]string
 }
 
 // NewTable creates a new table with the given columns.
 func NewTable(columns ...Column) *Table {
-	return &Table{columns: columns}
+	headers := make([]string, len(columns))
+	for i, c := range columns {
+		headers[i] = c.Header
+	}
+	return &Table{headers: headers}
 }
 
 // AddRow adds a row to the table. Values correspond to columns in order.
@@ -35,42 +49,20 @@ func (t *Table) Render() {
 		return
 	}
 
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(Palette.Muted)
-
-	// Auto-calculate widths if not set.
-	widths := make([]int, len(t.columns))
-	for i, col := range t.columns {
-		if col.Width > 0 {
-			widths[i] = col.Width
-		} else {
-			widths[i] = len(col.Header)
-			for _, row := range t.rows {
-				if i < len(row) && len(row[i]) > widths[i] {
-					widths[i] = len(row[i])
-				}
+	tbl := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(tableBorderStyle).
+		Headers(t.headers...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return tableHeaderStyle
 			}
-		}
-	}
+			return tableCellStyle
+		})
 
-	// Print header.
-	var header strings.Builder
-	for i, col := range t.columns {
-		fmt.Fprintf(&header, "  %-*s", widths[i]+2, col.Header)
-	}
-	fmt.Println(headerStyle.Render(header.String()))
-
-	// Print rows.
 	for _, row := range t.rows {
-		var line strings.Builder
-		for i := range t.columns {
-			val := ""
-			if i < len(row) {
-				val = row[i]
-			}
-			fmt.Fprintf(&line, "  %-*s", widths[i]+2, val)
-		}
-		fmt.Println(line.String())
+		tbl.Row(row...)
 	}
+
+	fmt.Println(tbl)
 }
