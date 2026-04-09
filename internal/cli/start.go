@@ -71,7 +71,7 @@ func newStartCmd() *cobra.Command {
 			if len(repos) > 1 && len(filterRepos) == 0 && isInteractive() {
 				opts := make([]huh.Option[string], len(repos))
 				for i, r := range repos {
-					opts[i] = huh.NewOption(r.Name, r.Name).Selected(true)
+					opts[i] = huh.NewOption(r.Name, r.Name)
 				}
 
 				var selected []string
