@@ -166,26 +166,18 @@ func repoNames(repos []Repo) string {
 // newIssueTracker creates an issue.Tracker from current config. Prompts for
 // missing values interactively and saves them for future use.
 func newIssueTracker() (issue.Tracker, error) {
-	provider, err := requireConfig("issue_tracker", "Issue tracker", withGlobal(), withOptions("jira"))
+	provider, err := requireConfig("issue_tracker")
 	if err != nil {
 		return nil, err
 	}
 
 	switch provider {
 	case "jira":
-		baseURL, err := requireConfig("jira.base_url", "Jira base URL (e.g. https://mycompany.atlassian.net)", withGlobal())
+		cfg, err := requireGroup("jira")
 		if err != nil {
 			return nil, err
 		}
-		email, err := requireConfig("jira.email", "Jira email", withGlobal())
-		if err != nil {
-			return nil, err
-		}
-		token, err := requireEnv("BOSUN_JIRA_TOKEN", "Jira API token")
-		if err != nil {
-			return nil, err
-		}
-		return jira.New(baseURL, email, token), nil
+		return jira.New(cfg["base_url"], cfg["email"], cfg["token"]), nil
 	default:
 		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
 	}
