@@ -106,13 +106,21 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 
 	// Secret env var — prompt with masked input, don't save to file.
 	if ck.Secret && ck.EnvVar != "" {
-		val := promptSecret(fmt.Sprintf("  %s (set %s to persist)", ck.Label, ck.EnvVar))
+		var val string
+		if err := runForm(
+			huh.NewInput().
+				Title("  " + ck.Label).
+				Placeholder("set for this session").
+				EchoMode(huh.EchoModePassword).
+				Value(&val),
+		); err != nil {
+			return err
+		}
 		if val == "" {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
 		ui.Saved(ck.Label, "(set for this session)")
-		ui.Muted("    Add to your shell profile to persist: export %s=...", ck.EnvVar)
 		return nil
 	}
 
