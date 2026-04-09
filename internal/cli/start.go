@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"charm.land/huh/v2"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -66,13 +67,32 @@ func newStartCmd() *cobra.Command {
 				return nil
 			}
 
-			// Confirm when operating on multiple unfiltered repos.
-			if len(repos) > 1 && len(filterRepos) == 0 {
-				label := fmt.Sprintf("Start %s in %d repos (%s)?",
-					issue, len(repos), repoNames(repos))
-				if !promptConfirm(label, true) {
-					ui.Warning("Aborted.")
+			// When no --repo filter and multiple repos, let user pick.
+			if len(repos) > 1 && len(filterRepos) == 0 && isInteractive() {
+				opts := make([]huh.Option[string], len(repos))
+				for i, r := range repos {
+					opts[i] = huh.NewOption(r.Name, r.Name).Selected(true)
+				}
+
+				var selected []string
+				if err := runForm(
+					huh.NewMultiSelect[string]().
+						Title("  Repos").
+						Options(opts...).
+						Value(&selected),
+				); err != nil {
+					return err
+				}
+
+				if len(selected) == 0 {
+					ui.Warning("No repos selected.")
 					return nil
+				}
+
+				// Re-filter repos to just the selected ones.
+				repos, err = resolveRepos(selected)
+				if err != nil {
+					return err
 				}
 			}
 
