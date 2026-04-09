@@ -96,9 +96,11 @@ func newConfigListCmd() *cobra.Command {
 			}
 			sort.Strings(keys)
 
+			kv := ui.NewKV()
 			for _, k := range keys {
-				ui.Item(k, fmt.Sprintf("%v", flat[k]))
+				kv.Add(k, fmt.Sprintf("%v", flat[k]))
 			}
+			kv.Print()
 			return nil
 		},
 	}
@@ -139,13 +141,15 @@ func newConfigPathCmd() *cobra.Command {
 		Use:   "path",
 		Short: "Show configuration file paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			kv := ui.NewKV()
+
 			configDir, err := config.GlobalConfigDir()
 			if err == nil {
 				globalPath := filepath.Join(configDir, "config.yaml")
 				if _, err := os.Stat(globalPath); err == nil {
-					ui.Item("Global:", globalPath)
+					kv.Add("Global", globalPath)
 				} else {
-					ui.Item("Global:", globalPath+" (not found)")
+					kv.Add("Global", globalPath+" (not found)")
 				}
 			}
 
@@ -153,13 +157,15 @@ func newConfigPathCmd() *cobra.Command {
 			if projectRoot != "" {
 				projectPath := filepath.Join(projectRoot, ".bosun", "config.yaml")
 				if _, err := os.Stat(projectPath); err == nil {
-					ui.Item("Project:", projectPath)
+					kv.Add("Project", projectPath)
 				} else {
-					ui.Item("Project:", projectPath+" (not found)")
+					kv.Add("Project", projectPath+" (not found)")
 				}
 			} else {
-				ui.Muted("  No project config (.bosun/ not found)")
+				kv.Add("Project", "(no .bosun/ found)")
 			}
+
+			kv.Print()
 
 			return nil
 		},

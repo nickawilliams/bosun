@@ -70,10 +70,13 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would create %s issue: %q", issueType, title)
-				ui.Item("Project:", project)
-				ui.Item("Description:", description)
-				ui.Item("Size:", size)
+				ui.DryRun("Would create %s issue", issueType)
+				ui.NewKV().
+					Add("Project", project).
+					Add("Title", title).
+					Add("Description", description).
+					Add("Size", size).
+					Print()
 				return nil
 			}
 
@@ -96,10 +99,12 @@ func newCreateCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Success("Created %s", created.Key)
-			ui.Item("Title:", created.Title)
-			ui.Item("Status:", created.Status)
-			ui.Item("URL:", created.URL)
+			ui.Complete(fmt.Sprintf("Created %s", created.Key))
+			ui.NewKV().
+				Add("Title", created.Title).
+				Add("Status", created.Status).
+				Add("URL", created.URL).
+				Print()
 
 			return nil
 		},

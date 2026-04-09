@@ -20,12 +20,7 @@ func newReleaseCmd() *cobra.Command {
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would release %s (migrations-done: %v)", issue, migrationsDone)
-				ui.Muted("  - Confirm migrations (if applicable)")
-				ui.Muted("  - Trigger production deployment")
-				if statusName, err := resolveStatus("done"); err == nil {
-					ui.Item("Status:", fmt.Sprintf("→ %s", statusName))
-				}
+				transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done", true)
 				return nil
 			}
 
@@ -33,45 +28,25 @@ func newReleaseCmd() *cobra.Command {
 			if !migrationsDone {
 				if isInteractive() {
 					if !promptConfirm("Have any required database migrations been run?", false) {
-						ui.Warning("Run migrations first, then use --migrations-done")
+						ui.Skip("Run migrations first, then use --migrations-done")
 						return nil
 					}
+					ui.Complete("Migrations confirmed")
 				} else {
 					return fmt.Errorf("use --migrations-done to confirm migrations have been run")
 				}
+			} else {
+				ui.Complete("Migrations confirmed (--migrations-done)")
 			}
 
 			// TODO: Trigger production deployment (phase 6)
 
-			ctx := cmd.Context()
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr != nil {
-				ui.Warning("Issue tracker not configured: %v", trackerErr)
-			} else {
-				statusName, err := resolveStatus("done")
-				if err != nil {
-					ui.Warning("Status mapping: %v", err)
-				} else {
-					if err := validateStageTransition(ctx, tracker, issue, "ready_for_release"); err != nil {
-						return err
-					}
-					err = ui.WithSpinner(fmt.Sprintf("Setting status to %s...", statusName), func() error {
-						return tracker.SetStatus(ctx, issue, statusName)
-					})
-					if err != nil {
-						ui.Warning("Failed to set status: %v", err)
-					} else {
-						ui.Success("Set %s to %s", issue, statusName)
-					}
-				}
-			}
-
+			transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done", false)
 			return nil
 		},
 	}
 
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
-
 	return cmd
 }

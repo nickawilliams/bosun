@@ -40,6 +40,7 @@ func newStartCmd() *cobra.Command {
 					return fmt.Errorf("fetching issue: %w", err)
 				}
 				detail = fetched
+				ui.Complete(fmt.Sprintf("Fetched %s: %s", detail.Key, detail.Title))
 			}
 
 			// Build branch name from pattern + issue metadata.
@@ -47,19 +48,21 @@ func newStartCmd() *cobra.Command {
 			if detail.Key != "" {
 				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
 				if err != nil {
-					ui.Warning("Branch naming: %v (falling back to %s)", err, issue)
+					ui.Skip(fmt.Sprintf("Branch naming: %v (using %s)", err, issue))
 				} else {
 					branchName = name
 				}
 			}
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would start work on %s", issue)
-				ui.Item("Branch:", branchName)
-				ui.Item("Repos:", repoNames(repos))
+				ui.DryRun("Would create workspace")
+				kv := ui.NewKV().
+					Add("Branch", branchName).
+					Add("Repos", repoNames(repos))
 				if statusName, err := resolveStatus("in_progress"); err == nil {
-					ui.Item("Status:", fmt.Sprintf("→ %s", statusName))
+					kv.Add("Status", fmt.Sprintf("→ %s", statusName))
 				}
+				kv.Print()
 				return nil
 			}
 
@@ -86,18 +89,19 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Success("Created workspace for %s", issue)
-			for _, r := range repos {
-				ui.Item(r.Name, r.Path)
+			items := make([]string, len(repos))
+			for i, r := range repos {
+				items[i] = fmt.Sprintf("%-12s %s", r.Name, r.Path)
 			}
+			ui.CompleteWithDetail("Created workspace", items)
 
 			// Transition issue status (graceful — warn on error, don't fail).
 			if trackerErr != nil {
-				ui.Warning("Issue tracker not configured: %v", trackerErr)
+				ui.Skip(fmt.Sprintf("Issue tracker not configured: %v", trackerErr))
 			} else {
 				statusName, err := resolveStatus("in_progress")
 				if err != nil {
-					ui.Warning("Status mapping: %v", err)
+					ui.Skip(fmt.Sprintf("Status mapping: %v", err))
 				} else {
 					if err := validateStageTransition(ctx, tracker, issue, "ready"); err != nil {
 						return err
@@ -106,9 +110,9 @@ func newStartCmd() *cobra.Command {
 						return tracker.SetStatus(ctx, issue, statusName)
 					})
 					if err != nil {
-						ui.Warning("Failed to set status: %v", err)
+						ui.Fail(fmt.Sprintf("Set status: %v", err))
 					} else {
-						ui.Success("Set %s to %s", issue, statusName)
+						ui.Complete(fmt.Sprintf("Set status to %s", statusName))
 					}
 				}
 			}

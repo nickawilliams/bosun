@@ -30,10 +30,15 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Bold("%s  %s", detail.Key, detail.Title)
-			ui.Item("Status:", detail.Status)
-			ui.Item("Type:", detail.Type)
-			ui.Item("URL:", detail.URL)
+			kv := ui.NewKV().
+				Add("Title", detail.Title).
+				Add("Status", detail.Status).
+				Add("Type", detail.Type).
+				Add("URL", detail.URL)
+
+			ui.NewPanel(detail.Key).
+				Content(kv.Render()).
+				Print()
 
 			// TODO: VCS branch status per repo (phase 2 data available)
 			// TODO: Code host PR status (phase 4)

@@ -126,10 +126,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if isDryRun(cmd) {
-		ui.DryRun("Would initialize bosun project:")
-		ui.Item("config:", ".bosun/config.yaml")
-		ui.Item("repos:", strings.Join(repoGlobs, ", "))
-		ui.Item("workspace_root:", wsRoot)
+		ui.DryRun("Would initialize bosun project")
+		ui.NewKV().
+			Add("Config", ".bosun/config.yaml").
+			Add("Repos", strings.Join(repoGlobs, ", ")).
+			Add("Workspace root", wsRoot).
+			Print()
 		return nil
 	}
 
@@ -144,13 +146,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	ui.Success("Initialized bosun project in %s", bosunDir)
-	ui.Item("config:", configPath)
-	if len(repoGlobs) > 0 {
-		ui.Item("repos:", strings.Join(repoGlobs, ", "))
-	} else {
-		ui.Item("repos:", "(none — add repo patterns to .bosun/config.yaml)")
+	ui.Complete("Initialized bosun project")
+	repoDisplay := strings.Join(repoGlobs, ", ")
+	if repoDisplay == "" {
+		repoDisplay = "(none — add repo patterns to .bosun/config.yaml)"
 	}
+	ui.NewKV().
+		Add("Config", configPath).
+		Add("Repos", repoDisplay).
+		Add("Workspace root", wsRoot).
+		Print()
+	fmt.Println()
 	ui.Info("Next steps:")
 	ui.Muted("  Edit .bosun/config.yaml to configure Jira, Slack, etc.")
 	ui.Muted("  Run: bosun start --issue <issue>")

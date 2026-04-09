@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -27,9 +28,11 @@ func newCleanupCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would clean up %s", issue)
-				ui.Item("Workspace:", branchName)
-				ui.Item("Repos:", repoNames(repos))
+				ui.DryRun("Would remove workspace")
+				ui.NewKV().
+					Add("Workspace", branchName).
+					Add("Repos", repoNames(repos)).
+					Print()
 				return nil
 			}
 
@@ -46,13 +49,12 @@ func newCleanupCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Success("Cleaned up %s", issue)
+			ui.Complete(fmt.Sprintf("Removed workspace for %s", issue))
 			return nil
 		},
 	}
 
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
-
 	return cmd
 }
