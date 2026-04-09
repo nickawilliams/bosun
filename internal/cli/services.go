@@ -166,7 +166,7 @@ func repoNames(repos []Repo) string {
 // newIssueTracker creates an issue.Tracker from current config. Prompts for
 // missing values interactively and saves them for future use.
 func newIssueTracker() (issue.Tracker, error) {
-	provider, err := requireConfig("issue_tracker", "Issue tracker (e.g. jira)", withGlobal())
+	provider, err := requireConfig("issue_tracker", "Issue tracker", withGlobal(), withOptions("jira"))
 	if err != nil {
 		return nil, err
 	}

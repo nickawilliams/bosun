@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/viper"
@@ -16,6 +17,7 @@ type requireOpt func(*requireOpts)
 type requireOpts struct {
 	defaultVal string
 	global     bool
+	options    []string // If set, render a select instead of text input.
 }
 
 // withDefault pre-fills the prompt with a default value.
@@ -26,6 +28,11 @@ func withDefault(val string) requireOpt {
 // withGlobal saves the value to global config instead of project config.
 func withGlobal() requireOpt {
 	return func(o *requireOpts) { o.global = true }
+}
+
+// withOptions restricts the value to a known set and renders a select prompt.
+func withOptions(opts ...string) requireOpt {
+	return func(o *requireOpts) { o.options = opts }
 }
 
 // requireConfig returns the value for a config key. If the key is not set
@@ -47,8 +54,19 @@ func requireConfig(key, label string, opts ...requireOpt) (string, error) {
 		return "", fmt.Errorf("%s not configured (set %s in config)", label, key)
 	}
 
-	// Prompt.
-	val := promptValue(label, o.defaultVal)
+	// Prompt — select if options provided, text input otherwise.
+	var val string
+	if len(o.options) > 0 {
+		opts := make([]huh.Option[string], len(o.options))
+		for i, opt := range o.options {
+			opts[i] = huh.NewOption(opt, opt)
+		}
+		if err := runForm(huh.NewSelect[string]().Title(label).Options(opts...).Value(&val)); err != nil {
+			return "", err
+		}
+	} else {
+		val = promptValue(label, o.defaultVal)
+	}
 	if val == "" {
 		return "", fmt.Errorf("%s is required", label)
 	}
