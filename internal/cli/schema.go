@@ -1,13 +1,5 @@
 package cli
 
-// Scope indicates where a config value should be stored.
-type Scope int
-
-const (
-	ScopeGlobal  Scope = iota // ~/.config/bosun/config.yaml
-	ScopeProject              // .bosun/config.yaml
-)
-
 // ConfigKey describes a single configuration value.
 type ConfigKey struct {
 	Key      string   // Config key (relative to group, e.g. "base_url").
@@ -23,7 +15,6 @@ type ConfigKey struct {
 // ConfigGroup describes a related set of config values (e.g., "jira").
 type ConfigGroup struct {
 	Label string      // Human-readable label (e.g., "Jira").
-	Scope Scope       // Where values are stored.
 	Keys  []ConfigKey // The config keys in this group.
 }
 
@@ -31,14 +22,14 @@ type ConfigGroup struct {
 var configSchema = map[string]ConfigGroup{
 	"issue_tracker": {
 		Label: "Issue tracker",
-		Scope: ScopeGlobal,
+
 		Keys: []ConfigKey{
 			{Key: "issue_tracker", Label: "Provider", Options: []string{"jira"}, Required: true},
 		},
 	},
 	"jira": {
 		Label: "Jira",
-		Scope: ScopeGlobal,
+
 		Keys: []ConfigKey{
 			{Key: "base_url", Label: "Base URL", Example: "https://mycompany.atlassian.net", Required: true},
 			{Key: "email", Label: "Email", Required: true},
@@ -48,7 +39,7 @@ var configSchema = map[string]ConfigGroup{
 	},
 	"statuses": {
 		Label: "Status mappings",
-		Scope: ScopeGlobal,
+
 		Keys: []ConfigKey{
 			{Key: "ready", Label: "Ready", Default: "Ready"},
 			{Key: "in_progress", Label: "In Progress", Default: "In Progress"},
@@ -60,7 +51,7 @@ var configSchema = map[string]ConfigGroup{
 	},
 	"branch": {
 		Label: "Branch naming",
-		Scope: ScopeGlobal,
+
 		Keys: []ConfigKey{
 			{Key: "pattern", Label: "Branch pattern", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
 			{Key: "categories.story", Label: "Story category", Default: "feature"},
@@ -70,7 +61,7 @@ var configSchema = map[string]ConfigGroup{
 	},
 	"workspace": {
 		Label: "Workspace",
-		Scope: ScopeProject,
+
 		Keys: []ConfigKey{
 			{Key: "workspace_root", Label: "Workspace root", Default: "_workspaces"},
 		},

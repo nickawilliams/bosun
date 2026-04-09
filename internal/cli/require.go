@@ -134,14 +134,8 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		return fmt.Errorf("%s is required", ck.Label)
 	}
 
-	// Determine scope from the group in the schema.
-	global := true
-	if group, ok := lookupGroup(groupName); ok {
-		global = group.Scope == ScopeGlobal
-	}
-
-	// Save to config file.
-	configPath, err := configPathForScope(global)
+	// Save to project config if inside a project, global otherwise.
+	configPath, err := configPathForScope(false)
 	if err != nil {
 		viper.Set(fk, val)
 		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
