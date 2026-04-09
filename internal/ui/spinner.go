@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // spinnerModel is a bubbletea model that shows a spinner while a task runs.
@@ -21,9 +21,10 @@ type spinnerModel struct {
 type taskDoneMsg struct{ err error }
 
 func newSpinnerModel(message string, resultCh <-chan error) spinnerModel {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(Palette.Primary)
+	s := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(Palette.Primary)),
+	)
 	return spinnerModel{
 		spinner:  s,
 		message:  message,
@@ -55,11 +56,11 @@ func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m spinnerModel) View() string {
+func (m spinnerModel) View() tea.View {
 	if m.done {
-		return ""
+		return tea.NewView("")
 	}
-	return m.spinner.View() + " " + m.message + "\n"
+	return tea.NewView(m.spinner.View() + " " + m.message + "\n")
 }
 
 func (m spinnerModel) waitForResult() tea.Cmd {

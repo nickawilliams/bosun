@@ -3,7 +3,7 @@ package cli
 import (
 	"os"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"golang.org/x/term"
 )

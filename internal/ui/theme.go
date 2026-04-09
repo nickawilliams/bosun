@@ -1,25 +1,24 @@
 package ui
 
 import (
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Palette defines the canonical color values for the entire application.
 // Every styled element — output helpers, huh forms, spinners, tables —
 // derives its colors from this palette.
-//
-// Values are drawn from the Charm color scheme so that huh forms and CLI
-// output share a single visual language.
 var Palette = struct {
 	// Semantic colors.
-	Primary lipgloss.TerminalColor // Titles, headings
-	Accent  lipgloss.TerminalColor // Selectors, prompts, interactive elements
-	Success lipgloss.TerminalColor // Confirmations, selected items
-	Error   lipgloss.TerminalColor // Errors, validation failures
-	Warning lipgloss.TerminalColor // Caution, dry-run indicators
-	Muted   lipgloss.TerminalColor // Secondary text, descriptions
-	NormalFg lipgloss.TerminalColor // Default foreground
+	Primary  color.Color // Titles, headings
+	Accent   color.Color // Selectors, prompts, interactive elements
+	Success  color.Color // Confirmations, selected items
+	Error    color.Color // Errors, validation failures
+	Warning  color.Color // Caution, dry-run indicators
+	Muted    color.Color // Secondary text, descriptions
+	NormalFg color.Color // Default foreground
 
 	// Symbols.
 	Check  string
@@ -28,13 +27,13 @@ var Palette = struct {
 	Bullet string
 	Dot    string
 }{
-	Primary:  lipgloss.AdaptiveColor{Light: "#5A56E0", Dark: "#7571F9"}, // Indigo
-	Accent:   lipgloss.Color("#F780E2"),                                 // Fuchsia
-	Success:  lipgloss.AdaptiveColor{Light: "#02BA84", Dark: "#02BF87"}, // Green
-	Error:    lipgloss.AdaptiveColor{Light: "#FF4672", Dark: "#ED567A"}, // Red
-	Warning:  lipgloss.AdaptiveColor{Light: "#FF8C00", Dark: "#FFA500"}, // Orange
-	Muted:    lipgloss.AdaptiveColor{Light: "", Dark: "243"},            // Gray
-	NormalFg: lipgloss.AdaptiveColor{Light: "235", Dark: "252"},
+	Primary:  lipgloss.Color("#7571F9"), // Indigo
+	Accent:   lipgloss.Color("#F780E2"), // Fuchsia
+	Success:  lipgloss.Color("#02BF87"), // Green
+	Error:    lipgloss.Color("#ED567A"), // Red
+	Warning:  lipgloss.Color("#FFA500"), // Orange
+	Muted:    lipgloss.Color("243"),     // Gray
+	NormalFg: lipgloss.Color("252"),
 
 	Check:  "✓",
 	Cross:  "✗",
@@ -43,10 +42,12 @@ var Palette = struct {
 	Dot:    "·",
 }
 
-// FormTheme returns a huh theme built from the app palette. Use this for
-// all huh forms so that interactive prompts match the rest of the CLI.
-func FormTheme() *huh.Theme {
-	t := huh.ThemeBase()
+// BosunTheme implements huh.Theme for use with huh forms.
+type BosunTheme struct{}
+
+// Theme returns styled huh Styles built from the app palette.
+func (BosunTheme) Theme(isDark bool) *huh.Styles {
+	t := huh.ThemeBase(isDark)
 
 	t.Focused.Base = t.Focused.Base.BorderForeground(lipgloss.Color("238"))
 	t.Focused.Card = t.Focused.Base
@@ -66,16 +67,16 @@ func FormTheme() *huh.Theme {
 	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("• ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
-		Foreground(lipgloss.AdaptiveColor{Light: "#FFFDF5", Dark: "#FFFDF5"}).
+		Foreground(lipgloss.Color("#FFFDF5")).
 		Background(Palette.Accent)
 	t.Focused.Next = t.Focused.FocusedButton
 	t.Focused.BlurredButton = t.Focused.BlurredButton.
 		Foreground(Palette.NormalFg).
-		Background(lipgloss.AdaptiveColor{Light: "252", Dark: "237"})
+		Background(lipgloss.Color("237"))
 
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(Palette.Success)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.
-		Foreground(lipgloss.AdaptiveColor{Light: "248", Dark: "238"})
+		Foreground(lipgloss.Color("238"))
 	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(Palette.Accent)
 
 	t.Blurred = t.Focused
@@ -88,4 +89,9 @@ func FormTheme() *huh.Theme {
 	t.Group.Description = t.Focused.Description
 
 	return t
+}
+
+// FormTheme returns the app's huh Theme.
+func FormTheme() huh.Theme {
+	return BosunTheme{}
 }
