@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/nickawilliams/bosun/internal/cli"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 var (
@@ -17,7 +18,7 @@ func main() {
 	versionStr := fmt.Sprintf("%s (%s, %s)", version, commit, date)
 	cmd := cli.NewRootCmd(versionStr)
 	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		ui.Error("%s", err)
 		os.Exit(1)
 	}
 }

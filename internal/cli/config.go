@@ -97,7 +97,7 @@ func newConfigListCmd() *cobra.Command {
 			sort.Strings(keys)
 
 			for _, k := range keys {
-				fmt.Printf("%s = %v\n", k, flat[k])
+				ui.Item(k, fmt.Sprintf("%v", flat[k]))
 			}
 			return nil
 		},
