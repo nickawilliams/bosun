@@ -26,6 +26,7 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Check bosun configuration and connectivity",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ui.Header("doctor")
 			var results []checkResult
 
 			check := func(name string, required bool, fn func() (string, error)) {
@@ -73,9 +74,6 @@ func renderDoctorResults(results []checkResult) {
 	failStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
 	nameStyle := lipgloss.NewStyle().Bold(true)
 	detailStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-
-	ui.Bold("Bosun Doctor")
-	fmt.Println()
 
 	passed, warned, failed := 0, 0, 0
 

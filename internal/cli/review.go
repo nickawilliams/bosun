@@ -16,6 +16,7 @@ func newReviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("review", issue)
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would submit %s for review", issue)

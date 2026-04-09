@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 )
@@ -58,6 +59,17 @@ func Item(label, value string) {
 		mutedStyle.Render(label),
 		primaryStyle.Render(value),
 	)
+}
+
+// Header prints a styled command header. Pass the command name and optional
+// context (e.g., issue key, workspace name).
+func Header(command string, context ...string) {
+	parts := []string{boldStyle.Render(command)}
+	for _, c := range context {
+		parts = append(parts, primaryStyle.Render(c))
+	}
+	symbol := lipgloss.NewStyle().Foreground(Palette.Accent).Render("●")
+	fmt.Printf("\n%s %s\n\n", symbol, strings.Join(parts, " "))
 }
 
 // DryRun prints a dry-run prefixed message.

@@ -62,6 +62,7 @@ func newCreateCmd() *cobra.Command {
 			if title == "" {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
+			ui.Header("create")
 
 			project := viper.GetString("jira.project")
 			if project == "" {

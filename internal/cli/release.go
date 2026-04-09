@@ -16,6 +16,7 @@ func newReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("release", issue)
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
 
 			if isDryRun(cmd) {

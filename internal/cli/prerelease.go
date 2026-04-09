@@ -16,6 +16,7 @@ func newPrereleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("prerelease", issue)
 			bump, _ := cmd.Flags().GetString("bump")
 
 			if isDryRun(cmd) {

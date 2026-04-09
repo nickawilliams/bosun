@@ -16,6 +16,7 @@ func newCleanupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("cleanup", issue)
 
 			repos, err := resolveRepos(nil)
 			if err != nil {

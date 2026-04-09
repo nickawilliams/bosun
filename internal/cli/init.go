@@ -29,6 +29,7 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	ui.Header("init")
 	interactive, _ := cmd.Flags().GetBool("interactive")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")
 	force, _ := cmd.Flags().GetBool("force")

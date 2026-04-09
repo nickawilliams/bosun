@@ -18,6 +18,7 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("start", issue)
 
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
 			repos, err := resolveRepos(filterRepos)

@@ -43,6 +43,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			name := args[0]
 			repoNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
+			ui.Header("workspace create", name)
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would create workspace %q for repos %v (from-head: %v)",
@@ -89,6 +90,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			// implemented. For now, first arg is always the name.
 			name := args[0]
 			repoNames := args[1:]
+			ui.Header("workspace add", name)
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would add repos %v to workspace %q", repoNames, name)
@@ -131,6 +133,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("workspace status", name)
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -146,8 +149,6 @@ func newWorkspaceStatusCmd() *cobra.Command {
 				ui.Warning("No repos found in workspace %q", name)
 				return nil
 			}
-
-			ui.Bold("Workspace: %s", name)
 
 			table := ui.NewTable(
 				ui.Column{Header: "Repo"},
@@ -177,6 +178,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("workspace rm", name)
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {

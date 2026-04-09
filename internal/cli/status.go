@@ -15,6 +15,7 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("status", issue)
 
 			tracker, err := newIssueTracker()
 			if err != nil {

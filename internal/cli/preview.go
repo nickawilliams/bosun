@@ -16,6 +16,7 @@ func newPreviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ui.Header("preview", issue)
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would deploy %s to preview", issue)
