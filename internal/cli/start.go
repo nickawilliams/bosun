@@ -72,7 +72,7 @@ func newStartCmd() *cobra.Command {
 				const allValue = "*"
 
 				opts := []huh.Option[string]{
-					huh.NewOption("All repos", allValue),
+					huh.NewOption("<all>", allValue),
 				}
 				for _, r := range repos {
 					opts = append(opts, huh.NewOption(r.Name, r.Name))
