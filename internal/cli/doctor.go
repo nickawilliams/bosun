@@ -8,92 +8,110 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
+type checkResult struct {
+	name   string
+	status string // "pass", "warn", "fail"
+	detail string
+}
+
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Check bosun configuration and connectivity",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ui.Bold("Bosun Doctor")
-			fmt.Println()
+			var results []checkResult
 
-			passed := 0
-			warned := 0
-			failed := 0
-
-			check := func(name string, fn func() (string, error)) {
+			check := func(name string, required bool, fn func() (string, error)) {
 				detail, err := fn()
 				if err != nil {
-					ui.Error("%s: %v", name, err)
-					failed++
-				} else if detail != "" {
-					ui.Success("%s: %s", name, detail)
-					passed++
+					status := "warn"
+					if required {
+						status = "fail"
+					}
+					results = append(results, checkResult{name, status, err.Error()})
 				} else {
-					ui.Success("%s", name)
-					passed++
+					results = append(results, checkResult{name, "pass", detail})
 				}
 			}
 
-			warn := func(name string, fn func() (string, error)) {
-				detail, err := fn()
-				if err != nil {
-					ui.Warning("%s: %v", name, err)
-					warned++
-				} else if detail != "" {
-					ui.Success("%s: %s", name, detail)
-					passed++
-				} else {
-					ui.Success("%s", name)
-					passed++
-				}
-			}
+			// Configuration.
+			check("Global config", true, checkGlobalConfig)
+			check("Project config", false, checkProjectConfig)
 
-			// Config files.
-			check("Global config", checkGlobalConfig)
-			warn("Project config", checkProjectConfig)
+			// Tools.
+			check("Git", true, checkGit)
 
-			// Git.
-			check("Git", checkGit)
-
-			// Repos.
-			warn("Repos", checkRepos)
+			// Project.
+			check("Repos", false, checkRepos)
+			check("Branch pattern", false, checkBranchPattern)
+			check("Status mappings", false, checkStatusMappings)
 
 			// Issue tracker.
-			warn("Issue tracker config", checkIssueTrackerConfig)
+			check("Issue tracker", false, checkIssueTrackerConfig)
 			if viper.GetString("issue_tracker") != "" {
-				warn("Issue tracker connectivity", checkIssueTrackerConnectivity)
+				check("Tracker auth", false, checkIssueTrackerConnectivity)
 			}
 
-			// Status mappings.
-			warn("Status mappings", checkStatusMappings)
-
-			// Branch config.
-			warn("Branch pattern", checkBranchPattern)
-
-			// Summary.
-			fmt.Println()
-			summary := fmt.Sprintf("%d passed", passed)
-			if warned > 0 {
-				summary += fmt.Sprintf(", %d warnings", warned)
-			}
-			if failed > 0 {
-				summary += fmt.Sprintf(", %d failed", failed)
-				ui.Error("%s", summary)
-			} else if warned > 0 {
-				ui.Warning("%s", summary)
-			} else {
-				ui.Success("%s", summary)
-			}
+			// Render.
+			renderDoctorResults(results)
 
 			return nil
 		},
 	}
+}
+
+func renderDoctorResults(results []checkResult) {
+	passStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
+	warnStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
+	failStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	nameStyle := lipgloss.NewStyle().Bold(true)
+	detailStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	ui.Bold("Bosun Doctor")
+	fmt.Println()
+
+	passed, warned, failed := 0, 0, 0
+
+	for _, r := range results {
+		var symbol string
+		switch r.status {
+		case "pass":
+			symbol = passStyle.Render(ui.Palette.Check)
+			passed++
+		case "warn":
+			symbol = warnStyle.Render("!")
+			warned++
+		case "fail":
+			symbol = failStyle.Render(ui.Palette.Cross)
+			failed++
+		}
+
+		name := nameStyle.Render(r.name)
+		if r.detail != "" {
+			detail := detailStyle.Render(r.detail)
+			fmt.Printf("  %s  %-24s %s\n", symbol, name, detail)
+		} else {
+			fmt.Printf("  %s  %s\n", symbol, name)
+		}
+	}
+
+	// Summary line.
+	fmt.Println()
+	parts := []string{passStyle.Render(fmt.Sprintf("%d passed", passed))}
+	if warned > 0 {
+		parts = append(parts, warnStyle.Render(fmt.Sprintf("%d warnings", warned)))
+	}
+	if failed > 0 {
+		parts = append(parts, failStyle.Render(fmt.Sprintf("%d failed", failed)))
+	}
+	fmt.Printf("  %s\n", strings.Join(parts, "  "))
 }
 
 func checkGlobalConfig() (string, error) {
@@ -111,7 +129,7 @@ func checkGlobalConfig() (string, error) {
 func checkProjectConfig() (string, error) {
 	root := config.FindProjectRoot()
 	if root == "" {
-		return "", fmt.Errorf("no .bosun/ directory found (run bosun init)")
+		return "", fmt.Errorf("no .bosun/ found (run bosun init)")
 	}
 	path := root + "/.bosun/config.yaml"
 	if _, err := os.Stat(path); err != nil {
@@ -121,15 +139,18 @@ func checkProjectConfig() (string, error) {
 }
 
 func checkGit() (string, error) {
-	path, err := exec.LookPath("git")
+	_, err := exec.LookPath("git")
 	if err != nil {
-		return "", fmt.Errorf("git not found on PATH")
+		return "", fmt.Errorf("not found on PATH")
 	}
 	out, err := exec.Command("git", "--version").Output()
 	if err != nil {
-		return path, nil
+		return "found", nil
 	}
-	return string(out[:len(out)-1]), nil // trim newline
+	// Extract just the version number from "git version 2.50.1"
+	ver := strings.TrimSpace(string(out))
+	ver = strings.TrimPrefix(ver, "git version ")
+	return ver, nil
 }
 
 func checkRepos() (string, error) {
@@ -137,13 +158,17 @@ func checkRepos() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%d repos found", len(repos)), nil
+	names := make([]string, len(repos))
+	for i, r := range repos {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", "), nil
 }
 
 func checkIssueTrackerConfig() (string, error) {
 	provider := viper.GetString("issue_tracker")
 	if provider == "" {
-		return "", fmt.Errorf("issue_tracker not set in config")
+		return "", fmt.Errorf("not configured")
 	}
 
 	switch provider {
@@ -158,11 +183,15 @@ func checkIssueTrackerConfig() (string, error) {
 		}
 		token := os.Getenv("BOSUN_JIRA_TOKEN")
 		if token == "" {
-			return "", fmt.Errorf("BOSUN_JIRA_TOKEN env var not set")
+			return "", fmt.Errorf("BOSUN_JIRA_TOKEN not set")
 		}
-		return fmt.Sprintf("%s (%s as %s)", provider, baseURL, email), nil
+		// Trim URL to just the hostname for display.
+		host := strings.TrimPrefix(baseURL, "https://")
+		host = strings.TrimPrefix(host, "http://")
+		host = strings.TrimRight(host, "/")
+		return fmt.Sprintf("jira → %s (%s)", host, email), nil
 	default:
-		return "", fmt.Errorf("unsupported provider: %q", provider)
+		return "", fmt.Errorf("unsupported: %q", provider)
 	}
 }
 
@@ -175,24 +204,19 @@ func checkIssueTrackerConnectivity() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Try to fetch a known project's issue to verify auth. Use GetIssue
-	// with a dummy key — a 404 means auth works but issue doesn't exist,
-	// which is fine. A 401/403 means auth is broken.
 	_, err = tracker.GetIssue(ctx, "BOSUN-0")
 	if err != nil {
-		// Check if it's an auth error vs a "not found" error.
 		errStr := err.Error()
 		if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
-			return "", fmt.Errorf("authentication failed (check BOSUN_JIRA_TOKEN and jira.email)")
+			return "", fmt.Errorf("auth failed (check token and email)")
 		}
 		if strings.Contains(errStr, "404") {
-			return "authenticated successfully", nil
+			return "authenticated", nil
 		}
-		// Other errors (DNS, timeout, etc.)
 		return "", fmt.Errorf("connection failed: %w", err)
 	}
 
-	return "connected and authenticated", nil
+	return "connected", nil
 }
 
 func checkStatusMappings() (string, error) {
@@ -208,19 +232,18 @@ func checkStatusMappings() (string, error) {
 	}
 
 	if mapped == 0 {
-		return "", fmt.Errorf("no status mappings configured (add statuses section to config)")
+		return "", fmt.Errorf("none configured")
 	}
 	if len(missing) > 0 {
-		return "", fmt.Errorf("%d/%d mapped (missing: %s)", mapped, len(keys), strings.Join(missing, ", "))
+		return "", fmt.Errorf("%d/%d (missing: %s)", mapped, len(keys), strings.Join(missing, ", "))
 	}
-	return fmt.Sprintf("%d/%d mapped", mapped, len(keys)), nil
+	return fmt.Sprintf("%d/%d", mapped, len(keys)), nil
 }
 
 func checkBranchPattern() (string, error) {
 	pattern := viper.GetString("branch.pattern")
 	if pattern == "" {
-		return "using default ({{.Category}}/{{.IssueNumber}}_{{.IssueSlug}})", nil
+		return "default", nil
 	}
 	return pattern, nil
 }
-
