@@ -16,7 +16,10 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize a new bosun project",
-		RunE:  runInit,
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Initialize project",
+		},
+		RunE: runInit,
 	}
 
 	cmd.Flags().BoolP("interactive", "I", false, "prompt for every value")
@@ -29,7 +32,7 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	ui.Header("init")
+	rootCard(cmd).Print()
 	interactive, _ := cmd.Flags().GetBool("interactive")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")
 	force, _ := cmd.Flags().GetBool("force")
@@ -58,10 +61,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if len(repoGlobs) == 0 && !noDetect {
 		if repos := detectRepos(cwd); len(repos) > 0 {
 			detectedGlob = "./*"
-			ui.Info("Detected repos:")
-			for _, r := range repos {
-				ui.Item("", r)
-			}
+			ui.NewCard(ui.CardInfo, "Detected repos").
+				Text(repos...).
+				Print()
 		}
 	}
 
@@ -89,9 +91,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 				Value(&wsInput))
 		}
 
+		rewind := ui.NewCard(ui.CardInput, "Project settings").PrintRewindable()
 		if err := runForm(fields...); err != nil {
 			return err
 		}
+		rewind()
 
 		if needRepos {
 			for _, g := range strings.Split(repoInput, ",") {
@@ -126,11 +130,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if isDryRun(cmd) {
-		ui.DryRun("Would initialize bosun project")
-		ui.NewKV().
-			Add("Config", ".bosun/config.yaml").
-			Add("Repos", strings.Join(repoGlobs, ", ")).
-			Add("Workspace root", wsRoot).
+		ui.NewCard(ui.CardInfo, "Would initialize bosun project").
+			Subtitle("dry-run").
+			KV(
+				"Config", ".bosun/config.yaml",
+				"Repos", strings.Join(repoGlobs, ", "),
+				"Workspace root", wsRoot,
+			).
 			Print()
 		return nil
 	}
@@ -146,20 +152,24 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	ui.Complete("Initialized bosun project")
 	repoDisplay := strings.Join(repoGlobs, ", ")
 	if repoDisplay == "" {
 		repoDisplay = "(none — add repo patterns to .bosun/config.yaml)"
 	}
-	ui.NewKV().
-		Add("Config", configPath).
-		Add("Repos", repoDisplay).
-		Add("Workspace root", wsRoot).
+	ui.NewCard(ui.CardSuccess, "Initialized bosun project").
+		KV(
+			"Config", configPath,
+			"Repos", repoDisplay,
+			"Workspace root", wsRoot,
+		).
 		Print()
-	fmt.Println()
-	ui.Info("Next steps:")
-	ui.Muted("  Edit .bosun/config.yaml to configure Jira, Slack, etc.")
-	ui.Muted("  Run: bosun start --issue <issue>")
+
+	ui.NewCard(ui.CardInfo, "Next steps").
+		Muted(
+			"Edit .bosun/config.yaml to configure Jira, Slack, etc.",
+			"Run: bosun start --issue <issue>",
+		).
+		Print()
 
 	return nil
 }
