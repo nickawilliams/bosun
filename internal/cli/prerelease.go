@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -9,12 +8,15 @@ func newPrereleaseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prerelease",
 		Short: "Prepare release artifacts",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Pre-release",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			ui.Header("prerelease", issue)
+			rootCard(cmd, issue).Print()
 
 			// TODO: Create releases (phase 4)
 			// TODO: Notify release channel (phase 5)
