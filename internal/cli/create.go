@@ -14,6 +14,9 @@ func newCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new issue",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Create issue",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			title, _ := cmd.Flags().GetString("title")
 			description, _ := cmd.Flags().GetString("description")
@@ -53,16 +56,18 @@ func newCreateCmd() *cobra.Command {
 				}
 
 				if len(fields) > 0 {
+					rewind := ui.NewCard(ui.CardInput, "Issue details").PrintRewindable()
 					if err := runForm(fields...); err != nil {
 						return err
 					}
+					rewind()
 				}
 			}
 
 			if title == "" {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
-			ui.Header("create")
+			rootCard(cmd).Print()
 
 			project := viper.GetString("jira.project")
 			if project == "" {
@@ -70,12 +75,14 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would create %s issue", issueType)
-				ui.NewKV().
-					Add("Project", project).
-					Add("Title", title).
-					Add("Description", description).
-					Add("Size", size).
+				ui.NewCard(ui.CardInfo, fmt.Sprintf("Would create %s issue", issueType)).
+					Subtitle("dry-run").
+					KV(
+						"Project", project,
+						"Title", title,
+						"Description", description,
+						"Size", size,
+					).
 					Print()
 				return nil
 			}
@@ -86,24 +93,27 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			created, err := ui.WithSpinnerResult("Creating issue...", func() (issuepkg.Issue, error) {
-				return tracker.CreateIssue(ctx, issuepkg.CreateRequest{
+			var created issuepkg.Issue
+			if err := ui.RunCard("Creating issue", func() error {
+				var createErr error
+				created, createErr = tracker.CreateIssue(ctx, issuepkg.CreateRequest{
 					Project:     project,
 					Title:       title,
 					Description: description,
 					Type:        issueType,
 					Size:        size,
 				})
-			})
-			if err != nil {
+				return createErr
+			}); err != nil {
 				return err
 			}
 
-			ui.Complete(fmt.Sprintf("Created %s", created.Key))
-			ui.NewKV().
-				Add("Title", created.Title).
-				Add("Status", created.Status).
-				Add("URL", created.URL).
+			ui.NewCard(ui.CardSuccess, created.Key).
+				KV(
+					"Title", created.Title,
+					"Status", created.Status,
+					"URL", created.URL,
+				).
 				Print()
 
 			return nil
