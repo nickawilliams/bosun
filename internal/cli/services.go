@@ -179,7 +179,7 @@ func newIssueTracker() (issue.Tracker, error) {
 		return jira.New(
 			viper.GetString("jira.base_url"),
 			viper.GetString("jira.email"),
-			os.Getenv("BOSUN_JIRA_TOKEN"),
+			viper.GetString("jira.token"),
 		), nil
 	default:
 		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)

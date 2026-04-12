@@ -15,7 +15,7 @@ import (
 // the key matches a group in the schema, all required keys in that group
 // are resolved. If it matches a single key, just that key is resolved.
 // Missing values are prompted for interactively and saved. Callers read
-// the resolved values from viper / os.Getenv afterward.
+// the resolved values from viper afterward.
 func requireConfig(keys ...string) error {
 	for _, key := range keys {
 		if group, ok := lookupGroup(key); ok {
@@ -26,9 +26,6 @@ func requireConfig(keys ...string) error {
 		}
 
 		if ck, groupName, ok := findConfigKey(key); ok {
-			if ck.EnvVar != "" && os.Getenv(ck.EnvVar) != "" {
-				continue
-			}
 			if viper.GetString(fullKey(groupName, ck)) != "" {
 				continue
 			}
@@ -60,12 +57,7 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
-		// Already set via env var?
-		if ck.EnvVar != "" && os.Getenv(ck.EnvVar) != "" {
-			continue
-		}
-
-		// Already set in viper?
+		// Already set (config file, env var via AutomaticEnv, etc.)?
 		if viper.GetString(fk) != "" {
 			continue
 		}
@@ -99,7 +91,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 			return nil
 		}
 		if ck.EnvVar != "" {
-			return fmt.Errorf("%s not set (set %s env var)", ck.Label, ck.EnvVar)
+			return fmt.Errorf("%s not set (set %s in config or %s env var)", ck.Label, fk, ck.EnvVar)
 		}
 		return fmt.Errorf("%s not configured (set %s in config)", ck.Label, fk)
 	}
@@ -121,6 +113,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
+		viper.Set(fk, val)
 		ui.NewCard(ui.CardSuccess, ck.Label).
 			Text("(set for this session)").
 			Print()

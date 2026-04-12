@@ -88,7 +88,7 @@ func renderDoctorResults(results []checkResult) {
 		}
 		card := ui.NewCard(state, r.name)
 		if r.detail != "" {
-			card.Muted(r.detail)
+			card.Muted(strings.Split(r.detail, "\n")...)
 		}
 		card.Print()
 	}
@@ -152,7 +152,7 @@ func checkRepos() (string, error) {
 	for i, r := range repos {
 		names[i] = r.Name
 	}
-	return strings.Join(names, ", "), nil
+	return strings.Join(names, "\n"), nil
 }
 
 func checkIssueTrackerConfig() (string, error) {
@@ -171,9 +171,9 @@ func checkIssueTrackerConfig() (string, error) {
 		if email == "" {
 			return "", fmt.Errorf("jira.email not set")
 		}
-		token := os.Getenv("BOSUN_JIRA_TOKEN")
+		token := viper.GetString("jira.token")
 		if token == "" {
-			return "", fmt.Errorf("BOSUN_JIRA_TOKEN not set")
+			return "", fmt.Errorf("jira.token not set")
 		}
 		// Trim URL to just the hostname for display.
 		host := strings.TrimPrefix(baseURL, "https://")
