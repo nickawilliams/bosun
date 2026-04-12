@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -12,12 +11,15 @@ func newCleanupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cleanup",
 		Short: "Remove workspace and feature branches",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Cleanup",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			ui.Header("cleanup", issue)
+			rootCard(cmd, issue).Print()
 
 			repos, err := resolveRepos(nil)
 			if err != nil {
@@ -28,10 +30,9 @@ func newCleanupCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would remove workspace")
-				ui.NewKV().
-					Add("Workspace", branchName).
-					Add("Repos", repoNames(repos)).
+				ui.NewCard(ui.CardInfo, "Would remove workspace").
+					Subtitle("dry-run").
+					KV("Workspace", branchName, "Repos", repoNames(repos)).
 					Print()
 				return nil
 			}
@@ -42,15 +43,9 @@ func newCleanupCmd() *cobra.Command {
 			}
 
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			err = ui.WithSpinner("Removing workspace...", func() error {
+			return ui.RunCard("Removing workspace", func() error {
 				return mgr.Remove(context.Background(), branchName, wsRepos, force)
 			})
-			if err != nil {
-				return err
-			}
-
-			ui.Complete(fmt.Sprintf("Removed workspace for %s", issue))
-			return nil
 		},
 	}
 
