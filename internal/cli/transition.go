@@ -13,34 +13,34 @@ import (
 func transitionIssueStatus(ctx context.Context, issueKey, expectedStatusKey, targetStatusKey string, dryRun bool) {
 	if dryRun {
 		if statusName, err := resolveStatus(targetStatusKey); err == nil {
-			ui.DryRun("Would set status to %s", statusName)
+			ui.NewCard(ui.CardInfo, fmt.Sprintf("Would set status to %s", statusName)).
+				Subtitle("dry-run").
+				Print()
 		}
 		return
 	}
 
 	tracker, trackerErr := newIssueTracker()
 	if trackerErr != nil {
-		ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
+		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()
 		return
 	}
 
 	statusName, err := resolveStatus(targetStatusKey)
 	if err != nil {
-		ui.Skip(fmt.Sprintf("Status mapping: %v", err))
+		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Status mapping: %v", err)).Print()
 		return
 	}
 
 	if err := validateStageTransition(ctx, tracker, issueKey, expectedStatusKey); err != nil {
-		ui.Fail(fmt.Sprintf("Stage validation: %v", err))
+		ui.NewCard(ui.CardFailed, fmt.Sprintf("Stage validation: %v", err)).Print()
 		return
 	}
 
-	err = ui.WithSpinner(fmt.Sprintf("Setting status to %s...", statusName), func() error {
+	err = ui.RunCard(fmt.Sprintf("Setting status to %s", statusName), func() error {
 		return tracker.SetStatus(ctx, issueKey, statusName)
 	})
 	if err != nil {
-		ui.Fail(fmt.Sprintf("Set status: %v", err))
-	} else {
-		ui.Complete(fmt.Sprintf("Set status to %s", statusName))
+		ui.NewCard(ui.CardFailed, fmt.Sprintf("Set status: %v", err)).Print()
 	}
 }
