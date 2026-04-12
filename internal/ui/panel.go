@@ -7,8 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-var panelBorderColor = lipgloss.Color("238")
-
 // Panel renders content inside a bordered box with an optional title.
 type Panel struct {
 	title   string
@@ -49,7 +47,7 @@ func (p *Panel) Render() string {
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(panelBorderColor).
+		BorderForeground(Palette.Border).
 		Padding(1, 2).
 		Width(w)
 
@@ -58,7 +56,7 @@ func (p *Panel) Render() string {
 		rendered := style.Render(p.content)
 		// Inject the title into the top border.
 		title := " " + titleStyle.Render(p.title) + " "
-		return injectTitle(rendered, title, panelBorderColor)
+		return injectTitle(rendered, title, Palette.Border)
 	}
 
 	return style.Render(p.content)

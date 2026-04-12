@@ -155,7 +155,7 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	// total width stays the same, keeping all card titles aligned.
 	gap := "  "
 	if c.state == CardRoot {
-		gap = lipgloss.NewStyle().Foreground(cardConnectorColor).Render("─") + " "
+		gap = lipgloss.NewStyle().Foreground(Palette.Recessed).Render("─") + " "
 	}
 
 	fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
@@ -191,21 +191,17 @@ func (c *Card) glyph() string {
 	case CardInput:
 		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
 	case CardRoot:
-		return lipgloss.NewStyle().Foreground(cardConnectorColor).Render(cardGlyphRoot)
+		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
 	}
 	return " "
 }
-
-// cardConnectorColor is deliberately darker than Palette.Muted so the
-// vertical timeline spine recedes behind the content it ties together.
-var cardConnectorColor = lipgloss.Color("237")
 
 // renderConnector returns the styled left-gutter connector for this
 // card's continuation lines. All cards (including CardInput) use
 // the recessed gray spine — the fuchsia accent is reserved for the
 // single row receiving input.
 func (c *Card) renderConnector() string {
-	return lipgloss.NewStyle().Foreground(cardConnectorColor).Render(cardConnector)
+	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
 }
 
 func renderCardBody(b cardBody) []string {

@@ -50,7 +50,7 @@ func NewTimelineLayout() huh.Layout {
 
 func (l timelineLayout) View(f *huh.Form) string {
 	raw := l.inner.View(f)
-	styled := lipgloss.NewStyle().Foreground(cardConnectorColor).Render("│")
+	styled := lipgloss.NewStyle().Foreground(Palette.Recessed).Render("│")
 	return separatorRowPattern.ReplaceAllString(raw, "\n "+styled+"${1}\n")
 }
 

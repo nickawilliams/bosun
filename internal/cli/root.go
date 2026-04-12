@@ -4,6 +4,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // NewRootCmd creates the root bosun command.
@@ -14,7 +15,11 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return config.Load()
+			if err := config.Load(); err != nil {
+				return err
+			}
+			ui.ApplyColorMode(viper.GetString("color_mode"))
+			return nil
 		},
 	}
 

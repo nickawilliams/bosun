@@ -2,15 +2,17 @@ package ui
 
 import (
 	"image/color"
+	"os"
+	"strings"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 )
 
-// Palette defines the canonical color values for the entire application.
+// palette holds the canonical color values for the entire application.
 // Every styled element — output helpers, huh forms, spinners, tables —
-// derives its colors from this palette.
-var Palette = struct {
+// derives its colors from this struct.
+type palette struct {
 	// Semantic colors.
 	Primary  color.Color // Titles, headings
 	Accent   color.Color // Selectors, prompts, interactive elements
@@ -20,26 +22,120 @@ var Palette = struct {
 	Muted    color.Color // Secondary text, descriptions
 	NormalFg color.Color // Default foreground
 
+	// Chrome colors — structural UI elements.
+	Recessed color.Color // Timeline spine, blurred button bg, help separator
+	Border   color.Color // Panel/table borders, input placeholder
+	Subtle   color.Color // Help description text
+	ButtonFg color.Color // Focused button foreground
+
 	// Symbols.
 	Check  string
 	Cross  string
 	Arrow  string
 	Bullet string
 	Dot    string
-}{
-	Primary:  lipgloss.Color("#7571F9"), // Indigo
-	Accent:   lipgloss.Color("#F780E2"), // Fuchsia
-	Success:  lipgloss.Color("#02BF87"), // Green
-	Error:    lipgloss.Color("#ED567A"), // Red
-	Warning:  lipgloss.Color("#FFA500"), // Orange
-	Muted:    lipgloss.Color("243"),     // Gray
-	NormalFg: lipgloss.Color("252"),
+}
 
-	Check:  "✓",
-	Cross:  "✗",
-	Arrow:  "→",
-	Bullet: "•",
-	Dot:    "·",
+// Palette is the active color palette. Swapped by ApplyColorMode before
+// any rendering occurs; read freely afterward (single-goroutine init).
+var Palette = defaultPalette()
+
+func defaultPalette() palette {
+	return palette{
+		Primary:  lipgloss.Color("#7571F9"), // Indigo
+		Accent:   lipgloss.Color("#F780E2"), // Fuchsia
+		Success:  lipgloss.Color("#02BF87"), // Green
+		Error:    lipgloss.Color("#ED567A"), // Red
+		Warning:  lipgloss.Color("#FFA500"), // Orange
+		Muted:    lipgloss.Color("243"),     // Gray
+		NormalFg: lipgloss.Color("252"),
+		Recessed: lipgloss.Color("237"),
+		Border:   lipgloss.Color("238"),
+		Subtle:   lipgloss.Color("239"),
+		ButtonFg: lipgloss.Color("#FFFDF5"),
+
+		Check:  "✓",
+		Cross:  "✗",
+		Arrow:  "→",
+		Bullet: "•",
+		Dot:    "·",
+	}
+}
+
+func ansiPalette() palette {
+	return palette{
+		Primary:  lipgloss.BrightBlue,
+		Accent:   lipgloss.BrightMagenta,
+		Success:  lipgloss.Green,
+		Error:    lipgloss.Red,
+		Warning:  lipgloss.Yellow,
+		Muted:    lipgloss.BrightBlack,
+		NormalFg: lipgloss.White,
+		Recessed: lipgloss.BrightBlack,
+		Border:   lipgloss.BrightBlack,
+		Subtle:   lipgloss.BrightBlack,
+		ButtonFg: lipgloss.BrightWhite,
+
+		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
+	}
+}
+
+func noColorPalette() palette {
+	nc := lipgloss.NoColor{}
+	return palette{
+		Primary: nc, Accent: nc, Success: nc, Error: nc, Warning: nc,
+		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
+		ButtonFg: nc,
+
+		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
+	}
+}
+
+// ApplyColorMode sets the active palette based on the given mode string
+// and rebuilds all cached package-level styles. Must be called after
+// config loads and before any rendering (i.e. in PersistentPreRunE).
+func ApplyColorMode(mode string) {
+	// NO_COLOR env var (https://no-color.org) acts as implicit "none"
+	// unless the user explicitly configured a color mode.
+	if _, noColor := os.LookupEnv("NO_COLOR"); noColor && mode == "" {
+		mode = "none"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "ansi":
+		Palette = ansiPalette()
+	case "none":
+		Palette = noColorPalette()
+	default:
+		Palette = defaultPalette()
+	}
+
+	rebuildStyles()
+}
+
+// rebuildStyles refreshes every package-level style var that captured
+// palette values at init time. Called by ApplyColorMode.
+func rebuildStyles() {
+	// output.go
+	successStyle = lipgloss.NewStyle().Foreground(Palette.Success)
+	errorStyle = lipgloss.NewStyle().Foreground(Palette.Error)
+	warningStyle = lipgloss.NewStyle().Foreground(Palette.Warning)
+	mutedStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
+
+	// steps.go
+	stepCheckStyle = lipgloss.NewStyle().Foreground(Palette.Success)
+	stepSkipStyle = lipgloss.NewStyle().Foreground(Palette.Warning)
+	stepFailStyle = lipgloss.NewStyle().Foreground(Palette.Error)
+	stepArrowStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+	stepItemStyle = lipgloss.NewStyle().Foreground(Palette.NormalFg)
+
+	// table.go
+	tableHeaderStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(Palette.Primary).
+		Padding(0, 1)
+	tableBorderStyle = lipgloss.NewStyle().Foreground(Palette.Border)
 }
 
 // BosunTheme implements huh.Theme for use with huh forms.
@@ -87,16 +183,16 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("• ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
-		Foreground(lipgloss.Color("#FFFDF5")).
+		Foreground(Palette.ButtonFg).
 		Background(Palette.Accent)
 	t.Focused.Next = t.Focused.FocusedButton
 	t.Focused.BlurredButton = t.Focused.BlurredButton.
 		Foreground(Palette.NormalFg).
-		Background(lipgloss.Color("237"))
+		Background(Palette.Recessed)
 
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(Palette.Success)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.
-		Foreground(lipgloss.Color("238"))
+		Foreground(Palette.Border)
 	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(Palette.Accent)
 
 	t.Blurred = t.Focused
@@ -104,7 +200,7 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// recessed timeline color so the whole form reads as a single
 	// continuous card, with the fuchsia accent only marking the
 	// one row receiving input.
-	t.Blurred.Base = t.Focused.Base.BorderForeground(cardConnectorColor)
+	t.Blurred.Base = t.Focused.Base.BorderForeground(Palette.Recessed)
 	t.Blurred.Card = t.Blurred.Base
 	t.Blurred.NextIndicator = lipgloss.NewStyle()
 	t.Blurred.PrevIndicator = lipgloss.NewStyle()
@@ -119,8 +215,8 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// matching the 1-space outer pad + 1-col border + 2-col inner
 	// padding used by the focused card.
 	helpKey := lipgloss.NewStyle().Foreground(Palette.Muted)
-	helpDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	helpSep := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+	helpDesc := lipgloss.NewStyle().Foreground(Palette.Subtle)
+	helpSep := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	t.Help.ShortKey = helpKey
 	t.Help.ShortDesc = helpDesc
 	t.Help.ShortSeparator = helpSep

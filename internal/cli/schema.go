@@ -66,6 +66,13 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workspace_root", Label: "Workspace root", Default: "_workspaces"},
 		},
 	},
+	"color_mode": {
+		Label: "Color mode",
+
+		Keys: []ConfigKey{
+			{Key: "color_mode", Label: "Color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
+		},
+	},
 }
 
 // lookupGroup returns the config group for a given name.
