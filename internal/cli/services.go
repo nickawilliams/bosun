@@ -192,12 +192,23 @@ func newIssueTracker() (issue.Tracker, error) {
 
 // resolveStatus maps a bosun lifecycle status key (e.g., "in_progress") to
 // the provider-specific status name from config (e.g., "In Progress").
+// Falls back to schema defaults if not set in config.
 func resolveStatus(key string) (string, error) {
 	name := viper.GetString("statuses." + key)
-	if name == "" {
-		return "", fmt.Errorf("status %q not mapped in config statuses section", key)
+	if name != "" {
+		return name, nil
 	}
-	return name, nil
+
+	// Check schema defaults.
+	if group, ok := lookupGroup("statuses"); ok {
+		for _, ck := range group.Keys {
+			if ck.Key == key && ck.Default != "" {
+				return ck.Default, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("status %q not mapped in config statuses section", key)
 }
 
 // validateStageTransition checks the issue's current status against the
