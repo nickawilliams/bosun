@@ -21,19 +21,13 @@ func newReleaseCmd() *cobra.Command {
 				return err
 			}
 			rootCard(cmd, issue).Print()
+
+			// --- Pre-flight: migration confirmation ---
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
-
-			if isDryRun(cmd) {
-				transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done", true)
-				return nil
-			}
-
-			// Migration confirmation pre-flight.
-			confirmTitle := "Have any required database migrations been run?"
 			if !migrationsDone {
 				if isInteractive() {
 					var confirmed bool
-					rewind := ui.NewCard(ui.CardInput, confirmTitle).PrintRewindable()
+					rewind := ui.NewCard(ui.CardInput, "Have any required database migrations been run?").PrintRewindable()
 					if err := runForm(
 						huh.NewConfirm().
 							Affirmative("Yes").
@@ -57,8 +51,21 @@ func newReleaseCmd() *cobra.Command {
 					Print()
 			}
 
+			// --- Resolve ---
+			statusName, statusErr := resolveStatus("done")
+
+			// --- Plan ---
+			plan := ui.NewPlan()
+			if statusErr == nil {
+				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
+			}
 			// TODO: Trigger production deployment (phase 6)
 
+			if !confirmPlan(cmd, plan) {
+				return nil
+			}
+
+			// --- Apply ---
 			transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done", false)
 			return nil
 		},

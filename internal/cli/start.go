@@ -24,16 +24,13 @@ func newStartCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
-			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
-			repos, err := resolveRepos(filterRepos)
-			if err != nil {
-				return err
-			}
-
-			fromHead, _ := cmd.Flags().GetBool("from-head")
 			ctx := cmd.Context()
+			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
+			fromHead, _ := cmd.Flags().GetBool("from-head")
 
-			// Fetch issue details to build branch name.
+			// --- Resolve ---
+
+			// Fetch issue details for branch naming.
 			var detail issuepkg.Issue
 			tracker, trackerErr := newIssueTracker()
 			if trackerErr == nil {
@@ -46,7 +43,7 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
-			// Build branch name from pattern + issue metadata.
+			// Build branch name.
 			branchName := issue
 			if detail.Key != "" {
 				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
@@ -57,19 +54,13 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
-			if isDryRun(cmd) {
-				kvArgs := []string{"Branch", branchName, "Repos", repoNames(repos)}
-				if statusName, err := resolveStatus("in_progress"); err == nil {
-					kvArgs = append(kvArgs, "Status", fmt.Sprintf("→ %s", statusName))
-				}
-				ui.NewCard(ui.CardInfo, "Would create workspace").
-					Subtitle("dry-run").
-					KV(kvArgs...).
-					Print()
-				return nil
+			// Resolve repos.
+			repos, err := resolveRepos(filterRepos)
+			if err != nil {
+				return err
 			}
 
-			// When no --repo filter and multiple repos, let user pick.
+			// Interactive repo selection.
 			if len(repos) > 1 && len(filterRepos) == 0 && isInteractive() {
 				opts := make([]huh.Option[string], len(repos))
 				for i, r := range repos {
@@ -92,13 +83,27 @@ func newStartCmd() *cobra.Command {
 					return nil
 				}
 
-				// Re-filter repos to just the selected ones.
 				repos, err = resolveRepos(selected)
 				if err != nil {
 					return err
 				}
 			}
 
+			// --- Plan ---
+			plan := ui.NewPlan()
+			plan.Add(ui.PlanCreate, "Create Branch", branchName, "")
+			for _, r := range repos {
+				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, branchName)
+			}
+			if statusName, err := resolveStatus("in_progress"); err == nil {
+				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
+			}
+
+			if !confirmPlan(cmd, plan) {
+				return nil
+			}
+
+			// --- Apply ---
 			mgr, err := newWorkspaceManager()
 			if err != nil {
 				return err
@@ -119,23 +124,11 @@ func newStartCmd() *cobra.Command {
 				Text(items...).
 				Print()
 
-			// Transition issue status (graceful — warn on error, don't fail).
+			// Transition issue status (graceful).
 			if trackerErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker not configured: %v", trackerErr)).Print()
+				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()
 			} else {
-				statusName, err := resolveStatus("in_progress")
-				if err != nil {
-					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Status mapping: %v", err)).Print()
-				} else {
-					if err := validateStageTransition(ctx, tracker, issue, "ready"); err != nil {
-						return err
-					}
-					if err := ui.RunCard(fmt.Sprintf("Setting status to %s", statusName), func() error {
-						return tracker.SetStatus(ctx, issue, statusName)
-					}); err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("Set status: %v", err)).Print()
-					}
-				}
+				transitionIssueStatus(ctx, issue, "ready", "in_progress", false)
 			}
 
 			return nil
