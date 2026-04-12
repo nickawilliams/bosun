@@ -54,9 +54,6 @@ func styledHelp(cmd *cobra.Command, args []string) {
 
 	// Subcommands.
 	if cmd.HasAvailableSubCommands() {
-		b.WriteString(helpHeading().Render("Commands"))
-		b.WriteString("\n")
-
 		maxLen := 0
 		for _, sub := range cmd.Commands() {
 			if sub.IsAvailableCommand() && len(sub.Name()) > maxLen {
@@ -64,15 +61,39 @@ func styledHelp(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		for _, sub := range cmd.Commands() {
-			if !sub.IsAvailableCommand() {
-				continue
+		if groups := cmd.Groups(); len(groups) > 0 {
+			for _, group := range groups {
+				var found bool
+				for _, sub := range cmd.Commands() {
+					if !sub.IsAvailableCommand() || sub.GroupID != group.ID {
+						continue
+					}
+					if !found {
+						b.WriteString(helpHeading().Render(group.Title))
+						b.WriteString("\n")
+						found = true
+					}
+					name := helpCommand().Render(sub.Name())
+					padding := strings.Repeat(" ", maxLen-len(sub.Name())+2)
+					b.WriteString(fmt.Sprintf("  %s%s%s\n", name, padding, sub.Short))
+				}
+				if found {
+					b.WriteString("\n")
+				}
 			}
-			name := helpCommand().Render(sub.Name())
-			padding := strings.Repeat(" ", maxLen-len(sub.Name())+2)
-			b.WriteString(fmt.Sprintf("  %s%s%s\n", name, padding, sub.Short))
+		} else {
+			b.WriteString(helpHeading().Render("Commands"))
+			b.WriteString("\n")
+			for _, sub := range cmd.Commands() {
+				if !sub.IsAvailableCommand() {
+					continue
+				}
+				name := helpCommand().Render(sub.Name())
+				padding := strings.Repeat(" ", maxLen-len(sub.Name())+2)
+				b.WriteString(fmt.Sprintf("  %s%s%s\n", name, padding, sub.Short))
+			}
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 
 	// Local flags.

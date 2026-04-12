@@ -7,8 +7,15 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	groupLifecycle = "lifecycle"
+	groupCommands  = "commands"
+)
+
 // NewRootCmd creates the root bosun command.
 func NewRootCmd(version string) *cobra.Command {
+	cobra.EnableCommandSorting = false
+
 	cmd := &cobra.Command{
 		Use:           "bosun",
 		Short:         "Automate SDLC lifecycle tasks",
@@ -35,7 +42,13 @@ func NewRootCmd(version string) *cobra.Command {
 
 	setStyledHelp(cmd)
 
-	cmd.AddCommand(
+	cmd.AddGroup(
+		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},
+		&cobra.Group{ID: groupCommands, Title: "Commands"},
+	)
+
+	// Lifecycle commands — ordered by lifecycle stage.
+	lifecycle := []*cobra.Command{
 		newInitCmd(),
 		newCreateCmd(),
 		newStartCmd(),
@@ -44,12 +57,26 @@ func NewRootCmd(version string) *cobra.Command {
 		newPrereleaseCmd(),
 		newReleaseCmd(),
 		newCleanupCmd(),
-		newStatusCmd(),
-		newWorkspaceCmd(),
+	}
+	for _, sub := range lifecycle {
+		sub.GroupID = groupLifecycle
+	}
+	cmd.AddCommand(lifecycle...)
+
+	// Utility commands — alphabetical.
+	utility := []*cobra.Command{
 		newConfigCmd(),
 		newDoctorCmd(),
-		newDemoCmd(),
-	)
+		newStatusCmd(),
+		newWorkspaceCmd(),
+	}
+	for _, sub := range utility {
+		sub.GroupID = groupCommands
+	}
+	cmd.AddCommand(utility...)
+
+	// Hidden commands.
+	cmd.AddCommand(newDemoCmd())
 
 	return cmd
 }
