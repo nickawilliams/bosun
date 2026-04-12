@@ -67,8 +67,9 @@ func newConfigSetCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Success("Set %s = %s", key, value)
-			ui.Muted("  in %s", configPath)
+			ui.NewCard(ui.CardSuccess, fmt.Sprintf("Set %s = %s", key, value)).
+				Muted(configPath).
+				Print()
 			return nil
 		},
 	}
@@ -85,7 +86,7 @@ func newConfigListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			settings := viper.AllSettings()
 			if len(settings) == 0 {
-				ui.Muted("No configuration values set")
+				ui.NewCard(ui.CardSkipped, "No configuration values set").Print()
 				return nil
 			}
 
@@ -96,11 +97,13 @@ func newConfigListCmd() *cobra.Command {
 			}
 			sort.Strings(keys)
 
-			kv := ui.NewKV()
+			kvArgs := make([]string, 0, len(keys)*2)
 			for _, k := range keys {
-				kv.Add(k, fmt.Sprintf("%v", flat[k]))
+				kvArgs = append(kvArgs, k, fmt.Sprintf("%v", flat[k]))
 			}
-			kv.Print()
+			ui.NewCard(ui.CardInfo, "Configuration").
+				KV(kvArgs...).
+				Print()
 			return nil
 		},
 	}
@@ -141,15 +144,15 @@ func newConfigPathCmd() *cobra.Command {
 		Use:   "path",
 		Short: "Show configuration file paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			kv := ui.NewKV()
+			var kvArgs []string
 
 			configDir, err := config.GlobalConfigDir()
 			if err == nil {
 				globalPath := filepath.Join(configDir, "config.yaml")
 				if _, err := os.Stat(globalPath); err == nil {
-					kv.Add("Global", globalPath)
+					kvArgs = append(kvArgs, "Global", globalPath)
 				} else {
-					kv.Add("Global", globalPath+" (not found)")
+					kvArgs = append(kvArgs, "Global", globalPath+" (not found)")
 				}
 			}
 
@@ -157,15 +160,17 @@ func newConfigPathCmd() *cobra.Command {
 			if projectRoot != "" {
 				projectPath := filepath.Join(projectRoot, ".bosun", "config.yaml")
 				if _, err := os.Stat(projectPath); err == nil {
-					kv.Add("Project", projectPath)
+					kvArgs = append(kvArgs, "Project", projectPath)
 				} else {
-					kv.Add("Project", projectPath+" (not found)")
+					kvArgs = append(kvArgs, "Project", projectPath+" (not found)")
 				}
 			} else {
-				kv.Add("Project", "(no .bosun/ found)")
+				kvArgs = append(kvArgs, "Project", "(no .bosun/ found)")
 			}
 
-			kv.Print()
+			ui.NewCard(ui.CardInfo, "Config paths").
+				KV(kvArgs...).
+				Print()
 
 			return nil
 		},
