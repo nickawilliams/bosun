@@ -69,7 +69,7 @@ func (p *Plan) Render() string {
 	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 
 	glyphStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	fmt.Fprintf(&b, " %s  %s\n", glyphStyle.Render(cardGlyphPending), headingStyle.Render("Plan:"))
+	fmt.Fprintf(&b, " %s  %s\n", glyphStyle.Render(cardGlyphInfo), headingStyle.Render("Plan:"))
 
 	// Compute column widths for alignment.
 	maxAction := 0
