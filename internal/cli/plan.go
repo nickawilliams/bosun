@@ -34,13 +34,12 @@ func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
 		return true
 	}
 
-	// Interactive: print plan, then confirm inline beneath it.
-	rewind := plan.PrintRewindable()
-
+	// Interactive: the plan content becomes the confirm prompt.
 	var confirmed bool
+	rewind := ui.NewCard(ui.CardInput, plan.Summary()).PrintRewindable()
 	if err := runForm(
 		huh.NewConfirm().
-			Title("Apply").
+			Title(plan.RenderItems()).
 			Affirmative("Apply").
 			Negative("Cancel").
 			Value(&confirmed),
@@ -49,7 +48,7 @@ func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
 	}
 	rewind()
 
-	// Re-render the plan in its final state.
+	// Re-render as static plan.
 	plan.Print()
 
 	return confirmed
