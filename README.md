@@ -99,11 +99,11 @@ bosun review --issue PROJ-123 --dry-run
 
 ### Phase 4: Code Hosting
 
-- [ ] `code.Host` interface and domain types
-- [ ] GitHub adapter (PR creation, release/tag creation)
-- [ ] Wire `review` (create PRs) and `prerelease` (create releases)
-- [ ] Version derivation from existing tags with `--bump` override
-- [ ] Tests for code hosting
+- [x] `code.Host` interface and domain types
+- [x] GitHub adapter (PR creation, release/tag creation)
+- [x] Wire `review` (create PRs) and `prerelease` (create releases)
+- [x] Version derivation from existing tags with `--bump` override
+- [x] Tests for code hosting
 
 ```sh
 # Create PRs across all repos with changes
