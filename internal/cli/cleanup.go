@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -21,6 +22,7 @@ func newCleanupCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
+			// --- Resolve ---
 			repos, err := resolveRepos(nil)
 			if err != nil {
 				return err
@@ -29,14 +31,20 @@ func newCleanupCmd() *cobra.Command {
 			branchName := issue
 			force, _ := cmd.Flags().GetBool("force")
 
-			if isDryRun(cmd) {
-				ui.NewCard(ui.CardInfo, "Would remove workspace").
-					Subtitle("dry-run").
-					KV("Workspace", branchName, "Repos", repoNames(repos)).
-					Print()
+			// --- Plan ---
+			plan := ui.NewPlan()
+			for _, r := range repos {
+				plan.Add(ui.PlanDestroy, "Remove Worktree", r.Name, branchName)
+			}
+			for _, r := range repos {
+				plan.Add(ui.PlanDestroy, "Delete Branch", r.Name, fmt.Sprintf("%s (local + remote)", branchName))
+			}
+
+			if !confirmPlan(cmd, plan) {
 				return nil
 			}
 
+			// --- Apply ---
 			mgr, err := newWorkspaceManager()
 			if err != nil {
 				return err

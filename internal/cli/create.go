@@ -69,24 +69,21 @@ func newCreateCmd() *cobra.Command {
 			}
 			rootCard(cmd).Print()
 
+			// --- Resolve ---
 			project := viper.GetString("jira.project")
 			if project == "" {
 				return fmt.Errorf("jira.project not configured in .bosun/config.yaml")
 			}
 
-			if isDryRun(cmd) {
-				ui.NewCard(ui.CardInfo, fmt.Sprintf("Would create %s issue", issueType)).
-					Subtitle("dry-run").
-					KV(
-						"Project", project,
-						"Title", title,
-						"Description", description,
-						"Size", size,
-					).
-					Print()
+			// --- Plan ---
+			plan := ui.NewPlan()
+			plan.Add(ui.PlanCreate, "Create Issue", project, fmt.Sprintf("%s: %q", issueType, title))
+
+			if !confirmPlan(cmd, plan) {
 				return nil
 			}
 
+			// --- Apply ---
 			tracker, err := newIssueTracker()
 			if err != nil {
 				return err
