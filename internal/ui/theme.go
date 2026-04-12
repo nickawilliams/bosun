@@ -49,6 +49,15 @@ type BosunTheme struct{}
 func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t := huh.ThemeBase(isDark)
 
+	// Between fields in a multi-field group, huh inserts a
+	// FieldSeparator on its own line. The default is a blank "\n\n"
+	// which breaks the timeline spine. Use an UNSTYLED "\n │\n" so
+	// a bare │ sits on its own row between fields without lipgloss
+	// padding trailing whitespace into the next field's margin.
+	// The bar is recolored to the recessed timeline gray by
+	// NewTimelineLayout — see form_layout.go for the rationale.
+	t.FieldSeparator = lipgloss.NewStyle().SetString("\n │\n")
+
 	// Align huh's focused form with the card timeline: 1 space of
 	// left margin, a normal-weight │ border in the accent color,
 	// and 2 spaces of inner padding. Callers that want a "?" glyph

@@ -18,10 +18,13 @@ func isInteractive() bool {
 
 // runForm runs a huh form with the app theme applied. Keybinding
 // help is explicitly enabled so the shortcut hints render in the
-// footer beneath the active prompt.
+// footer beneath the active prompt. The timeline layout wraps
+// huh's default layout to recolor field separator bars in the
+// recessed timeline gray.
 func runForm(fields ...huh.Field) error {
 	return huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
+		WithLayout(ui.NewTimelineLayout()).
 		WithShowHelp(true).
 		Run()
 }
