@@ -229,12 +229,19 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 	return nil
 }
 
-// newCodeHost creates a code.Host from current config. Tries gh CLI / env var
-// first (no prompting), falls back to JIT config prompting.
+// newCodeHost creates a code.Host from current config. Resolution order:
+// 1. github.token from viper (config file or BOSUN_GITHUB_TOKEN env)
+// 2. gh auth token (GitHub CLI)
+// 3. GITHUB_TOKEN env var
+// 4. JIT prompt (saves to config)
 func newCodeHost() (code.Host, error) {
-	// Try automatic token resolution first.
-	token := gh.ResolveToken()
-	if token != "" {
+	// Check viper first (config file or env var via AutomaticEnv).
+	if token := viper.GetString("github.token"); token != "" {
+		return gh.New(token), nil
+	}
+
+	// Try automatic resolution (gh CLI, GITHUB_TOKEN env).
+	if token := gh.ResolveToken(); token != "" {
 		return gh.New(token), nil
 	}
 
