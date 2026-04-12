@@ -111,9 +111,7 @@ func newReviewCmd() *cobra.Command {
 					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repo.Name, detail)
 				}
 			}
-			if statusName, err := resolveStatus("review"); err == nil {
-				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
-			}
+			addStatusPlanItem(plan, issue, detail.Status, "review")
 
 			if !confirmPlan(cmd, plan) {
 				return nil

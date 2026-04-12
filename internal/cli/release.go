@@ -51,14 +51,9 @@ func newReleaseCmd() *cobra.Command {
 					Print()
 			}
 
-			// --- Resolve ---
-			statusName, statusErr := resolveStatus("done")
-
 			// --- Plan ---
 			plan := ui.NewPlan()
-			if statusErr == nil {
-				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
-			}
+			addStatusPlanItem(plan, issue, "", "done")
 			// TODO: Trigger production deployment (phase 6)
 
 			if !confirmPlan(cmd, plan) {

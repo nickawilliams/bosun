@@ -103,9 +103,7 @@ func newPrereleaseCmd() *cobra.Command {
 				}
 				plan.Add(ui.PlanCreate, "Create Release", rp.repo.Name, fmt.Sprintf("%s → %s", from, rp.nextVersion))
 			}
-			if statusName, err := resolveStatus("ready_for_release"); err == nil {
-				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
-			}
+			addStatusPlanItem(plan, issue, "", "ready_for_release")
 
 			if !confirmPlan(cmd, plan) {
 				return nil
