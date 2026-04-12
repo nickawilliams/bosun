@@ -10,12 +10,15 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show issue lifecycle status",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Issue status",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			ui.Header("status", issue)
+			rootCard(cmd, issue).Print()
 
 			tracker, err := newIssueTracker()
 			if err != nil {
@@ -23,21 +26,22 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			detail, err := ui.WithSpinnerResult("Fetching issue...", func() (issuepkg.Issue, error) {
-				return tracker.GetIssue(ctx, issue)
-			})
-			if err != nil {
+			var detail issuepkg.Issue
+			if err := ui.RunCard("Fetching issue", func() error {
+				var fetchErr error
+				detail, fetchErr = tracker.GetIssue(ctx, issue)
+				return fetchErr
+			}); err != nil {
 				return err
 			}
 
-			kv := ui.NewKV().
-				Add("Title", detail.Title).
-				Add("Status", detail.Status).
-				Add("Type", detail.Type).
-				Add("URL", detail.URL)
-
-			ui.NewPanel(detail.Key).
-				Content(kv.Render()).
+			ui.NewCard(ui.CardInfo, detail.Key).
+				KV(
+					"Title", detail.Title,
+					"Status", detail.Status,
+					"Type", detail.Type,
+					"URL", detail.URL,
+				).
 				Print()
 
 			// TODO: VCS branch status per repo (phase 2 data available)
