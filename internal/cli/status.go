@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/code"
+	gh "github.com/nickawilliams/bosun/internal/code/github"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -87,7 +89,30 @@ func newStatusCmd() *cobra.Command {
 					Print()
 			}
 
-			// TODO: Code host PR status (phase 4)
+			// PR status from code host.
+			if repoErr == nil && len(repoStatuses) > 0 {
+				host, hostErr := newCodeHost()
+				if hostErr != nil {
+					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
+				} else {
+					prStatuses := collectPRStatus(ctx, host, repoStatuses, repos)
+					if len(prStatuses) > 0 {
+						var lines []string
+						for _, ps := range prStatuses {
+							line := fmt.Sprintf("%-12s #%-4d %s", ps.repoName, ps.pr.Number, ps.pr.State)
+							if ps.pr.Review != "" {
+								line += " · " + ps.pr.Review
+							}
+							lines = append(lines, line)
+							lines = append(lines, fmt.Sprintf("%-12s %s", "", ps.pr.URL))
+						}
+						ui.NewCard(ui.CardInfo, "Pull Requests").
+							Text(lines...).
+							Print()
+					}
+				}
+			}
+
 			// TODO: CI/CD status (phase 6)
 
 			return nil
@@ -142,4 +167,46 @@ func collectBranchStatus(ctx context.Context, issueKey string, repos []Repo) []r
 	}
 
 	return statuses
+}
+
+type prStatus struct {
+	repoName string
+	pr       code.PullRequest
+}
+
+// collectPRStatus checks each repo for PRs matching the branch.
+func collectPRStatus(ctx context.Context, host code.Host, repoStatuses []repoStatus, repos []Repo) []prStatus {
+	var results []prStatus
+
+	for _, s := range repoStatuses {
+		if !s.exists {
+			continue
+		}
+
+		// Find the repo path to parse the remote.
+		var repoPath string
+		for _, r := range repos {
+			if r.Name == s.name {
+				repoPath = r.Path
+				break
+			}
+		}
+		if repoPath == "" {
+			continue
+		}
+
+		identity, err := gh.ParseRemote(ctx, repoPath)
+		if err != nil {
+			continue
+		}
+
+		pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, s.branch)
+		if err != nil || pr.Number == 0 {
+			continue
+		}
+
+		results = append(results, prStatus{repoName: s.name, pr: pr})
+	}
+
+	return results
 }
