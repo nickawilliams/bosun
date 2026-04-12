@@ -31,6 +31,7 @@ func NewRootCmd(version string) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().Bool("dry-run", false, "show what would happen without making changes")
+	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
 	cmd.Flags().BoolP("version", "v", false, "print version information")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if v, _ := cmd.Flags().GetBool("version"); v {
