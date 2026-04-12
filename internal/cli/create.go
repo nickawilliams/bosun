@@ -15,7 +15,7 @@ func newCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a new issue",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Create issue",
+			headerAnnotationTitle: "create issue",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			title, _ := cmd.Flags().GetString("title")

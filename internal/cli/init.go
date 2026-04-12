@@ -17,7 +17,7 @@ func newInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Initialize a new bosun project",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Initialize project",
+			headerAnnotationTitle: "initialize project",
 		},
 		RunE: runInit,
 	}

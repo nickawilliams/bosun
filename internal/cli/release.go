@@ -13,7 +13,7 @@ func newReleaseCmd() *cobra.Command {
 		Use:   "release",
 		Short: "Deploy to production",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Release",
+			headerAnnotationTitle: "release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)

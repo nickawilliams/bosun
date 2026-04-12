@@ -15,7 +15,7 @@ func newDemoCmd() *cobra.Command {
 		Short:  "Render all UI components for design iteration",
 		Hidden: true,
 		Annotations: map[string]string{
-			headerAnnotationTitle: "UI Components",
+			headerAnnotationTitle: "UI components",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Root — title is read from cmd.Annotations["title"].

@@ -9,7 +9,7 @@ func newPrereleaseCmd() *cobra.Command {
 		Use:   "prerelease",
 		Short: "Prepare release artifacts",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Pre-release",
+			headerAnnotationTitle: "pre-release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)

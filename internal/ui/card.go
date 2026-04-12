@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"unicode"
+	"unicode/utf8"
 )
 
 // CardState represents the lifecycle state of a card.
@@ -150,15 +152,29 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	conn := pad + c.renderConnector() + "  "
 
 	// Between the glyph and the title is normally two spaces. Root
-	// cards instead draw a short horizontal line + space so the
-	// corner glyph extends into a labeled branch (╭─ Title). The
-	// total width stays the same, keeping all card titles aligned.
+	// cards draw a horizontal rule through the title so the heading
+	// reads as a visual divider: ╭── Title ─────────────────
 	gap := "  "
 	if c.state == CardRoot {
-		gap = lipgloss.NewStyle().Foreground(Palette.Recessed).Render("─") + " "
+		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+		title := titleCase(c.title)
+		rendered := titleStyle.Render(title)
+		// Title visible width (without ANSI).
+		titleWidth := lipgloss.Width(rendered)
+		// Available width: terminal minus pad(1) + glyph(1) + pre-dash(1) + space(1) + title + space(1).
+		trailLen := TermWidth() - 5 - titleWidth
+		if trailLen < 2 {
+			trailLen = 2
+		}
+		trail := ""
+		for range trailLen {
+			trail += "─"
+		}
+		gap = ruleStyle.Render("─") + " "
+		fmt.Fprintf(&b, "%s%s%s%s %s\n", pad, glyph, gap, rendered, ruleStyle.Render(trail))
+	} else {
+		fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
 	}
-
-	fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
 
 	if c.subtitle != "" {
 		fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(c.subtitle))
@@ -340,4 +356,21 @@ func RunCard(title string, fn func() error) error {
 	card.state = CardSuccess
 	card.Print()
 	return nil
+}
+
+// titleCase capitalizes the first letter of each word while
+// preserving words that already contain uppercase letters (e.g.
+// acronyms like "UI" or "API"). Only fully-lowercase words get
+// their first rune uppercased.
+func titleCase(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		if w == strings.ToLower(w) {
+			r, size := utf8.DecodeRuneInString(w)
+			if r != utf8.RuneError {
+				words[i] = string(unicode.ToUpper(r)) + w[size:]
+			}
+		}
+	}
+	return strings.Join(words, " ")
 }

@@ -15,7 +15,7 @@ func newStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Begin work on an issue",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Start work",
+			headerAnnotationTitle: "start work",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)

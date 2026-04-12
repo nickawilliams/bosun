@@ -9,7 +9,7 @@ func newReviewCmd() *cobra.Command {
 		Use:   "review",
 		Short: "Submit issue for code review",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Code review",
+			headerAnnotationTitle: "code review",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)

@@ -11,7 +11,7 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show issue lifecycle status",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Issue status",
+			headerAnnotationTitle: "issue status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)

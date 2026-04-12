@@ -25,7 +25,7 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Check bosun configuration and connectivity",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "System check",
+			headerAnnotationTitle: "system check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
