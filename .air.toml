@@ -9,6 +9,7 @@ entrypoint = ["/usr/bin/true"]
 include_ext = ["go", "toml", "yaml"]
 
 [log]
+time = true
 main_only = false
 
 [misc]
