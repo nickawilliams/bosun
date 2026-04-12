@@ -10,6 +10,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type prereleaseRepoPlan struct {
+	repo        Repo
+	owner       string
+	name        string
+	branch      string
+	currentTag  string
+	nextVersion string
+}
+
 func newPrereleaseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prerelease",
@@ -27,39 +36,37 @@ func newPrereleaseCmd() *cobra.Command {
 			ctx := cmd.Context()
 			bump, _ := cmd.Flags().GetString("bump")
 
-			// Resolve repos.
+			// --- Resolve ---
+
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
 			repos, err := resolveRepos(filterRepos)
 			if err != nil {
 				return err
 			}
 
-			// Resolve code host.
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
 				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
 			}
 
 			g := git.New()
+			var repoPlans []prereleaseRepoPlan
 
-			// Create releases per repo.
 			if host != nil {
 				for _, r := range repos {
-					// Get current branch.
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
 					if err != nil {
 						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err)).Print()
 						continue
 					}
 
-					// Parse remote to get owner/repo.
 					identity, err := gh.ParseRemote(ctx, r.Path)
 					if err != nil {
 						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
 						continue
 					}
 
-					// Get latest tag and derive next version.
+					// Fetch latest tag (read-only network call).
 					var currentTag string
 					if err := ui.RunCard(fmt.Sprintf("Fetching latest tag for %s", r.Name), func() error {
 						var e error
@@ -76,49 +83,60 @@ func newPrereleaseCmd() *cobra.Command {
 						continue
 					}
 
-					fromTag := currentTag
-					if fromTag == "" {
-						fromTag = "(none)"
-					}
-
-					if isDryRun(cmd) {
-						ui.NewCard(ui.CardInfo, fmt.Sprintf("Would release %s for %s", nextVersion, r.Name)).
-							Subtitle("dry-run").
-							KV(
-								"Repo", fmt.Sprintf("%s/%s", identity.Owner, identity.Name),
-								"Current", fromTag,
-								"Next", nextVersion,
-								"Target", branch,
-							).
-							Print()
-						continue
-					}
-
-					var rel code.Release
-					if err := ui.RunCard(fmt.Sprintf("Creating release %s for %s", nextVersion, r.Name), func() error {
-						var e error
-						rel, e = host.CreateRelease(ctx, code.CreateReleaseRequest{
-							Owner:  identity.Owner,
-							Repo:   identity.Name,
-							Tag:    nextVersion,
-							Target: branch,
-							Name:   nextVersion,
-						})
-						return e
-					}); err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
-						continue
-					}
-
-					ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s %s", r.Name, rel.Tag)).
-						Muted(rel.URL).
-						Print()
+					repoPlans = append(repoPlans, prereleaseRepoPlan{
+						repo:        r,
+						owner:       identity.Owner,
+						name:        identity.Name,
+						branch:      branch,
+						currentTag:  currentTag,
+						nextVersion: nextVersion,
+					})
 				}
+			}
+
+			// --- Plan ---
+			plan := ui.NewPlan()
+			for _, rp := range repoPlans {
+				from := rp.currentTag
+				if from == "" {
+					from = "(none)"
+				}
+				plan.Add(ui.PlanCreate, "Create Release", rp.repo.Name, fmt.Sprintf("%s → %s", from, rp.nextVersion))
+			}
+			if statusName, err := resolveStatus("ready_for_release"); err == nil {
+				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
+			}
+
+			if !confirmPlan(cmd, plan) {
+				return nil
+			}
+
+			// --- Apply ---
+			for _, rp := range repoPlans {
+				var rel code.Release
+				if err := ui.RunCard(fmt.Sprintf("Creating release %s for %s", rp.nextVersion, rp.repo.Name), func() error {
+					var e error
+					rel, e = host.CreateRelease(ctx, code.CreateReleaseRequest{
+						Owner:  rp.owner,
+						Repo:   rp.name,
+						Tag:    rp.nextVersion,
+						Target: rp.branch,
+						Name:   rp.nextVersion,
+					})
+					return e
+				}); err != nil {
+					ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", rp.repo.Name, err)).Print()
+					continue
+				}
+
+				ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s %s", rp.repo.Name, rel.Tag)).
+					Muted(rel.URL).
+					Print()
 			}
 
 			// TODO: Notify release channel (phase 5)
 
-			transitionIssueStatus(ctx, issue, "preview", "ready_for_release", isDryRun(cmd))
+			transitionIssueStatus(ctx, issue, "preview", "ready_for_release", false)
 			return nil
 		},
 	}
