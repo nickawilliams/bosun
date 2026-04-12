@@ -14,12 +14,15 @@ func newStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Begin work on an issue",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Start work",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			ui.Header("start", issue)
+			rootCard(cmd, issue).Print()
 
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
 			repos, err := resolveRepos(filterRepos)
@@ -34,14 +37,13 @@ func newStartCmd() *cobra.Command {
 			var detail issuepkg.Issue
 			tracker, trackerErr := newIssueTracker()
 			if trackerErr == nil {
-				fetched, err := ui.WithSpinnerResult("Fetching issue...", func() (issuepkg.Issue, error) {
-					return tracker.GetIssue(ctx, issue)
-				})
-				if err != nil {
+				if err := ui.RunCard("Fetching issue", func() error {
+					var fetchErr error
+					detail, fetchErr = tracker.GetIssue(ctx, issue)
+					return fetchErr
+				}); err != nil {
 					return fmt.Errorf("fetching issue: %w", err)
 				}
-				detail = fetched
-				ui.Complete(fmt.Sprintf("Fetched %s: %s", detail.Key, detail.Title))
 			}
 
 			// Build branch name from pattern + issue metadata.
@@ -49,21 +51,21 @@ func newStartCmd() *cobra.Command {
 			if detail.Key != "" {
 				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
 				if err != nil {
-					ui.Skip(fmt.Sprintf("Branch naming: %v (using %s)", err, issue))
+					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Branch naming: %v (using %s)", err, issue)).Print()
 				} else {
 					branchName = name
 				}
 			}
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would create workspace")
-				kv := ui.NewKV().
-					Add("Branch", branchName).
-					Add("Repos", repoNames(repos))
+				kvArgs := []string{"Branch", branchName, "Repos", repoNames(repos)}
 				if statusName, err := resolveStatus("in_progress"); err == nil {
-					kv.Add("Status", fmt.Sprintf("→ %s", statusName))
+					kvArgs = append(kvArgs, "Status", fmt.Sprintf("→ %s", statusName))
 				}
-				kv.Print()
+				ui.NewCard(ui.CardInfo, "Would create workspace").
+					Subtitle("dry-run").
+					KV(kvArgs...).
+					Print()
 				return nil
 			}
 
@@ -75,17 +77,18 @@ func newStartCmd() *cobra.Command {
 				}
 
 				var selected []string
+				rewind := ui.NewCard(ui.CardInput, "Repos").PrintRewindable()
 				if err := runForm(
 					huh.NewMultiSelect[string]().
-						Title("  Repos").
 						Options(opts...).
 						Value(&selected),
 				); err != nil {
 					return err
 				}
+				rewind()
 
 				if len(selected) == 0 {
-					ui.Warning("No repos selected.")
+					ui.NewCard(ui.CardSkipped, "No repos selected").Print()
 					return nil
 				}
 
@@ -102,10 +105,9 @@ func newStartCmd() *cobra.Command {
 			}
 
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			err = ui.WithSpinner("Creating workspace...", func() error {
+			if err := ui.RunCard("Creating workspace", func() error {
 				return mgr.Create(context.Background(), branchName, wsRepos, fromHead)
-			})
-			if err != nil {
+			}); err != nil {
 				return err
 			}
 
@@ -113,26 +115,25 @@ func newStartCmd() *cobra.Command {
 			for i, r := range repos {
 				items[i] = fmt.Sprintf("%-12s %s", r.Name, r.Path)
 			}
-			ui.CompleteWithDetail("Created workspace", items)
+			ui.NewCard(ui.CardSuccess, "Created workspace").
+				Text(items...).
+				Print()
 
 			// Transition issue status (graceful — warn on error, don't fail).
 			if trackerErr != nil {
-				ui.Skip(fmt.Sprintf("Issue tracker not configured: %v", trackerErr))
+				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker not configured: %v", trackerErr)).Print()
 			} else {
 				statusName, err := resolveStatus("in_progress")
 				if err != nil {
-					ui.Skip(fmt.Sprintf("Status mapping: %v", err))
+					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Status mapping: %v", err)).Print()
 				} else {
 					if err := validateStageTransition(ctx, tracker, issue, "ready"); err != nil {
 						return err
 					}
-					err = ui.WithSpinner(fmt.Sprintf("Setting status to %s...", statusName), func() error {
+					if err := ui.RunCard(fmt.Sprintf("Setting status to %s", statusName), func() error {
 						return tracker.SetStatus(ctx, issue, statusName)
-					})
-					if err != nil {
-						ui.Fail(fmt.Sprintf("Set status: %v", err))
-					} else {
-						ui.Complete(fmt.Sprintf("Set status to %s", statusName))
+					}); err != nil {
+						ui.NewCard(ui.CardFailed, fmt.Sprintf("Set status: %v", err)).Print()
 					}
 				}
 			}
