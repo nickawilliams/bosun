@@ -91,9 +91,9 @@ func newStartCmd() *cobra.Command {
 
 			// --- Plan ---
 			plan := ui.NewPlan()
-			plan.Add(ui.PlanCreate, "Create Branch", branchName, "")
 			for _, r := range repos {
-				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, branchName)
+				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
+				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, r.Path)
 			}
 			if statusName, err := resolveStatus("in_progress"); err == nil {
 				plan.Add(ui.PlanModify, "Update Issue Status", issue, fmt.Sprintf("→ %s", statusName))
