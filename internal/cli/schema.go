@@ -66,6 +66,28 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workspace_root", Label: "Workspace root", Default: "_workspaces"},
 		},
 	},
+	"code_host": {
+		Label: "Code host",
+
+		Keys: []ConfigKey{
+			{Key: "code_host", Label: "Provider", Options: []string{"github"}, Required: true},
+		},
+	},
+	"github": {
+		Label: "GitHub",
+
+		Keys: []ConfigKey{
+			{Key: "token", Label: "Personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
+		},
+	},
+	"pull_request": {
+		Label: "Pull request",
+
+		Keys: []ConfigKey{
+			{Key: "base", Label: "Base branch", Default: "main"},
+			{Key: "title_pattern", Label: "PR title pattern", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
+		},
+	},
 	"color_mode": {
 		Label: "Color mode",
 

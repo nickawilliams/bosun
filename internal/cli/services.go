@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"text/template"
+
+	"github.com/nickawilliams/bosun/internal/code"
+	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/issue/jira"
@@ -223,4 +227,55 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 	}
 
 	return nil
+}
+
+// newCodeHost creates a code.Host from current config. Tries gh CLI / env var
+// first (no prompting), falls back to JIT config prompting.
+func newCodeHost() (code.Host, error) {
+	// Try automatic token resolution first.
+	token := gh.ResolveToken()
+	if token != "" {
+		return gh.New(token), nil
+	}
+
+	// Fall back to config-prompted token.
+	if err := requireConfig("code_host"); err != nil {
+		return nil, err
+	}
+
+	provider := viper.GetString("code_host")
+	switch provider {
+	case "github":
+		if err := requireConfig("github"); err != nil {
+			return nil, err
+		}
+		return gh.New(viper.GetString("github.token")), nil
+	default:
+		return nil, fmt.Errorf("unsupported code host: %q", provider)
+	}
+}
+
+// buildPRTitle generates a PR title from the configured pattern and issue metadata.
+func buildPRTitle(issueKey, issueTitle string) string {
+	pattern := viper.GetString("pull_request.title_pattern")
+	if pattern == "" {
+		pattern = "[{{.IssueKey}}] {{.IssueTitle}}"
+	}
+
+	tmpl, err := template.New("pr-title").Parse(pattern)
+	if err != nil {
+		return fmt.Sprintf("[%s] %s", issueKey, issueTitle)
+	}
+
+	data := struct {
+		IssueKey   string
+		IssueTitle string
+	}{issueKey, issueTitle}
+
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Sprintf("[%s] %s", issueKey, issueTitle)
+	}
+
+	return buf.String()
 }
