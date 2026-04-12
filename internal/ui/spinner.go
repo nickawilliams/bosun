@@ -70,9 +70,14 @@ func (m spinnerModel) waitForResult() tea.Cmd {
 }
 
 // WithSpinner runs fn while displaying a spinner with the given message.
-// Returns the error from fn. If the terminal doesn't support the spinner
-// (e.g., non-interactive), it falls back to a simple message.
+// Returns the error from fn.
 func WithSpinner(message string, fn func() error) error {
+	return defaultReporter.Task(message, fn)
+}
+
+// withSpinner is the original spinner implementation. It is called by
+// cardReporter.Task to avoid a delegation cycle.
+func withSpinner(message string, fn func() error) error {
 	resultCh := make(chan error, 1)
 	go func() {
 		resultCh <- fn()
@@ -95,30 +100,7 @@ func WithSpinner(message string, fn func() error) error {
 // WithSpinnerResult runs fn while displaying a spinner and returns both
 // the result value and error.
 func WithSpinnerResult[T any](message string, fn func() (T, error)) (T, error) {
-	type result struct {
-		val T
-		err error
-	}
-
-	resCh := make(chan result, 1)
-	errCh := make(chan error, 1)
-
-	go func() {
-		val, err := fn()
-		resCh <- result{val, err}
-		errCh <- err
-	}()
-
-	p := tea.NewProgram(newSpinnerModel(message, errCh))
-	_, err := p.Run()
-	if err != nil {
-		// Bubbletea failed — wait for the task.
-		r := <-resCh
-		return r.val, r.err
-	}
-
-	r := <-resCh
-	return r.val, r.err
+	return TaskResult(defaultReporter, message, fn)
 }
 
 // SimulateSpinner prints a simple message with a brief delay for contexts

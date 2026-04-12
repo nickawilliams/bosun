@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-
 	"charm.land/lipgloss/v2"
 )
 
@@ -15,24 +13,13 @@ var (
 )
 
 // Complete prints a completed step with a green checkmark.
-func Complete(label string) {
-	fmt.Printf("  %s %s\n", stepCheckStyle.Render(Palette.Check), label)
-}
+func Complete(label string) { defaultReporter.Complete(label) }
 
 // CompleteWithDetail prints a completed step with indented detail items.
-func CompleteWithDetail(label string, items []string) {
-	Complete(label)
-	for _, item := range items {
-		fmt.Printf("      %s %s\n", stepArrowStyle.Render(Palette.Arrow), stepItemStyle.Render(item))
-	}
-}
+func CompleteWithDetail(label string, items []string) { defaultReporter.CompleteDetail(label, items) }
 
 // Skip prints a skipped step with a warning symbol.
-func Skip(label string) {
-	fmt.Printf("  %s %s\n", stepSkipStyle.Render("!"), label)
-}
+func Skip(label string) { defaultReporter.Skip(label) }
 
 // Fail prints a failed step with an error symbol.
-func Fail(label string) {
-	fmt.Printf("  %s %s\n", stepFailStyle.Render(Palette.Cross), label)
-}
+func Fail(label string) { defaultReporter.Fail(label) }

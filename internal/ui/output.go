@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"charm.land/lipgloss/v2"
 )
@@ -18,10 +17,7 @@ var (
 )
 
 // Success prints a success message with a check mark.
-func Success(msg string, args ...any) {
-	text := fmt.Sprintf(msg, args...)
-	fmt.Println(successStyle.Render(Palette.Check) + " " + text)
-}
+func Success(msg string, args ...any) { defaultReporter.Success(msg, args...) }
 
 // Error prints an error message with an X mark to stderr.
 func Error(msg string, args ...any) {
@@ -30,22 +26,13 @@ func Error(msg string, args ...any) {
 }
 
 // Warning prints a warning message to stderr.
-func Warning(msg string, args ...any) {
-	text := fmt.Sprintf(msg, args...)
-	fmt.Fprintln(os.Stderr, warningStyle.Render("!")+" "+text)
-}
+func Warning(msg string, args ...any) { defaultReporter.Warning(msg, args...) }
 
 // Info prints an informational message.
-func Info(msg string, args ...any) {
-	text := fmt.Sprintf(msg, args...)
-	fmt.Println(primaryStyle.Render(Palette.Bullet) + " " + text)
-}
+func Info(msg string, args ...any) { defaultReporter.Info(msg, args...) }
 
 // Muted prints a dimmed/secondary message.
-func Muted(msg string, args ...any) {
-	text := fmt.Sprintf(msg, args...)
-	fmt.Println(mutedStyle.Render(text))
-}
+func Muted(msg string, args ...any) { defaultReporter.Muted(msg, args...) }
 
 // Bold prints bold text.
 func Bold(msg string, args ...any) {
@@ -63,30 +50,11 @@ func Item(label, value string) {
 
 // Saved prints a confirmation that a value was set, styled to match huh form
 // inputs: check + bold primary label on one line, muted value on the next.
-func Saved(label, value string) {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	fmt.Printf("  %s %s\n    %s\n",
-		stepCheckStyle.Render(Palette.Check),
-		titleStyle.Render(label),
-		valueStyle.Render(value),
-	)
-}
+func Saved(label, value string) { defaultReporter.Saved(label, value) }
 
 // Header prints a styled command header. Pass the command name and optional
 // context (e.g., issue key, workspace name).
-func Header(command string, context ...string) {
-	parts := []string{boldStyle.Render(command)}
-	for _, c := range context {
-		parts = append(parts, primaryStyle.Render(c))
-	}
-	symbol := lipgloss.NewStyle().Foreground(Palette.Accent).Render("●")
-	fmt.Printf("\n%s %s\n\n", symbol, strings.Join(parts, " "))
-}
+func Header(command string, context ...string) { defaultReporter.Header(command, context...) }
 
 // DryRun prints a dry-run prefixed message.
-func DryRun(msg string, args ...any) {
-	text := fmt.Sprintf(msg, args...)
-	prefix := warningStyle.Render("[dry-run]")
-	fmt.Printf("%s %s\n", prefix, text)
-}
+func DryRun(msg string, args ...any) { defaultReporter.DryRun(msg, args...) }
