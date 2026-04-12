@@ -69,7 +69,8 @@ func (p *Plan) Render() string {
 	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 
 	glyphStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	fmt.Fprintf(&b, " %s  %s\n", glyphStyle.Render(cardGlyphInfo), headingStyle.Render("Plan:"))
+	summary := p.summary()
+	fmt.Fprintf(&b, " %s  %s\n", glyphStyle.Render(cardGlyphInfo), headingStyle.Render(summary))
 
 	// Compute column widths for alignment.
 	maxAction := 0
@@ -111,12 +112,7 @@ func (p *Plan) Render() string {
 		fmt.Fprintf(&b, "%s\n", line)
 	}
 
-	// Summary line.
 	fmt.Fprintf(&b, " %s\n", connStyle.Render("│"))
-	summary := p.summary()
-	if summary != "" {
-		fmt.Fprintf(&b, " %s  %s\n", connStyle.Render("│"), lipgloss.NewStyle().Foreground(Palette.Muted).Render(summary))
-	}
 
 	return b.String()
 }
