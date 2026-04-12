@@ -49,7 +49,18 @@ type BosunTheme struct{}
 func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t := huh.ThemeBase(isDark)
 
-	t.Focused.Base = t.Focused.Base.BorderForeground(lipgloss.Color("238"))
+	// Align huh's focused form with the card timeline: 1 space of
+	// left margin, a normal-weight │ border in the accent color,
+	// and 2 spaces of inner padding. Callers that want a "?" glyph
+	// on the first row should print a CardInput title card before
+	// invoking the form; the form itself only draws the connector,
+	// which matches the CardInput card's own connector color.
+	t.Focused.Base = lipgloss.NewStyle().
+		MarginLeft(1).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderLeft(true).
+		BorderForeground(Palette.Accent).
+		PaddingLeft(2)
 	t.Focused.Card = t.Focused.Base
 	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true)
 	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1)
@@ -80,13 +91,34 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(Palette.Accent)
 
 	t.Blurred = t.Focused
-	t.Blurred.Base = t.Focused.Base.BorderStyle(lipgloss.HiddenBorder())
+	// Blurred (inactive) fields keep a visible left gutter in the
+	// recessed timeline color so the whole form reads as a single
+	// continuous card, with the fuchsia accent only marking the
+	// one row receiving input.
+	t.Blurred.Base = t.Focused.Base.BorderForeground(cardConnectorColor)
 	t.Blurred.Card = t.Blurred.Base
 	t.Blurred.NextIndicator = lipgloss.NewStyle()
 	t.Blurred.PrevIndicator = lipgloss.NewStyle()
 
 	t.Group.Title = t.Focused.Title
 	t.Group.Description = t.Focused.Description
+
+	// Help footer: keys + descriptions in recessed muted gray so
+	// the shortcut hints sit quietly beneath the active prompt
+	// without competing with the card timeline above. Indented
+	// with a left margin so it aligns under the prompt content,
+	// matching the 1-space outer pad + 1-col border + 2-col inner
+	// padding used by the focused card.
+	helpKey := lipgloss.NewStyle().Foreground(Palette.Muted)
+	helpDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	helpSep := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+	t.Help.ShortKey = helpKey
+	t.Help.ShortDesc = helpDesc
+	t.Help.ShortSeparator = helpSep
+	t.Help.Ellipsis = helpSep
+	t.Help.FullKey = helpKey
+	t.Help.FullDesc = helpDesc
+	t.Help.FullSeparator = helpSep
 
 	return t
 }

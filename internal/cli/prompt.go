@@ -16,10 +16,13 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// runForm runs a huh form with the app theme applied.
+// runForm runs a huh form with the app theme applied. Keybinding
+// help is explicitly enabled so the shortcut hints render in the
+// footer beneath the active prompt.
 func runForm(fields ...huh.Field) error {
 	return huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
+		WithShowHelp(true).
 		Run()
 }
 
