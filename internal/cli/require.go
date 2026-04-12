@@ -107,31 +107,35 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	// Secret env var — prompt with masked input, don't save to file.
 	if ck.Secret && ck.EnvVar != "" {
 		var val string
+		rewind := ui.NewCard(ui.CardInput, ck.Label).PrintRewindable()
 		if err := runForm(
 			huh.NewInput().
-				Title("  " + ck.Label).
 				Placeholder("set for this session").
 				EchoMode(huh.EchoModePassword).
 				Value(&val),
 		); err != nil {
 			return err
 		}
+		rewind()
 		if val == "" {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
 		os.Setenv(ck.EnvVar, val)
-		ui.Saved(ck.Label, "(set for this session)")
+		ui.NewCard(ui.CardSuccess, ck.Label).
+			Text("(set for this session)").
+			Print()
 		return nil
 	}
 
-	// Select from options.
+	// Select from options or free-text input.
 	var val string
+	rewind := ui.NewCard(ui.CardInput, ck.Label).PrintRewindable()
 	if len(ck.Options) > 0 {
 		opts := make([]huh.Option[string], len(ck.Options))
 		for i, o := range ck.Options {
 			opts[i] = huh.NewOption(o, o)
 		}
-		if err := runForm(huh.NewSelect[string]().Title("  " + ck.Label).Options(opts...).Value(&val)); err != nil {
+		if err := runForm(huh.NewSelect[string]().Options(opts...).Value(&val)); err != nil {
 			return err
 		}
 	} else {
@@ -139,8 +143,12 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		if defaultVal == "" {
 			defaultVal = ck.Example
 		}
-		val = promptValue("  "+ck.Label, defaultVal)
+		val = defaultVal
+		if err := runForm(huh.NewInput().Value(&val)); err != nil {
+			return err
+		}
 	}
+	rewind()
 
 	if val == "" {
 		return fmt.Errorf("%s is required", ck.Label)
@@ -150,18 +158,20 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		viper.Set(fk, val)
-		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
+		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Could not save %s: %v", fk, err)).Print()
 		return nil
 	}
 
 	if err := setConfigValue(configPath, fk, val); err != nil {
 		viper.Set(fk, val)
-		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
+		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Could not save %s: %v", fk, err)).Print()
 		return nil
 	}
 
 	viper.Set(fk, val)
-	ui.Saved(ck.Label, val)
+	ui.NewCard(ui.CardSuccess, ck.Label).
+		Text(val).
+		Print()
 
 	return nil
 }
