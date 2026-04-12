@@ -113,7 +113,7 @@ func newReviewCmd() *cobra.Command {
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "review")
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

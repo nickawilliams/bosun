@@ -40,7 +40,7 @@ func newCleanupCmd() *cobra.Command {
 				plan.Add(ui.PlanDestroy, "Delete Branch", r.Name, fmt.Sprintf("%s (local + remote)", branchName))
 			}
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

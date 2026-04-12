@@ -79,7 +79,7 @@ func newCreateCmd() *cobra.Command {
 			plan := ui.NewPlan()
 			plan.Add(ui.PlanCreate, "Create Issue", project, fmt.Sprintf("%s: %q", issueType, title))
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

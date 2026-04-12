@@ -56,7 +56,7 @@ func newReleaseCmd() *cobra.Command {
 			addStatusPlanItem(plan, issue, "", "done")
 			// TODO: Trigger production deployment (phase 6)
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

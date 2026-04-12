@@ -122,6 +122,26 @@ func (p *Plan) Print() {
 	fmt.Print(p.Render())
 }
 
+// PrintCancelled renders the plan with a cancelled/skipped glyph.
+func (p *Plan) PrintCancelled() {
+	if len(p.items) == 0 {
+		return
+	}
+
+	var b strings.Builder
+	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	glyphStyle := lipgloss.NewStyle().Foreground(Palette.Warning)
+	cancelStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+
+	summary := p.Summary()
+	fmt.Fprintf(&b, " %s  %s %s %s\n", glyphStyle.Render(cardGlyphSkipped), headingStyle.Render("Plan:"), summary, cancelStyle.Render("(cancelled)"))
+
+	fmt.Fprintf(&b, " %s\n", connStyle.Render("│"))
+
+	fmt.Print(b.String())
+}
+
 // PrintRewindable writes the plan to stdout and returns a function that
 // erases it (same pattern as Card.PrintRewindable).
 func (p *Plan) PrintRewindable() func() {

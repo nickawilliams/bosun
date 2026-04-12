@@ -105,7 +105,7 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 			addStatusPlanItem(plan, issue, "", "ready_for_release")
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

@@ -22,7 +22,7 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, issue).Print()
+			rootCard(cmd).Print()
 
 			ctx := cmd.Context()
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
@@ -97,7 +97,7 @@ func newStartCmd() *cobra.Command {
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
 
-			if !confirmPlan(cmd, plan) {
+			if err := confirmPlan(cmd, plan); err != nil {
 				return nil
 			}
 

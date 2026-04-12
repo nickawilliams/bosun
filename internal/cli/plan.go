@@ -1,37 +1,43 @@
 package cli
 
 import (
+	"errors"
+
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
+// ErrCancelled is returned when the user cancels a plan confirmation.
+var ErrCancelled = errors.New("cancelled")
+
 // confirmPlan renders the plan and returns whether execution should proceed.
+// Returns ErrCancelled if the user declines. Returns nil to proceed.
 //
-//   - --dry-run: render plan, return false
-//   - --yes or non-interactive: render plan, return true
-//   - interactive: render plan with inline confirm, return answer
-//   - empty plan or all unchanged: return true (nothing to confirm)
-func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
+//   - --dry-run: render plan, return ErrCancelled (no apply)
+//   - --yes or non-interactive: render plan, return nil (proceed)
+//   - interactive: render plan with inline confirm, return based on answer
+//   - empty plan or all unchanged: return nil (nothing to confirm)
+func confirmPlan(cmd *cobra.Command, plan *ui.Plan) error {
 	if plan.IsEmpty() {
-		return true
+		return nil
 	}
 
 	// All items are no-ops — nothing to confirm.
 	if !plan.HasChanges() {
 		plan.Print()
 		ui.NewCard(ui.CardInfo, "Nothing to do — all items unchanged").Print()
-		return true
+		return nil
 	}
 
 	if isDryRun(cmd) {
 		plan.Print()
-		return false
+		return ErrCancelled
 	}
 
 	if isAutoApprove(cmd) || !isInteractive() {
 		plan.Print()
-		return true
+		return nil
 	}
 
 	// Interactive: the plan content becomes the confirm prompt.
@@ -44,14 +50,19 @@ func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
 			Negative("Cancel").
 			Value(&confirmed),
 	); err != nil {
-		return false
+		rewind()
+		plan.PrintCancelled()
+		return ErrCancelled
 	}
 	rewind()
 
-	// Re-render as static plan.
-	plan.Print()
+	if !confirmed {
+		plan.PrintCancelled()
+		return ErrCancelled
+	}
 
-	return confirmed
+	plan.Print()
+	return nil
 }
 
 // isAutoApprove returns true if the --yes flag is set.
