@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -25,8 +24,11 @@ func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Check bosun configuration and connectivity",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "System check",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ui.Header("doctor")
+			rootCard(cmd).Print()
 			var results []checkResult
 
 			check := func(name string, required bool, fn func() (string, error)) {
@@ -69,67 +71,37 @@ func newDoctorCmd() *cobra.Command {
 }
 
 func renderDoctorResults(results []checkResult) {
-	passStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warnStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	failStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-
 	passed, warned, failed := 0, 0, 0
 
-	tbl := ui.NewTable(
-		ui.Column{Header: "Check"},
-		ui.Column{Header: ""},
-		ui.Column{Header: "Detail"},
-	)
-
-	tbl.SetStyleFunc(func(row, col int) lipgloss.Style {
-		base := lipgloss.NewStyle().Padding(0, 1)
-		if row < 0 {
-			return base.Bold(true).Foreground(ui.Palette.Primary)
-		}
-		if col == 1 && row < len(results) {
-			switch results[row].status {
-			case "pass":
-				return base.Foreground(ui.Palette.Success)
-			case "warn":
-				return base.Foreground(ui.Palette.Warning)
-			case "fail":
-				return base.Foreground(ui.Palette.Error)
-			}
-		}
-		if col == 2 {
-			return base.Foreground(ui.Palette.Muted)
-		}
-		return base
-	})
-
 	for _, r := range results {
-		var symbol string
+		var state ui.CardState
 		switch r.status {
 		case "pass":
-			symbol = ui.Palette.Check
+			state = ui.CardSuccess
 			passed++
 		case "warn":
-			symbol = "!"
+			state = ui.CardSkipped
 			warned++
 		case "fail":
-			symbol = ui.Palette.Cross
+			state = ui.CardFailed
 			failed++
 		}
-		tbl.AddRow(r.name, symbol, r.detail)
+		card := ui.NewCard(state, r.name)
+		if r.detail != "" {
+			card.Muted(r.detail)
+		}
+		card.Print()
 	}
 
-	tbl.Render()
-
-	// Summary line.
-	fmt.Println()
-	parts := []string{passStyle.Render(fmt.Sprintf("%d passed", passed))}
+	// Summary.
+	parts := []string{fmt.Sprintf("%d passed", passed)}
 	if warned > 0 {
-		parts = append(parts, warnStyle.Render(fmt.Sprintf("%d warnings", warned)))
+		parts = append(parts, fmt.Sprintf("%d warnings", warned))
 	}
 	if failed > 0 {
-		parts = append(parts, failStyle.Render(fmt.Sprintf("%d failed", failed)))
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	fmt.Printf("  %s\n", strings.Join(parts, "  "))
+	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).Print()
 }
 
 func checkGlobalConfig() (string, error) {
