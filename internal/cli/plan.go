@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +33,23 @@ func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
 		return true
 	}
 
-	return promptConfirm("Apply?", true)
+	var confirmed bool
+	rewind := ui.NewCard(ui.CardInput, "Apply?").PrintRewindable()
+	if err := runForm(
+		huh.NewConfirm().
+			Affirmative("Yes").
+			Negative("No").
+			Value(&confirmed),
+	); err != nil {
+		return false
+	}
+	rewind()
+
+	if confirmed {
+		ui.NewCard(ui.CardSuccess, "Applying").Print()
+	}
+
+	return confirmed
 }
 
 // isAutoApprove returns true if the --yes flag is set.
