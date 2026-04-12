@@ -38,7 +38,7 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			// --- Apply ---
-			transitionIssueStatus(cmd.Context(), issue, "review", "preview", false)
+			transitionIssueStatus(cmd.Context(), issue, "review", "preview")
 			return nil
 		},
 	}

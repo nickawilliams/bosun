@@ -9,17 +9,9 @@ import (
 
 // transitionIssueStatus handles the common pattern of validating the current
 // status and transitioning to a new one. Graceful — logs warnings instead of
-// failing when tracker is not configured.
-func transitionIssueStatus(ctx context.Context, issueKey, expectedStatusKey, targetStatusKey string, dryRun bool) {
-	if dryRun {
-		if statusName, err := resolveStatus(targetStatusKey); err == nil {
-			ui.NewCard(ui.CardInfo, fmt.Sprintf("Would set status to %s", statusName)).
-				Subtitle("dry-run").
-				Print()
-		}
-		return
-	}
-
+// failing when tracker is not configured. This function always executes;
+// callers gate with confirmPlan before calling.
+func transitionIssueStatus(ctx context.Context, issueKey, expectedStatusKey, targetStatusKey string) {
 	tracker, trackerErr := newIssueTracker()
 	if trackerErr != nil {
 		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()

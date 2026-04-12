@@ -136,7 +136,7 @@ func newPrereleaseCmd() *cobra.Command {
 
 			// TODO: Notify release channel (phase 5)
 
-			transitionIssueStatus(ctx, issue, "preview", "ready_for_release", false)
+			transitionIssueStatus(ctx, issue, "preview", "ready_for_release")
 			return nil
 		},
 	}

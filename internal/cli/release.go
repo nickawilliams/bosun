@@ -66,7 +66,7 @@ func newReleaseCmd() *cobra.Command {
 			}
 
 			// --- Apply ---
-			transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done", false)
+			transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done")
 			return nil
 		},
 	}

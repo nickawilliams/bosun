@@ -128,7 +128,7 @@ func newStartCmd() *cobra.Command {
 			if trackerErr != nil {
 				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()
 			} else {
-				transitionIssueStatus(ctx, issue, "ready", "in_progress", false)
+				transitionIssueStatus(ctx, issue, "ready", "in_progress")
 			}
 
 			return nil

@@ -152,7 +152,7 @@ func newReviewCmd() *cobra.Command {
 			// TODO: Notify (phase 5)
 
 			if trackerErr == nil {
-				transitionIssueStatus(ctx, issue, "in_progress", "review", false)
+				transitionIssueStatus(ctx, issue, "in_progress", "review")
 			}
 			return nil
 		},
