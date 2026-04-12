@@ -122,6 +122,19 @@ func (p *Plan) Print() {
 	fmt.Print(p.Render())
 }
 
+// PrintRewindable writes the plan to stdout and returns a function that
+// erases it (same pattern as Card.PrintRewindable).
+func (p *Plan) PrintRewindable() func() {
+	rendered := p.Render()
+	fmt.Print(rendered)
+	lines := strings.Count(rendered, "\n")
+	return func() {
+		if lines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		}
+	}
+}
+
 // summary builds the count line: "1 unchanged, 2 to create, 1 to update"
 func (p *Plan) summary() string {
 	counts := map[PlanOp]int{}

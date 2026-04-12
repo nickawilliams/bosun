@@ -10,44 +10,47 @@ import (
 //
 //   - --dry-run: render plan, return false
 //   - --yes or non-interactive: render plan, return true
-//   - interactive: render plan, prompt "Apply? [Y/n]", return answer
+//   - interactive: render plan with inline confirm, return answer
 //   - empty plan or all unchanged: return true (nothing to confirm)
 func confirmPlan(cmd *cobra.Command, plan *ui.Plan) bool {
 	if plan.IsEmpty() {
 		return true
 	}
 
-	plan.Print()
-
 	// All items are no-ops — nothing to confirm.
 	if !plan.HasChanges() {
+		plan.Print()
 		ui.NewCard(ui.CardInfo, "Nothing to do — all items unchanged").Print()
 		return true
 	}
 
 	if isDryRun(cmd) {
+		plan.Print()
 		return false
 	}
 
 	if isAutoApprove(cmd) || !isInteractive() {
+		plan.Print()
 		return true
 	}
 
+	// Interactive: print plan, then confirm inline beneath it.
+	rewind := plan.PrintRewindable()
+
 	var confirmed bool
-	rewind := ui.NewCard(ui.CardInput, "Apply?").PrintRewindable()
 	if err := runForm(
 		huh.NewConfirm().
-			Affirmative("Yes").
-			Negative("No").
+			Title("Apply").
+			Affirmative("Apply").
+			Negative("Cancel").
 			Value(&confirmed),
 	); err != nil {
 		return false
 	}
 	rewind()
 
-	if confirmed {
-		ui.NewCard(ui.CardSuccess, "Applying").Print()
-	}
+	// Re-render the plan in its final state.
+	plan.Print()
 
 	return confirmed
 }
