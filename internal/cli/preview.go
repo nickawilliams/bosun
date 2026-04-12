@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -9,12 +8,15 @@ func newPreviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preview",
 		Short: "Deploy to preview environment",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Preview deploy",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			ui.Header("preview", issue)
+			rootCard(cmd, issue).Print()
 
 			// TODO: Trigger deployment (phase 6)
 			// TODO: Reply to notification thread (phase 5)
