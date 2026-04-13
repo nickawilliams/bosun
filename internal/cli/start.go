@@ -34,10 +34,13 @@ func newStartCmd() *cobra.Command {
 			var detail issuepkg.Issue
 			tracker, trackerErr := newIssueTracker()
 			if trackerErr == nil {
-				if err := ui.RunCard("Fetching issue", func() error {
+				if err := ui.RunCardReplace("Fetching issue", func() error {
 					var fetchErr error
 					detail, fetchErr = tracker.GetIssue(ctx, issue)
 					return fetchErr
+				}, func() *ui.Card {
+					return ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
+						Subtitle(detail.Title)
 				}); err != nil {
 					return fmt.Errorf("fetching issue: %w", err)
 				}

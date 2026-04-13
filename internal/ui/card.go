@@ -358,6 +358,41 @@ func RunCard(title string, fn func() error) error {
 	return nil
 }
 
+// RunCardReplace works like RunCard but on success, prints a replacement
+// card (returned by successCard) instead of the original card in success
+// state. On failure, prints the original card in failed state as usual.
+func RunCardReplace(title string, fn func() error, successCard func() *Card) error {
+	card := NewCard(CardRunning, title)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- fn()
+	}()
+
+	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
+	model, err := p.Run()
+	if err != nil {
+		// Non-interactive fallback.
+		taskErr := <-resultCh
+		if taskErr != nil {
+			card.state = CardFailed
+			card.Print()
+		} else {
+			successCard().Print()
+		}
+		return taskErr
+	}
+
+	m := model.(cardSpinnerModel)
+	if m.err != nil {
+		card.state = CardFailed
+		card.Print()
+		return m.err
+	}
+	successCard().Print()
+	return nil
+}
+
 // titleCase capitalizes the first letter of each word while
 // preserving words that already contain uppercase letters (e.g.
 // acronyms like "UI" or "API"). Only fully-lowercase words get
