@@ -42,9 +42,11 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 		return applyPlanCard(pc, actions)
 	}
 
-	// Interactive: show plan items as the huh confirm prompt content.
-	// The plan card itself is not printed separately — the huh form
-	// IS the proposed state. After confirmation, we print the final card.
+	// Interactive: show the plan as a CardInput (? glyph + summary),
+	// then run the huh confirm form with plan items as content.
+	// After the form, rewind and replace with the final state card.
+	rewind := ui.NewCard(ui.CardInput, plan.Summary()).PrintRewindable()
+
 	var confirmed bool
 	if err := runForm(
 		huh.NewConfirm().
@@ -53,10 +55,12 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 			Negative("Cancel").
 			Value(&confirmed),
 	); err != nil {
+		rewind()
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
 		return ErrCancelled
 	}
+	rewind()
 
 	if !confirmed {
 		pc.SetState(ui.PlanCancelled)
