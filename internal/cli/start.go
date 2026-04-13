@@ -113,7 +113,7 @@ func newStartCmd() *cobra.Command {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
 				wtPath := filepath.Join(wsRoot, branchName, r.Name)
 				if rel, err := filepath.Rel(cwd, wtPath); err == nil {
-					wtPath = "./" + rel
+					wtPath = rel
 				}
 				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
 			}
