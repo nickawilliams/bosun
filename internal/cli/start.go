@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"charm.land/huh/v2"
@@ -107,14 +106,10 @@ func newStartCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
-			cwd, _ := os.Getwd()
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
 				wtPath := filepath.Join(wsRoot, branchName, r.Name)
-				if rel, err := filepath.Rel(cwd, wtPath); err == nil {
-					wtPath = rel
-				}
 				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
