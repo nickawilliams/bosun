@@ -69,7 +69,7 @@ func newReleaseCmd() *cobra.Command {
 			}
 
 			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return nil
+				return err
 			}
 			return nil
 		},

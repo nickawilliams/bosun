@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 
 	"charm.land/huh/v2"
@@ -21,12 +22,18 @@ func isInteractive() bool {
 // footer beneath the active prompt. The timeline layout wraps
 // huh's default layout to recolor field separator bars in the
 // recessed timeline gray.
+//
+// If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
-	return huh.NewForm(huh.NewGroup(fields...)).
+	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
 		WithLayout(ui.NewTimelineLayout()).
 		WithShowHelp(true).
 		Run()
+	if errors.Is(err, huh.ErrUserAborted) {
+		return ErrCancelled
+	}
+	return err
 }
 
 // promptRequired prompts for a value if stdin is a terminal. If stdin is not

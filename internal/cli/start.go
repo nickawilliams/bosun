@@ -81,6 +81,7 @@ func newStartCmd() *cobra.Command {
 						Options(opts...).
 						Value(&selected),
 				); err != nil {
+					rewind()
 					return err
 				}
 				rewind()
@@ -142,7 +143,7 @@ func newStartCmd() *cobra.Command {
 			}
 
 			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return nil
+				return err
 			}
 
 			return nil

@@ -138,7 +138,7 @@ func newReviewCmd() *cobra.Command {
 			// TODO: Notify (phase 5)
 
 			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return nil
+				return err
 			}
 			return nil
 		},

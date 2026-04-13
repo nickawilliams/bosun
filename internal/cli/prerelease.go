@@ -130,7 +130,7 @@ func newPrereleaseCmd() *cobra.Command {
 			// TODO: Notify release channel (phase 5)
 
 			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return nil
+				return err
 			}
 			return nil
 		},
