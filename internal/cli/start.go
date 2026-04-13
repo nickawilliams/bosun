@@ -89,7 +89,7 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
-			// --- Plan ---
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
@@ -97,36 +97,30 @@ func newStartCmd() *cobra.Command {
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
 
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
-			}
+			// Resolve status name for the action.
+			statusName, _ := resolveStatus("in_progress")
 
-			// --- Apply ---
-			mgr, err := newWorkspaceManager()
-			if err != nil {
-				return err
-			}
-
+			// Build actions list.
 			wsRepos := cliReposToWorkspaceRepos(repos)
-			if err := ui.RunCard("Creating workspace", func() error {
-				return mgr.Create(context.Background(), branchName, wsRepos, fromHead)
-			}); err != nil {
-				return err
+			actions := []PlanAction{
+				func() error {
+					mgr, err := newWorkspaceManager()
+					if err != nil {
+						return err
+					}
+					return mgr.Create(context.Background(), branchName, wsRepos, fromHead)
+				},
 			}
 
-			items := make([]string, len(repos))
-			for i, r := range repos {
-				items[i] = fmt.Sprintf("%-12s %s", r.Name, r.Path)
+			// Add status transition action if tracker is available.
+			if trackerErr == nil && statusName != "" {
+				actions = append(actions, func() error {
+					return tracker.SetStatus(ctx, issue, statusName)
+				})
 			}
-			ui.NewCard(ui.CardSuccess, "Created workspace").
-				Text(items...).
-				Print()
 
-			// Transition issue status (graceful).
-			if trackerErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()
-			} else {
-				transitionIssueStatus(ctx, issue, "ready", "in_progress")
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
 			}
 
 			return nil
