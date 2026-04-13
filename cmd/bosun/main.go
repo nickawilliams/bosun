@@ -20,7 +20,7 @@ func main() {
 	cmd := cli.NewRootCmd(versionStr)
 	if err := cmd.Execute(); err != nil {
 		if errors.Is(err, cli.ErrCancelled) {
-			ui.NewCard(ui.CardSkipped, "Cancelled").Print()
+			ui.NewCard(ui.CardSkipped, "User cancelled").Print()
 			os.Exit(0)
 		}
 		ui.Error("%s", err)
