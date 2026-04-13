@@ -230,6 +230,98 @@ func (p *Plan) Summary() string {
 	return strings.Join(parts, ", ")
 }
 
+// SummaryPastTense returns "2 created, 1 updated" — for the success state.
+func (p *Plan) SummaryPastTense() string {
+	counts := map[PlanOp]int{}
+	for _, item := range p.items {
+		counts[item.Op]++
+	}
+
+	var parts []string
+
+	createStyle := lipgloss.NewStyle().Foreground(Palette.Success)
+	modifyStyle := lipgloss.NewStyle().Foreground(Palette.Warning)
+	destroyStyle := lipgloss.NewStyle().Foreground(Palette.Error)
+	unchangedStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+
+	if n := counts[PlanCreate]; n > 0 {
+		parts = append(parts, createStyle.Render(fmt.Sprintf("%d created", n)))
+	}
+	if n := counts[PlanModify]; n > 0 {
+		parts = append(parts, modifyStyle.Render(fmt.Sprintf("%d updated", n)))
+	}
+	if n := counts[PlanDestroy]; n > 0 {
+		parts = append(parts, destroyStyle.Render(fmt.Sprintf("%d destroyed", n)))
+	}
+	if n := counts[PlanNoChange]; n > 0 {
+		parts = append(parts, unchangedStyle.Render(fmt.Sprintf("%d unchanged", n)))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// SummaryPartial returns a mixed-tense summary for partial application.
+func (p *Plan) SummaryPartial(succeeded, failed int) string {
+	failStyle := lipgloss.NewStyle().Foreground(Palette.Error)
+	successStyle := lipgloss.NewStyle().Foreground(Palette.Success)
+
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, failStyle.Render(fmt.Sprintf("%d failed", failed)))
+	}
+	if succeeded > 0 {
+		parts = append(parts, successStyle.Render(fmt.Sprintf("%d applied", succeeded)))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// RenderItemLines returns the formatted action lines as a slice for reuse
+// by PlanCard. Each line includes the symbol, action, target, and detail
+// but no spine or heading.
+func (p *Plan) RenderItemLines() []string {
+	if len(p.items) == 0 {
+		return nil
+	}
+
+	maxAction := 0
+	maxTarget := 0
+	for _, item := range p.items {
+		if len(item.Action) > maxAction {
+			maxAction = len(item.Action)
+		}
+		if len(item.Target) > maxTarget {
+			maxTarget = len(item.Target)
+		}
+	}
+
+	var lines []string
+	for _, item := range p.items {
+		symbol, symbolStyle := planSymbol(item.Op)
+		actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
+		targetStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+		detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
+
+		if item.Op == PlanNoChange {
+			actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+			targetStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+			detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+		}
+
+		paddedAction := fmt.Sprintf("%-*s", maxAction, item.Action)
+		paddedTarget := fmt.Sprintf("%-*s", maxTarget, item.Target)
+
+		lines = append(lines, fmt.Sprintf("  %s  %s  %s  %s",
+			symbolStyle.Render(symbol),
+			actionStyle.Render(paddedAction),
+			targetStyle.Render(paddedTarget),
+			detailStyle.Render(item.Detail),
+		))
+	}
+
+	return lines
+}
+
 // planSymbol returns the diff symbol and its style for a given operation.
 func planSymbol(op PlanOp) (string, lipgloss.Style) {
 	switch op {
