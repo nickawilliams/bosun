@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
@@ -106,10 +108,14 @@ func newStartCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
+			home, _ := os.UserHomeDir()
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
 				wtPath := filepath.Join(wsRoot, branchName, r.Name)
+				if home != "" && strings.HasPrefix(wtPath, home) {
+					wtPath = "~" + wtPath[len(home):]
+				}
 				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
