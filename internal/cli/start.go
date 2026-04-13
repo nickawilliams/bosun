@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
@@ -108,13 +107,13 @@ func newStartCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
-			home, _ := os.UserHomeDir()
+			cwd, _ := os.Getwd()
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
 				wtPath := filepath.Join(wsRoot, branchName, r.Name)
-				if home != "" && strings.HasPrefix(wtPath, home) {
-					wtPath = "~" + wtPath[len(home):]
+				if rel, err := filepath.Rel(cwd, wtPath); err == nil {
+					wtPath = rel
 				}
 				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
 			}
