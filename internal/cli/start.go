@@ -3,11 +3,14 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"charm.land/huh/v2"
+	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func newStartCmd() *cobra.Command {
@@ -92,11 +95,22 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
+			// Compute workspace root for worktree path display.
+			projectRoot := config.FindProjectRoot()
+			wsRoot := viper.GetString("workspace_root")
+			if wsRoot == "" && projectRoot != "" {
+				wsRoot = projectRoot
+			}
+			if !filepath.IsAbs(wsRoot) && projectRoot != "" {
+				wsRoot = filepath.Join(projectRoot, wsRoot)
+			}
+
 			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
-				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, r.Path)
+				wtPath := filepath.Join(wsRoot, branchName, r.Name)
+				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
 
