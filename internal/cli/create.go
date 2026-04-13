@@ -75,43 +75,46 @@ func newCreateCmd() *cobra.Command {
 				return fmt.Errorf("jira.project not configured in .bosun/config.yaml")
 			}
 
-			// --- Plan ---
-			plan := ui.NewPlan()
-			plan.Add(ui.PlanCreate, "Create Issue", project, fmt.Sprintf("%s: %q", issueType, title))
-
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
-			}
-
-			// --- Apply ---
 			tracker, err := newIssueTracker()
 			if err != nil {
 				return err
 			}
 
+			// --- Plan + Apply ---
+			plan := ui.NewPlan()
+			plan.Add(ui.PlanCreate, "Create Issue", project, fmt.Sprintf("%s: %q", issueType, title))
+
 			ctx := cmd.Context()
 			var created issuepkg.Issue
-			if err := ui.RunCard("Creating issue", func() error {
-				var createErr error
-				created, createErr = tracker.CreateIssue(ctx, issuepkg.CreateRequest{
-					Project:     project,
-					Title:       title,
-					Description: description,
-					Type:        issueType,
-					Size:        size,
-				})
-				return createErr
-			}); err != nil {
-				return err
+
+			actions := []PlanAction{
+				func() error {
+					var createErr error
+					created, createErr = tracker.CreateIssue(ctx, issuepkg.CreateRequest{
+						Project:     project,
+						Title:       title,
+						Description: description,
+						Type:        issueType,
+						Size:        size,
+					})
+					return createErr
+				},
 			}
 
-			ui.NewCard(ui.CardSuccess, created.Key).
-				KV(
-					"Title", created.Title,
-					"Status", created.Status,
-					"URL", created.URL,
-				).
-				Print()
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
+			}
+
+			// Show created issue details.
+			if created.Key != "" {
+				ui.NewCard(ui.CardSuccess, created.Key).
+					KV(
+						"Title", created.Title,
+						"Status", created.Status,
+						"URL", created.URL,
+					).
+					Print()
+			}
 
 			return nil
 		},

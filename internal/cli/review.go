@@ -17,7 +17,7 @@ type reviewRepoPlan struct {
 	owner    string
 	name     string
 	branch   string
-	existing code.PullRequest // Number > 0 if PR already exists
+	existing code.PullRequest
 }
 
 func newReviewCmd() *cobra.Command {
@@ -38,7 +38,6 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			// Repos.
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
 			repos, err := resolveRepos(filterRepos)
 			if err != nil {
@@ -64,13 +63,12 @@ func newReviewCmd() *cobra.Command {
 				baseBranch = "main"
 			}
 
-			// Code host.
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
 				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
 			}
 
-			// Per-repo resolution: branch, remote, existing PR check.
+			// Per-repo resolution.
 			g := git.New()
 			var repoPlans []reviewRepoPlan
 
@@ -88,7 +86,6 @@ func newReviewCmd() *cobra.Command {
 						continue
 					}
 
-					// Check for existing PR.
 					existing, _ := host.GetPRForBranch(ctx, identity.Owner, identity.Name, branch)
 
 					repoPlans = append(repoPlans, reviewRepoPlan{
@@ -101,56 +98,47 @@ func newReviewCmd() *cobra.Command {
 				}
 			}
 
-			// --- Plan ---
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			for _, rp := range repoPlans {
-				detail := fmt.Sprintf("%s → %s", rp.branch, baseBranch)
+				branchDetail := fmt.Sprintf("%s → %s", rp.branch, baseBranch)
 				if rp.existing.Number > 0 {
 					plan.Add(ui.PlanNoChange, "Pull Request", rp.repo.Name, fmt.Sprintf("#%d", rp.existing.Number))
 				} else {
-					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repo.Name, detail)
+					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repo.Name, branchDetail)
 				}
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "review")
 
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
-			}
-
-			// --- Apply ---
+			// Build actions — one per new PR + status transition.
+			var actions []PlanAction
 			for _, rp := range repoPlans {
 				if rp.existing.Number > 0 {
-					ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s #%d (exists)", rp.repo.Name, rp.existing.Number)).
-						Muted(rp.existing.URL).
-						Print()
-					continue
+					continue // skip existing PRs
 				}
-
-				var pr code.PullRequest
-				if err := ui.RunCard(fmt.Sprintf("Creating PR for %s", rp.repo.Name), func() error {
-					var e error
-					pr, e = host.CreatePR(ctx, code.CreatePRRequest{
+				actions = append(actions, func() error {
+					_, err := host.CreatePR(ctx, code.CreatePRRequest{
 						Owner: rp.owner,
 						Repo:  rp.name,
 						Head:  rp.branch,
 						Base:  baseBranch,
 						Title: prTitle,
 					})
-					return e
-				}); err != nil {
-					ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", rp.repo.Name, err)).Print()
-					continue
-				}
+					return err
+				})
+			}
 
-				ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s #%d", rp.repo.Name, pr.Number)).
-					Muted(pr.URL).
-					Print()
+			statusName, _ := resolveStatus("review")
+			if trackerErr == nil && statusName != "" {
+				actions = append(actions, func() error {
+					return tracker.SetStatus(ctx, issue, statusName)
+				})
 			}
 
 			// TODO: Notify (phase 5)
 
-			if trackerErr == nil {
-				transitionIssueStatus(ctx, issue, "in_progress", "review")
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
 			}
 			return nil
 		},

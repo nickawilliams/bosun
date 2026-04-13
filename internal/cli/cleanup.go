@@ -22,7 +22,6 @@ func newCleanupCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
-			// --- Resolve ---
 			repos, err := resolveRepos(nil)
 			if err != nil {
 				return err
@@ -31,7 +30,7 @@ func newCleanupCmd() *cobra.Command {
 			branchName := issue
 			force, _ := cmd.Flags().GetBool("force")
 
-			// --- Plan ---
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			for _, r := range repos {
 				plan.Add(ui.PlanDestroy, "Remove Worktree", r.Name, branchName)
@@ -40,20 +39,21 @@ func newCleanupCmd() *cobra.Command {
 				plan.Add(ui.PlanDestroy, "Delete Branch", r.Name, fmt.Sprintf("%s (local + remote)", branchName))
 			}
 
-			if err := confirmPlan(cmd, plan); err != nil {
+			wsRepos := cliReposToWorkspaceRepos(repos)
+			actions := []PlanAction{
+				func() error {
+					mgr, err := newWorkspaceManager()
+					if err != nil {
+						return err
+					}
+					return mgr.Remove(context.Background(), branchName, wsRepos, force)
+				},
+			}
+
+			if err := runPlanCard(cmd, plan, actions); err != nil {
 				return nil
 			}
-
-			// --- Apply ---
-			mgr, err := newWorkspaceManager()
-			if err != nil {
-				return err
-			}
-
-			wsRepos := cliReposToWorkspaceRepos(repos)
-			return ui.RunCard("Removing workspace", func() error {
-				return mgr.Remove(context.Background(), branchName, wsRepos, force)
-			})
+			return nil
 		},
 	}
 

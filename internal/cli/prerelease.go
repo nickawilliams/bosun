@@ -66,7 +66,6 @@ func newPrereleaseCmd() *cobra.Command {
 						continue
 					}
 
-					// Fetch latest tag (read-only network call).
 					var currentTag string
 					if err := ui.RunCard(fmt.Sprintf("Fetching latest tag for %s", r.Name), func() error {
 						var e error
@@ -94,7 +93,7 @@ func newPrereleaseCmd() *cobra.Command {
 				}
 			}
 
-			// --- Plan ---
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			for _, rp := range repoPlans {
 				from := rp.currentTag
@@ -105,36 +104,34 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 			addStatusPlanItem(plan, issue, "", "ready_for_release")
 
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
-			}
-
-			// --- Apply ---
+			// Build actions.
+			var actions []PlanAction
 			for _, rp := range repoPlans {
-				var rel code.Release
-				if err := ui.RunCard(fmt.Sprintf("Creating release %s for %s", rp.nextVersion, rp.repo.Name), func() error {
-					var e error
-					rel, e = host.CreateRelease(ctx, code.CreateReleaseRequest{
+				actions = append(actions, func() error {
+					_, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 						Owner:  rp.owner,
 						Repo:   rp.name,
 						Tag:    rp.nextVersion,
 						Target: rp.branch,
 						Name:   rp.nextVersion,
 					})
-					return e
-				}); err != nil {
-					ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", rp.repo.Name, err)).Print()
-					continue
-				}
+					return err
+				})
+			}
 
-				ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s %s", rp.repo.Name, rel.Tag)).
-					Muted(rel.URL).
-					Print()
+			statusName, _ := resolveStatus("ready_for_release")
+			tracker, trackerErr := newIssueTracker()
+			if trackerErr == nil && statusName != "" {
+				actions = append(actions, func() error {
+					return tracker.SetStatus(ctx, issue, statusName)
+				})
 			}
 
 			// TODO: Notify release channel (phase 5)
 
-			transitionIssueStatus(ctx, issue, "preview", "ready_for_release")
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
+			}
 			return nil
 		},
 	}

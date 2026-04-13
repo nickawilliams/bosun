@@ -22,6 +22,8 @@ func newReleaseCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
+			ctx := cmd.Context()
+
 			// --- Pre-flight: migration confirmation ---
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
 			if !migrationsDone {
@@ -51,17 +53,24 @@ func newReleaseCmd() *cobra.Command {
 					Print()
 			}
 
-			// --- Plan ---
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			addStatusPlanItem(plan, issue, "", "done")
 			// TODO: Trigger production deployment (phase 6)
 
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
+			statusName, _ := resolveStatus("done")
+			tracker, trackerErr := newIssueTracker()
+
+			var actions []PlanAction
+			if trackerErr == nil && statusName != "" {
+				actions = append(actions, func() error {
+					return tracker.SetStatus(ctx, issue, statusName)
+				})
 			}
 
-			// --- Apply ---
-			transitionIssueStatus(cmd.Context(), issue, "ready_for_release", "done")
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
+			}
 			return nil
 		},
 	}

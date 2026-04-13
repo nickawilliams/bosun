@@ -19,19 +19,26 @@ func newPreviewCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
-			// --- Plan ---
+			ctx := cmd.Context()
+			statusName, _ := resolveStatus("preview")
+
+			// --- Plan + Apply ---
 			plan := ui.NewPlan()
 			addStatusPlanItem(plan, issue, "", "preview")
-
 			// TODO: Trigger deployment (phase 6)
 			// TODO: Reply to notification thread (phase 5)
 
-			if err := confirmPlan(cmd, plan); err != nil {
-				return nil
+			tracker, trackerErr := newIssueTracker()
+			var actions []PlanAction
+			if trackerErr == nil && statusName != "" {
+				actions = append(actions, func() error {
+					return tracker.SetStatus(ctx, issue, statusName)
+				})
 			}
 
-			// --- Apply ---
-			transitionIssueStatus(cmd.Context(), issue, "review", "preview")
+			if err := runPlanCard(cmd, plan, actions); err != nil {
+				return nil
+			}
 			return nil
 		},
 	}
