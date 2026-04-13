@@ -98,19 +98,19 @@ func (pc *PlanCard) renderWithGlyph(glyph string) string {
 func (pc *PlanCard) prefix() string {
 	switch pc.state {
 	case PlanProposed:
-		return "Plan:"
+		return "Pending:"
 	case PlanApplying:
 		return "Applying:"
 	case PlanSuccess:
-		return "Applied:"
+		return "Success:"
 	case PlanPartial:
 		return "Partial:"
 	case PlanFailure:
-		return "Failed:"
+		return "Failure:"
 	case PlanCancelled:
 		return "Cancelled:"
 	}
-	return "Plan:"
+	return "Pending:"
 }
 
 // summary returns the appropriately-tensed count string for the current state.

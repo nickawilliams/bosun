@@ -45,7 +45,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 	// Interactive: show the plan as a CardInput (? glyph + summary),
 	// then run the huh confirm form with plan items as content.
 	// After the form, rewind and replace with the final state card.
-	rewind := ui.NewCard(ui.CardInput, plan.Summary()).PrintRewindable()
+	rewind := ui.NewCard(ui.CardInput, "Pending: "+plan.Summary()).PrintRewindable()
 
 	var confirmed bool
 	if err := runForm(
