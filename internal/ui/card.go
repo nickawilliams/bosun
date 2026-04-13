@@ -125,23 +125,25 @@ func (c *Card) Print() {
 }
 
 // PrintRewindable writes the card to stdout and returns a function
-// that, when called, restores the cursor to its position before the
-// card was printed and erases everything from there to the end of
-// the screen. Uses ANSI DECSC/DECRC for reliable cleanup even when
-// a huh/BubbleTea form adds unknown output below the card.
+// that, when called, erases the card by moving the cursor back to
+// its first row and clearing from there to the end of the screen.
+// Useful for transient "live" cards (e.g., an active prompt) that
+// should be replaced with a terminal-state card after an interactive
+// operation completes. Note: this only works reliably when huh/
+// BubbleTea cleans up its own output on normal exit. For ctrl+c
+// interrupts, callers should skip the rewind and append output
+// below the interrupted form instead.
 func (c *Card) PrintRewindable() func() {
-	SaveCursor()
-	fmt.Print(c.Render())
-	return RestoreAndClear
+	rendered := c.Render()
+	fmt.Print(rendered)
+	lines := strings.Count(rendered, "\n")
+	return func() {
+		if lines > 0 {
+			// CPL (cursor previous line) + ED (erase to end of screen).
+			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		}
+	}
 }
-
-// SaveCursor saves the terminal cursor position using ANSI DECSC.
-func SaveCursor() { fmt.Print("\x1b7") }
-
-// RestoreAndClear restores the saved cursor position and erases everything
-// from there to the end of the screen. Reliably undoes any output printed
-// since SaveCursor, regardless of how many lines were added.
-func RestoreAndClear() { fmt.Print("\x1b8\x1b[J") }
 
 // renderWithGlyph renders the card with a custom leading glyph.
 // Used by the spinner to animate the state indicator in place.

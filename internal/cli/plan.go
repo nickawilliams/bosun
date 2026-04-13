@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ErrCancelled is returned when the user cancels a plan confirmation.
+// ErrCancelled is returned when the user cancels or interrupts.
 var ErrCancelled = errors.New("cancelled")
 
 // PlanAction is a function that executes one step of a plan.
@@ -16,7 +16,7 @@ type PlanAction func() error
 
 // runPlanCard orchestrates the full plan lifecycle: proposed → confirm →
 // applying (with spinner) → final state. Returns nil on success,
-// ErrCancelled on dry-run/cancel, or the first execution error.
+// ErrCancelled on dry-run/cancel/interrupt, or the first execution error.
 func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error {
 	if plan.IsEmpty() {
 		return nil
@@ -42,26 +42,28 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 		return applyPlanCard(pc, actions)
 	}
 
-	// Interactive: show the plan as a CardInput (? glyph + summary),
-	// then run the huh confirm form with plan items as content.
-	// Use ANSI save/restore cursor so ctrl+c cleanup works reliably.
-	ui.SaveCursor()
-	ui.NewCard(ui.CardInput, "Pending: "+plan.Summary()).Print()
+	// Interactive: show the plan as a CardInput, run huh confirm.
+	// Normal cancel: rewind prompt, show cancelled card in place.
+	// Ctrl+c interrupt: don't rewind, just bail (timeline shows the interrupt).
+	rewind := ui.NewCard(ui.CardInput, "Pending: "+plan.Summary()).PrintRewindable()
 
 	var confirmed bool
-	if err := runForm(
+	err := runForm(
 		huh.NewConfirm().
 			Title(plan.RenderItems()).
 			Affirmative("Apply").
 			Negative("Cancel").
 			Value(&confirmed),
-	); err != nil {
-		ui.RestoreAndClear()
-		pc.SetState(ui.PlanCancelled)
-		pc.Print()
+	)
+
+	if err != nil {
+		// ctrl+c: don't try to rewind — just return and let main.go
+		// append the "User cancelled" card below whatever huh left.
 		return ErrCancelled
 	}
-	ui.RestoreAndClear()
+
+	// Normal form submission — huh cleaned up its output, rewind works.
+	rewind()
 
 	if !confirmed {
 		pc.SetState(ui.PlanCancelled)
