@@ -2,20 +2,11 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
-
-// saveCursor saves the terminal cursor position using ANSI DECSC.
-func saveCursor() { fmt.Print("\x1b7") }
-
-// restoreAndClear restores the saved cursor position and erases everything
-// from there to the end of the screen. This reliably undoes any output
-// printed since saveCursor, regardless of how many lines were added.
-func restoreAndClear() { fmt.Print("\x1b8\x1b[J") }
 
 // ErrCancelled is returned when the user cancels a plan confirmation.
 var ErrCancelled = errors.New("cancelled")
@@ -54,7 +45,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 	// Interactive: show the plan as a CardInput (? glyph + summary),
 	// then run the huh confirm form with plan items as content.
 	// Use ANSI save/restore cursor so ctrl+c cleanup works reliably.
-	saveCursor()
+	ui.SaveCursor()
 	ui.NewCard(ui.CardInput, "Pending: "+plan.Summary()).Print()
 
 	var confirmed bool
@@ -65,12 +56,12 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 			Negative("Cancel").
 			Value(&confirmed),
 	); err != nil {
-		restoreAndClear()
+		ui.RestoreAndClear()
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
 		return ErrCancelled
 	}
-	restoreAndClear()
+	ui.RestoreAndClear()
 
 	if !confirmed {
 		pc.SetState(ui.PlanCancelled)
