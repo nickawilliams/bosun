@@ -26,7 +26,12 @@ func NewRootCmd(version string) *cobra.Command {
 				return err
 			}
 			ui.ApplyColorMode(viper.GetString("color_mode"))
-			ui.ApplyDisplayMode(viper.GetString("display_mode"))
+			// Machine-readable output flags suppress timeline chrome.
+			if f := cmd.Flag("output"); f != nil && f.Value.String() != "" {
+				ui.ApplyDisplayMode("compact")
+			} else {
+				ui.ApplyDisplayMode(viper.GetString("display_mode"))
+			}
 			ui.BeginTimeline()
 			return nil
 		},
