@@ -42,7 +42,10 @@ func requireConfig(keys ...string) error {
 		if !isInteractive() {
 			return fmt.Errorf("%s not configured", key)
 		}
-		val := promptValue(key, "")
+		val, err := promptValue(key, "")
+		if err != nil {
+			return err
+		}
 		if val == "" {
 			return fmt.Errorf("%s is required", key)
 		}

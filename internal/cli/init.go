@@ -112,9 +112,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 		repoGlobs = []string{detectedGlob}
 	}
 	if len(repoGlobs) == 0 && !interactive && isInteractive() {
-		input := promptValue(
+		input, err := promptValue(
 			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
 			"")
+		if err != nil {
+			return err
+		}
 		if input != "" {
 			for _, g := range strings.Split(input, ",") {
 				if trimmed := strings.TrimSpace(g); trimmed != "" {

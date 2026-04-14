@@ -98,14 +98,15 @@ func promptSecret(label string) string {
 }
 
 // promptValue displays a prompt with a default value.
-func promptValue(label, defaultVal string) string {
+// Returns the entered value and any error (including ErrCancelled on ctrl+c).
+func promptValue(label, defaultVal string) (string, error) {
 	if !isInteractive() {
-		return defaultVal
+		return defaultVal, nil
 	}
 
 	value := defaultVal
 	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
-		return defaultVal
+		return defaultVal, err
 	}
-	return value
+	return value, nil
 }
