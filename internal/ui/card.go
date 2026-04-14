@@ -12,6 +12,16 @@ import (
 )
 
 // CardState represents the lifecycle state of a card.
+//
+// Semantic guide for command output:
+//   - CardSuccess — operation completed successfully
+//   - CardFailed  — operation was attempted and returned an error
+//   - CardSkipped — operation was not attempted (missing config, optional
+//     dependency unavailable, precondition unmet)
+//   - CardInfo    — informational display, not an operation result
+//   - CardInput   — interactive prompt (use with PrintRewindable)
+//   - CardRoot    — command header (timeline anchor)
+//   - CardPending/CardRunning — transient states used by spinners
 type CardState int
 
 const (
@@ -61,6 +71,7 @@ const (
 	cardBodyKV
 	cardBodyStdout
 	cardBodyStderr
+	cardBodyRaw // pre-styled lines, no additional formatting
 )
 
 type cardBody struct {
@@ -108,6 +119,13 @@ func (c *Card) KV(pairs ...string) *Card {
 		kv = append(kv, [2]string{pairs[i], pairs[i+1]})
 	}
 	c.body = append(c.body, cardBody{kind: cardBodyKV, pairs: kv})
+	return c
+}
+
+// Raw appends pre-styled body lines without additional formatting.
+// Use when lines contain embedded ANSI codes that must be preserved.
+func (c *Card) Raw(lines ...string) *Card {
+	c.body = append(c.body, cardBody{kind: cardBodyRaw, lines: lines})
 	return c
 }
 
@@ -262,6 +280,8 @@ func renderCardBody(b cardBody) []string {
 			out[i] = errorStyle.Render(l)
 		}
 		return out
+	case cardBodyRaw:
+		return b.lines
 	case cardBodyKV:
 		maxKey := 0
 		for _, p := range b.pairs {
