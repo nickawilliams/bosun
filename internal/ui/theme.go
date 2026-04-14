@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image/color"
 	"os"
 	"strings"
@@ -39,6 +40,90 @@ type palette struct {
 // Palette is the active color palette. Swapped by ApplyColorMode before
 // any rendering occurs; read freely afterward (single-goroutine init).
 var Palette = defaultPalette()
+
+// DisplayMode controls the density of rendered output.
+type DisplayMode int
+
+const (
+	DisplayCompact     DisplayMode = iota // No extra spacing (default).
+	DisplayComfy                    // Breathing room between cards.
+	DisplayVerbose                        // Reserved: richer incremental output.
+)
+
+// displayMode is the active display mode. Set by ApplyDisplayMode before
+// any rendering occurs; read freely afterward (single-goroutine init).
+var displayMode = DisplayCompact
+
+// ApplyDisplayMode sets the active display mode from a config string.
+// Must be called after config loads and before any rendering.
+func ApplyDisplayMode(mode string) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "comfy":
+		displayMode = DisplayComfy
+	case "verbose":
+		displayMode = DisplayVerbose
+	default:
+		displayMode = DisplayCompact
+	}
+}
+
+// IsComfy reports whether the display mode adds breathing room.
+// Returns true for both comfortable and verbose modes.
+func IsComfy() bool {
+	return displayMode >= DisplayComfy
+}
+
+// displayPadding returns extra vertical whitespace to insert after a
+// non-timeline block (e.g. Panel) when the display mode calls for
+// breathing room.
+func displayPadding() string {
+	if displayMode >= DisplayComfy {
+		return "\n"
+	}
+	return ""
+}
+
+// comfyBreak is set after a timeline card prints to signal that the
+// next card should be preceded by a connector line. The connector is
+// emitted as a leading prefix so the last card in a run never leaves
+// a dangling │.
+var comfyBreak bool
+
+// BreakTimeline requests a connector-line break before the next
+// card in comfy mode. Use when the next card follows output that
+// didn't go through the normal Print path (e.g. an interrupted
+// huh form).
+func BreakTimeline() {
+	comfyBreak = true
+}
+
+// BeginTimeline prints a leading blank line in comfy mode to
+// separate the timeline from the shell prompt above.
+func BeginTimeline() {
+	if IsComfy() {
+		fmt.Println()
+	}
+}
+
+// EndTimeline prints a trailing blank line in comfy mode to close
+// the visual timeline with clean whitespace.
+func EndTimeline() {
+	if IsComfy() {
+		fmt.Println()
+	}
+}
+
+// comfyPrefix returns (and clears) a pending connector-line prefix
+// for comfy-mode breathing room between timeline cards.
+func comfyPrefix() string {
+	if !comfyBreak || !IsComfy() {
+		comfyBreak = false
+		return ""
+	}
+	comfyBreak = false
+	conn := lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
+	return " " + conn + "\n"
+}
 
 func defaultPalette() palette {
 	return palette{

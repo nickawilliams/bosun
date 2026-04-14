@@ -95,6 +95,13 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "color_mode", Label: "Color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
 		},
 	},
+	"display_mode": {
+		Label: "Display mode",
+
+		Keys: []ConfigKey{
+			{Key: "display_mode", Label: "Display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
+		},
+	},
 }
 
 // lookupGroup returns the config group for a given name.
