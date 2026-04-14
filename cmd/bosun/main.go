@@ -24,13 +24,11 @@ func main() {
 		fang.WithColorSchemeFunc(cli.FangColorScheme),
 		fang.WithoutManpage(),
 		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
-			ui.BreakTimeline()
 			if errors.Is(err, cli.ErrCancelled) {
 				ui.NewCard(ui.CardSkipped, "User cancelled").Print()
-				ui.EndTimeline()
-				return
+			} else {
+				ui.Fail(err.Error())
 			}
-			ui.Error("%s", err)
 			ui.EndTimeline()
 		}),
 	}
