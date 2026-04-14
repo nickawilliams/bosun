@@ -177,3 +177,23 @@ func TestDetectName(t *testing.T) {
 		t.Errorf("DetectName() = %q, want %q", name, "feature/PROJ-123")
 	}
 }
+
+func TestDetectNameFromSubdirectory(t *testing.T) {
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	mgr.Create(ctx, "feature/PROJ-456", repos, true)
+
+	// Create a nested subdirectory inside the worktree.
+	subdir := filepath.Join(wsRoot, "feature", "PROJ-456", "api", "src", "pkg")
+	os.MkdirAll(subdir, 0o755)
+
+	name, err := DetectName(wsRoot, subdir)
+	if err != nil {
+		t.Fatalf("DetectName() from subdirectory error: %v", err)
+	}
+	if name != filepath.Join("feature", "PROJ-456") {
+		t.Errorf("DetectName() = %q, want %q", name, "feature/PROJ-456")
+	}
+}

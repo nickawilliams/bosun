@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -67,18 +69,29 @@ func issueFromWorkspacePath() string {
 	if wsRoot == "" {
 		return ""
 	}
+	if !filepath.IsAbs(wsRoot) {
+		wsRoot = filepath.Join(projectRoot, wsRoot)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 
-	name, err := workspace.DetectName(wsRoot, cwd)
-	if err != nil {
-		return ""
+	// Try worktree-based detection (CWD is inside a repo worktree).
+	if name, err := workspace.DetectName(wsRoot, cwd); err == nil {
+		if issue := extractIssue(name); issue != "" {
+			return issue
+		}
 	}
 
-	return extractIssue(name)
+	// Fall back to the path relative to workspace root (CWD is the
+	// workspace directory itself, not inside a worktree).
+	if rel, err := filepath.Rel(wsRoot, cwd); err == nil && !strings.HasPrefix(rel, "..") {
+		return extractIssue(rel)
+	}
+
+	return ""
 }
 
 // issueFromBranch attempts to extract an issue ID from the current git
