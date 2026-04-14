@@ -86,11 +86,10 @@ func newDemoCmd() *cobra.Command {
 			var confirmed bool
 
 			nameTitle := "What should we call the new workspace?"
-			rewind := ui.NewCard(ui.CardInput, nameTitle).
-				Subtitle("Used as the worktree directory name").
-				PrintRewindable()
+			rewind := ui.NewCard(ui.CardInput, nameTitle).Tight().PrintRewindable()
 			if err := runForm(
 				huh.NewInput().
+					Description("Used as the worktree directory name").
 					Placeholder("my-workspace").
 					Value(&name),
 			); err != nil {
@@ -102,7 +101,7 @@ func newDemoCmd() *cobra.Command {
 				Print()
 
 			confirmTitle := "Create workspace now?"
-			rewind = ui.NewCard(ui.CardInput, confirmTitle).PrintRewindable()
+			rewind = ui.NewCard(ui.CardInput, confirmTitle).Tight().PrintRewindable()
 			if err := runForm(
 				huh.NewConfirm().
 					Affirmative("Yes").

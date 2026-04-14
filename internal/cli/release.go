@@ -29,7 +29,7 @@ func newReleaseCmd() *cobra.Command {
 			if !migrationsDone {
 				if isInteractive() {
 					var confirmed bool
-					rewind := ui.NewCard(ui.CardInput, "Have any required database migrations been run?").PrintRewindable()
+					rewind := ui.NewCard(ui.CardInput, "Have any required database migrations been run?").Tight().PrintRewindable()
 					if err := runForm(
 						huh.NewConfirm().
 							Affirmative("Yes").

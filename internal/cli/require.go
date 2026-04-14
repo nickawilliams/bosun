@@ -99,7 +99,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	// Secret env var — prompt with masked input, don't save to file.
 	if ck.Secret && ck.EnvVar != "" {
 		var val string
-		rewind := ui.NewCard(ui.CardInput, ck.Label).PrintRewindable()
+		rewind := ui.NewCard(ui.CardInput, ck.Label).Tight().PrintRewindable()
 		if err := runForm(
 			huh.NewInput().
 				Placeholder("set for this session").
@@ -122,7 +122,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 
 	// Select from options or free-text input.
 	var val string
-	rewind := ui.NewCard(ui.CardInput, ck.Label).PrintRewindable()
+	rewind := ui.NewCard(ui.CardInput, ck.Label).Tight().PrintRewindable()
 	if len(ck.Options) > 0 {
 		opts := make([]huh.Option[string], len(ck.Options))
 		for i, o := range ck.Options {
