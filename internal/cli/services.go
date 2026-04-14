@@ -112,7 +112,7 @@ func newWorkspaceManager() (*workspace.Manager, error) {
 
 	wsRoot := viper.GetString("workspace_root")
 	if wsRoot == "" {
-		wsRoot = projectRoot
+		return nil, fmt.Errorf("workspaces not configured (set workspace_root in config)")
 	}
 	if !filepath.IsAbs(wsRoot) {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
@@ -135,7 +135,7 @@ func resolveWorkspaceName(args []string) (string, error) {
 
 	wsRoot := viper.GetString("workspace_root")
 	if wsRoot == "" {
-		wsRoot = projectRoot
+		return "", fmt.Errorf("workspaces not configured (set workspace_root in config)")
 	}
 	if !filepath.IsAbs(wsRoot) {
 		wsRoot = filepath.Join(projectRoot, wsRoot)

@@ -101,9 +101,6 @@ func newStartCmd() *cobra.Command {
 			// Compute workspace root for worktree path display.
 			projectRoot := config.FindProjectRoot()
 			wsRoot := viper.GetString("workspace_root")
-			if wsRoot == "" && projectRoot != "" {
-				wsRoot = projectRoot
-			}
 			if !filepath.IsAbs(wsRoot) && projectRoot != "" {
 				wsRoot = filepath.Join(projectRoot, wsRoot)
 			}

@@ -76,7 +76,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if repoInput == "" {
 			repoInput = "., ./*"
 		}
-		wsInput := "_workspaces"
+		wsInput := ".workspaces"
 
 		var fields []huh.Field
 		if needRepos {
@@ -129,17 +129,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-	if wsRoot == "" {
-		wsRoot = "_workspaces"
-	}
-
 	if isDryRun(cmd) {
 		ui.DryRun("Would initialize bosun project")
-		ui.Details("", ui.NewFields(
+		fields := ui.NewFields(
 			"Config", ".bosun/config.yaml",
 			"Repos", strings.Join(repoGlobs, ", "),
-			"Workspace root", wsRoot,
-		))
+		)
+		if wsRoot != "" {
+			fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
+		}
+		ui.Details("", fields)
 		return nil
 	}
 
@@ -158,11 +157,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if repoDisplay == "" {
 		repoDisplay = "(none — add repo patterns to .bosun/config.yaml)"
 	}
-	ui.Details("Initialized bosun project", ui.NewFields(
+	fields := ui.NewFields(
 		"Config", configPath,
 		"Repos", repoDisplay,
-		"Workspace root", wsRoot,
-	))
+	)
+	if wsRoot != "" {
+		fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
+	}
+	ui.Details("Initialized bosun project", fields)
 
 	ui.Info("Next steps")
 	ui.Muted("Edit .bosun/config.yaml to configure Jira, Slack, etc.")
@@ -248,8 +250,13 @@ func writeInitConfig(path, wsRoot string, repoGlobs []string) error {
 		b.WriteString("  # - ./*        # child directories that are repos\n")
 	}
 
-	b.WriteString("\n# Where workspaces are created (default: project root)\n")
-	fmt.Fprintf(&b, "workspace_root: %s\n", wsRoot)
+	if wsRoot != "" {
+		b.WriteString("\n# Where workspaces are created (relative to project root)\n")
+		fmt.Fprintf(&b, "workspace_root: %s\n", wsRoot)
+	} else {
+		b.WriteString("\n# Uncomment to enable worktree-based workspaces:\n")
+		b.WriteString("# workspace_root: .workspaces\n")
+	}
 
 	b.WriteString("\n# Uncomment and configure as needed:\n")
 	b.WriteString("# jira:\n")

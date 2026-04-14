@@ -63,7 +63,7 @@ var configSchema = map[string]ConfigGroup{
 		Label: "Workspace",
 
 		Keys: []ConfigKey{
-			{Key: "workspace_root", Label: "Workspace root", Default: "_workspaces"},
+			{Key: "workspace_root", Label: "Workspace root", Example: ".workspaces"},
 		},
 	},
 	"code_host": {
