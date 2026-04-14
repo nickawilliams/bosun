@@ -64,7 +64,7 @@ func (p *Panel) Render() string {
 
 // Print writes the panel to stdout.
 func (p *Panel) Print() {
-	fmt.Println(p.Render())
+	fmt.Println(p.Render() + displayPadding())
 }
 
 // injectTitle replaces part of the first line (the top border) with a title.

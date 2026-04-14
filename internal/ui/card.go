@@ -50,6 +50,7 @@ type Card struct {
 	title    string
 	subtitle string
 	body     []cardBody
+	tight    bool // suppress comfy spacing (e.g. single-field prompts)
 }
 
 type cardBodyKind int
@@ -71,6 +72,14 @@ type cardBody struct {
 // NewCard creates a card with the given state and title.
 func NewCard(state CardState, title string) *Card {
 	return &Card{state: state, title: title}
+}
+
+// Tight suppresses the comfy-mode timeline padding after this card.
+// Use for single-field prompts where a huh form renders immediately
+// below without a visual gap.
+func (c *Card) Tight() *Card {
+	c.tight = true
+	return c
 }
 
 // Subtitle sets a muted subtitle line (context, ID, path).
@@ -121,7 +130,10 @@ func (c *Card) Render() string {
 
 // Print writes the card to stdout.
 func (c *Card) Print() {
-	fmt.Print(c.Render())
+	fmt.Print(comfyPrefix() + c.Render())
+	if !c.tight {
+		comfyBreak = true
+	}
 }
 
 // PrintRewindable writes the card to stdout and returns a function
@@ -134,14 +146,19 @@ func (c *Card) Print() {
 // interrupts, callers should skip the rewind and append output
 // below the interrupted form instead.
 func (c *Card) PrintRewindable() func() {
-	rendered := c.Render()
+	prev := comfyBreak
+	rendered := comfyPrefix() + c.Render()
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
+	if !c.tight {
+		comfyBreak = true
+	}
 	return func() {
 		if lines > 0 {
 			// CPL (cursor previous line) + ED (erase to end of screen).
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
+		comfyBreak = prev
 	}
 }
 
@@ -216,9 +233,7 @@ func (c *Card) glyph() string {
 }
 
 // renderConnector returns the styled left-gutter connector for this
-// card's continuation lines. All cards (including CardInput) use
-// the recessed gray spine — the fuchsia accent is reserved for the
-// single row receiving input.
+// card's continuation lines.
 func (c *Card) renderConnector() string {
 	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
 }
@@ -336,6 +351,10 @@ func RunCard(title string, fn func() error) error {
 		resultCh <- fn()
 	}()
 
+	// Emit comfy connector before the spinner starts — BubbleTea's
+	// View() bypasses Print() so it won't consume the prefix itself.
+	fmt.Print(comfyPrefix())
+
 	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
 	model, err := p.Run()
 	if err != nil {
@@ -371,6 +390,8 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	go func() {
 		resultCh <- fn()
 	}()
+
+	fmt.Print(comfyPrefix())
 
 	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
 	model, err := p.Run()
