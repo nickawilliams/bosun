@@ -7,10 +7,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const (
-	groupLifecycle = "lifecycle"
-	groupCommands  = "commands"
-)
+const groupLifecycle = "lifecycle"
 
 // NewRootCmd creates the root bosun command.
 func NewRootCmd() *cobra.Command {
@@ -45,7 +42,6 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.AddGroup(
 		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},
-		&cobra.Group{ID: groupCommands, Title: "Commands"},
 	)
 
 	// Lifecycle commands — ordered by lifecycle stage.
@@ -63,18 +59,15 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(lifecycle...)
 
-	// Utility commands — alphabetical.
-	utility := []*cobra.Command{
+	// Utility commands — ungrouped so they merge with fang's
+	// help/completion in the default "Commands" section.
+	cmd.AddCommand(
 		newConfigCmd(),
 		newDoctorCmd(),
 		newInitCmd(),
 		newStatusCmd(),
 		newWorkspaceCmd(),
-	}
-	for _, sub := range utility {
-		sub.GroupID = groupCommands
-	}
-	cmd.AddCommand(utility...)
+	)
 
 	// Hidden commands.
 	cmd.AddCommand(newDemoCmd())
