@@ -57,11 +57,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Resolve repo globs.
 	repoGlobs, _ := cmd.Flags().GetStringSlice("repos")
-	detectedGlob := ""
+	var detectedGlobs []string
 	if len(repoGlobs) == 0 && !noDetect {
 		if repos := detectRepos(cwd); len(repos) > 0 {
-			detectedGlob = "./*"
 			ui.CompleteWithDetail("Detected repos", repos)
+			detectedGlobs = defaultRepoGlobs(cwd, repos)
 		}
 	}
 
@@ -72,7 +72,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	needRepos := len(repoGlobs) == 0
 	needWS := wsRoot == ""
 	if (needRepos || needWS) && interactive && isInteractive() {
-		repoInput := firstNonEmpty(detectedGlob, "./*")
+		repoInput := strings.Join(detectedGlobs, ", ")
+		if repoInput == "" {
+			repoInput = "., ./*"
+		}
 		wsInput := "_workspaces"
 
 		var fields []huh.Field
@@ -108,8 +111,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Apply defaults for anything still unresolved.
-	if len(repoGlobs) == 0 && detectedGlob != "" {
-		repoGlobs = []string{detectedGlob}
+	if len(repoGlobs) == 0 && len(detectedGlobs) > 0 {
+		repoGlobs = detectedGlobs
 	}
 	if len(repoGlobs) == 0 && !interactive && isInteractive() {
 		input, err := promptValue(
@@ -168,25 +171,56 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// detectRepos scans a directory for immediate children that contain a .git
-// directory (i.e., are git repositories).
+// detectRepos scans a directory for git repositories: the directory
+// itself (if it contains .git/) and immediate children that do.
 func detectRepos(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
+	var repos []string
+
+	// Check if the directory itself is a repo.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		repos = append(repos, filepath.Base(dir)+" (root)")
 	}
 
-	var repos []string
+	// Check children.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return repos
+	}
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		gitDir := filepath.Join(dir, entry.Name(), ".git")
-		if _, err := os.Stat(gitDir); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, entry.Name(), ".git")); err == nil {
 			repos = append(repos, entry.Name())
 		}
 	}
 	return repos
+}
+
+// defaultRepoGlobs returns the default repo glob patterns based on
+// what was detected. Uses "." for the root repo and "./*" for children.
+func defaultRepoGlobs(dir string, detected []string) []string {
+	var globs []string
+	hasRoot := false
+	hasChildren := false
+
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		hasRoot = true
+	}
+	for _, d := range detected {
+		if !strings.HasSuffix(d, "(root)") {
+			hasChildren = true
+			break
+		}
+	}
+
+	if hasRoot {
+		globs = append(globs, ".")
+	}
+	if hasChildren {
+		globs = append(globs, "./*")
+	}
+	return globs
 }
 
 // firstNonEmpty returns the first non-empty string from the arguments.
@@ -210,8 +244,8 @@ func writeInitConfig(path, wsRoot string, repoGlobs []string) error {
 			fmt.Fprintf(&b, "  - %s\n", g)
 		}
 	} else {
-		b.WriteString("  # - ./*\n")
-		b.WriteString("  # - ~/Projects/myorg/*\n")
+		b.WriteString("  # - .          # this directory is a repo\n")
+		b.WriteString("  # - ./*        # child directories that are repos\n")
 	}
 
 	b.WriteString("\n# Where workspaces are created (default: project root)\n")
