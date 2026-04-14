@@ -74,23 +74,30 @@ func renderDoctorResults(results []checkResult) {
 	passed, warned, failed := 0, 0, 0
 
 	for _, r := range results {
-		var state ui.CardState
+		detail := strings.Split(r.detail, "\n")
 		switch r.status {
 		case "pass":
-			state = ui.CardSuccess
 			passed++
+			if r.detail != "" {
+				ui.CompleteWithDetail(r.name, detail)
+			} else {
+				ui.Complete(r.name)
+			}
 		case "warn":
-			state = ui.CardSkipped
 			warned++
+			if r.detail != "" {
+				ui.Skip(fmt.Sprintf("%s: %s", r.name, r.detail))
+			} else {
+				ui.Skip(r.name)
+			}
 		case "fail":
-			state = ui.CardFailed
 			failed++
+			if r.detail != "" {
+				ui.Fail(fmt.Sprintf("%s: %s", r.name, r.detail))
+			} else {
+				ui.Fail(r.name)
+			}
 		}
-		card := ui.NewCard(state, r.name)
-		if r.detail != "" {
-			card.Muted(strings.Split(r.detail, "\n")...)
-		}
-		card.Print()
 	}
 
 	// Summary.
@@ -101,7 +108,7 @@ func renderDoctorResults(results []checkResult) {
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
-	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).Print()
+	ui.Info("%s", strings.Join(parts, ", "))
 }
 
 func checkGlobalConfig() (string, error) {
@@ -156,26 +163,22 @@ func checkRepos() (string, error) {
 }
 
 func checkIssueTrackerConfig() (string, error) {
-	provider := viper.GetString("issue_tracker")
-	if provider == "" {
-		return "", fmt.Errorf("not configured")
+	if group, ok := lookupGroup("issue_tracker"); ok {
+		if missing := checkGroupCompleteness("issue_tracker", group); len(missing) > 0 {
+			return "", fmt.Errorf("not configured")
+		}
 	}
 
+	provider := viper.GetString("issue_tracker")
 	switch provider {
 	case "jira":
+		if group, ok := lookupGroup("jira"); ok {
+			if missing := checkGroupCompleteness("jira", group); len(missing) > 0 {
+				return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
+			}
+		}
 		baseURL := viper.GetString("jira.base_url")
-		if baseURL == "" {
-			return "", fmt.Errorf("jira.base_url not set")
-		}
 		email := viper.GetString("jira.email")
-		if email == "" {
-			return "", fmt.Errorf("jira.email not set")
-		}
-		token := viper.GetString("jira.token")
-		if token == "" {
-			return "", fmt.Errorf("jira.token not set")
-		}
-		// Trim URL to just the hostname for display.
 		host := strings.TrimPrefix(baseURL, "https://")
 		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimRight(host, "/")
@@ -210,14 +213,20 @@ func checkIssueTrackerConnectivity() (string, error) {
 }
 
 func checkStatusMappings() (string, error) {
-	keys := []string{"ready", "in_progress", "review", "preview", "ready_for_release", "done"}
-	var missing []string
+	group, ok := lookupGroup("statuses")
+	if !ok {
+		return "", fmt.Errorf("no status schema defined")
+	}
+
+	total := len(group.Keys)
 	var mapped int
-	for _, k := range keys {
-		if viper.GetString("statuses."+k) != "" {
+	var missing []string
+	for _, ck := range group.Keys {
+		fk := fullKey("statuses", ck)
+		if viper.GetString(fk) != "" || ck.Default != "" {
 			mapped++
 		} else {
-			missing = append(missing, k)
+			missing = append(missing, ck.Key)
 		}
 	}
 
@@ -225,9 +234,9 @@ func checkStatusMappings() (string, error) {
 		return "", fmt.Errorf("none configured")
 	}
 	if len(missing) > 0 {
-		return "", fmt.Errorf("%d/%d (missing: %s)", mapped, len(keys), strings.Join(missing, ", "))
+		return "", fmt.Errorf("%d/%d (missing: %s)", mapped, total, strings.Join(missing, ", "))
 	}
-	return fmt.Sprintf("%d/%d", mapped, len(keys)), nil
+	return fmt.Sprintf("%d/%d", mapped, total), nil
 }
 
 func checkBranchPattern() (string, error) {
