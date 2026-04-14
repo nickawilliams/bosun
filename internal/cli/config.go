@@ -2,33 +2,413 @@ package cli
 
 import (
 	"fmt"
+	"image/color"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/nickawilliams/bosun/internal/config"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+)
+
+
+// Source-encoded glyphs and colors for the config tree.
+const (
+	glyphDefault = "◻︎"
+	glyphGlobal  = "◼︎"
+	glyphProject = "◆"
+	glyphEnv     = "▲"
 )
 
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "View and manage bosun configuration",
+		// Bare "config" runs "show".
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runConfigShow(cmd, args)
+		},
 	}
 
+	showCmd := newConfigShowCmd()
+
 	cmd.AddCommand(
+		showCmd,
+		newConfigCheckCmd(),
 		newConfigGetCmd(),
 		newConfigSetCmd(),
-		newConfigListCmd(),
+		newConfigUnsetCmd(),
 		newConfigEditCmd(),
-		newConfigPathCmd(),
 	)
 
+	// Inherit show's flags on the parent so "config --source env" works.
+	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
+	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
+
 	return cmd
+}
+
+func newConfigShowCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "show [group]",
+		Short: "Display effective resolved configuration",
+		Args:  cobra.MaximumNArgs(1),
+		Annotations: map[string]string{
+			headerAnnotationTitle: "configuration",
+		},
+		RunE: runConfigShow,
+	}
+
+	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
+	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
+
+	return cmd
+}
+
+func runConfigShow(cmd *cobra.Command, args []string) error {
+	outputFmt, _ := cmd.Flags().GetString("output")
+	sourceFilter, _ := cmd.Flags().GetStringSlice("source")
+	var groupFilter string
+	if len(args) > 0 {
+		groupFilter = args[0]
+	}
+
+	// Machine-readable output.
+	if outputFmt != "" {
+		return runConfigShowMachine(outputFmt, sourceFilter, groupFilter)
+	}
+
+	// Human-readable tree display.
+	cs := loadConfigSources()
+
+	ui.NewCard(ui.CardRoot, "configuration").Tight().Print()
+	tree := buildConfigTree(cs, sourceFilter, groupFilter)
+	tree.Print()
+
+	// Sources hint line at the end.
+	fmt.Println()
+	fmt.Println(renderSourcesHint(cs, sourceFilter))
+
+	return nil
+}
+
+func runConfigShowMachine(format string, sourceFilter []string, groupFilter string) error {
+	cs := loadConfigSources()
+	settings := viper.AllSettings()
+
+	if groupFilter != "" {
+		if sub, ok := settings[groupFilter]; ok {
+			settings = map[string]any{groupFilter: sub}
+		} else {
+			return fmt.Errorf("unknown group %q", groupFilter)
+		}
+	}
+
+	// Apply source filter.
+	if len(sourceFilter) > 0 {
+		flat := flattenMap("", settings)
+		filtered := make(map[string]any)
+		for key, val := range flat {
+			_, src := cs.resolveKeySource(key)
+			if src == "" {
+				// Try schema lookup.
+				if ck, gn, ok := findConfigKey(key); ok {
+					_, src = cs.resolveSource(gn, ck)
+				}
+			}
+			if matchesSourceFilter(src, sourceFilter) {
+				filtered[key] = val
+			}
+		}
+		settings = filtered
+	}
+
+	switch format {
+	case "yaml":
+		printYAML(settings)
+	case "json":
+		printJSON(settings)
+	case "env":
+		printEnv(settings)
+	default:
+		return fmt.Errorf("unknown output format %q (valid: yaml, json, env)", format)
+	}
+	return nil
+}
+
+func buildConfigTree(cs *configSources, sourceFilter []string, groupFilter string) *ui.Tree {
+	tree := ui.NewTree()
+
+	// Collect all effective config as a flat map, then inject schema
+	// defaults for keys that aren't explicitly set so the tree shows
+	// the full effective configuration.
+	allSettings := viper.AllSettings()
+	injectSchemaDefaults(allSettings)
+
+	// Determine which top-level keys are groups (have nested maps).
+	topLevel := make(map[string]bool) // true = group, false = leaf
+	for k, v := range allSettings {
+		if _, ok := v.(map[string]any); ok {
+			topLevel[k] = true
+		} else {
+			topLevel[k] = false
+		}
+	}
+
+	// Sort keys for stable output.
+	keys := make([]string, 0, len(topLevel))
+	for k := range topLevel {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if groupFilter != "" && key != groupFilter {
+			continue
+		}
+
+		isGroup := topLevel[key]
+		if isGroup {
+			children := buildGroupChildren(cs, key, allSettings[key].(map[string]any), sourceFilter)
+			if len(children) == 0 && len(sourceFilter) > 0 {
+				continue
+			}
+			group := ui.Group(key, children...)
+			tree.Add(group)
+		} else {
+			node := buildLeafNode(cs, key, sourceFilter)
+			if node == nil {
+				continue
+			}
+			tree.Add(node)
+		}
+	}
+
+	return tree
+}
+
+// injectSchemaDefaults adds schema keys into the settings map when
+// they aren't already present but have an effective value (a default
+// or a set env var), so the tree reflects the full effective config.
+func injectSchemaDefaults(settings map[string]any) {
+	for groupName, group := range configSchema {
+		for _, ck := range group.Keys {
+			// Determine the effective value for missing keys.
+			val := ck.Default
+			if val == "" && ck.EnvVar != "" {
+				if v := os.Getenv(ck.EnvVar); v != "" {
+					val = v
+				}
+			}
+			if val == "" {
+				// Also check automatic BOSUN_* env var.
+				fk := fullKey(groupName, ck)
+				if v := os.Getenv(envVarForKey(fk)); v != "" {
+					val = v
+				}
+			}
+			if val == "" {
+				continue
+			}
+
+			fk := fullKey(groupName, ck)
+			parts := strings.SplitN(fk, ".", 2)
+			if len(parts) == 1 {
+				if _, exists := settings[fk]; !exists {
+					settings[fk] = val
+				}
+			} else {
+				parent := parts[0]
+				child := parts[1]
+				sub, ok := settings[parent].(map[string]any)
+				if !ok {
+					sub = make(map[string]any)
+					settings[parent] = sub
+				}
+				if _, exists := sub[child]; !exists {
+					sub[child] = val
+				}
+			}
+		}
+	}
+}
+
+func buildGroupChildren(cs *configSources, groupKey string, m map[string]any, sourceFilter []string) []*ui.TreeNode {
+	var children []*ui.TreeNode
+
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, childKey := range keys {
+		childVal := m[childKey]
+		fk := groupKey + "." + childKey
+
+		if subMap, ok := childVal.(map[string]any); ok {
+			// Nested group.
+			subChildren := buildGroupChildren(cs, fk, subMap, sourceFilter)
+			if len(subChildren) == 0 && len(sourceFilter) > 0 {
+				continue
+			}
+			children = append(children, ui.Group(childKey, subChildren...))
+			continue
+		}
+
+		// Leaf within group.
+		value, source := resolveKeyWithSchema(cs, fk)
+		if !matchesSourceFilter(source, sourceFilter) {
+			continue
+		}
+		if value == "" {
+			continue
+		}
+		// Mask secrets.
+		if ck, _, ok := findConfigKey(fk); ok && ck.Secret {
+			value = "••••••••"
+		}
+		glyph, glyphColor := sourceGlyph(source)
+		children = append(children, ui.Leaf(glyph, glyphColor, childKey, value))
+	}
+
+	return children
+}
+
+func buildLeafNode(cs *configSources, key string, sourceFilter []string) *ui.TreeNode {
+	value, source := resolveKeyWithSchema(cs, key)
+	if !matchesSourceFilter(source, sourceFilter) {
+		return nil
+	}
+	if value == "" {
+		return nil
+	}
+	// Mask secrets.
+	if ck, _, ok := findConfigKey(key); ok && ck.Secret {
+		value = "••••••••"
+	}
+	glyph, glyphColor := sourceGlyph(source)
+	return ui.Leaf(glyph, glyphColor, key, formatValue(value))
+}
+
+// resolveKeyWithSchema resolves a fully-qualified key, using schema
+// metadata if available, falling back to raw source resolution.
+func resolveKeyWithSchema(cs *configSources, key string) (value, source string) {
+	if ck, gn, ok := findConfigKey(key); ok {
+		return cs.resolveSource(gn, ck)
+	}
+	return cs.resolveKeySource(key)
+}
+
+// sourceGlyph returns the glyph and color for a config source tier.
+func sourceGlyph(source string) (string, color.Color) {
+	switch source {
+	case sourceGlobal:
+		return glyphGlobal, ui.Palette.Primary
+	case sourceProject:
+		return glyphProject, ui.Palette.Success
+	case sourceEnv:
+		return glyphEnv, ui.Palette.Warning
+	default:
+		return glyphDefault, ui.Palette.Muted
+	}
+}
+
+// renderSourcesHint builds a single-line sources footer styled like
+// huh keyboard hints: glyph label · glyph label · ...
+func renderSourcesHint(cs *configSources, filter []string) string {
+	labelStyle := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
+	sepStyle := lipgloss.NewStyle().Foreground(ui.Palette.Recessed)
+	glyphFor := func(c color.Color, g string) string {
+		return lipgloss.NewStyle().Foreground(c).Render(g)
+	}
+
+	var parts []string
+	if matchesSourceFilter(sourceDefault, filter) {
+		parts = append(parts, glyphFor(ui.Palette.Muted, glyphDefault)+" "+labelStyle.Render("defaults"))
+	}
+	if cs.globalPath != "" && matchesSourceFilter(sourceGlobal, filter) {
+		parts = append(parts, glyphFor(ui.Palette.Primary, glyphGlobal)+" "+labelStyle.Render(shortPath(cs.globalPath)))
+	}
+	if cs.projectPath != "" && matchesSourceFilter(sourceProject, filter) {
+		parts = append(parts, glyphFor(ui.Palette.Success, glyphProject)+" "+labelStyle.Render(shortPath(cs.projectPath)))
+	}
+	if matchesSourceFilter(sourceEnv, filter) {
+		if envCount := countEnvSources(cs); envCount > 0 {
+			label := fmt.Sprintf("%d var", envCount)
+			if envCount != 1 {
+				label += "s"
+			}
+			parts = append(parts, glyphFor(ui.Palette.Warning, glyphEnv)+" "+labelStyle.Render(label))
+		}
+	}
+
+	sep := " " + sepStyle.Render("·") + " "
+	return "  " + strings.Join(parts, sep)
+}
+
+// shortPath replaces the home directory prefix with ~.
+func shortPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil {
+		if strings.HasPrefix(path, home) {
+			return "~" + path[len(home):]
+		}
+	}
+	return path
+}
+
+// matchesSourceFilter reports whether a source matches the active
+// filter. An empty filter matches everything.
+func matchesSourceFilter(source string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, f := range filter {
+		if f == source {
+			return true
+		}
+	}
+	return false
+}
+
+// formatValue formats a config value for display, handling slices.
+func formatValue(v string) string {
+	// Viper renders slices as "[a b c]". Convert to comma-separated.
+	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {
+		inner := v[1 : len(v)-1]
+		if inner != "" {
+			return strings.ReplaceAll(inner, " ", ", ")
+		}
+	}
+	return v
+}
+
+// countEnvSources counts how many env vars contribute to the config.
+func countEnvSources(cs *configSources) int {
+	seen := make(map[string]bool)
+
+	// Count BOSUN_* env vars.
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "BOSUN_") {
+			name := env[:strings.IndexByte(env, '=')]
+			seen[name] = true
+		}
+	}
+
+	// Count schema-specific env vars (e.g., GITHUB_TOKEN).
+	for _, group := range configSchema {
+		for _, ck := range group.Keys {
+			if ck.EnvVar != "" && !strings.HasPrefix(ck.EnvVar, "BOSUN_") {
+				if os.Getenv(ck.EnvVar) != "" {
+					seen[ck.EnvVar] = true
+				}
+			}
+		}
+	}
+
+	return len(seen)
 }
 
 func newConfigGetCmd() *cobra.Command {
@@ -40,6 +420,11 @@ func newConfigGetCmd() *cobra.Command {
 			key := args[0]
 			val := viper.Get(key)
 			if val == nil {
+				// Check schema default.
+				if ck, _, ok := findConfigKey(key); ok && ck.Default != "" {
+					fmt.Println(ck.Default)
+					return nil
+				}
 				return fmt.Errorf("key %q not set", key)
 			}
 			fmt.Println(val)
@@ -48,253 +433,144 @@ func newConfigGetCmd() *cobra.Command {
 	}
 }
 
-func newConfigSetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "set <key> <value>",
-		Short: "Set a configuration value",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			key := args[0]
-			value := args[1]
-			global, _ := cmd.Flags().GetBool("global")
-
-			configPath, err := resolveConfigPath(global)
-			if err != nil {
-				return err
-			}
-
-			if err := setConfigValue(configPath, key, value); err != nil {
-				return err
-			}
-
-			ui.NewCard(ui.CardSuccess, fmt.Sprintf("Set %s = %s", key, value)).
-				Muted(configPath).
-				Print()
-			return nil
-		},
-	}
-
-	cmd.Flags().BoolP("global", "g", false, "write to global config instead of project config")
-
-	return cmd
-}
-
-func newConfigListCmd() *cobra.Command {
+func newConfigCheckCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List all configuration values",
+		Use:   "check [group]",
+		Short: "Validate configuration completeness",
+		Args:  cobra.MaximumNArgs(1),
+		Annotations: map[string]string{
+			headerAnnotationTitle: "config check",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			settings := viper.AllSettings()
-			if len(settings) == 0 {
-				ui.NewCard(ui.CardSkipped, "No configuration values set").Print()
-				return nil
-			}
-
-			flat := flattenMap("", settings)
-			keys := make([]string, 0, len(flat))
-			for k := range flat {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-
-			kvArgs := make([]string, 0, len(keys)*2)
-			for _, k := range keys {
-				kvArgs = append(kvArgs, k, fmt.Sprintf("%v", flat[k]))
-			}
-			ui.NewCard(ui.CardInfo, "Configuration").
-				KV(kvArgs...).
-				Print()
-			return nil
+			rootCard(cmd).Print()
+			return runConfigCheck(args)
 		},
 	}
 }
 
-func newConfigEditCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "edit",
-		Short: "Open configuration in $EDITOR",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			global, _ := cmd.Flags().GetBool("global")
-
-			configPath, err := resolveConfigPath(global)
-			if err != nil {
-				return err
-			}
-
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vi"
-			}
-
-			c := exec.Command(editor, configPath)
-			c.Stdin = os.Stdin
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			return c.Run()
-		},
+func runConfigCheck(args []string) error {
+	var groupFilter string
+	if len(args) > 0 {
+		groupFilter = args[0]
 	}
 
-	cmd.Flags().BoolP("global", "g", false, "edit global config instead of project config")
-
-	return cmd
-}
-
-func newConfigPathCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "path",
-		Short: "Show configuration file paths",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			var kvArgs []string
-
-			configDir, err := config.GlobalConfigDir()
-			if err == nil {
-				globalPath := filepath.Join(configDir, "config.yaml")
-				if _, err := os.Stat(globalPath); err == nil {
-					kvArgs = append(kvArgs, "Global", globalPath)
-				} else {
-					kvArgs = append(kvArgs, "Global", globalPath+" (not found)")
-				}
-			}
-
-			projectRoot := config.FindProjectRoot()
-			if projectRoot != "" {
-				projectPath := filepath.Join(projectRoot, ".bosun", "config.yaml")
-				if _, err := os.Stat(projectPath); err == nil {
-					kvArgs = append(kvArgs, "Project", projectPath)
-				} else {
-					kvArgs = append(kvArgs, "Project", projectPath+" (not found)")
-				}
-			} else {
-				kvArgs = append(kvArgs, "Project", "(no .bosun/ found)")
-			}
-
-			ui.NewCard(ui.CardInfo, "Config paths").
-				KV(kvArgs...).
-				Print()
-
-			return nil
-		},
-	}
-
-	return cmd
-}
-
-// resolveConfigPath returns the path to the config file to write to.
-func resolveConfigPath(global bool) (string, error) {
-	if global {
-		dir, err := config.GlobalConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("finding config directory: %w", err)
+	passed, warned := 0, 0
+	for name, group := range configSchema {
+		if groupFilter != "" && name != groupFilter {
+			continue
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("creating config directory: %w", err)
-		}
-		return filepath.Join(dir, "config.yaml"), nil
-	}
-
-	projectRoot := config.FindProjectRoot()
-	if projectRoot == "" {
-		return "", fmt.Errorf("not inside a bosun project (use --global for global config)")
-	}
-	return filepath.Join(projectRoot, ".bosun", "config.yaml"), nil
-}
-
-// setConfigValue does a targeted update of a single key in a YAML file,
-// preserving comments and structure. For nested keys like "jira.base_url",
-// it finds or creates the parent key and sets the child.
-func setConfigValue(path, key, value string) error {
-	content, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reading config: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	parts := strings.SplitN(key, ".", 2)
-
-	if len(parts) == 1 {
-		// Top-level key.
-		lines = setYAMLKey(lines, key, value, 0)
-	} else {
-		// Nested key: find parent section, set child within it.
-		parent := parts[0]
-		child := parts[1]
-		parentIdx := findYAMLKey(lines, parent, 0)
-		if parentIdx == -1 {
-			// Parent doesn't exist — append it.
-			lines = append(lines, parent+":")
-			lines = append(lines, fmt.Sprintf("  %s: %s", child, value))
+		missing := checkGroupCompleteness(name, group)
+		if len(missing) == 0 {
+			ui.Complete(group.Label)
+			passed++
 		} else {
-			// Find or set the child within the parent's indented block.
-			lines = setYAMLKey(lines, child, value, parentIdx+1)
+			ui.Skip(fmt.Sprintf("%s: missing %s", group.Label, strings.Join(missing, ", ")))
+			warned++
 		}
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	parts := []string{fmt.Sprintf("%d passed", passed)}
+	if warned > 0 {
+		parts = append(parts, fmt.Sprintf("%d incomplete", warned))
+	}
+	ui.Info("%s", strings.Join(parts, ", "))
+	return nil
 }
 
-// findYAMLKey returns the line index of a key at the expected indentation
-// level, or -1 if not found. startFrom specifies where to begin searching.
-func findYAMLKey(lines []string, key string, startFrom int) int {
-	prefix := key + ":"
-	for i := startFrom; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, prefix) {
-			return i
+// checkGroupCompleteness returns the names of missing required keys
+// in a config group.
+func checkGroupCompleteness(groupName string, group ConfigGroup) []string {
+	var missing []string
+	for _, ck := range group.Keys {
+		if !ck.Required {
+			continue
+		}
+		fk := fullKey(groupName, ck)
+		if viper.GetString(fk) == "" && ck.Default == "" {
+			missing = append(missing, ck.Key)
 		}
 	}
-	return -1
+	return missing
 }
 
-// setYAMLKey finds a key starting from startFrom and updates its value,
-// or appends it if not found.
-func setYAMLKey(lines []string, key, value string, startFrom int) []string {
-	idx := findYAMLKey(lines, key, startFrom)
-	if idx != -1 {
-		// Preserve existing indentation.
-		indent := len(lines[idx]) - len(strings.TrimLeft(lines[idx], " "))
-		lines[idx] = strings.Repeat(" ", indent) + key + ": " + value
-	} else {
-		// Determine indentation from context.
-		indent := ""
-		if startFrom > 0 && startFrom < len(lines) {
-			// Match indentation of the section we're inserting into.
-			for i := startFrom; i < len(lines); i++ {
-				if strings.TrimSpace(lines[i]) != "" && !strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-					indent = strings.Repeat(" ", len(lines[i])-len(strings.TrimLeft(lines[i], " ")))
-					break
-				}
-			}
-			if indent == "" {
-				indent = "  "
-			}
-		}
-		// Insert after startFrom or append.
-		newLine := indent + key + ": " + value
-		if startFrom > 0 && startFrom <= len(lines) {
-			lines = append(lines[:startFrom+1], append([]string{newLine}, lines[startFrom+1:]...)...)
-		} else {
-			lines = append(lines, newLine)
-		}
+// Machine-readable output helpers.
+
+func printYAML(settings map[string]any) {
+	printYAMLMap(settings, 0)
+}
+
+func printYAMLMap(m map[string]any, indent int) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-	return lines
-}
+	sort.Strings(keys)
 
-// flattenMap recursively flattens a nested map into dot-separated keys.
-func flattenMap(prefix string, m map[string]any) map[string]string {
-	result := make(map[string]string)
-	for k, v := range m {
-		key := k
-		if prefix != "" {
-			key = prefix + "." + k
-		}
+	prefix := strings.Repeat("  ", indent)
+	for _, k := range keys {
+		v := m[k]
 		switch val := v.(type) {
 		case map[string]any:
-			for fk, fv := range flattenMap(key, val) {
-				result[fk] = fv
-			}
+			fmt.Printf("%s%s:\n", prefix, k)
+			printYAMLMap(val, indent+1)
 		default:
-			result[key] = fmt.Sprintf("%v", val)
+			fmt.Printf("%s%s: %v\n", prefix, k, val)
 		}
 	}
-	return result
+}
+
+func printJSON(settings map[string]any) {
+	printJSONValue(settings, 0, false)
+	fmt.Println()
+}
+
+func printJSONValue(v any, indent int, inArray bool) {
+	prefix := strings.Repeat("  ", indent)
+	switch val := v.(type) {
+	case map[string]any:
+		fmt.Println("{")
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for i, k := range keys {
+			fmt.Printf("%s  %q: ", prefix, k)
+			printJSONValue(val[k], indent+1, false)
+			if i < len(keys)-1 {
+				fmt.Print(",")
+			}
+			fmt.Println()
+		}
+		fmt.Printf("%s}", prefix)
+	case []any:
+		fmt.Println("[")
+		for i, item := range val {
+			fmt.Printf("%s  ", prefix)
+			printJSONValue(item, indent+1, true)
+			if i < len(val)-1 {
+				fmt.Print(",")
+			}
+			fmt.Println()
+		}
+		fmt.Printf("%s]", prefix)
+	case string:
+		fmt.Printf("%q", val)
+	default:
+		fmt.Printf("%v", val)
+	}
+}
+
+func printEnv(settings map[string]any) {
+	flat := flattenMap("", settings)
+	keys := make([]string, 0, len(flat))
+	for k := range flat {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		envKey := "BOSUN_" + strings.ToUpper(strings.ReplaceAll(k, ".", "_"))
+		fmt.Printf("%s=%s\n", envKey, flat[k])
+	}
 }
