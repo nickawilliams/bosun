@@ -75,13 +75,12 @@ func newStartCmd() *cobra.Command {
 				}
 
 				var selected []string
-				rewind := ui.NewCard(ui.CardInput, "Repos").PrintRewindable()
+				rewind := ui.NewCard(ui.CardInput, "Repos").Tight().PrintRewindable()
 				if err := runForm(
 					huh.NewMultiSelect[string]().
 						Options(opts...).
 						Value(&selected),
 				); err != nil {
-					rewind()
 					return err
 				}
 				rewind()
@@ -90,6 +89,10 @@ func newStartCmd() *cobra.Command {
 					ui.NewCard(ui.CardSkipped, "No repos selected").Print()
 					return nil
 				}
+
+				ui.NewCard(ui.CardSuccess, "Repos").
+					Text(selected...).
+					Print()
 
 				repos, err = resolveRepos(selected)
 				if err != nil {

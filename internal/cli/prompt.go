@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"charm.land/huh/v2"
@@ -31,6 +32,10 @@ func runForm(fields ...huh.Field) error {
 		WithShowHelp(true).
 		Run()
 	if errors.Is(err, huh.ErrUserAborted) {
+		// BubbleTea leaves a trailing blank line on exit; move the
+		// cursor up so the cancel card (or its comfy connector)
+		// overwrites it rather than creating double spacing.
+		fmt.Print("\x1b[A")
 		return ErrCancelled
 	}
 	return err
