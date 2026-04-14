@@ -1,159 +1,33 @@
 package cli
 
 import (
-	"fmt"
-	"strings"
+	"image/color"
 
+	"charm.land/fang/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
-	"github.com/spf13/cobra"
 )
 
-func helpHeading() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary)
-}
-
-func helpCommand() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ui.Palette.Accent)
-}
-
-func helpFlag() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ui.Palette.Accent)
-}
-
-func helpDim() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-}
-
-// setStyledHelp configures the command tree to use styled help output.
-func setStyledHelp(cmd *cobra.Command) {
-	cmd.SetHelpFunc(styledHelp)
-}
-
-func styledHelp(cmd *cobra.Command, args []string) {
-	var b strings.Builder
-
-	// Description.
-	if cmd.Long != "" {
-		b.WriteString(cmd.Long)
-	} else if cmd.Short != "" {
-		b.WriteString(cmd.Short)
+// FangColorScheme returns a fang color scheme that matches the bosun
+// palette. The isLight parameter from fang's LightDarkFunc is unused
+// since bosun manages its own palette via color_mode config.
+func FangColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
+	return fang.ColorScheme{
+		Base:           ui.Palette.NormalFg,
+		Title:          ui.Palette.Primary,
+		Description:    ui.Palette.Muted,
+		Help:           ui.Palette.Muted,
+		Dash:           ui.Palette.Recessed,
+		Codeblock:      ui.Palette.Recessed,
+		Program:        ui.Palette.NormalFg,
+		Command:        ui.Palette.Accent,
+		Argument:       ui.Palette.NormalFg,
+		DimmedArgument: ui.Palette.Muted,
+		QuotedString:   ui.Palette.Success,
+		Comment:        ui.Palette.Muted,
+		Flag:           ui.Palette.Accent,
+		FlagDefault:    ui.Palette.Muted,
+		ErrorHeader:    [2]color.Color{lipgloss.Color("#FFFDF5"), lipgloss.Color("#FF4672")},
+		ErrorDetails:   ui.Palette.NormalFg,
 	}
-	b.WriteString("\n\n")
-
-	// Usage.
-	b.WriteString(helpHeading().Render("Usage"))
-	b.WriteString("\n")
-	if cmd.Runnable() {
-		b.WriteString("  " + helpDim().Render(cmd.UseLine()) + "\n")
-	}
-	if cmd.HasAvailableSubCommands() {
-		b.WriteString("  " + helpDim().Render(cmd.CommandPath()+" [command]") + "\n")
-	}
-	b.WriteString("\n")
-
-	// Subcommands.
-	if cmd.HasAvailableSubCommands() {
-		maxLen := 0
-		for _, sub := range cmd.Commands() {
-			if sub.IsAvailableCommand() && len(sub.Name()) > maxLen {
-				maxLen = len(sub.Name())
-			}
-		}
-
-		if groups := cmd.Groups(); len(groups) > 0 {
-			for _, group := range groups {
-				var found bool
-				for _, sub := range cmd.Commands() {
-					if !sub.IsAvailableCommand() || sub.GroupID != group.ID {
-						continue
-					}
-					if !found {
-						b.WriteString(helpHeading().Render(group.Title))
-						b.WriteString("\n")
-						found = true
-					}
-					name := helpCommand().Render(sub.Name())
-					padding := strings.Repeat(" ", maxLen-len(sub.Name())+2)
-					b.WriteString(fmt.Sprintf("  %s%s%s\n", name, padding, sub.Short))
-				}
-				if found {
-					b.WriteString("\n")
-				}
-			}
-		} else {
-			b.WriteString(helpHeading().Render("Commands"))
-			b.WriteString("\n")
-			for _, sub := range cmd.Commands() {
-				if !sub.IsAvailableCommand() {
-					continue
-				}
-				name := helpCommand().Render(sub.Name())
-				padding := strings.Repeat(" ", maxLen-len(sub.Name())+2)
-				b.WriteString(fmt.Sprintf("  %s%s%s\n", name, padding, sub.Short))
-			}
-			b.WriteString("\n")
-		}
-	}
-
-	// Local flags.
-	if cmd.HasAvailableLocalFlags() {
-		b.WriteString(helpHeading().Render("Flags"))
-		b.WriteString("\n")
-		b.WriteString(styleFlags(cmd.LocalFlags().FlagUsages()))
-		b.WriteString("\n")
-	}
-
-	// Inherited flags.
-	if cmd.HasAvailableInheritedFlags() {
-		b.WriteString(helpHeading().Render("Global Flags"))
-		b.WriteString("\n")
-		b.WriteString(styleFlags(cmd.InheritedFlags().FlagUsages()))
-		b.WriteString("\n")
-	}
-
-	// Footer.
-	if cmd.HasAvailableSubCommands() {
-		footer := fmt.Sprintf(`Use "%s [command] --help" for more information about a command.`, cmd.CommandPath())
-		b.WriteString(helpDim().Render(footer))
-		b.WriteString("\n")
-	}
-
-	fmt.Fprint(cmd.OutOrStdout(), b.String())
-}
-
-// styleFlags colorizes flag names in Cobra's flag usage output.
-func styleFlags(usage string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(usage, "\n"), "\n") {
-		b.WriteString(styleFlagLine(line))
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// styleFlagLine applies color to a single flag usage line.
-// Cobra outputs lines like: "  -f, --format string   description text"
-func styleFlagLine(line string) string {
-	if line == "" {
-		return line
-	}
-
-	trimmed := strings.TrimLeft(line, " ")
-	indent := strings.Repeat(" ", len(line)-len(trimmed))
-
-	// Split on the double-space boundary between flags and description.
-	parts := strings.SplitN(trimmed, "   ", 2)
-	if len(parts) == 1 {
-		return indent + helpFlag().Render(trimmed)
-	}
-
-	flagPart := parts[0]
-	descPart := strings.TrimLeft(parts[1], " ")
-
-	totalFlagWidth := len(flagPart)
-	originalSpacing := len(trimmed) - len(flagPart) - len(strings.TrimLeft(parts[1], " "))
-	spacing := strings.Repeat(" ", originalSpacing+totalFlagWidth-len(flagPart))
-
-	return indent + helpFlag().Render(flagPart) + spacing + descPart
 }

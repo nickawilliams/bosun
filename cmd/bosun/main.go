@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
-	"fmt"
+	"io"
 	"os"
 
+	"charm.land/fang/v2"
 	"github.com/nickawilliams/bosun/internal/cli"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
@@ -12,21 +14,28 @@ import (
 var (
 	version = "dev"
 	commit  = "none"
-	date    = "unknown"
 )
 
 func main() {
-	versionStr := fmt.Sprintf("%s (%s, %s)", version, commit, date)
-	cmd := cli.NewRootCmd(versionStr)
-	if err := cmd.Execute(); err != nil {
-		ui.BreakTimeline()
-		if errors.Is(err, cli.ErrCancelled) {
-			ui.NewCard(ui.CardSkipped, "User cancelled").Print()
+	cmd := cli.NewRootCmd()
+
+	err := fang.Execute(context.Background(), cmd,
+		fang.WithVersion(version),
+		fang.WithCommit(commit),
+		fang.WithColorSchemeFunc(cli.FangColorScheme),
+		fang.WithoutManpage(),
+		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
+			ui.BreakTimeline()
+			if errors.Is(err, cli.ErrCancelled) {
+				ui.NewCard(ui.CardSkipped, "User cancelled").Print()
+				ui.EndTimeline()
+				return
+			}
+			ui.Error("%s", err)
 			ui.EndTimeline()
-			os.Exit(0)
-		}
-		ui.Error("%s", err)
-		ui.EndTimeline()
+		}),
+	)
+	if err != nil {
 		os.Exit(1)
 	}
 }
