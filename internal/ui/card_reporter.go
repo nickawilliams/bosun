@@ -2,116 +2,99 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
-
-	"charm.land/lipgloss/v2"
 )
 
-// cardReporter is the default Reporter implementation. For v1 it
-// faithfully reproduces the legacy rendering from output.go, steps.go,
-// and spinner.go so there is zero visual change when the delegation
-// wiring lands. A future version will route through the Card timeline
-// primitives.
+// cardReporter is the default Reporter implementation. It renders
+// through the Card timeline so all output participates in the
+// vertical glyph spine with consistent spacing and alignment.
 type cardReporter struct{}
 
 func newCardReporter() Reporter { return &cardReporter{} }
 
-// Header reproduces the ● command context format from output.go:78-84.
+// Header emits a CardRoot that opens the timeline for a command run.
 func (r *cardReporter) Header(command string, context ...string) {
-	parts := []string{boldStyle.Render(command)}
-	for _, c := range context {
-		parts = append(parts, primaryStyle.Render(c))
+	card := NewCard(CardRoot, command)
+	if len(context) > 0 {
+		card.Subtitle(strings.Join(context, " · "))
 	}
-	symbol := lipgloss.NewStyle().Foreground(Palette.Accent).Render("●")
-	fmt.Printf("\n%s %s\n\n", symbol, strings.Join(parts, " "))
+	card.Print()
 }
 
-// Complete reproduces steps.go:18-19.
+// Complete emits a CardSuccess for a finished step.
 func (r *cardReporter) Complete(label string) {
-	fmt.Printf("  %s %s\n", stepCheckStyle.Render(Palette.Check), label)
+	NewCard(CardSuccess, label).Print()
 }
 
-// CompleteDetail reproduces steps.go:23-27.
+// CompleteDetail emits a CardSuccess with indented detail items.
 func (r *cardReporter) CompleteDetail(label string, items []string) {
-	r.Complete(label)
-	for _, item := range items {
-		fmt.Printf("      %s %s\n", stepArrowStyle.Render(Palette.Arrow), stepItemStyle.Render(item))
-	}
+	NewCard(CardSuccess, label).Muted(items...).Print()
 }
 
-// Skip reproduces steps.go:31-32.
+// Skip emits a CardSkipped for a step that was not attempted.
 func (r *cardReporter) Skip(label string) {
-	fmt.Printf("  %s %s\n", stepSkipStyle.Render("!"), label)
+	NewCard(CardSkipped, label).Print()
 }
 
-// Fail reproduces steps.go:36-37.
+// Fail emits a CardFailed for a step that errored.
 func (r *cardReporter) Fail(label string) {
-	fmt.Printf("  %s %s\n", stepFailStyle.Render(Palette.Cross), label)
+	NewCard(CardFailed, label).Print()
 }
 
-// Success reproduces output.go:21-23.
+// Success emits a CardSuccess with the formatted message as title.
 func (r *cardReporter) Success(format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	fmt.Println(successStyle.Render(Palette.Check) + " " + text)
+	NewCard(CardSuccess, fmt.Sprintf(format, args...)).Print()
 }
 
-// Warning reproduces output.go:33-35 (writes to stderr).
+// Warning emits a CardSkipped (warning glyph) for cautionary messages.
 func (r *cardReporter) Warning(format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	fmt.Fprintln(os.Stderr, warningStyle.Render("!")+" "+text)
+	NewCard(CardSkipped, fmt.Sprintf(format, args...)).Print()
 }
 
-// Info reproduces output.go:39-41.
+// Info emits a CardInfo with the formatted message as title.
 func (r *cardReporter) Info(format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	fmt.Println(primaryStyle.Render(Palette.Bullet) + " " + text)
+	NewCard(CardInfo, fmt.Sprintf(format, args...)).Print()
 }
 
-// Muted reproduces output.go:45-47.
+// Muted prints dimmed text in the timeline without a glyph.
 func (r *cardReporter) Muted(format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
-	fmt.Println(mutedStyle.Render(text))
+	fmt.Print(comfyPrefix())
+	fmt.Printf(" %s  %s\n", NewCard(CardInfo, "").renderConnector(), mutedStyle.Render(text))
 }
 
-// DryRun reproduces output.go:88-91.
+// DryRun emits a CardInfo with a dry-run prefix.
 func (r *cardReporter) DryRun(format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
-	prefix := warningStyle.Render("[dry-run]")
-	fmt.Printf("%s %s\n", prefix, text)
+	NewCard(CardInfo, fmt.Sprintf("[dry-run] %s", text)).Print()
 }
 
-// Saved reproduces output.go:66-73.
+// Saved emits a CardSuccess with the label as title and value as
+// muted detail beneath it.
 func (r *cardReporter) Saved(label, value string) {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	fmt.Printf("  %s %s\n    %s\n",
-		stepCheckStyle.Render(Palette.Check),
-		titleStyle.Render(label),
-		valueStyle.Render(value),
-	)
+	NewCard(CardSuccess, label).Muted(value).Print()
 }
 
-// Task reproduces spinner.go:75-93 (the non-card bubbletea spinner).
+// Task runs fn while showing a spinner card, then finalizes as
+// success or failure.
 func (r *cardReporter) Task(title string, fn func() error) error {
-	return withSpinner(title, fn)
+	return RunCard(title, fn)
 }
 
-// Details renders key-value pairs. An empty heading produces a bare
-// KV block matching the legacy ui.NewKV() output; a non-empty heading
-// renders the heading as an Info line above the block.
+// Details emits a CardInfo with key-value pairs as body. An empty
+// heading produces a bare KV block without a card title.
 func (r *cardReporter) Details(heading string, fields Fields) {
-	if heading != "" {
-		r.Info("%s", heading)
-	}
-	kv := NewKV()
+	pairs := make([]string, 0, len(fields)*2)
 	for _, f := range fields {
-		kv.Add(f.Key, f.Value)
+		pairs = append(pairs, f.Key, f.Value)
 	}
-	kv.Print()
+	if heading == "" {
+		heading = "Details"
+	}
+	NewCard(CardInfo, heading).KV(pairs...).Print()
 }
 
-// Table returns a new table builder, same as ui.NewTable.
+// Table returns a new table builder.
 func (r *cardReporter) Table(columns ...Column) *Table {
 	return NewTable(columns...)
 }

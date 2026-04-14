@@ -58,3 +58,6 @@ func Header(command string, context ...string) { defaultReporter.Header(command,
 
 // DryRun prints a dry-run prefixed message.
 func DryRun(msg string, args ...any) { defaultReporter.DryRun(msg, args...) }
+
+// Details prints a block of key-value pairs with an optional heading.
+func Details(heading string, fields Fields) { defaultReporter.Details(heading, fields) }
