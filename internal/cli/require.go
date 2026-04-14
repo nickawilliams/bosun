@@ -114,9 +114,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		}
 		os.Setenv(ck.EnvVar, val)
 		viper.Set(fk, val)
-		ui.NewCard(ui.CardSuccess, ck.Label).
-			Text("(set for this session)").
-			Print()
+		ui.Saved(ck.Label, "(set for this session)")
 		return nil
 	}
 
@@ -151,20 +149,18 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		viper.Set(fk, val)
-		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Could not save %s: %v", fk, err)).Print()
+		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
 		return nil
 	}
 
 	if err := setConfigValue(configPath, fk, val); err != nil {
 		viper.Set(fk, val)
-		ui.NewCard(ui.CardSkipped, fmt.Sprintf("Could not save %s: %v", fk, err)).Print()
+		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
 		return nil
 	}
 
 	viper.Set(fk, val)
-	ui.NewCard(ui.CardSuccess, ck.Label).
-		Text(val).
-		Print()
+	ui.Saved(ck.Label, val)
 
 	return nil
 }

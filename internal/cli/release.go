@@ -39,17 +39,15 @@ func newReleaseCmd() *cobra.Command {
 					}
 					rewind()
 					if !confirmed {
-						ui.NewCard(ui.CardSkipped, "Run migrations first, then use --migrations-done").Print()
+						ui.Skip("Run migrations first, then use --migrations-done")
 						return nil
 					}
-					ui.NewCard(ui.CardSuccess, "Migrations confirmed").Print()
+					ui.Complete("Migrations confirmed")
 				} else {
 					return fmt.Errorf("use --migrations-done to confirm migrations have been run")
 				}
 			} else {
-				ui.NewCard(ui.CardSuccess, "Migrations confirmed").
-					Muted("--migrations-done").
-					Print()
+				ui.Saved("Migrations confirmed", "--migrations-done")
 			}
 
 			// --- Plan + Apply ---

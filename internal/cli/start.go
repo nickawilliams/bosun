@@ -55,7 +55,7 @@ func newStartCmd() *cobra.Command {
 			if detail.Key != "" {
 				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
 				if err != nil {
-					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Branch naming: %v (using %s)", err, issue)).Print()
+					ui.Skip(fmt.Sprintf("Branch naming: %v (using %s)", err, issue))
 				} else {
 					branchName = name
 				}
@@ -86,13 +86,11 @@ func newStartCmd() *cobra.Command {
 				rewind()
 
 				if len(selected) == 0 {
-					ui.NewCard(ui.CardSkipped, "No repos selected").Print()
+					ui.Skip("No repos selected")
 					return nil
 				}
 
-				ui.NewCard(ui.CardSuccess, "Repos").
-					Text(selected...).
-					Print()
+				ui.CompleteWithDetail("Repos", selected)
 
 				repos, err = resolveRepos(selected)
 				if err != nil {

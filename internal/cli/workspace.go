@@ -50,10 +50,11 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
-				ui.NewCard(ui.CardInfo, "Would create workspace").
-					Subtitle("dry-run").
-					Text(fmt.Sprintf("repos: %v, from-head: %v", repoNames, fromHead)).
-					Print()
+				ui.DryRun("Would create workspace")
+				ui.Details("", ui.NewFields(
+					"Repos", fmt.Sprintf("%v", repoNames),
+					"From HEAD", fmt.Sprintf("%v", fromHead),
+				))
 				return nil
 			}
 
@@ -96,10 +97,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
-				ui.NewCard(ui.CardInfo, "Would add repos").
-					Subtitle("dry-run").
-					Text(fmt.Sprintf("%v", repoNames)).
-					Print()
+				ui.DryRun("Would add repos: %v", repoNames)
 				return nil
 			}
 
@@ -149,20 +147,16 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			}
 
 			if len(statuses) == 0 {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("No repos found in workspace %q", name)).Print()
+				ui.Skip(fmt.Sprintf("No repos found in workspace %q", name))
 				return nil
 			}
 
 			for _, s := range statuses {
-				state := ui.CardSuccess
-				statusText := "clean"
 				if s.Dirty {
-					state = ui.CardSkipped
-					statusText = "dirty"
+					ui.Skip(fmt.Sprintf("%s: %s · dirty", s.Name, s.Branch))
+				} else {
+					ui.Complete(fmt.Sprintf("%s: %s · clean", s.Name, s.Branch))
 				}
-				ui.NewCard(state, s.Name).
-					Muted(fmt.Sprintf("%s · %s", s.Branch, statusText)).
-					Print()
 			}
 
 			return nil
@@ -186,10 +180,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				ui.NewCard(ui.CardInfo, "Would remove workspace").
-					Subtitle("dry-run").
-					Text(fmt.Sprintf("force: %v", force)).
-					Print()
+				ui.DryRun("Would remove workspace (force: %v)", force)
 				return nil
 			}
 

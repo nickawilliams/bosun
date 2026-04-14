@@ -107,13 +107,11 @@ func newCreateCmd() *cobra.Command {
 
 			// Show created issue details.
 			if created.Key != "" {
-				ui.NewCard(ui.CardSuccess, created.Key).
-					KV(
-						"Title", created.Title,
-						"Status", created.Status,
-						"URL", created.URL,
-					).
-					Print()
+				ui.Details(created.Key, ui.NewFields(
+					"Title", created.Title,
+					"Status", created.Status,
+					"URL", created.URL,
+				))
 			}
 
 			return nil

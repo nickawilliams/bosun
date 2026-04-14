@@ -53,7 +53,7 @@ func newReviewCmd() *cobra.Command {
 					detail, e = tracker.GetIssue(ctx, issue)
 					return e
 				}); err != nil {
-					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue details: %v", err)).Print()
+					ui.Skip(fmt.Sprintf("Issue details: %v", err))
 				}
 			}
 
@@ -65,7 +65,7 @@ func newReviewCmd() *cobra.Command {
 
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
+				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
 			// Per-repo resolution.
@@ -76,13 +76,13 @@ func newReviewCmd() *cobra.Command {
 				for _, r := range repos {
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
 					if err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err))
 						continue
 					}
 
 					identity, err := gh.ParseRemote(ctx, r.Path)
 					if err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
 						continue
 					}
 

@@ -53,27 +53,25 @@ func newStatusCmd() *cobra.Command {
 
 			// Issue details.
 			if trackerErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Issue tracker: %v", trackerErr)).Print()
+				ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
 			} else if fetchErr != nil {
-				ui.NewCard(ui.CardFailed, fmt.Sprintf("Issue tracker: %v", fetchErr)).Print()
+				ui.Fail(fmt.Sprintf("Issue tracker: %v", fetchErr))
 			} else {
-				ui.NewCard(ui.CardInfo, detail.Key).
-					KV(
-						"Title", detail.Title,
-						"Status", detail.Status,
-						"Type", detail.Type,
-						"URL", detail.URL,
-					).
-					Print()
+				ui.Details(detail.Key, ui.NewFields(
+					"Title", detail.Title,
+					"Status", detail.Status,
+					"Type", detail.Type,
+					"URL", detail.URL,
+				))
 			}
 
 			// Repo branch status.
 			if repoErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Repos: %v", repoErr)).Print()
+				ui.Skip(fmt.Sprintf("Repos: %v", repoErr))
 			} else if len(repoStatuses) == 0 {
-				ui.NewCard(ui.CardSkipped, "No branches found for "+issue).Print()
+				ui.Skip("No branches found for " + issue)
 			} else {
-				var lines []string
+				fields := make(ui.Fields, 0, len(repoStatuses))
 				for _, s := range repoStatuses {
 					status := "clean"
 					if s.dirty {
@@ -82,33 +80,35 @@ func newStatusCmd() *cobra.Command {
 					if !s.current {
 						status = "not checked out"
 					}
-					lines = append(lines, fmt.Sprintf("%-12s %s · %s", s.name, s.branch, status))
+					fields = append(fields, ui.Field{
+						Key:   s.name,
+						Value: s.branch + " · " + status,
+					})
 				}
-				ui.NewCard(ui.CardInfo, "Repos").
-					Text(lines...).
-					Print()
+				ui.Details("Repos", fields)
 			}
 
 			// PR status from code host.
 			if repoErr == nil && len(repoStatuses) > 0 {
 				host, hostErr := newCodeHost()
 				if hostErr != nil {
-					ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
+					ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 				} else {
 					prStatuses := collectPRStatus(ctx, host, repoStatuses, repos)
 					if len(prStatuses) > 0 {
-						var lines []string
+						fields := make(ui.Fields, 0, len(prStatuses))
 						for _, ps := range prStatuses {
-							line := fmt.Sprintf("%-12s #%-4d %s", ps.repoName, ps.pr.Number, ps.pr.State)
+							value := fmt.Sprintf("#%d %s", ps.pr.Number, ps.pr.State)
 							if ps.pr.Review != "" {
-								line += " · " + ps.pr.Review
+								value += " · " + ps.pr.Review
 							}
-							lines = append(lines, line)
-							lines = append(lines, fmt.Sprintf("%-12s %s", "", ps.pr.URL))
+							value += "\n" + ps.pr.URL
+							fields = append(fields, ui.Field{
+								Key:   ps.repoName,
+								Value: value,
+							})
 						}
-						ui.NewCard(ui.CardInfo, "Pull Requests").
-							Text(lines...).
-							Print()
+						ui.Details("Pull Requests", fields)
 					}
 				}
 			}

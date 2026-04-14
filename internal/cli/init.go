@@ -61,9 +61,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if len(repoGlobs) == 0 && !noDetect {
 		if repos := detectRepos(cwd); len(repos) > 0 {
 			detectedGlob = "./*"
-			ui.NewCard(ui.CardInfo, "Detected repos").
-				Text(repos...).
-				Print()
+			ui.CompleteWithDetail("Detected repos", repos)
 		}
 	}
 
@@ -130,14 +128,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if isDryRun(cmd) {
-		ui.NewCard(ui.CardInfo, "Would initialize bosun project").
-			Subtitle("dry-run").
-			KV(
-				"Config", ".bosun/config.yaml",
-				"Repos", strings.Join(repoGlobs, ", "),
-				"Workspace root", wsRoot,
-			).
-			Print()
+		ui.DryRun("Would initialize bosun project")
+		ui.Details("", ui.NewFields(
+			"Config", ".bosun/config.yaml",
+			"Repos", strings.Join(repoGlobs, ", "),
+			"Workspace root", wsRoot,
+		))
 		return nil
 	}
 
@@ -156,20 +152,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if repoDisplay == "" {
 		repoDisplay = "(none — add repo patterns to .bosun/config.yaml)"
 	}
-	ui.NewCard(ui.CardSuccess, "Initialized bosun project").
-		KV(
-			"Config", configPath,
-			"Repos", repoDisplay,
-			"Workspace root", wsRoot,
-		).
-		Print()
+	ui.Details("Initialized bosun project", ui.NewFields(
+		"Config", configPath,
+		"Repos", repoDisplay,
+		"Workspace root", wsRoot,
+	))
 
-	ui.NewCard(ui.CardInfo, "Next steps").
-		Muted(
-			"Edit .bosun/config.yaml to configure Jira, Slack, etc.",
-			"Run: bosun start --issue <issue>",
-		).
-		Print()
+	ui.Info("Next steps")
+	ui.Muted("Edit .bosun/config.yaml to configure Jira, Slack, etc.")
+	ui.Muted("Run: bosun start --issue <issue>")
 
 	return nil
 }

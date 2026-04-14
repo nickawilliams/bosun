@@ -227,13 +227,13 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 	}
 
 	if !strings.EqualFold(current.Status, expectedStatus) {
-		ui.Warning("Issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus)
+		ui.Skip(fmt.Sprintf("Issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus))
 		if isInteractive() {
 			if !promptConfirm("Proceed anyway?", false) {
 				return fmt.Errorf("aborted: unexpected issue status")
 			}
 		} else {
-			ui.Warning("Proceeding (non-interactive mode)")
+			ui.Skip("Proceeding (non-interactive mode)")
 		}
 	}
 

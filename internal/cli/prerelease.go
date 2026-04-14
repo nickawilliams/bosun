@@ -46,7 +46,7 @@ func newPrereleaseCmd() *cobra.Command {
 
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
-				ui.NewCard(ui.CardSkipped, fmt.Sprintf("Code host: %v", hostErr)).Print()
+				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
 			g := git.New()
@@ -56,13 +56,13 @@ func newPrereleaseCmd() *cobra.Command {
 				for _, r := range repos {
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
 					if err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err))
 						continue
 					}
 
 					identity, err := gh.ParseRemote(ctx, r.Path)
 					if err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
 						continue
 					}
 
@@ -72,13 +72,13 @@ func newPrereleaseCmd() *cobra.Command {
 						currentTag, e = host.GetLatestTag(ctx, identity.Owner, identity.Name)
 						return e
 					}); err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
 						continue
 					}
 
 					nextVersion, err := code.DeriveNextVersion(currentTag, bump)
 					if err != nil {
-						ui.NewCard(ui.CardFailed, fmt.Sprintf("%s: %v", r.Name, err)).Print()
+						ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
 						continue
 					}
 
