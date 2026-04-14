@@ -26,7 +26,12 @@ func NewRootCmd(version string) *cobra.Command {
 				return err
 			}
 			ui.ApplyColorMode(viper.GetString("color_mode"))
+			ui.ApplyDisplayMode(viper.GetString("display_mode"))
+			ui.BeginTimeline()
 			return nil
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			ui.EndTimeline()
 		},
 	}
 
@@ -50,7 +55,6 @@ func NewRootCmd(version string) *cobra.Command {
 
 	// Lifecycle commands — ordered by lifecycle stage.
 	lifecycle := []*cobra.Command{
-		newInitCmd(),
 		newCreateCmd(),
 		newStartCmd(),
 		newReviewCmd(),
@@ -68,6 +72,7 @@ func NewRootCmd(version string) *cobra.Command {
 	utility := []*cobra.Command{
 		newConfigCmd(),
 		newDoctorCmd(),
+		newInitCmd(),
 		newStatusCmd(),
 		newWorkspaceCmd(),
 	}
