@@ -19,9 +19,8 @@ var (
 func main() {
 	cmd := cli.NewRootCmd()
 
-	err := fang.Execute(context.Background(), cmd,
+	opts := []fang.Option{
 		fang.WithVersion(version),
-		fang.WithCommit(commit),
 		fang.WithColorSchemeFunc(cli.FangColorScheme),
 		fang.WithoutManpage(),
 		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
@@ -34,8 +33,9 @@ func main() {
 			ui.Error("%s", err)
 			ui.EndTimeline()
 		}),
-	)
-	if err != nil {
+	}
+
+	if err := fang.Execute(context.Background(), cmd, opts...); err != nil {
 		os.Exit(1)
 	}
 }
