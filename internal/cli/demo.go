@@ -103,7 +103,7 @@ func newDemoCmd() *cobra.Command {
 			confirmTitle := "Create workspace now?"
 			rewind = ui.NewCard(ui.CardInput, confirmTitle).Tight().PrintRewindable()
 			if err := runForm(
-				huh.NewConfirm().
+				newConfirm().
 					Affirmative("Yes").
 					Negative("No").
 					Value(&confirmed),

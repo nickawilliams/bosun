@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 
-	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +48,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 
 	var confirmed bool
 	err := runForm(
-		huh.NewConfirm().
+		newConfirm().
 			Title(plan.RenderItems()).
 			Affirmative("Apply").
 			Negative("Cancel").

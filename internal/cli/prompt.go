@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"golang.org/x/term"
 )
@@ -41,6 +42,11 @@ func runForm(fields ...huh.Field) error {
 	return err
 }
 
+// newConfirm creates a huh Confirm field with app defaults (left-aligned buttons).
+func newConfirm() *huh.Confirm {
+	return huh.NewConfirm().WithButtonAlignment(lipgloss.Left)
+}
+
 // promptRequired prompts for a value if stdin is a terminal. If stdin is not
 // a terminal (piped/scripted), returns empty string and the caller should
 // error.
@@ -65,7 +71,7 @@ func promptConfirm(label string, defaultVal bool) bool {
 
 	confirmed := defaultVal
 	err := runForm(
-		huh.NewConfirm().
+		newConfirm().
 			Title(label).
 			Affirmative("Yes").
 			Negative("No").

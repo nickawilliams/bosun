@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 
-	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -31,7 +30,7 @@ func newReleaseCmd() *cobra.Command {
 					var confirmed bool
 					rewind := ui.NewCard(ui.CardInput, "Have any required database migrations been run?").Tight().PrintRewindable()
 					if err := runForm(
-						huh.NewConfirm().
+						newConfirm().
 							Affirmative("Yes").
 							Negative("No").
 							Value(&confirmed),
