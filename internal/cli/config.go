@@ -416,6 +416,9 @@ func newConfigGetCmd() *cobra.Command {
 		Use:   "get <key>",
 		Short: "Get a configuration value",
 		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"output": "raw",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 			val := viper.Get(key)

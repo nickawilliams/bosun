@@ -23,8 +23,9 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 			ui.ApplyColorMode(viper.GetString("color_mode"))
-			// Machine-readable output flags suppress timeline chrome.
-			if f := cmd.Flag("output"); f != nil && f.Value.String() != "" {
+			// Machine-readable commands suppress timeline chrome.
+			if cmd.Annotations["output"] == "raw" ||
+				(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != "") {
 				ui.ApplyDisplayMode("compact")
 			} else {
 				ui.ApplyDisplayMode(viper.GetString("display_mode"))
