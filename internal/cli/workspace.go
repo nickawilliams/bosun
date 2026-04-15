@@ -40,7 +40,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Use:   "create <name> <repos...>",
 		Short: "Create a new workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "create workspace",
+			headerAnnotationTitle: "create",
 		},
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -84,7 +84,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 		Use:   "add [name] <repos...>",
 		Short: "Add repos to an existing workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "add repos",
+			headerAnnotationTitle: "add",
 		},
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -127,7 +127,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 		Use:   "status [name]",
 		Short: "Show workspace status",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "workspace status",
+			headerAnnotationTitle: "status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, err := resolveWorkspaceName(args)
@@ -169,7 +169,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 		Use:   "rm [name]",
 		Short: "Remove a workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "remove workspace",
+			headerAnnotationTitle: "remove",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, err := resolveWorkspaceName(args)

@@ -56,7 +56,7 @@ func newConfigShowCmd() *cobra.Command {
 		Short: "Display effective resolved configuration",
 		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
-			headerAnnotationTitle: "configuration",
+			headerAnnotationTitle: "show",
 		},
 		RunE: runConfigShow,
 	}
@@ -83,7 +83,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	// Human-readable tree display.
 	cs := loadConfigSources()
 
-	ui.NewCard(ui.CardRoot, "configuration").Tight().Print()
+	rootCard(cmd).Tight().Print()
 	tree := buildConfigTree(cs, sourceFilter, groupFilter)
 	tree.Print()
 
@@ -442,7 +442,7 @@ func newConfigCheckCmd() *cobra.Command {
 		Short: "Validate configuration completeness",
 		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
-			headerAnnotationTitle: "config check",
+			headerAnnotationTitle: "check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
