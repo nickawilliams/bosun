@@ -381,6 +381,7 @@ func RunCard(title string, fn func() error) error {
 		taskErr := <-resultCh
 		if taskErr != nil {
 			card.state = CardFailed
+			card.Subtitle(taskErr.Error())
 		} else {
 			card.state = CardSuccess
 		}
@@ -391,6 +392,7 @@ func RunCard(title string, fn func() error) error {
 	m := model.(cardSpinnerModel)
 	if m.err != nil {
 		card.state = CardFailed
+		card.Subtitle(m.err.Error())
 		card.Print()
 		return m.err
 	}
@@ -419,6 +421,7 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 		taskErr := <-resultCh
 		if taskErr != nil {
 			card.state = CardFailed
+			card.Subtitle(taskErr.Error())
 			card.Print()
 		} else {
 			successCard().Print()
@@ -429,6 +432,7 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	m := model.(cardSpinnerModel)
 	if m.err != nil {
 		card.state = CardFailed
+		card.Subtitle(m.err.Error())
 		card.Print()
 		return m.err
 	}

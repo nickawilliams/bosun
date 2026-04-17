@@ -8,7 +8,10 @@ import (
 	"regexp"
 	"strings"
 
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
@@ -47,8 +50,8 @@ func resolveIssue(cmd *cobra.Command) (string, error) {
 		return issue, nil
 	}
 
-	// (5) Interactive prompt (terminal only).
-	if issue := promptRequired("Issue"); issue != "" {
+	// (5) Interactive issue picker (terminal only).
+	if issue := pickOrPromptIssue(); issue != "" {
 		return issue, nil
 	}
 
@@ -109,6 +112,80 @@ func issueFromBranch() string {
 	}
 
 	return extractIssue(branch)
+}
+
+// manualEntry is the sentinel value used in the issue picker to
+// indicate the user wants to type an issue key manually.
+const manualEntry = "__manual__"
+
+// pickOrPromptIssue tries to show an interactive picker of assigned
+// issues. If the tracker is unavailable or the API call fails, falls
+// back to a free-text prompt. Returns empty string in non-interactive
+// mode.
+func pickOrPromptIssue() string {
+	if !isInteractive() {
+		return ""
+	}
+
+	// Try the picker first.
+	if picked := pickAssignedIssue(); picked != "" && picked != manualEntry {
+		return picked
+	}
+
+	// Manual entry fallback (chosen explicitly or picker unavailable).
+	return promptRequired("Issue")
+}
+
+// pickAssignedIssue fetches assigned issues and presents a select
+// picker. Returns the selected issue key, manualEntry if the user
+// chose to enter manually, or empty string if the picker could not
+// be shown.
+func pickAssignedIssue() string {
+	tracker, err := newIssueTracker()
+	if err != nil {
+		return ""
+	}
+
+	var issues []issuepkg.Issue
+	if err := ui.RunCard("Fetching assigned issues", func() error {
+		var fetchErr error
+		issues, fetchErr = tracker.ListIssues(context.Background(), issuepkg.ListQuery{
+			AssignedToMe: true,
+		})
+		return fetchErr
+	}); err != nil {
+		return ""
+	}
+
+	if len(issues) == 0 {
+		ui.Skip("No assigned issues found")
+		return ""
+	}
+
+	// Build select options.
+	opts := make([]huh.Option[string], len(issues)+1)
+	for i, iss := range issues {
+		label := fmt.Sprintf("%s  %s  (%s)", iss.Key, iss.Title, iss.Status)
+		opts[i] = huh.NewOption(label, iss.Key)
+	}
+	opts[len(issues)] = huh.NewOption("Enter manually...", manualEntry)
+
+	var selected string
+	rewind := ui.NewCard(ui.CardInput, "Select issue").Tight().PrintRewindable()
+	if err := runForm(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return ""
+	}
+	rewind()
+
+	if selected != "" && selected != manualEntry {
+		ui.Complete(selected)
+	}
+
+	return selected
 }
 
 // extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.

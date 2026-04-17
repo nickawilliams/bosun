@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/issue"
@@ -146,6 +147,74 @@ func (a *Adapter) SetStatus(ctx context.Context, issueKey, statusName string) er
 	resp2.Body.Close()
 
 	return nil
+}
+
+func (a *Adapter) ListIssues(ctx context.Context, query issue.ListQuery) ([]issue.Issue, error) {
+	jql := buildJQL(query)
+
+	maxResults := query.MaxResults
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+
+	path := fmt.Sprintf("/rest/api/3/search/jql?jql=%s&fields=summary,status,issuetype&maxResults=%d",
+		url.QueryEscape(jql), maxResults)
+
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("searching issues: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Issues []struct {
+			Key    string `json:"key"`
+			Fields struct {
+				Summary   string                 `json:"summary"`
+				Status    struct{ Name string }  `json:"status"`
+				IssueType struct{ Name string }  `json:"issuetype"`
+			} `json:"fields"`
+		} `json:"issues"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing search response: %w", err)
+	}
+
+	issues := make([]issue.Issue, len(result.Issues))
+	for i, r := range result.Issues {
+		issues[i] = issue.Issue{
+			Key:    r.Key,
+			Title:  r.Fields.Summary,
+			Status: r.Fields.Status.Name,
+			Type:   r.Fields.IssueType.Name,
+			URL:    a.baseURL + "/browse/" + r.Key,
+		}
+	}
+	return issues, nil
+}
+
+// buildJQL assembles a JQL query string from the given ListQuery filters.
+func buildJQL(query issue.ListQuery) string {
+	clauses := []string{"resolution = Unresolved"}
+
+	if query.AssignedToMe {
+		clauses = append(clauses, "assignee = currentUser()")
+	}
+	if len(query.Statuses) > 0 {
+		quoted := make([]string, len(query.Statuses))
+		for i, s := range query.Statuses {
+			quoted[i] = fmt.Sprintf("%q", s)
+		}
+		clauses = append(clauses, "status IN ("+strings.Join(quoted, ", ")+")")
+	}
+	if query.Project != "" {
+		clauses = append(clauses, fmt.Sprintf("project = %q", query.Project))
+	}
+	if query.CurrentSprint {
+		clauses = append(clauses, "sprint IN openSprints()")
+	}
+
+	return strings.Join(clauses, " AND ") + " ORDER BY updated DESC"
 }
 
 // doRequest executes an authenticated request against the Jira API.

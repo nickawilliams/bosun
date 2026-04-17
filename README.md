@@ -146,3 +146,9 @@ bosun start --issue PROJ-123 --dry-run  # shows plan, exits
 - [x] Multi-select repo picker for `start` command
 - [x] `RunCardReplace` for in-place card updates (e.g., spinner → result)
 - [x] Schema-driven config forms (select, text, secret inputs)
+
+### Additional: Issue Picker
+
+- [ ] `ListAssignedIssues()` on `issue.Tracker` interface (Jira: `assignee = currentUser()` JQL)
+- [ ] Interactive issue picker in `resolveIssue()` fallback (replaces free-text prompt)
+- [ ] Free-text escape hatch for unassigned issues
