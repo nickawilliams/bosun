@@ -195,8 +195,7 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	gap := "  "
 	if c.state == CardRoot {
 		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		title := titleCase(c.title)
-		rendered := titleStyle.Render(title)
+		rendered := renderBreadcrumbTitle(c.title)
 		// Title visible width (without ANSI).
 		titleWidth := lipgloss.Width(rendered)
 		// Available width: terminal minus pad(1) + glyph(1) + pre-dash(1) + space(1) + title + space(1).
@@ -452,4 +451,29 @@ func titleCase(s string) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+// renderBreadcrumbTitle renders a breadcrumb title (segments joined
+// by " › ") with the first segment in Secondary and the rest in
+// Primary. Non-breadcrumb titles render entirely in Primary.
+func renderBreadcrumbTitle(title string) string {
+	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	secondaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
+	sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
+
+	segments := strings.Split(title, " › ")
+	if len(segments) <= 1 {
+		return primaryStyle.Render(titleCase(title))
+	}
+
+	styled := make([]string, len(segments))
+	for i, seg := range segments {
+		tc := titleCase(seg)
+		if i == 0 {
+			styled[i] = secondaryStyle.Render(tc)
+		} else {
+			styled[i] = primaryStyle.Render(tc)
+		}
+	}
+	return strings.Join(styled, sepStyle.Render(" › "))
 }

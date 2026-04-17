@@ -15,8 +15,9 @@ import (
 // derives its colors from this struct.
 type palette struct {
 	// Semantic colors.
-	Primary  color.Color // Titles, headings
-	Accent   color.Color // Selectors, prompts, interactive elements
+	Primary   color.Color // Titles, headings
+	Secondary color.Color // Breadcrumb root, secondary headings
+	Accent    color.Color // Selectors, prompts, interactive elements
 	Success  color.Color // Confirmations, selected items
 	Error    color.Color // Errors, validation failures
 	Warning  color.Color // Caution, dry-run indicators
@@ -127,8 +128,9 @@ func comfyPrefix() string {
 
 func defaultPalette() palette {
 	return palette{
-		Primary:  lipgloss.Color("#7571F9"), // Indigo
-		Accent:   lipgloss.Color("#F780E2"), // Fuchsia
+		Primary:   lipgloss.Color("#7571F9"), // Indigo
+		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
+		Accent:    lipgloss.Color("#F780E2"), // Fuchsia
 		Success:  lipgloss.Color("#02BF87"), // Green
 		Error:    lipgloss.Color("#ED567A"), // Red
 		Warning:  lipgloss.Color("#FFA500"), // Orange
@@ -149,8 +151,9 @@ func defaultPalette() palette {
 
 func ansiPalette() palette {
 	return palette{
-		Primary:  lipgloss.BrightBlue,
-		Accent:   lipgloss.BrightMagenta,
+		Primary:   lipgloss.BrightBlue,
+		Secondary: lipgloss.Blue,
+		Accent:    lipgloss.BrightMagenta,
 		Success:  lipgloss.Green,
 		Error:    lipgloss.Red,
 		Warning:  lipgloss.Yellow,
@@ -168,7 +171,7 @@ func ansiPalette() palette {
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
 	return palette{
-		Primary: nc, Accent: nc, Success: nc, Error: nc, Warning: nc,
+		Primary: nc, Secondary: nc, Accent: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 
