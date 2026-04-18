@@ -22,15 +22,18 @@ var (
 )
 
 // buildBranchName generates a branch name from the configured pattern,
-// the issue type (from the tracker), and the issue title.
-func buildBranchName(issueKey, issueType, issueTitle string) (string, error) {
+// the issue type (from the tracker), and the issue title. When slug is
+// non-empty it is used directly; otherwise one is derived from the title.
+func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, error) {
 	pattern := viper.GetString("branch.pattern")
 	if pattern == "" {
 		pattern = defaultPattern
 	}
 
 	category := resolveCategory(issueType)
-	slug := slugify(issueTitle)
+	if slug == "" {
+		slug = slugify(issueTitle)
+	}
 
 	tmpl, err := template.New("branch").Parse(pattern)
 	if err != nil {

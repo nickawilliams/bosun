@@ -6,6 +6,40 @@ directs the crew and signals state changes.
 
 See [DESIGN.md](DESIGN.md) for the full design document.
 
+## Lifecycle Commands
+
+- [x] **create** — Create a new issue
+  - [x] Issue Tracker: Create issue with given attributes
+- [x] **start** — Begin work on an issue
+  - [x] VCS: Create branch with naming from issue metadata
+  - [x] Workspace: Create worktrees under workspace root
+  - [x] Issue Tracker: Transition to `In Progress`
+- [ ] **review** — Submit for code review
+  - [x] Code Host: Create pull request(s) per repo with changes
+  - [ ] Notification: Notify review channel with PR + issue URLs
+  - [x] Issue Tracker: Transition to `Review`
+- [ ] **preview** — Deploy to preview environment
+  - [ ] CI/CD: Trigger ephemeral environment deployment
+  - [ ] Notification: Reply to review thread with preview URL
+  - [x] Issue Tracker: Transition to `In Preview Env`
+- [ ] **prerelease** — Prepare release artifacts
+  - [x] Code Host: Create release/tag per repo (version from latest tag + `--bump`)
+  - [ ] Notification: Notify release channel with release details
+  - [x] Issue Tracker: Transition to `Ready for Release`
+- [ ] **release** — Deploy to production
+  - [x] Pre-flight: Database migration confirmation
+  - [ ] CI/CD: Trigger production deployment workflow
+  - [x] Issue Tracker: Transition to `Done`
+- [x] **cleanup** — Remove workspace and feature branches
+  - [x] Workspace: Remove worktrees for all repos
+  - [x] VCS: Delete local and remote feature branches
+- [ ] **status** — Show issue lifecycle status
+  - [x] Issue Tracker: Issue details + status
+  - [x] VCS: Branch status per repo
+  - [x] Code Host: PR status and review state per repo
+  - [ ] CI/CD: Last build/deploy status
+  - [ ] Ephemeral: Preview environment status + URL
+
 ## Implementation Plan
 
 ### Phase 1: Skeleton + Config

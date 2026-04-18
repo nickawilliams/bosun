@@ -440,6 +440,56 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	return nil
 }
 
+// RunCardRewindable works like RunCard but on success, prints the
+// final card via PrintRewindable and returns the rewind function. The
+// rewind erases both the comfy prefix emitted before the spinner and
+// the success card, restoring the terminal to its pre-call state.
+// On failure the card is printed normally and a nil rewind is returned.
+func RunCardRewindable(title string, fn func() error) (func(), error) {
+	card := NewCard(CardRunning, title)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- fn()
+	}()
+
+	prevComfy := comfyBreak
+	prefix := comfyPrefix()
+	fmt.Print(prefix)
+
+	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
+	model, err := p.Run()
+
+	// Determine the task result regardless of how BubbleTea exited.
+	var taskErr error
+	if err != nil {
+		taskErr = <-resultCh
+	} else {
+		taskErr = model.(cardSpinnerModel).err
+	}
+
+	if taskErr != nil {
+		card.state = CardFailed
+		card.Subtitle(taskErr.Error())
+		card.Print()
+		return nil, taskErr
+	}
+
+	card.state = CardSuccess
+	rendered := comfyPrefix() + card.Render()
+	fmt.Print(rendered)
+	totalLines := strings.Count(prefix+rendered, "\n")
+	if !card.tight {
+		comfyBreak = true
+	}
+	return func() {
+		if totalLines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
+		}
+		comfyBreak = prevComfy
+	}, nil
+}
+
 // titleCase capitalizes the first letter of each word while
 // preserving words that already contain uppercase letters (e.g.
 // acronyms like "UI" or "API"). Only fully-lowercase words get

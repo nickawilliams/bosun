@@ -19,6 +19,7 @@ func TestBuildBranchName(t *testing.T) {
 		issueKey  string
 		issueType string
 		title     string
+		slug      string
 		want      string
 	}{
 		{
@@ -49,11 +50,27 @@ func TestBuildBranchName(t *testing.T) {
 			title:     "Add API endpoint for /users (v2)",
 			want:      "feature/CS-42_add-api-endpoint-for-users-v2",
 		},
+		{
+			name:      "custom slug overrides auto-generated",
+			issueKey:  "PROJ-123",
+			issueType: "Story",
+			title:     "Add widget endpoint",
+			slug:      "my-custom-slug",
+			want:      "feature/PROJ-123_my-custom-slug",
+		},
+		{
+			name:      "empty slug falls back to auto-generated",
+			issueKey:  "PROJ-123",
+			issueType: "Story",
+			title:     "Add widget endpoint",
+			slug:      "",
+			want:      "feature/PROJ-123_add-widget-endpoint",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildBranchName(tt.issueKey, tt.issueType, tt.title)
+			got, err := buildBranchName(tt.issueKey, tt.issueType, tt.title, tt.slug)
 			if err != nil {
 				t.Fatalf("buildBranchName() error: %v", err)
 			}
@@ -70,7 +87,7 @@ func TestBuildBranchNameDefaultPattern(t *testing.T) {
 	viper.Set("branch.categories.story", "feature")
 	t.Cleanup(func() { viper.Reset() })
 
-	got, err := buildBranchName("PROJ-1", "Story", "Test")
+	got, err := buildBranchName("PROJ-1", "Story", "Test", "")
 	if err != nil {
 		t.Fatalf("buildBranchName() error: %v", err)
 	}

@@ -22,11 +22,11 @@ func newStartCmd() *cobra.Command {
 			headerAnnotationTitle: "start work",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rootCard(cmd).Print()
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
 
 			ctx := cmd.Context()
 			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
@@ -50,10 +50,36 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
+			// Resolve slug for branch naming.
+			slugOverride, _ := cmd.Flags().GetString("slug")
+			var slug string
+			if detail.Key != "" {
+				switch {
+				case slugOverride != "":
+					slug = slugify(slugOverride)
+				case isInteractive():
+					slug = slugify(detail.Title)
+					slugSlot := ui.NewSlot()
+					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch slug").Tight())
+					if err := runForm(
+						huh.NewInput().
+							Title("Slug").
+							Value(&slug),
+					); err != nil {
+						return err
+					}
+					slugSlot.Clear()
+					if slug != "" {
+						slug = slugify(slug)
+					}
+					ui.Complete(fmt.Sprintf("Branch slug: %s", slug))
+				}
+			}
+
 			// Build branch name.
 			branchName := issue
 			if detail.Key != "" {
-				name, err := buildBranchName(detail.Key, detail.Type, detail.Title)
+				name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
 				if err != nil {
 					ui.Skip(fmt.Sprintf("Branch naming: %v (using %s)", err, issue))
 				} else {
@@ -75,7 +101,8 @@ func newStartCmd() *cobra.Command {
 				}
 
 				var selected []string
-				rewind := ui.NewCard(ui.CardInput, "Repos").Tight().PrintRewindable()
+				repoSlot := ui.NewSlot()
+				repoSlot.Show(ui.NewCard(ui.CardInput, "Repos").Tight())
 				if err := runForm(
 					huh.NewMultiSelect[string]().
 						Options(opts...).
@@ -83,7 +110,7 @@ func newStartCmd() *cobra.Command {
 				); err != nil {
 					return err
 				}
-				rewind()
+				repoSlot.Clear()
 
 				if len(selected) == 0 {
 					ui.Skip("No repos selected")
@@ -149,6 +176,7 @@ func newStartCmd() *cobra.Command {
 	}
 
 	addIssueFlag(cmd)
+	cmd.Flags().String("slug", "", "custom slug for branch name")
 	cmd.Flags().StringSlice("repo", nil, "filter repos to operate on")
 	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
 
