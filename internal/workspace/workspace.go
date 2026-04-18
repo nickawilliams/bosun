@@ -189,6 +189,55 @@ func (m *Manager) Remove(ctx context.Context, name string, repos []Repo, force b
 	return nil
 }
 
+// DetectWorkspace determines the workspace name from a path at or below a
+// workspace directory. It walks progressively longer prefixes of the relative
+// path from the workspace root, returning the first that contains worktree
+// subdirectories (directories with a .git entry).
+func (m *Manager) DetectWorkspace(currentPath string) (string, error) {
+	absRoot, err := filepath.Abs(m.workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(currentPath)
+	if err != nil {
+		return "", err
+	}
+
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("not inside a workspace under %s", absRoot)
+	}
+
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i := 1; i <= len(parts); i++ {
+		candidate := filepath.Join(parts[:i]...)
+		candidatePath := filepath.Join(absRoot, candidate)
+
+		if hasWorktreeChildren(candidatePath) {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("not inside a workspace under %s", absRoot)
+}
+
+// hasWorktreeChildren reports whether dir contains at least one subdirectory
+// with a .git entry (i.e. a git worktree).
+func hasWorktreeChildren(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if _, err := os.Stat(filepath.Join(dir, e.Name(), ".git")); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // DetectName attempts to determine the workspace name from a path within
 // a workspace. Walks up from the given path looking for the workspace root.
 func DetectName(workspaceRoot, currentPath string) (string, error) {

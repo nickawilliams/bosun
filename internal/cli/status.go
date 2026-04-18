@@ -3,13 +3,15 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
+	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -18,83 +20,54 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show issue lifecycle status",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "issue status",
+			headerAnnotationTitle: "status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, issue).Print()
+			rootCard(cmd).Print()
 
 			ctx := cmd.Context()
 
-			// --- Fetch phase ---
-
-			var detail issuepkg.Issue
-			var trackerErr, fetchErr error
-
+			// --- Issue details ---
 			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil {
-				fetchErr = ui.RunCard("Fetching issue", func() error {
+			var detail issuepkg.Issue
+			if trackerErr != nil {
+				ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
+			} else {
+				issueSlot := ui.NewSlot()
+				if err := issueSlot.Run("Fetching issue", func() error {
 					var e error
 					detail, e = tracker.GetIssue(ctx, issue)
 					return e
-				})
-			}
-
-			repos, repoErr := resolveRepos(nil)
-			var repoStatuses []repoStatus
-			if repoErr == nil {
-				repoStatuses = collectBranchStatus(ctx, issue, repos)
-			}
-
-			// --- Display phase ---
-
-			// Issue details.
-			if trackerErr != nil {
-				ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
-			} else if fetchErr != nil {
-				ui.Fail(fmt.Sprintf("Issue tracker: %v", fetchErr))
-			} else {
-				ui.Details(detail.Key, ui.NewFields(
-					"Title", detail.Title,
-					"Status", detail.Status,
-					"Type", detail.Type,
-					"URL", detail.URL,
-				))
-			}
-
-			// Repo branch status.
-			if repoErr != nil {
-				ui.Skip(fmt.Sprintf("Repos: %v", repoErr))
-			} else if len(repoStatuses) == 0 {
-				ui.Skip("No branches found for " + issue)
-			} else {
-				fields := make(ui.Fields, 0, len(repoStatuses))
-				for _, s := range repoStatuses {
-					status := "clean"
-					if s.dirty {
-						status = "dirty"
-					}
-					if !s.current {
-						status = "not checked out"
-					}
-					fields = append(fields, ui.Field{
-						Key:   s.name,
-						Value: s.branch + " · " + status,
-					})
+				}); err == nil {
+					issueSlot.Clear()
+					ui.NewCard(ui.CardInfo, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
+						Subtitle(detail.Title).
+						Text("").
+						KV("Status", detail.Status, "URL", detail.URL).
+						Print()
 				}
-				ui.Details("Repos", fields)
 			}
 
-			// PR status from code host.
-			if repoErr == nil && len(repoStatuses) > 0 {
+			// --- Repo branch status ---
+			repoStatuses := resolveRepoStatuses(ctx)
+
+			// --- PR status ---
+			if len(repoStatuses) > 0 {
 				host, hostErr := newCodeHost()
 				if hostErr != nil {
 					ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 				} else {
-					prStatuses := collectPRStatus(ctx, host, repoStatuses, repos)
+					var prStatuses []prStatus
+					prSlot := ui.NewSlot()
+					_ = prSlot.Run("Fetching pull requests", func() error {
+						prStatuses = collectPRStatus(ctx, host, repoStatuses)
+						return nil
+					})
+					prSlot.Clear()
 					if len(prStatuses) > 0 {
 						fields := make(ui.Fields, 0, len(prStatuses))
 						for _, ps := range prStatuses {
@@ -124,88 +97,85 @@ func newStatusCmd() *cobra.Command {
 	return cmd
 }
 
-type repoStatus struct {
-	name    string
-	branch  string
-	exists  bool
-	dirty   bool
-	current bool
-}
-
-// collectBranchStatus checks each repo for branches matching the issue key.
-func collectBranchStatus(ctx context.Context, issueKey string, repos []Repo) []repoStatus {
-	g := git.New()
-	var statuses []repoStatus
-
-	for _, r := range repos {
-		currentBranch, err := g.GetCurrentBranch(ctx, r.Path)
-		if err != nil {
-			continue
-		}
-
-		if strings.Contains(currentBranch, issueKey) {
-			dirty, _ := g.IsDirty(ctx, r.Path)
-			statuses = append(statuses, repoStatus{
-				name:    r.Name,
-				branch:  currentBranch,
-				exists:  true,
-				dirty:   dirty,
-				current: true,
-			})
-			continue
-		}
-
-		exists, _ := g.BranchExists(ctx, r.Path, issueKey)
-		if exists {
-			statuses = append(statuses, repoStatus{
-				name:    r.Name,
-				branch:  issueKey,
-				exists:  true,
-				current: false,
-			})
-		}
-	}
-
-	return statuses
-}
-
 type prStatus struct {
 	repoName string
 	pr       code.PullRequest
 }
 
-// collectPRStatus checks each repo for PRs matching the branch.
-func collectPRStatus(ctx context.Context, host code.Host, repoStatuses []repoStatus, repos []Repo) []prStatus {
+// resolveRepoStatuses determines repo branch status from the workspace (if
+// CWD is at or below one) or from the current git repo (single-repo mode).
+// Renders the Repos detail card and returns the statuses for downstream use.
+func resolveRepoStatuses(ctx context.Context) []workspace.RepoStatus {
+	// Try workspace mode first.
+	if mgr, err := newWorkspaceManager(); err == nil {
+		cwd, _ := os.Getwd()
+		if wsName, err := mgr.DetectWorkspace(cwd); err == nil {
+			statuses, err := mgr.Status(ctx, wsName)
+			if err != nil {
+				ui.Skip(fmt.Sprintf("Workspace status: %v", err))
+				return nil
+			}
+			if len(statuses) == 0 {
+				ui.Skip("No repos found in workspace " + wsName)
+				return nil
+			}
+			renderRepoStatuses(statuses)
+			return statuses
+		}
+		// Workspace configured but CWD is not inside one.
+		ui.Skip("Not inside a workspace")
+		return nil
+	}
+
+	// No workspace configured — single repo mode.
+	cwd, _ := os.Getwd()
+	g := git.New()
+	branch, err := g.GetCurrentBranch(ctx, cwd)
+	if err != nil {
+		return nil
+	}
+	dirty, _ := g.IsDirty(ctx, cwd)
+	statuses := []workspace.RepoStatus{{
+		Name:   filepath.Base(cwd),
+		Branch: branch,
+		Dirty:  dirty,
+		Path:   cwd,
+	}}
+	renderRepoStatuses(statuses)
+	return statuses
+}
+
+func renderRepoStatuses(statuses []workspace.RepoStatus) {
+	fields := make(ui.Fields, 0, len(statuses))
+	for _, s := range statuses {
+		status := "clean"
+		if s.Dirty {
+			status = "dirty"
+		}
+		fields = append(fields, ui.Field{
+			Key:   s.Name,
+			Value: s.Branch + " · " + status,
+		})
+	}
+	ui.Details("Repos", fields)
+}
+
+// collectPRStatus checks each repo for PRs matching its branch.
+func collectPRStatus(ctx context.Context, host code.Host, statuses []workspace.RepoStatus) []prStatus {
 	var results []prStatus
 
-	for _, s := range repoStatuses {
-		if !s.exists {
-			continue
-		}
-
-		// Find the repo path to parse the remote.
-		var repoPath string
-		for _, r := range repos {
-			if r.Name == s.name {
-				repoPath = r.Path
-				break
-			}
-		}
-		if repoPath == "" {
-			continue
-		}
-
-		identity, err := gh.ParseRemote(ctx, repoPath)
+	for _, s := range statuses {
+		identity, err := gh.ParseRemote(ctx, s.Path)
 		if err != nil {
 			continue
 		}
 
-		pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, s.branch)
+		pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, s.Branch)
 		if err != nil || pr.Number == 0 {
 			continue
 		}
 
-		results = append(results, prStatus{repoName: s.name, pr: pr})
+		results = append(results, prStatus{repoName: s.Name, pr: pr})
 	}
 
 	return results

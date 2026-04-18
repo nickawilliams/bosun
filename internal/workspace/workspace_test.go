@@ -161,6 +161,70 @@ func TestMissingRepo(t *testing.T) {
 	}
 }
 
+func TestDetectWorkspaceFromWorktree(t *testing.T) {
+	wsRoot, repos := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	mgr.Create(ctx, "feature/PROJ-123", repos, true)
+
+	wtPath := filepath.Join(wsRoot, "feature", "PROJ-123", "api")
+	name, err := mgr.DetectWorkspace(wtPath)
+	if err != nil {
+		t.Fatalf("DetectWorkspace() error: %v", err)
+	}
+	if name != filepath.Join("feature", "PROJ-123") {
+		t.Errorf("DetectWorkspace() = %q, want %q", name, "feature/PROJ-123")
+	}
+}
+
+func TestDetectWorkspaceFromRoot(t *testing.T) {
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	mgr.Create(ctx, "feature/PROJ-456", repos, true)
+
+	// At the workspace root itself (not inside a worktree).
+	wsPath := filepath.Join(wsRoot, "feature", "PROJ-456")
+	name, err := mgr.DetectWorkspace(wsPath)
+	if err != nil {
+		t.Fatalf("DetectWorkspace() from workspace root error: %v", err)
+	}
+	if name != filepath.Join("feature", "PROJ-456") {
+		t.Errorf("DetectWorkspace() = %q, want %q", name, "feature/PROJ-456")
+	}
+}
+
+func TestDetectWorkspaceFromSubdir(t *testing.T) {
+	wsRoot, repos := setupTestProject(t, "api")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	mgr.Create(ctx, "feature/PROJ-789", repos, true)
+
+	subdir := filepath.Join(wsRoot, "feature", "PROJ-789", "api", "src", "pkg")
+	os.MkdirAll(subdir, 0o755)
+
+	name, err := mgr.DetectWorkspace(subdir)
+	if err != nil {
+		t.Fatalf("DetectWorkspace() from subdirectory error: %v", err)
+	}
+	if name != filepath.Join("feature", "PROJ-789") {
+		t.Errorf("DetectWorkspace() = %q, want %q", name, "feature/PROJ-789")
+	}
+}
+
+func TestDetectWorkspaceNotInside(t *testing.T) {
+	wsRoot, _ := setupTestProject(t)
+	mgr := NewManager(git.New(), wsRoot)
+
+	_, err := mgr.DetectWorkspace("/tmp")
+	if err == nil {
+		t.Error("DetectWorkspace() should fail when not inside a workspace")
+	}
+}
+
 func TestDetectName(t *testing.T) {
 	wsRoot, repos := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
