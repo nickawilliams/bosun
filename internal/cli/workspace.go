@@ -25,19 +25,19 @@ func newWorkspaceCmd() *cobra.Command {
 	return cmd
 }
 
-// argsToWorkspaceRepos converts repo name arguments into workspace.Repo
-// by resolving them against the configured repo globs.
-func argsToWorkspaceRepos(names []string) ([]workspace.Repo, error) {
-	repos, err := resolveRepos(names)
+// argsToWorkspaceRepositories converts repository name arguments into
+// workspace.Repository by resolving them against the configured repository globs.
+func argsToWorkspaceRepositories(names []string) ([]workspace.Repository, error) {
+	repositories, err := resolveRepositories(names)
 	if err != nil {
 		return nil, err
 	}
-	return cliReposToWorkspaceRepos(repos), nil
+	return cliRepositoriesToWorkspaceRepositories(repositories), nil
 }
 
 func newWorkspaceCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "create <name> <repos...>",
+		Use:   "create <name> <repositories...>",
 		Short: "Create a new workspace",
 		Annotations: map[string]string{
 			headerAnnotationTitle: "create",
@@ -45,14 +45,14 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			repoNames := args[1:]
+			repositoryNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
 				ui.DryRun("Would create workspace")
 				ui.Details("", ui.NewFields(
-					"Repos", fmt.Sprintf("%v", repoNames),
+					"Repositories", fmt.Sprintf("%v", repositoryNames),
 					"From HEAD", fmt.Sprintf("%v", fromHead),
 				))
 				return nil
@@ -63,13 +63,13 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				return err
 			}
 
-			repos, err := argsToWorkspaceRepos(repoNames)
+			repositories, err := argsToWorkspaceRepositories(repositoryNames)
 			if err != nil {
 				return err
 			}
 
 			return ui.RunCard("Creating workspace", func() error {
-				return mgr.Create(context.Background(), name, repos, fromHead)
+				return mgr.Create(context.Background(), name, repositories, fromHead)
 			})
 		},
 	}
@@ -81,8 +81,8 @@ func newWorkspaceCreateCmd() *cobra.Command {
 
 func newWorkspaceAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [name] <repos...>",
-		Short: "Add repos to an existing workspace",
+		Use:   "add [name] <repositories...>",
+		Short: "Add repositories to an existing workspace",
 		Annotations: map[string]string{
 			headerAnnotationTitle: "add",
 		},
@@ -90,14 +90,14 @@ func newWorkspaceAddCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 
-			// TODO(nick): distinguish name vs repo args when auto-detect is
-			// implemented. For now, first arg is always the name.
+			// TODO(nick): distinguish name vs repository args when auto-detect
+			// is implemented. For now, first arg is always the name.
 			name := args[0]
-			repoNames := args[1:]
+			repositoryNames := args[1:]
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would add repos: %v", repoNames)
+				ui.DryRun("Would add repositories: %v", repositoryNames)
 				return nil
 			}
 
@@ -106,13 +106,13 @@ func newWorkspaceAddCmd() *cobra.Command {
 				return err
 			}
 
-			repos, err := argsToWorkspaceRepos(repoNames)
+			repositories, err := argsToWorkspaceRepositories(repositoryNames)
 			if err != nil {
 				return err
 			}
 
-			return ui.RunCard("Adding repos", func() error {
-				return mgr.Add(context.Background(), name, repos, fromHead)
+			return ui.RunCard("Adding repositories", func() error {
+				return mgr.Add(context.Background(), name, repositories, fromHead)
 			})
 		},
 	}
@@ -147,7 +147,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			}
 
 			if len(statuses) == 0 {
-				ui.Skip(fmt.Sprintf("No repos found in workspace %q", name))
+				ui.Skip(fmt.Sprintf("No repositories found in workspace %q", name))
 				return nil
 			}
 
@@ -189,12 +189,12 @@ func newWorkspaceRmCmd() *cobra.Command {
 				return err
 			}
 
-			repos, err := resolveRepos(nil)
+			repositories, err := resolveRepositories(nil)
 			if err != nil {
 				return err
 			}
 
-			wsRepos := cliReposToWorkspaceRepos(repos)
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 			return ui.RunCard("Removing workspace", func() error {
 				return mgr.Remove(context.Background(), name, wsRepos, force)
 			})

@@ -13,12 +13,12 @@ type PullRequest struct {
 
 // CreatePRRequest holds the fields needed to create a pull request.
 type CreatePRRequest struct {
-	Owner string // Repository owner (org or user)
-	Repo  string // Repository name
-	Head  string // Source branch
-	Base  string // Target branch (e.g., "main")
-	Title string
-	Body  string
+	Owner      string // Repository owner (org or user)
+	Repository string // Repository name
+	Head       string // Source branch
+	Base       string // Target branch (e.g., "main")
+	Title      string
+	Body       string
 }
 
 // Release represents a release/tag on a code hosting platform.
@@ -29,12 +29,12 @@ type Release struct {
 
 // CreateReleaseRequest holds the fields needed to create a release.
 type CreateReleaseRequest struct {
-	Owner  string
-	Repo   string
-	Tag    string // e.g., "v1.2.3"
-	Target string // Branch or commit SHA to tag
-	Name   string // Release title
-	Body   string // Release notes
+	Owner      string
+	Repository string
+	Tag        string // e.g., "v1.2.3"
+	Target     string // Branch or commit SHA to tag
+	Name       string // Release title
+	Body       string // Release notes
 }
 
 // Host defines code hosting operations needed by bosun.
@@ -45,12 +45,12 @@ type Host interface {
 
 	// GetPRForBranch returns the PR for a given head branch. Returns a
 	// PullRequest with Number==0 if none exists.
-	GetPRForBranch(ctx context.Context, owner, repo, branch string) (PullRequest, error)
+	GetPRForBranch(ctx context.Context, owner, repository, branch string) (PullRequest, error)
 
 	// CreateRelease creates a release with a new tag.
 	CreateRelease(ctx context.Context, req CreateReleaseRequest) (Release, error)
 
-	// GetLatestTag returns the most recent semver tag for a repo,
+	// GetLatestTag returns the most recent semver tag for a repository,
 	// or empty string if no tags exist.
-	GetLatestTag(ctx context.Context, owner, repo string) (string, error)
+	GetLatestTag(ctx context.Context, owner, repository string) (string, error)
 }

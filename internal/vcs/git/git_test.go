@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// initTestRepo creates a bare-minimum git repo with one commit and
-// origin/HEAD set. Returns the repo path.
-func initTestRepo(t *testing.T) string {
+// initTestRepository creates a bare-minimum git repository with one commit
+// and origin/HEAD set. Returns the repository path.
+func initTestRepository(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	dir, _ = filepath.EvalSymlinks(dir)
@@ -32,26 +32,26 @@ func initTestRepo(t *testing.T) string {
 	return dir
 }
 
-// initTestRepoWithRemote creates a repo with a bare remote and origin/HEAD.
-func initTestRepoWithRemote(t *testing.T) string {
+// initTestRepositoryWithRemote creates a repository with a bare remote and origin/HEAD.
+func initTestRepositoryWithRemote(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
 	base, _ = filepath.EvalSymlinks(base)
 
 	bare := filepath.Join(base, "origin.git")
-	repo := filepath.Join(base, "repo")
+	repository :=filepath.Join(base, "repository")
 
 	steps := []struct {
 		dir  string
 		args []string
 	}{
 		{base, []string{"git", "init", "--bare", bare}},
-		{base, []string{"git", "clone", bare, repo}},
-		{repo, []string{"git", "config", "user.email", "test@test.com"}},
-		{repo, []string{"git", "config", "user.name", "Test"}},
-		{repo, []string{"git", "commit", "--allow-empty", "-m", "initial"}},
-		{repo, []string{"git", "push", "origin", "main"}},
-		{repo, []string{"git", "remote", "set-head", "origin", "--auto"}},
+		{base, []string{"git", "clone", bare, repository}},
+		{repository, []string{"git", "config", "user.email", "test@test.com"}},
+		{repository, []string{"git", "config", "user.name", "Test"}},
+		{repository, []string{"git", "commit", "--allow-empty", "-m", "initial"}},
+		{repository, []string{"git", "push", "origin", "main"}},
+		{repository, []string{"git", "remote", "set-head", "origin", "--auto"}},
 	}
 	for _, s := range steps {
 		cmd := exec.Command(s.args[0], s.args[1:]...)
@@ -61,19 +61,19 @@ func initTestRepoWithRemote(t *testing.T) string {
 		}
 	}
 
-	return repo
+	return repository
 }
 
 func TestCreateBranch(t *testing.T) {
-	repo := initTestRepoWithRemote(t)
+	repository :=initTestRepositoryWithRemote(t)
 	a := New()
 	ctx := context.Background()
 
-	if err := a.CreateBranch(ctx, repo, "feature/test-123"); err != nil {
+	if err := a.CreateBranch(ctx, repository, "feature/test-123"); err != nil {
 		t.Fatalf("CreateBranch() error: %v", err)
 	}
 
-	exists, err := a.BranchExists(ctx, repo, "feature/test-123")
+	exists, err := a.BranchExists(ctx, repository, "feature/test-123")
 	if err != nil {
 		t.Fatalf("BranchExists() error: %v", err)
 	}
@@ -82,21 +82,21 @@ func TestCreateBranch(t *testing.T) {
 	}
 
 	// Idempotent — second call should not error.
-	if err := a.CreateBranch(ctx, repo, "feature/test-123"); err != nil {
+	if err := a.CreateBranch(ctx, repository, "feature/test-123"); err != nil {
 		t.Fatalf("CreateBranch() second call error: %v", err)
 	}
 }
 
 func TestCreateBranchFromHead(t *testing.T) {
-	repo := initTestRepo(t)
+	repository :=initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
-	if err := a.CreateBranchFromHead(ctx, repo, "test-branch"); err != nil {
+	if err := a.CreateBranchFromHead(ctx, repository, "test-branch"); err != nil {
 		t.Fatalf("CreateBranchFromHead() error: %v", err)
 	}
 
-	exists, err := a.BranchExists(ctx, repo, "test-branch")
+	exists, err := a.BranchExists(ctx, repository, "test-branch")
 	if err != nil {
 		t.Fatalf("BranchExists() error: %v", err)
 	}
@@ -106,31 +106,31 @@ func TestCreateBranchFromHead(t *testing.T) {
 }
 
 func TestDeleteBranch(t *testing.T) {
-	repo := initTestRepo(t)
+	repository :=initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
-	a.CreateBranchFromHead(ctx, repo, "to-delete")
-	if err := a.DeleteBranch(ctx, repo, "to-delete"); err != nil {
+	a.CreateBranchFromHead(ctx, repository, "to-delete")
+	if err := a.DeleteBranch(ctx, repository, "to-delete"); err != nil {
 		t.Fatalf("DeleteBranch() error: %v", err)
 	}
 
-	exists, _ := a.BranchExists(ctx, repo, "to-delete")
+	exists, _ := a.BranchExists(ctx, repository, "to-delete")
 	if exists {
 		t.Error("branch should not exist after deletion")
 	}
 
 	// Idempotent — deleting non-existent branch should not error.
-	if err := a.DeleteBranch(ctx, repo, "to-delete"); err != nil {
+	if err := a.DeleteBranch(ctx, repository, "to-delete"); err != nil {
 		t.Fatalf("DeleteBranch() second call error: %v", err)
 	}
 }
 
 func TestGetCurrentBranch(t *testing.T) {
-	repo := initTestRepo(t)
+	repository :=initTestRepository(t)
 	a := New()
 
-	branch, err := a.GetCurrentBranch(context.Background(), repo)
+	branch, err := a.GetCurrentBranch(context.Background(), repository)
 	if err != nil {
 		t.Fatalf("GetCurrentBranch() error: %v", err)
 	}
@@ -141,10 +141,10 @@ func TestGetCurrentBranch(t *testing.T) {
 }
 
 func TestGetDefaultBranch(t *testing.T) {
-	repo := initTestRepoWithRemote(t)
+	repository :=initTestRepositoryWithRemote(t)
 	a := New()
 
-	branch, err := a.GetDefaultBranch(context.Background(), repo)
+	branch, err := a.GetDefaultBranch(context.Background(), repository)
 	if err != nil {
 		t.Fatalf("GetDefaultBranch() error: %v", err)
 	}
@@ -154,39 +154,39 @@ func TestGetDefaultBranch(t *testing.T) {
 }
 
 func TestIsDirty(t *testing.T) {
-	repo := initTestRepo(t)
+	repository :=initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
-	dirty, err := a.IsDirty(ctx, repo)
+	dirty, err := a.IsDirty(ctx, repository)
 	if err != nil {
 		t.Fatalf("IsDirty() error: %v", err)
 	}
 	if dirty {
-		t.Error("clean repo should not be dirty")
+		t.Error("clean repository should not be dirty")
 	}
 
 	// Create an untracked file.
-	os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(repository, "dirty.txt"), []byte("x"), 0o644)
 
-	dirty, err = a.IsDirty(ctx, repo)
+	dirty, err = a.IsDirty(ctx, repository)
 	if err != nil {
 		t.Fatalf("IsDirty() error: %v", err)
 	}
 	if !dirty {
-		t.Error("repo with untracked file should be dirty")
+		t.Error("repository with untracked file should be dirty")
 	}
 }
 
 func TestWorktree(t *testing.T) {
-	repo := initTestRepo(t)
+	repository :=initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
-	a.CreateBranchFromHead(ctx, repo, "wt-branch")
+	a.CreateBranchFromHead(ctx, repository, "wt-branch")
 
 	wtPath := filepath.Join(t.TempDir(), "worktree")
-	if err := a.CreateWorktree(ctx, repo, wtPath, "wt-branch"); err != nil {
+	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {
 		t.Fatalf("CreateWorktree() error: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestWorktree(t *testing.T) {
 		t.Errorf("worktree branch = %q, want %q", branch, "wt-branch")
 	}
 
-	if err := a.RemoveWorktree(ctx, repo, wtPath, false); err != nil {
+	if err := a.RemoveWorktree(ctx, repository, wtPath, false); err != nil {
 		t.Fatalf("RemoveWorktree() error: %v", err)
 	}
 }

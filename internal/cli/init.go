@@ -26,7 +26,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
 	cmd.Flags().Bool("force", false, "overwrite existing .bosun/ directory")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")
-	cmd.Flags().StringSlice("repos", nil, "repo glob patterns (e.g. ./* or ~/Projects/myorg/*)")
+	cmd.Flags().StringSlice("repositories", nil, "repository glob patterns (e.g. ./* or ~/Projects/myorg/*)")
 
 	return cmd
 }
@@ -55,13 +55,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	// Resolve repo globs.
-	repoGlobs, _ := cmd.Flags().GetStringSlice("repos")
+	// Resolve repository globs.
+	repositoryGlobs, _ := cmd.Flags().GetStringSlice("repositories")
 	var detectedGlobs []string
-	if len(repoGlobs) == 0 && !noDetect {
-		if repos := detectRepos(cwd); len(repos) > 0 {
-			ui.CompleteWithDetail("Detected repos", repos)
-			detectedGlobs = defaultRepoGlobs(cwd, repos)
+	if len(repositoryGlobs) == 0 && !noDetect {
+		if repositories := detectRepositories(cwd); len(repositories) > 0 {
+			ui.CompleteWithDetail("Detected repositories", repositories)
+			detectedGlobs = defaultRepositoryGlobs(cwd, repositories)
 		}
 	}
 
@@ -69,21 +69,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 	wsRoot, _ := cmd.Flags().GetString("workspace-root")
 
 	// Prompt for all missing values in a single form.
-	needRepos := len(repoGlobs) == 0
+	needRepositories := len(repositoryGlobs) == 0
 	needWS := wsRoot == ""
-	if (needRepos || needWS) && interactive && isInteractive() {
-		repoInput := strings.Join(detectedGlobs, ", ")
-		if repoInput == "" {
-			repoInput = "., ./*"
+	if (needRepositories || needWS) && interactive && isInteractive() {
+		repositoryInput := strings.Join(detectedGlobs, ", ")
+		if repositoryInput == "" {
+			repositoryInput = "., ./*"
 		}
 		wsInput := ".workspaces"
 
 		var fields []huh.Field
-		if needRepos {
+		if needRepositories {
 			fields = append(fields, huh.NewInput().
-				Title("Repo patterns").
+				Title("Repository patterns").
 				Description("Comma-separated globs, e.g. ./* or ~/Projects/myorg/*").
-				Value(&repoInput))
+				Value(&repositoryInput))
 		}
 		if needWS {
 			fields = append(fields, huh.NewInput().
@@ -98,10 +98,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 		rewind()
 
-		if needRepos {
-			for _, g := range strings.Split(repoInput, ",") {
+		if needRepositories {
+			for _, g := range strings.Split(repositoryInput, ",") {
 				if trimmed := strings.TrimSpace(g); trimmed != "" {
-					repoGlobs = append(repoGlobs, trimmed)
+					repositoryGlobs = append(repositoryGlobs, trimmed)
 				}
 			}
 		}
@@ -111,12 +111,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Apply defaults for anything still unresolved.
-	if len(repoGlobs) == 0 && len(detectedGlobs) > 0 {
-		repoGlobs = detectedGlobs
+	if len(repositoryGlobs) == 0 && len(detectedGlobs) > 0 {
+		repositoryGlobs = detectedGlobs
 	}
-	if len(repoGlobs) == 0 && !interactive && isInteractive() {
+	if len(repositoryGlobs) == 0 && !interactive && isInteractive() {
 		input, err := promptValue(
-			"No repos detected. Enter repo patterns (comma-separated, or leave blank)",
+			"No repositories detected. Enter repository patterns (comma-separated, or leave blank)",
 			"")
 		if err != nil {
 			return err
@@ -124,7 +124,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		if input != "" {
 			for _, g := range strings.Split(input, ",") {
 				if trimmed := strings.TrimSpace(g); trimmed != "" {
-					repoGlobs = append(repoGlobs, trimmed)
+					repositoryGlobs = append(repositoryGlobs, trimmed)
 				}
 			}
 		}
@@ -133,7 +133,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		ui.DryRun("Would initialize bosun project")
 		fields := ui.NewFields(
 			"Config", ".bosun/config.yaml",
-			"Repos", strings.Join(repoGlobs, ", "),
+			"Repositories", strings.Join(repositoryGlobs, ", "),
 		)
 		if wsRoot != "" {
 			fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
@@ -149,17 +149,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Write config.
 	configPath := filepath.Join(bosunDir, "config.yaml")
-	if err := writeInitConfig(configPath, wsRoot, repoGlobs); err != nil {
+	if err := writeInitConfig(configPath, wsRoot, repositoryGlobs); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	repoDisplay := strings.Join(repoGlobs, ", ")
-	if repoDisplay == "" {
-		repoDisplay = "(none — add repo patterns to .bosun/config.yaml)"
+	repositoryDisplay := strings.Join(repositoryGlobs, ", ")
+	if repositoryDisplay == "" {
+		repositoryDisplay = "(none — add repository patterns to .bosun/config.yaml)"
 	}
 	fields := ui.NewFields(
 		"Config", configPath,
-		"Repos", repoDisplay,
+		"Repositories", repositoryDisplay,
 	)
 	if wsRoot != "" {
 		fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
@@ -173,35 +173,35 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// detectRepos scans a directory for git repositories: the directory
+// detectRepositories scans a directory for git repositories: the directory
 // itself (if it contains .git/) and immediate children that do.
-func detectRepos(dir string) []string {
-	var repos []string
+func detectRepositories(dir string) []string {
+	var repositories []string
 
-	// Check if the directory itself is a repo.
+	// Check if the directory itself is a repository.
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		repos = append(repos, filepath.Base(dir)+" (root)")
+		repositories = append(repositories, filepath.Base(dir)+" (root)")
 	}
 
 	// Check children.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return repos
+		return repositories
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(dir, entry.Name(), ".git")); err == nil {
-			repos = append(repos, entry.Name())
+			repositories = append(repositories, entry.Name())
 		}
 	}
-	return repos
+	return repositories
 }
 
-// defaultRepoGlobs returns the default repo glob patterns based on
-// what was detected. Uses "." for the root repo and "./*" for children.
-func defaultRepoGlobs(dir string, detected []string) []string {
+// defaultRepositoryGlobs returns the default repository glob patterns based
+// on what was detected. Uses "." for the root repository and "./*" for children.
+func defaultRepositoryGlobs(dir string, detected []string) []string {
 	var globs []string
 	hasRoot := false
 	hasChildren := false
@@ -236,18 +236,18 @@ func firstNonEmpty(values ...string) string {
 }
 
 // writeInitConfig writes the initial .bosun/config.yaml.
-func writeInitConfig(path, wsRoot string, repoGlobs []string) error {
+func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 	var b strings.Builder
 
-	b.WriteString("# Repo patterns (globs resolved to directories containing .git/)\n")
-	b.WriteString("repos:\n")
-	if len(repoGlobs) > 0 {
-		for _, g := range repoGlobs {
+	b.WriteString("# Repository patterns (globs resolved to directories containing .git/)\n")
+	b.WriteString("repositories:\n")
+	if len(repositoryGlobs) > 0 {
+		for _, g := range repositoryGlobs {
 			fmt.Fprintf(&b, "  - %s\n", g)
 		}
 	} else {
-		b.WriteString("  # - .          # this directory is a repo\n")
-		b.WriteString("  # - ./*        # child directories that are repos\n")
+		b.WriteString("  # - .          # this directory is a repository\n")
+		b.WriteString("  # - ./*        # child directories that are repositories\n")
 	}
 
 	if wsRoot != "" {

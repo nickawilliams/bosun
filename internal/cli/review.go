@@ -12,12 +12,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-type reviewRepoPlan struct {
-	repo     Repo
-	owner    string
-	name     string
-	branch   string
-	existing code.PullRequest
+type reviewRepositoryPlan struct {
+	repository Repository
+	owner      string
+	name       string
+	branch     string
+	existing   code.PullRequest
 }
 
 func newReviewCmd() *cobra.Command {
@@ -38,8 +38,8 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
-			repos, err := resolveRepos(filterRepos)
+			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
+			repositories, err := resolveRepositories(filterRepositories)
 			if err != nil {
 				return err
 			}
@@ -68,12 +68,12 @@ func newReviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
-			// Per-repo resolution.
+			// Per-repository resolution.
 			g := git.New()
-			var repoPlans []reviewRepoPlan
+			var repositoryPlans []reviewRepositoryPlan
 
 			if host != nil {
-				for _, r := range repos {
+				for _, r := range repositories {
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
 					if err != nil {
 						ui.Fail(fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err))
@@ -88,41 +88,41 @@ func newReviewCmd() *cobra.Command {
 
 					existing, _ := host.GetPRForBranch(ctx, identity.Owner, identity.Name, branch)
 
-					repoPlans = append(repoPlans, reviewRepoPlan{
-						repo:     r,
-						owner:    identity.Owner,
-						name:     identity.Name,
-						branch:   branch,
-						existing: existing,
+					repositoryPlans = append(repositoryPlans, reviewRepositoryPlan{
+						repository: r,
+						owner:      identity.Owner,
+						name:       identity.Name,
+						branch:     branch,
+						existing:   existing,
 					})
 				}
 			}
 
 			// --- Plan + Apply ---
 			plan := ui.NewPlan()
-			for _, rp := range repoPlans {
+			for _, rp := range repositoryPlans {
 				branchDetail := fmt.Sprintf("%s → %s", rp.branch, baseBranch)
 				if rp.existing.Number > 0 {
-					plan.Add(ui.PlanNoChange, "Pull Request", rp.repo.Name, fmt.Sprintf("#%d", rp.existing.Number))
+					plan.Add(ui.PlanNoChange, "Pull Request", rp.repository.Name, fmt.Sprintf("#%d", rp.existing.Number))
 				} else {
-					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repo.Name, branchDetail)
+					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repository.Name, branchDetail)
 				}
 			}
 			addStatusPlanItem(plan, issue, detail.Status, "review")
 
 			// Build actions — one per new PR + status transition.
 			var actions []PlanAction
-			for _, rp := range repoPlans {
+			for _, rp := range repositoryPlans {
 				if rp.existing.Number > 0 {
 					continue // skip existing PRs
 				}
 				actions = append(actions, func() error {
 					_, err := host.CreatePR(ctx, code.CreatePRRequest{
-						Owner: rp.owner,
-						Repo:  rp.name,
-						Head:  rp.branch,
-						Base:  baseBranch,
-						Title: prTitle,
+						Owner:      rp.owner,
+						Repository: rp.name,
+						Head:       rp.branch,
+						Base:       baseBranch,
+						Title:      prTitle,
 					})
 					return err
 				})
@@ -145,6 +145,6 @@ func newReviewCmd() *cobra.Command {
 	}
 
 	addIssueFlag(cmd)
-	cmd.Flags().StringSlice("repo", nil, "filter repos to operate on")
+	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd
 }

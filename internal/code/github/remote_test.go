@@ -4,11 +4,11 @@ import "testing"
 
 func TestParseRemoteURL(t *testing.T) {
 	tests := []struct {
-		name    string
-		url     string
-		owner   string
-		repo    string
-		wantErr bool
+		name       string
+		url        string
+		owner      string
+		repository string
+		wantErr    bool
 	}{
 		{"ssh", "git@github.com:myorg/my-service.git", "myorg", "my-service", false},
 		{"ssh no .git", "git@github.com:myorg/my-service", "myorg", "my-service", false},
@@ -36,8 +36,8 @@ func TestParseRemoteURL(t *testing.T) {
 			if got.Owner != tt.owner {
 				t.Errorf("Owner = %q, want %q", got.Owner, tt.owner)
 			}
-			if got.Name != tt.repo {
-				t.Errorf("Name = %q, want %q", got.Name, tt.repo)
+			if got.Name != tt.repository {
+				t.Errorf("Name = %q, want %q", got.Name, tt.repository)
 			}
 		})
 	}

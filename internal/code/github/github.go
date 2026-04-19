@@ -66,7 +66,7 @@ func ResolveToken() string {
 
 func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.PullRequest, error) {
 	// Check for existing PR first (idempotent).
-	existing, err := a.GetPRForBranch(ctx, req.Owner, req.Repo, req.Head)
+	existing, err := a.GetPRForBranch(ctx, req.Owner, req.Repository, req.Head)
 	if err != nil {
 		return code.PullRequest{}, err
 	}
@@ -81,7 +81,7 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 		"base":  req.Base,
 	}
 
-	path := fmt.Sprintf("/repos/%s/%s/pulls", req.Owner, req.Repo)
+	path := fmt.Sprintf("/repos/%s/%s/pulls", req.Owner, req.Repository)
 	resp, err := a.doRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return code.PullRequest{}, fmt.Errorf("creating PR: %w", err)
@@ -106,8 +106,8 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 	}, nil
 }
 
-func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repo, branch string) (code.PullRequest, error) {
-	path := fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s&state=all", owner, repo, owner, branch)
+func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch string) (code.PullRequest, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s&state=all", owner, repository, owner, branch)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return code.PullRequest{}, fmt.Errorf("fetching PR for branch: %w", err)
@@ -151,7 +151,7 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 		"body":             req.Body,
 	}
 
-	path := fmt.Sprintf("/repos/%s/%s/releases", req.Owner, req.Repo)
+	path := fmt.Sprintf("/repos/%s/%s/releases", req.Owner, req.Repository)
 	resp, err := a.doRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return code.Release{}, fmt.Errorf("creating release: %w", err)
@@ -174,8 +174,8 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 
 var semverTag = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
 
-func (a *Adapter) GetLatestTag(ctx context.Context, owner, repo string) (string, error) {
-	path := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo)
+func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repository)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return "", fmt.Errorf("fetching tags: %w", err)

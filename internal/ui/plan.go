@@ -21,7 +21,7 @@ const (
 type PlanItem struct {
 	Op     PlanOp
 	Action string // "Create Pull Request" or just "Pull Request" (for =)
-	Target string // repo name, issue key, channel name
+	Target string // repository name, issue key, channel name
 	Detail string // branch name, PR number, status transition
 }
 

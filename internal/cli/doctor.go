@@ -52,7 +52,7 @@ func newDoctorCmd() *cobra.Command {
 			check("Git", true, checkGit)
 
 			// Project.
-			check("Repos", false, checkRepos)
+			check("Repositories", false, checkRepositories)
 			check("Branch pattern", false, checkBranchPattern)
 			check("Status mappings", false, checkStatusMappings)
 
@@ -150,13 +150,13 @@ func checkGit() (string, error) {
 	return ver, nil
 }
 
-func checkRepos() (string, error) {
-	repos, err := resolveRepos(nil)
+func checkRepositories() (string, error) {
+	repositories, err := resolveRepositories(nil)
 	if err != nil {
 		return "", err
 	}
-	names := make([]string, len(repos))
-	for i, r := range repos {
+	names := make([]string, len(repositories))
+	for i, r := range repositories {
 		names[i] = r.Name
 	}
 	return strings.Join(names, "\n"), nil

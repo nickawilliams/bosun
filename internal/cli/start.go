@@ -29,7 +29,7 @@ func newStartCmd() *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
+			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 
 			// --- Resolve ---
@@ -87,22 +87,22 @@ func newStartCmd() *cobra.Command {
 				}
 			}
 
-			// Resolve repos.
-			repos, err := resolveRepos(filterRepos)
+			// Resolve repositories.
+			repositories, err := resolveRepositories(filterRepositories)
 			if err != nil {
 				return err
 			}
 
-			// Interactive repo selection.
-			if len(repos) > 1 && len(filterRepos) == 0 && isInteractive() {
-				opts := make([]huh.Option[string], len(repos))
-				for i, r := range repos {
+			// Interactive repository selection.
+			if len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
+				opts := make([]huh.Option[string], len(repositories))
+				for i, r := range repositories {
 					opts[i] = huh.NewOption(r.Name, r.Name)
 				}
 
 				var selected []string
-				repoSlot := ui.NewSlot()
-				repoSlot.Show(ui.NewCard(ui.CardInput, "Repos").Tight())
+				repositorySlot := ui.NewSlot()
+				repositorySlot.Show(ui.NewCard(ui.CardInput, "Repositories").Tight())
 				if err := runForm(
 					huh.NewMultiSelect[string]().
 						Options(opts...).
@@ -110,16 +110,16 @@ func newStartCmd() *cobra.Command {
 				); err != nil {
 					return err
 				}
-				repoSlot.Clear()
+				repositorySlot.Clear()
 
 				if len(selected) == 0 {
-					ui.Skip("No repos selected")
+					ui.Skip("No repositories selected")
 					return nil
 				}
 
-				ui.CompleteWithDetail("Repos", selected)
+				ui.CompleteWithDetail("Repositories", selected)
 
-				repos, err = resolveRepos(selected)
+				repositories, err = resolveRepositories(selected)
 				if err != nil {
 					return err
 				}
@@ -135,7 +135,7 @@ func newStartCmd() *cobra.Command {
 			// --- Plan + Apply ---
 			cwd, _ := os.Getwd()
 			plan := ui.NewPlan()
-			for _, r := range repos {
+			for _, r := range repositories {
 				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
 				wtPath := filepath.Join(wsRoot, branchName, r.Name)
 				if rel, err := filepath.Rel(cwd, wtPath); err == nil {
@@ -149,7 +149,7 @@ func newStartCmd() *cobra.Command {
 			statusName, _ := resolveStatus("in_progress")
 
 			// Build actions list.
-			wsRepos := cliReposToWorkspaceRepos(repos)
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 			actions := []PlanAction{
 				func() error {
 					mgr, err := newWorkspaceManager()
@@ -177,7 +177,7 @@ func newStartCmd() *cobra.Command {
 
 	addIssueFlag(cmd)
 	cmd.Flags().String("slug", "", "custom slug for branch name")
-	cmd.Flags().StringSlice("repo", nil, "filter repos to operate on")
+	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
 
 	return cmd

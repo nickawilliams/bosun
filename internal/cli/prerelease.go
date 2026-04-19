@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type prereleaseRepoPlan struct {
-	repo        Repo
+type prereleaseRepositoryPlan struct {
+	repository  Repository
 	owner       string
 	name        string
 	branch      string
@@ -38,8 +38,8 @@ func newPrereleaseCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			filterRepos, _ := cmd.Flags().GetStringSlice("repo")
-			repos, err := resolveRepos(filterRepos)
+			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
+			repositories, err := resolveRepositories(filterRepositories)
 			if err != nil {
 				return err
 			}
@@ -50,10 +50,10 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 
 			g := git.New()
-			var repoPlans []prereleaseRepoPlan
+			var repositoryPlans []prereleaseRepositoryPlan
 
 			if host != nil {
-				for _, r := range repos {
+				for _, r := range repositories {
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
 					if err != nil {
 						ui.Fail(fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err))
@@ -82,8 +82,8 @@ func newPrereleaseCmd() *cobra.Command {
 						continue
 					}
 
-					repoPlans = append(repoPlans, prereleaseRepoPlan{
-						repo:        r,
+					repositoryPlans = append(repositoryPlans, prereleaseRepositoryPlan{
+						repository:  r,
 						owner:       identity.Owner,
 						name:        identity.Name,
 						branch:      branch,
@@ -95,25 +95,25 @@ func newPrereleaseCmd() *cobra.Command {
 
 			// --- Plan + Apply ---
 			plan := ui.NewPlan()
-			for _, rp := range repoPlans {
+			for _, rp := range repositoryPlans {
 				from := rp.currentTag
 				if from == "" {
 					from = "(none)"
 				}
-				plan.Add(ui.PlanCreate, "Create Release", rp.repo.Name, fmt.Sprintf("%s → %s", from, rp.nextVersion))
+				plan.Add(ui.PlanCreate, "Create Release", rp.repository.Name, fmt.Sprintf("%s → %s", from, rp.nextVersion))
 			}
 			addStatusPlanItem(plan, issue, "", "ready_for_release")
 
 			// Build actions.
 			var actions []PlanAction
-			for _, rp := range repoPlans {
+			for _, rp := range repositoryPlans {
 				actions = append(actions, func() error {
 					_, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
-						Owner:  rp.owner,
-						Repo:   rp.name,
-						Tag:    rp.nextVersion,
-						Target: rp.branch,
-						Name:   rp.nextVersion,
+						Owner:      rp.owner,
+						Repository: rp.name,
+						Tag:        rp.nextVersion,
+						Target:     rp.branch,
+						Name:       rp.nextVersion,
 					})
 					return err
 				})
@@ -138,6 +138,6 @@ func newPrereleaseCmd() *cobra.Command {
 
 	addIssueFlag(cmd)
 	cmd.Flags().String("bump", "patch", "version bump level (patch|minor|major)")
-	cmd.Flags().StringSlice("repo", nil, "filter repos to operate on")
+	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd
 }

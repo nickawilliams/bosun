@@ -18,8 +18,8 @@ func New() *Adapter {
 	return &Adapter{}
 }
 
-func (a *Adapter) CreateBranch(ctx context.Context, repoPath, branchName string) error {
-	exists, err := a.BranchExists(ctx, repoPath, branchName)
+func (a *Adapter) CreateBranch(ctx context.Context, repositoryPath, branchName string) error {
+	exists, err := a.BranchExists(ctx, repositoryPath, branchName)
 	if err != nil {
 		return err
 	}
@@ -27,19 +27,19 @@ func (a *Adapter) CreateBranch(ctx context.Context, repoPath, branchName string)
 		return nil
 	}
 
-	defaultBranch, err := a.GetDefaultBranch(ctx, repoPath)
+	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
 	if err != nil {
 		return fmt.Errorf("getting default branch: %w", err)
 	}
 
 	// Fetch latest before branching.
-	_ = run(ctx, repoPath, "fetch", "origin", defaultBranch)
+	_ = run(ctx, repositoryPath, "fetch", "origin", defaultBranch)
 
-	return run(ctx, repoPath, "branch", branchName, "origin/"+defaultBranch)
+	return run(ctx, repositoryPath, "branch", branchName, "origin/"+defaultBranch)
 }
 
-func (a *Adapter) CreateBranchFromHead(ctx context.Context, repoPath, branchName string) error {
-	exists, err := a.BranchExists(ctx, repoPath, branchName)
+func (a *Adapter) CreateBranchFromHead(ctx context.Context, repositoryPath, branchName string) error {
+	exists, err := a.BranchExists(ctx, repositoryPath, branchName)
 	if err != nil {
 		return err
 	}
@@ -47,21 +47,21 @@ func (a *Adapter) CreateBranchFromHead(ctx context.Context, repoPath, branchName
 		return nil
 	}
 
-	return run(ctx, repoPath, "branch", branchName)
+	return run(ctx, repositoryPath, "branch", branchName)
 }
 
-func (a *Adapter) DeleteBranch(ctx context.Context, repoPath, branchName string) error {
+func (a *Adapter) DeleteBranch(ctx context.Context, repositoryPath, branchName string) error {
 	// Delete local branch (ignore error if it doesn't exist).
-	_ = run(ctx, repoPath, "branch", "-D", branchName)
+	_ = run(ctx, repositoryPath, "branch", "-D", branchName)
 
 	// Delete remote branch (ignore error if it doesn't exist).
-	_ = run(ctx, repoPath, "push", "origin", "--delete", branchName)
+	_ = run(ctx, repositoryPath, "push", "origin", "--delete", branchName)
 
 	return nil
 }
 
-func (a *Adapter) GetBranchStatus(ctx context.Context, repoPath, branchName string) (vcs.BranchStatus, error) {
-	exists, err := a.BranchExists(ctx, repoPath, branchName)
+func (a *Adapter) GetBranchStatus(ctx context.Context, repositoryPath, branchName string) (vcs.BranchStatus, error) {
+	exists, err := a.BranchExists(ctx, repositoryPath, branchName)
 	if err != nil {
 		return vcs.BranchStatus{}, err
 	}
@@ -72,7 +72,7 @@ func (a *Adapter) GetBranchStatus(ctx context.Context, repoPath, branchName stri
 	}
 
 	if exists {
-		dirty, err := a.IsDirty(ctx, repoPath)
+		dirty, err := a.IsDirty(ctx, repositoryPath)
 		if err != nil {
 			return status, err
 		}
@@ -82,16 +82,16 @@ func (a *Adapter) GetBranchStatus(ctx context.Context, repoPath, branchName stri
 	return status, nil
 }
 
-func (a *Adapter) GetCurrentBranch(ctx context.Context, repoPath string) (string, error) {
-	out, err := output(ctx, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+func (a *Adapter) GetCurrentBranch(ctx context.Context, repositoryPath string) (string, error) {
+	out, err := output(ctx, repositoryPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("getting current branch: %w", err)
 	}
 	return out, nil
 }
 
-func (a *Adapter) GetDefaultBranch(ctx context.Context, repoPath string) (string, error) {
-	out, err := output(ctx, repoPath, "rev-parse", "--abbrev-ref", "origin/HEAD")
+func (a *Adapter) GetDefaultBranch(ctx context.Context, repositoryPath string) (string, error) {
+	out, err := output(ctx, repositoryPath, "rev-parse", "--abbrev-ref", "origin/HEAD")
 	if err != nil {
 		return "", fmt.Errorf(
 			"getting default branch: %w (is origin/HEAD set? run: git remote set-head origin --auto)",
@@ -101,8 +101,8 @@ func (a *Adapter) GetDefaultBranch(ctx context.Context, repoPath string) (string
 	return strings.TrimPrefix(out, "origin/"), nil
 }
 
-func (a *Adapter) BranchExists(ctx context.Context, repoPath, branchName string) (bool, error) {
-	err := run(ctx, repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+func (a *Adapter) BranchExists(ctx context.Context, repositoryPath, branchName string) (bool, error) {
+	err := run(ctx, repositoryPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 	if err != nil {
 		// Exit code 1 means the ref doesn't exist (not an error).
 		var exitErr *exec.ExitError
@@ -114,16 +114,16 @@ func (a *Adapter) BranchExists(ctx context.Context, repoPath, branchName string)
 	return true, nil
 }
 
-func (a *Adapter) CreateWorktree(ctx context.Context, repoPath, worktreePath, branchName string) error {
-	return run(ctx, repoPath, "worktree", "add", worktreePath, branchName)
+func (a *Adapter) CreateWorktree(ctx context.Context, repositoryPath, worktreePath, branchName string) error {
+	return run(ctx, repositoryPath, "worktree", "add", worktreePath, branchName)
 }
 
-func (a *Adapter) RemoveWorktree(ctx context.Context, repoPath, worktreePath string, force bool) error {
+func (a *Adapter) RemoveWorktree(ctx context.Context, repositoryPath, worktreePath string, force bool) error {
 	args := []string{"worktree", "remove", worktreePath}
 	if force {
 		args = append(args, "--force")
 	}
-	return run(ctx, repoPath, args...)
+	return run(ctx, repositoryPath, args...)
 }
 
 func (a *Adapter) IsDirty(ctx context.Context, path string) (bool, error) {

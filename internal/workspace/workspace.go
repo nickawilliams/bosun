@@ -10,18 +10,18 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
-// RepoStatus describes the state of a single repo within a workspace.
-type RepoStatus struct {
+// RepositoryStatus describes the state of a single repository within a workspace.
+type RepositoryStatus struct {
 	Name   string
 	Branch string
 	Dirty  bool
 	Path   string
 }
 
-// Repo represents a resolved repository with a short name and absolute path.
-type Repo struct {
+// Repository represents a resolved repository with a short name and absolute path.
+type Repository struct {
 	Name string // Directory basename, used for worktree directory names.
-	Path string // Absolute path to the repo.
+	Path string // Absolute path to the repository.
 }
 
 // Manager handles workspace lifecycle operations.
@@ -38,15 +38,15 @@ func NewManager(v vcs.VCS, workspaceRoot string) *Manager {
 	}
 }
 
-// Create creates a new workspace with worktrees for each repo.
+// Create creates a new workspace with worktrees for each repository.
 // The branch name is the workspace name (can include slashes).
-func (m *Manager) Create(ctx context.Context, name string, repos []Repo, fromHead bool) error {
-	for _, repo := range repos {
-		if _, err := os.Stat(repo.Path); err != nil {
-			return fmt.Errorf("repo %q not found at %s", repo.Name, repo.Path)
+func (m *Manager) Create(ctx context.Context, name string, repositories []Repository, fromHead bool) error {
+	for _, repository := range repositories {
+		if _, err := os.Stat(repository.Path); err != nil {
+			return fmt.Errorf("repository %q not found at %s", repository.Name, repository.Path)
 		}
 
-		worktreePath := filepath.Join(m.workspaceRoot, name, repo.Name)
+		worktreePath := filepath.Join(m.workspaceRoot, name, repository.Name)
 
 		// Skip if worktree already exists.
 		if _, err := os.Stat(worktreePath); err == nil {
@@ -55,12 +55,12 @@ func (m *Manager) Create(ctx context.Context, name string, repos []Repo, fromHea
 
 		// Create the branch if it doesn't exist.
 		if fromHead {
-			if err := m.vcs.CreateBranchFromHead(ctx, repo.Path, name); err != nil {
-				return fmt.Errorf("creating branch in %s: %w", repo.Name, err)
+			if err := m.vcs.CreateBranchFromHead(ctx, repository.Path, name); err != nil {
+				return fmt.Errorf("creating branch in %s: %w", repository.Name, err)
 			}
 		} else {
-			if err := m.vcs.CreateBranch(ctx, repo.Path, name); err != nil {
-				return fmt.Errorf("creating branch in %s: %w", repo.Name, err)
+			if err := m.vcs.CreateBranch(ctx, repository.Path, name); err != nil {
+				return fmt.Errorf("creating branch in %s: %w", repository.Name, err)
 			}
 		}
 
@@ -69,60 +69,60 @@ func (m *Manager) Create(ctx context.Context, name string, repos []Repo, fromHea
 			return fmt.Errorf("creating workspace directory: %w", err)
 		}
 
-		if err := m.vcs.CreateWorktree(ctx, repo.Path, worktreePath, name); err != nil {
-			return fmt.Errorf("creating worktree for %s: %w", repo.Name, err)
+		if err := m.vcs.CreateWorktree(ctx, repository.Path, worktreePath, name); err != nil {
+			return fmt.Errorf("creating worktree for %s: %w", repository.Name, err)
 		}
 	}
 
 	return nil
 }
 
-// Add adds repos to an existing workspace.
-func (m *Manager) Add(ctx context.Context, name string, repos []Repo, fromHead bool) error {
+// Add adds repositories to an existing workspace.
+func (m *Manager) Add(ctx context.Context, name string, repositories []Repository, fromHead bool) error {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 	if _, err := os.Stat(wsPath); err != nil {
 		return fmt.Errorf("workspace %q not found at %s", name, wsPath)
 	}
 
-	return m.Create(ctx, name, repos, fromHead)
+	return m.Create(ctx, name, repositories, fromHead)
 }
 
-// Status returns the status of all repos in a workspace.
-func (m *Manager) Status(ctx context.Context, name string) ([]RepoStatus, error) {
+// Status returns the status of all repositories in a workspace.
+func (m *Manager) Status(ctx context.Context, name string) ([]RepositoryStatus, error) {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 	entries, err := os.ReadDir(wsPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading workspace %q: %w", name, err)
 	}
 
-	var statuses []RepoStatus
+	var statuses []RepositoryStatus
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
-		repoPath := filepath.Join(wsPath, entry.Name())
+		repositoryPath := filepath.Join(wsPath, entry.Name())
 
 		// Check if it looks like a worktree (has .git entry).
-		if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		if _, err := os.Stat(filepath.Join(repositoryPath, ".git")); err != nil {
 			continue
 		}
 
-		branch, err := m.vcs.GetCurrentBranch(ctx, repoPath)
+		branch, err := m.vcs.GetCurrentBranch(ctx, repositoryPath)
 		if err != nil {
 			branch = "(unknown)"
 		}
 
-		dirty, err := m.vcs.IsDirty(ctx, repoPath)
+		dirty, err := m.vcs.IsDirty(ctx, repositoryPath)
 		if err != nil {
 			dirty = false
 		}
 
-		statuses = append(statuses, RepoStatus{
+		statuses = append(statuses, RepositoryStatus{
 			Name:   entry.Name(),
 			Branch: branch,
 			Dirty:  dirty,
-			Path:   repoPath,
+			Path:   repositoryPath,
 		})
 	}
 
@@ -130,10 +130,10 @@ func (m *Manager) Status(ctx context.Context, name string) ([]RepoStatus, error)
 }
 
 // Remove removes a workspace: worktrees, local branches, remote branches.
-// repos maps repo names to their source paths (needed to run git worktree
-// remove and branch delete against the source repo). Returns an error if any
-// repo has uncommitted changes (unless force is true).
-func (m *Manager) Remove(ctx context.Context, name string, repos []Repo, force bool) error {
+// repositories maps repository names to their source paths (needed to run git
+// worktree remove and branch delete against the source repository). Returns an
+// error if any repository has uncommitted changes (unless force is true).
+func (m *Manager) Remove(ctx context.Context, name string, repositories []Repository, force bool) error {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 
 	statuses, err := m.Status(ctx, name)
@@ -141,13 +141,13 @@ func (m *Manager) Remove(ctx context.Context, name string, repos []Repo, force b
 		return err
 	}
 
-	// Build a name→path lookup from the provided repos.
-	repoPath := make(map[string]string, len(repos))
-	for _, r := range repos {
-		repoPath[r.Name] = r.Path
+	// Build a name→path lookup from the provided repositories.
+	repositoryPath := make(map[string]string, len(repositories))
+	for _, r := range repositories {
+		repositoryPath[r.Name] = r.Path
 	}
 
-	// Check for dirty repos unless force is set.
+	// Check for dirty repositories unless force is set.
 	if !force {
 		var dirty []string
 		for _, s := range statuses {
@@ -157,7 +157,7 @@ func (m *Manager) Remove(ctx context.Context, name string, repos []Repo, force b
 		}
 		if len(dirty) > 0 {
 			return fmt.Errorf(
-				"repos have uncommitted changes: %s (use --force to override)",
+				"repositories have uncommitted changes: %s (use --force to override)",
 				strings.Join(dirty, ", "),
 			)
 		}
@@ -165,9 +165,9 @@ func (m *Manager) Remove(ctx context.Context, name string, repos []Repo, force b
 
 	// Remove worktrees and branches.
 	for _, s := range statuses {
-		srcPath, ok := repoPath[s.Name]
+		srcPath, ok := repositoryPath[s.Name]
 		if !ok {
-			return fmt.Errorf("source repo path unknown for %q: provide it via repos config", s.Name)
+			return fmt.Errorf("source repository path unknown for %q: provide it via repositories config", s.Name)
 		}
 		worktreePath := filepath.Join(wsPath, s.Name)
 

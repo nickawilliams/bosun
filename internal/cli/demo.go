@@ -35,7 +35,7 @@ func newDemoCmd() *cobra.Command {
 
 			// Text body
 			ui.NewCard(ui.CardSuccess, "Configured workspace").
-				Text("repos/api", "repos/web", "repos/infra").
+				Text("repositories/api", "repositories/web", "repositories/infra").
 				Print()
 
 			// KV body (replaces the Panel+KV combo from `status`)

@@ -52,11 +52,11 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
-			// --- Repo branch status ---
-			repoStatuses := resolveRepoStatuses(ctx)
+			// --- Repository branch status ---
+			repositoryStatuses := resolveRepositoryStatuses(ctx)
 
 			// --- PR status ---
-			if len(repoStatuses) > 0 {
+			if len(repositoryStatuses) > 0 {
 				host, hostErr := newCodeHost()
 				if hostErr != nil {
 					ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
@@ -64,7 +64,7 @@ func newStatusCmd() *cobra.Command {
 					var prStatuses []prStatus
 					prSlot := ui.NewSlot()
 					_ = prSlot.Run("Fetching pull requests", func() error {
-						prStatuses = collectPRStatus(ctx, host, repoStatuses)
+						prStatuses = collectPRStatus(ctx, host, repositoryStatuses)
 						return nil
 					})
 					prSlot.Clear()
@@ -77,7 +77,7 @@ func newStatusCmd() *cobra.Command {
 							}
 							value += "\n" + ps.pr.URL
 							fields = append(fields, ui.Field{
-								Key:   ps.repoName,
+								Key:   ps.repositoryName,
 								Value: value,
 							})
 						}
@@ -98,14 +98,15 @@ func newStatusCmd() *cobra.Command {
 }
 
 type prStatus struct {
-	repoName string
-	pr       code.PullRequest
+	repositoryName string
+	pr             code.PullRequest
 }
 
-// resolveRepoStatuses determines repo branch status from the workspace (if
-// CWD is at or below one) or from the current git repo (single-repo mode).
-// Renders the Repos detail card and returns the statuses for downstream use.
-func resolveRepoStatuses(ctx context.Context) []workspace.RepoStatus {
+// resolveRepositoryStatuses determines repository branch status from the
+// workspace (if CWD is at or below one) or from the current git repository
+// (single-repository mode). Renders the Repositories detail card and returns
+// the statuses for downstream use.
+func resolveRepositoryStatuses(ctx context.Context) []workspace.RepositoryStatus {
 	// Try workspace mode first.
 	if mgr, err := newWorkspaceManager(); err == nil {
 		cwd, _ := os.Getwd()
@@ -116,10 +117,10 @@ func resolveRepoStatuses(ctx context.Context) []workspace.RepoStatus {
 				return nil
 			}
 			if len(statuses) == 0 {
-				ui.Skip("No repos found in workspace " + wsName)
+				ui.Skip("No repositories found in workspace " + wsName)
 				return nil
 			}
-			renderRepoStatuses(statuses)
+			renderRepositoryStatuses(statuses)
 			return statuses
 		}
 		// Workspace configured but CWD is not inside one.
@@ -127,7 +128,7 @@ func resolveRepoStatuses(ctx context.Context) []workspace.RepoStatus {
 		return nil
 	}
 
-	// No workspace configured — single repo mode.
+	// No workspace configured — single repository mode.
 	cwd, _ := os.Getwd()
 	g := git.New()
 	branch, err := g.GetCurrentBranch(ctx, cwd)
@@ -135,17 +136,17 @@ func resolveRepoStatuses(ctx context.Context) []workspace.RepoStatus {
 		return nil
 	}
 	dirty, _ := g.IsDirty(ctx, cwd)
-	statuses := []workspace.RepoStatus{{
+	statuses := []workspace.RepositoryStatus{{
 		Name:   filepath.Base(cwd),
 		Branch: branch,
 		Dirty:  dirty,
 		Path:   cwd,
 	}}
-	renderRepoStatuses(statuses)
+	renderRepositoryStatuses(statuses)
 	return statuses
 }
 
-func renderRepoStatuses(statuses []workspace.RepoStatus) {
+func renderRepositoryStatuses(statuses []workspace.RepositoryStatus) {
 	fields := make(ui.Fields, 0, len(statuses))
 	for _, s := range statuses {
 		status := "clean"
@@ -157,11 +158,11 @@ func renderRepoStatuses(statuses []workspace.RepoStatus) {
 			Value: s.Branch + " · " + status,
 		})
 	}
-	ui.Details("Repos", fields)
+	ui.Details("Repositories", fields)
 }
 
-// collectPRStatus checks each repo for PRs matching its branch.
-func collectPRStatus(ctx context.Context, host code.Host, statuses []workspace.RepoStatus) []prStatus {
+// collectPRStatus checks each repository for PRs matching its branch.
+func collectPRStatus(ctx context.Context, host code.Host, statuses []workspace.RepositoryStatus) []prStatus {
 	var results []prStatus
 
 	for _, s := range statuses {
@@ -175,7 +176,7 @@ func collectPRStatus(ctx context.Context, host code.Host, statuses []workspace.R
 			continue
 		}
 
-		results = append(results, prStatus{repoName: s.Name, pr: pr})
+		results = append(results, prStatus{repositoryName: s.Name, pr: pr})
 	}
 
 	return results

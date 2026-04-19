@@ -67,7 +67,7 @@ func TestLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		configContent := []byte("repos:\n  - ./*\nworkspace_root: _workspaces\n")
+		configContent := []byte("repositories:\n  - ./*\nworkspace_root: _workspaces\n")
 		if err := os.WriteFile(filepath.Join(bosunDir, "config.yaml"), configContent, 0o644); err != nil {
 			t.Fatal(err)
 		}

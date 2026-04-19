@@ -10,26 +10,26 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 )
 
-// setupTestProject creates a project with repos and a workspace root.
-// Returns (wsRoot, repos).
-func setupTestProject(t *testing.T, repoNames ...string) (string, []Repo) {
+// setupTestProject creates a project with repositories and a workspace root.
+// Returns (wsRoot, repositories).
+func setupTestProject(t *testing.T, repositoryNames ...string) (string, []Repository) {
 	t.Helper()
 	base := t.TempDir()
 	base, _ = filepath.EvalSymlinks(base)
 
-	repoDir := filepath.Join(base, "repos")
+	repositoryDir := filepath.Join(base, "repositories")
 	wsRoot := filepath.Join(base, "workspaces")
-	os.MkdirAll(repoDir, 0o755)
+	os.MkdirAll(repositoryDir, 0o755)
 	os.MkdirAll(wsRoot, 0o755)
 
-	var repos []Repo
-	for _, name := range repoNames {
-		repoPath := filepath.Join(repoDir, name)
+	var repositories []Repository
+	for _, name := range repositoryNames {
+		repositoryPath := filepath.Join(repositoryDir, name)
 		steps := [][]string{
-			{"git", "init", repoPath},
-			{"git", "-C", repoPath, "config", "user.email", "test@test.com"},
-			{"git", "-C", repoPath, "config", "user.name", "Test"},
-			{"git", "-C", repoPath, "commit", "--allow-empty", "-m", "initial"},
+			{"git", "init", repositoryPath},
+			{"git", "-C", repositoryPath, "config", "user.email", "test@test.com"},
+			{"git", "-C", repositoryPath, "config", "user.name", "Test"},
+			{"git", "-C", repositoryPath, "commit", "--allow-empty", "-m", "initial"},
 		}
 		for _, args := range steps {
 			cmd := exec.Command(args[0], args[1:]...)
@@ -37,24 +37,24 @@ func setupTestProject(t *testing.T, repoNames ...string) (string, []Repo) {
 				t.Fatalf("%v failed: %s\n%s", args, err, out)
 			}
 		}
-		repos = append(repos, Repo{Name: name, Path: repoPath})
+		repositories = append(repositories, Repository{Name: name, Path: repositoryPath})
 	}
 
-	return wsRoot, repos
+	return wsRoot, repositories
 }
 
 func TestCreateAndStatus(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api", "web")
+	wsRoot, repositories := setupTestProject(t, "api", "web")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	if err := mgr.Create(ctx, "test-branch", repos, true); err != nil {
+	if err := mgr.Create(ctx, "test-branch", repositories, true); err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
 
 	// Verify workspace directory structure.
-	for _, repo := range repos {
-		wtPath := filepath.Join(wsRoot, "test-branch", repo.Name)
+	for _, repository := range repositories {
+		wtPath := filepath.Join(wsRoot, "test-branch", repository.Name)
 		if _, err := os.Stat(wtPath); err != nil {
 			t.Errorf("worktree %s should exist", wtPath)
 		}
@@ -66,41 +66,41 @@ func TestCreateAndStatus(t *testing.T) {
 		t.Fatalf("Status() error: %v", err)
 	}
 	if len(statuses) != 2 {
-		t.Fatalf("Status() returned %d repos, want 2", len(statuses))
+		t.Fatalf("Status() returned %d repositories, want 2", len(statuses))
 	}
 	for _, s := range statuses {
 		if s.Branch != "test-branch" {
-			t.Errorf("repo %s branch = %q, want %q", s.Name, s.Branch, "test-branch")
+			t.Errorf("repository %s branch = %q, want %q", s.Name, s.Branch, "test-branch")
 		}
 		if s.Dirty {
-			t.Errorf("repo %s should be clean", s.Name)
+			t.Errorf("repository %s should be clean", s.Name)
 		}
 	}
 }
 
 func TestCreateIdempotent(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	if err := mgr.Create(ctx, "idem-branch", repos, true); err != nil {
+	if err := mgr.Create(ctx, "idem-branch", repositories, true); err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
 
 	// Second call should not error.
-	if err := mgr.Create(ctx, "idem-branch", repos, true); err != nil {
+	if err := mgr.Create(ctx, "idem-branch", repositories, true); err != nil {
 		t.Fatalf("Create() second call error: %v", err)
 	}
 }
 
 func TestRemove(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "rm-branch", repos, true)
+	mgr.Create(ctx, "rm-branch", repositories, true)
 
-	if err := mgr.Remove(ctx, "rm-branch", repos, false); err != nil {
+	if err := mgr.Remove(ctx, "rm-branch", repositories, false); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
 
@@ -111,36 +111,36 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-func TestRemoveBlockedByDirtyRepo(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+func TestRemoveBlockedByDirtyRepository(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "dirty-branch", repos, true)
+	mgr.Create(ctx, "dirty-branch", repositories, true)
 
 	// Make the worktree dirty.
 	wtPath := filepath.Join(wsRoot, "dirty-branch", "api")
 	os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("x"), 0o644)
 
 	// Should fail without force.
-	if err := mgr.Remove(ctx, "dirty-branch", repos, false); err == nil {
-		t.Error("Remove() should fail with dirty repo")
+	if err := mgr.Remove(ctx, "dirty-branch", repositories, false); err == nil {
+		t.Error("Remove() should fail with dirty repository")
 	}
 
 	// Should succeed with force.
-	if err := mgr.Remove(ctx, "dirty-branch", repos, true); err != nil {
+	if err := mgr.Remove(ctx, "dirty-branch", repositories, true); err != nil {
 		t.Fatalf("Remove(force=true) error: %v", err)
 	}
 }
 
 func TestRemoveWithNestedBranchName(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-123", repos, true)
+	mgr.Create(ctx, "feature/PROJ-123", repositories, true)
 
-	if err := mgr.Remove(ctx, "feature/PROJ-123", repos, false); err != nil {
+	if err := mgr.Remove(ctx, "feature/PROJ-123", repositories, false); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
 
@@ -150,23 +150,23 @@ func TestRemoveWithNestedBranchName(t *testing.T) {
 	}
 }
 
-func TestMissingRepo(t *testing.T) {
+func TestMissingRepository(t *testing.T) {
 	wsRoot, _ := setupTestProject(t)
 	mgr := NewManager(git.New(), wsRoot)
 
-	missing := []Repo{{Name: "nonexistent", Path: "/tmp/does-not-exist"}}
+	missing := []Repository{{Name: "nonexistent", Path: "/tmp/does-not-exist"}}
 	err := mgr.Create(context.Background(), "test", missing, true)
 	if err == nil {
-		t.Error("Create() should fail for missing repo")
+		t.Error("Create() should fail for missing repository")
 	}
 }
 
 func TestDetectWorkspaceFromWorktree(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api", "web")
+	wsRoot, repositories := setupTestProject(t, "api", "web")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-123", repos, true)
+	mgr.Create(ctx, "feature/PROJ-123", repositories, true)
 
 	wtPath := filepath.Join(wsRoot, "feature", "PROJ-123", "api")
 	name, err := mgr.DetectWorkspace(wtPath)
@@ -179,11 +179,11 @@ func TestDetectWorkspaceFromWorktree(t *testing.T) {
 }
 
 func TestDetectWorkspaceFromRoot(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-456", repos, true)
+	mgr.Create(ctx, "feature/PROJ-456", repositories, true)
 
 	// At the workspace root itself (not inside a worktree).
 	wsPath := filepath.Join(wsRoot, "feature", "PROJ-456")
@@ -197,11 +197,11 @@ func TestDetectWorkspaceFromRoot(t *testing.T) {
 }
 
 func TestDetectWorkspaceFromSubdir(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-789", repos, true)
+	mgr.Create(ctx, "feature/PROJ-789", repositories, true)
 
 	subdir := filepath.Join(wsRoot, "feature", "PROJ-789", "api", "src", "pkg")
 	os.MkdirAll(subdir, 0o755)
@@ -226,11 +226,11 @@ func TestDetectWorkspaceNotInside(t *testing.T) {
 }
 
 func TestDetectName(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-123", repos, true)
+	mgr.Create(ctx, "feature/PROJ-123", repositories, true)
 
 	wtPath := filepath.Join(wsRoot, "feature", "PROJ-123", "api")
 	name, err := DetectName(wsRoot, wtPath)
@@ -243,11 +243,11 @@ func TestDetectName(t *testing.T) {
 }
 
 func TestDetectNameFromSubdirectory(t *testing.T) {
-	wsRoot, repos := setupTestProject(t, "api")
+	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)
 	ctx := context.Background()
 
-	mgr.Create(ctx, "feature/PROJ-456", repos, true)
+	mgr.Create(ctx, "feature/PROJ-456", repositories, true)
 
 	// Create a nested subdirectory inside the worktree.
 	subdir := filepath.Join(wsRoot, "feature", "PROJ-456", "api", "src", "pkg")

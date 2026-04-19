@@ -81,7 +81,7 @@ func issueFromWorkspacePath() string {
 		return ""
 	}
 
-	// Try worktree-based detection (CWD is inside a repo worktree).
+	// Try worktree-based detection (CWD is inside a repository worktree).
 	if name, err := workspace.DetectName(wsRoot, cwd); err == nil {
 		if issue := extractIssue(name); issue != "" {
 			return issue

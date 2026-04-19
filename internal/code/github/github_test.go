@@ -38,7 +38,7 @@ func TestCreatePR(t *testing.T) {
 
 	pr, err := a.CreatePR(context.Background(), code.CreatePRRequest{
 		Owner: "org",
-		Repo:  "repo",
+		Repository: "repo",
 		Head:  "feature/test",
 		Base:  "main",
 		Title: "[PROJ-1] Test",
@@ -81,7 +81,7 @@ func TestCreatePRIdempotent(t *testing.T) {
 	a := NewWithClient(server.Client(), server.URL, "token")
 
 	pr, err := a.CreatePR(context.Background(), code.CreatePRRequest{
-		Owner: "org", Repo: "repo", Head: "branch", Base: "main", Title: "New",
+		Owner: "org", Repository: "repo", Head: "branch", Base: "main", Title: "New",
 	})
 	if err != nil {
 		t.Fatalf("CreatePR() error: %v", err)
@@ -184,7 +184,7 @@ func TestCreateRelease(t *testing.T) {
 
 	rel, err := a.CreateRelease(context.Background(), code.CreateReleaseRequest{
 		Owner:  "org",
-		Repo:   "repo",
+		Repository: "repo",
 		Tag:    "v1.2.4",
 		Target: "main",
 		Name:   "v1.2.4",

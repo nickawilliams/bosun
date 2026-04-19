@@ -22,7 +22,7 @@ func newCleanupCmd() *cobra.Command {
 			}
 			rootCard(cmd, issue).Print()
 
-			repos, err := resolveRepos(nil)
+			repositories, err := resolveRepositories(nil)
 			if err != nil {
 				return err
 			}
@@ -32,14 +32,14 @@ func newCleanupCmd() *cobra.Command {
 
 			// --- Plan + Apply ---
 			plan := ui.NewPlan()
-			for _, r := range repos {
+			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "Remove Worktree", r.Name, branchName)
 			}
-			for _, r := range repos {
+			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "Delete Branch", r.Name, fmt.Sprintf("%s (local + remote)", branchName))
 			}
 
-			wsRepos := cliReposToWorkspaceRepos(repos)
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 			actions := []PlanAction{
 				func() error {
 					mgr, err := newWorkspaceManager()

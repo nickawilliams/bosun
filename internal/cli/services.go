@@ -20,24 +20,24 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Repo represents a resolved repository with a short name and absolute path.
-type Repo struct {
+// Repository represents a resolved repository with a short name and absolute path.
+type Repository struct {
 	Name string // Directory basename, used for worktree directory names.
-	Path string // Absolute path to the repo.
+	Path string // Absolute path to the repository.
 }
 
-// resolveRepos expands the repos: globs from config, filters to directories
-// containing .git/, and returns the resolved set. If filterNames is non-empty,
-// only repos whose names match are returned.
-func resolveRepos(filterNames []string) ([]Repo, error) {
-	patterns := viper.GetStringSlice("repos")
+// resolveRepositories expands the repositories: globs from config, filters to
+// directories containing .git/, and returns the resolved set. If filterNames
+// is non-empty, only repositories whose names match are returned.
+func resolveRepositories(filterNames []string) ([]Repository, error) {
+	patterns := viper.GetStringSlice("repositories")
 	if len(patterns) == 0 {
-		return nil, fmt.Errorf("no repo patterns configured: set repos in .bosun/config.yaml")
+		return nil, fmt.Errorf("no repository patterns configured: set repositories in .bosun/config.yaml")
 	}
 
 	projectRoot := config.FindProjectRoot()
 
-	var repos []Repo
+	var repositories []Repository
 	seen := make(map[string]bool)
 
 	for _, pattern := range patterns {
@@ -72,7 +72,7 @@ func resolveRepos(filterNames []string) ([]Repo, error) {
 			}
 			seen[abs] = true
 
-			repos = append(repos, Repo{Name: name, Path: abs})
+			repositories = append(repositories, Repository{Name: name, Path: abs})
 		}
 	}
 
@@ -81,26 +81,26 @@ func resolveRepos(filterNames []string) ([]Repo, error) {
 		for _, n := range filterNames {
 			filter[n] = true
 		}
-		var filtered []Repo
-		for _, r := range repos {
+		var filtered []Repository
+		for _, r := range repositories {
 			if filter[r.Name] {
 				filtered = append(filtered, r)
 			}
 		}
 		if len(filtered) == 0 {
 			return nil, fmt.Errorf(
-				"no repos matched filter %v (available: %s)",
-				filterNames, repoNames(repos),
+				"no repositories matched filter %v (available: %s)",
+				filterNames, repositoryNames(repositories),
 			)
 		}
-		repos = filtered
+		repositories = filtered
 	}
 
-	if len(repos) == 0 {
-		return nil, fmt.Errorf("no repos found matching configured patterns")
+	if len(repositories) == 0 {
+		return nil, fmt.Errorf("no repositories found matching configured patterns")
 	}
 
-	return repos, nil
+	return repositories, nil
 }
 
 // newWorkspaceManager creates a workspace.Manager from current config.
@@ -149,19 +149,19 @@ func resolveWorkspaceName(args []string) (string, error) {
 	return workspace.DetectName(wsRoot, cwd)
 }
 
-// cliReposToWorkspaceRepos converts CLI Repo types to workspace Repo types.
-func cliReposToWorkspaceRepos(repos []Repo) []workspace.Repo {
-	result := make([]workspace.Repo, len(repos))
-	for i, r := range repos {
-		result[i] = workspace.Repo{Name: r.Name, Path: r.Path}
+// cliRepositoriesToWorkspaceRepositories converts CLI Repository types to workspace Repository types.
+func cliRepositoriesToWorkspaceRepositories(repositories []Repository) []workspace.Repository {
+	result := make([]workspace.Repository, len(repositories))
+	for i, r := range repositories {
+		result[i] = workspace.Repository{Name: r.Name, Path: r.Path}
 	}
 	return result
 }
 
-// repoNames returns a comma-separated string of repo names.
-func repoNames(repos []Repo) string {
-	names := make([]string, len(repos))
-	for i, r := range repos {
+// repositoryNames returns a comma-separated string of repository names.
+func repositoryNames(repositories []Repository) string {
+	names := make([]string, len(repositories))
+	for i, r := range repositories {
 		names[i] = r.Name
 	}
 	return strings.Join(names, ", ")
