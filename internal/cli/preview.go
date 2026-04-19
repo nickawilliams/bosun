@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -20,26 +19,18 @@ func newPreviewCmd() *cobra.Command {
 			rootCard(cmd, issue).Print()
 
 			ctx := cmd.Context()
-			statusName, _ := resolveStatus("preview")
+			tracker, _ := newIssueTracker()
 
 			// --- Plan + Apply ---
-			plan := ui.NewPlan()
-			addStatusPlanItem(plan, issue, "", "preview")
 			// TODO: Trigger deployment (phase 6)
 			// TODO: Reply to notification thread (phase 5)
 
-			tracker, trackerErr := newIssueTracker()
-			var actions []PlanAction
-			if trackerErr == nil && statusName != "" {
-				actions = append(actions, func() error {
-					return tracker.SetStatus(ctx, issue, statusName)
-				})
+			var actions []Action
+			if sa, ok := statusAction(tracker, issue, "", "preview"); ok {
+				actions = append(actions, sa)
 			}
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return err
-			}
-			return nil
+			return runActions(cmd, ctx, actions)
 		},
 	}
 

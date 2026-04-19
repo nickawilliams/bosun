@@ -10,6 +10,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
+	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -133,45 +134,74 @@ func newStartCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
+
 			cwd, _ := os.Getwd()
-			plan := ui.NewPlan()
+			g := git.New()
+			var actions []Action
+
+			// Per-repo branch actions, then worktree actions (order matters:
+			// branches must exist before worktrees can be created).
 			for _, r := range repositories {
-				plan.Add(ui.PlanCreate, "Create Branch", r.Name, branchName)
-				wtPath := filepath.Join(wsRoot, branchName, r.Name)
-				if rel, err := filepath.Rel(cwd, wtPath); err == nil {
-					wtPath = rel
-				}
-				plan.Add(ui.PlanCreate, "Create Worktree", r.Name, wtPath)
-			}
-			addStatusPlanItem(plan, issue, detail.Status, "in_progress")
+				repoPath := r.Path
+				repoName := r.Name
 
-			// Resolve status name for the action.
-			statusName, _ := resolveStatus("in_progress")
-
-			// Build actions list.
-			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
-			actions := []PlanAction{
-				func() error {
-					mgr, err := newWorkspaceManager()
-					if err != nil {
-						return err
-					}
-					return mgr.Create(context.Background(), branchName, wsRepos, fromHead)
-				},
-			}
-
-			// Add status transition action if tracker is available.
-			if trackerErr == nil && statusName != "" {
-				actions = append(actions, func() error {
-					return tracker.SetStatus(ctx, issue, statusName)
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Create Branch",
+					Target: repoName,
+					Assess: func(ctx context.Context) (ActionState, string, error) {
+						exists, err := g.BranchExists(ctx, repoPath, branchName)
+						if err != nil {
+							return 0, "", err
+						}
+						if exists {
+							return ActionCompleted, branchName, nil
+						}
+						return ActionNeeded, branchName, nil
+					},
+					Apply: func(ctx context.Context) error {
+						if fromHead {
+							return g.CreateBranchFromHead(ctx, repoPath, branchName)
+						}
+						return g.CreateBranch(ctx, repoPath, branchName)
+					},
 				})
 			}
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return err
+			for _, r := range repositories {
+				repoPath := r.Path
+				repoName := r.Name
+				worktreePath := filepath.Join(wsRoot, branchName, repoName)
+
+				displayPath := worktreePath
+				if rel, err := filepath.Rel(cwd, worktreePath); err == nil {
+					displayPath = rel
+				}
+
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Create Worktree",
+					Target: repoName,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						if _, err := os.Stat(worktreePath); err == nil {
+							return ActionCompleted, displayPath, nil
+						}
+						return ActionNeeded, displayPath, nil
+					},
+					Apply: func(ctx context.Context) error {
+						if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+							return fmt.Errorf("creating workspace directory: %w", err)
+						}
+						return g.CreateWorktree(ctx, repoPath, worktreePath, branchName)
+					},
+				})
 			}
 
-			return nil
+			if sa, ok := statusAction(tracker, issue, detail.Status, "in_progress"); ok {
+				actions = append(actions, sa)
+			}
+
+			return runActions(cmd, ctx, actions)
 		},
 	}
 

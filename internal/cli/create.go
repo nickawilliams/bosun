@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"charm.land/huh/v2"
@@ -81,27 +82,32 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
-			plan := ui.NewPlan()
-			plan.Add(ui.PlanCreate, "Create Issue", project, fmt.Sprintf("%s: %q", issueType, title))
-
 			ctx := cmd.Context()
 			var created issuepkg.Issue
 
-			actions := []PlanAction{
-				func() error {
-					var createErr error
-					created, createErr = tracker.CreateIssue(ctx, issuepkg.CreateRequest{
-						Project:     project,
-						Title:       title,
-						Description: description,
-						Type:        issueType,
-						Size:        size,
-					})
-					return createErr
+			actions := []Action{
+				{
+					Op:     ui.PlanCreate,
+					Label:  "Create Issue",
+					Target: project,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						return ActionNeeded, fmt.Sprintf("%s: %q", issueType, title), nil
+					},
+					Apply: func(ctx context.Context) error {
+						var createErr error
+						created, createErr = tracker.CreateIssue(ctx, issuepkg.CreateRequest{
+							Project:     project,
+							Title:       title,
+							Description: description,
+							Type:        issueType,
+							Size:        size,
+						})
+						return createErr
+					},
 				},
 			}
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
+			if err := runActions(cmd, ctx, actions); err != nil {
 				return err
 			}
 

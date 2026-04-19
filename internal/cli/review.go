@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/code"
@@ -11,14 +12,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
-
-type reviewRepositoryPlan struct {
-	repository Repository
-	owner      string
-	name       string
-	branch     string
-	existing   code.PullRequest
-}
 
 func newReviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -69,9 +62,15 @@ func newReviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
-			// Per-repository resolution.
+			// --- Plan + Apply ---
+
+			createLabel := "Create Pull Request"
+			if draft {
+				createLabel = "Create Draft Pull Request"
+			}
+
 			g := git.New()
-			var repositoryPlans []reviewRepositoryPlan
+			var actions []Action
 
 			if host != nil {
 				for _, r := range repositories {
@@ -87,72 +86,47 @@ func newReviewCmd() *cobra.Command {
 						continue
 					}
 
-					existing, _ := host.GetPRForBranch(ctx, identity.Owner, identity.Name, branch)
+					owner := identity.Owner
+					repoName := identity.Name
 
-					repositoryPlans = append(repositoryPlans, reviewRepositoryPlan{
-						repository: r,
-						owner:      identity.Owner,
-						name:       identity.Name,
-						branch:     branch,
-						existing:   existing,
+					actions = append(actions, Action{
+						Op:     ui.PlanCreate,
+						Label:  createLabel,
+						Target: r.Name,
+						Assess: func(ctx context.Context) (ActionState, string, error) {
+							existing, err := host.GetPRForBranch(ctx, owner, repoName, branch)
+							if err != nil {
+								return 0, "", err
+							}
+							if existing.Number > 0 {
+								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
+							}
+							return ActionNeeded, fmt.Sprintf("%s → %s", branch, baseBranch), nil
+						},
+						Apply: func(ctx context.Context) error {
+							_, err := host.CreatePR(ctx, code.CreatePRRequest{
+								Owner:      owner,
+								Repository: repoName,
+								Head:       branch,
+								Base:       baseBranch,
+								Title:      prTitle,
+								Draft:      draft,
+							})
+							return err
+						},
 					})
 				}
-			}
-
-			// --- Plan + Apply ---
-			plan := ui.NewPlan()
-			prLabel := "Pull Request"
-			createLabel := "Create Pull Request"
-			if draft {
-				prLabel = "Draft Pull Request"
-				createLabel = "Create Draft Pull Request"
-			}
-			for _, rp := range repositoryPlans {
-				branchDetail := fmt.Sprintf("%s → %s", rp.branch, baseBranch)
-				if rp.existing.Number > 0 {
-					plan.Add(ui.PlanNoChange, prLabel, rp.repository.Name, fmt.Sprintf("#%d", rp.existing.Number))
-				} else {
-					plan.Add(ui.PlanCreate, createLabel, rp.repository.Name, branchDetail)
-				}
-			}
-			if !draft {
-				addStatusPlanItem(plan, issue, detail.Status, "review")
-			}
-
-			// Build actions — one per new PR + status transition.
-			var actions []PlanAction
-			for _, rp := range repositoryPlans {
-				if rp.existing.Number > 0 {
-					continue // skip existing PRs
-				}
-				actions = append(actions, func() error {
-					_, err := host.CreatePR(ctx, code.CreatePRRequest{
-						Owner:      rp.owner,
-						Repository: rp.name,
-						Head:       rp.branch,
-						Base:       baseBranch,
-						Title:      prTitle,
-						Draft:      draft,
-					})
-					return err
-				})
 			}
 
 			if !draft {
-				statusName, _ := resolveStatus("review")
-				if trackerErr == nil && statusName != "" {
-					actions = append(actions, func() error {
-						return tracker.SetStatus(ctx, issue, statusName)
-					})
+				if sa, ok := statusAction(tracker, issue, detail.Status, "review"); ok {
+					actions = append(actions, sa)
 				}
 			}
 
 			// TODO: Notify (phase 5)
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return err
-			}
-			return nil
+			return runActions(cmd, ctx, actions)
 		},
 	}
 

@@ -1,26 +1,41 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
 
-// addStatusPlanItem adds a status transition item to the plan.
-// If currentStatus is known (non-empty), it shows the full transition
-// and detects no-ops. Otherwise shows just the target.
-func addStatusPlanItem(plan *ui.Plan, issueKey, currentStatus, targetStatusKey string) {
+// statusAction builds an Action for an issue status transition. Returns
+// (action, true) on success, or (zero, false) if the tracker is nil or the
+// target status key cannot be resolved — letting the caller skip gracefully.
+func statusAction(tracker issue.Tracker, issueKey, currentStatus, targetStatusKey string) (Action, bool) {
+	if tracker == nil {
+		return Action{}, false
+	}
 	statusName, err := resolveStatus(targetStatusKey)
-	if err != nil {
-		return
+	if err != nil || statusName == "" {
+		return Action{}, false
 	}
 
-	if currentStatus != "" && strings.EqualFold(currentStatus, statusName) {
-		plan.Add(ui.PlanNoChange, "Issue Status", issueKey, currentStatus)
-	} else if currentStatus != "" {
-		plan.Add(ui.PlanModify, "Update Issue Status", issueKey, fmt.Sprintf("%s → %s", currentStatus, statusName))
-	} else {
-		plan.Add(ui.PlanModify, "Update Issue Status", issueKey, fmt.Sprintf("→ %s", statusName))
-	}
+	return Action{
+		Op:     ui.PlanModify,
+		Label:  "Update Issue Status",
+		Target: issueKey,
+		Assess: func(_ context.Context) (ActionState, string, error) {
+			if currentStatus != "" && strings.EqualFold(currentStatus, statusName) {
+				return ActionCompleted, currentStatus, nil
+			}
+			if currentStatus != "" {
+				return ActionNeeded, fmt.Sprintf("%s → %s", currentStatus, statusName), nil
+			}
+			return ActionNeeded, fmt.Sprintf("→ %s", statusName), nil
+		},
+		Apply: func(ctx context.Context) error {
+			return tracker.SetStatus(ctx, issueKey, statusName)
+		},
+	}, true
 }

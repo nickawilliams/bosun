@@ -51,24 +51,16 @@ func newReleaseCmd() *cobra.Command {
 			}
 
 			// --- Plan + Apply ---
-			plan := ui.NewPlan()
-			addStatusPlanItem(plan, issue, "", "done")
 			// TODO: Trigger production deployment (phase 6)
 
-			statusName, _ := resolveStatus("done")
-			tracker, trackerErr := newIssueTracker()
+			tracker, _ := newIssueTracker()
 
-			var actions []PlanAction
-			if trackerErr == nil && statusName != "" {
-				actions = append(actions, func() error {
-					return tracker.SetStatus(ctx, issue, statusName)
-				})
+			var actions []Action
+			if sa, ok := statusAction(tracker, issue, "", "done"); ok {
+				actions = append(actions, sa)
 			}
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return err
-			}
-			return nil
+			return runActions(cmd, ctx, actions)
 		},
 	}
 

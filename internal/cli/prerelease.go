@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/code"
@@ -9,15 +10,6 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
 )
-
-type prereleaseRepositoryPlan struct {
-	repository  Repository
-	owner       string
-	name        string
-	branch      string
-	currentTag  string
-	nextVersion string
-}
 
 func newPrereleaseCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -49,8 +41,9 @@ func newPrereleaseCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
+			// Per-repository resolution.
 			g := git.New()
-			var repositoryPlans []prereleaseRepositoryPlan
+			var actions []Action
 
 			if host != nil {
 				for _, r := range repositories {
@@ -66,10 +59,13 @@ func newPrereleaseCmd() *cobra.Command {
 						continue
 					}
 
+					owner := identity.Owner
+					repoName := identity.Name
+
 					var currentTag string
 					if err := ui.RunCard(fmt.Sprintf("Fetching latest tag for %s", r.Name), func() error {
 						var e error
-						currentTag, e = host.GetLatestTag(ctx, identity.Owner, identity.Name)
+						currentTag, e = host.GetLatestTag(ctx, owner, repoName)
 						return e
 					}); err != nil {
 						ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
@@ -82,57 +78,43 @@ func newPrereleaseCmd() *cobra.Command {
 						continue
 					}
 
-					repositoryPlans = append(repositoryPlans, prereleaseRepositoryPlan{
-						repository:  r,
-						owner:       identity.Owner,
-						name:        identity.Name,
-						branch:      branch,
-						currentTag:  currentTag,
-						nextVersion: nextVersion,
+					from := currentTag
+					if from == "" {
+						from = "(none)"
+					}
+
+					actions = append(actions, Action{
+						Op:     ui.PlanCreate,
+						Label:  "Create Release",
+						Target: r.Name,
+						Assess: func(_ context.Context) (ActionState, string, error) {
+							if currentTag == nextVersion {
+								return ActionCompleted, currentTag, nil
+							}
+							return ActionNeeded, fmt.Sprintf("%s → %s", from, nextVersion), nil
+						},
+						Apply: func(ctx context.Context) error {
+							_, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
+								Owner:      owner,
+								Repository: repoName,
+								Tag:        nextVersion,
+								Target:     branch,
+								Name:       nextVersion,
+							})
+							return err
+						},
 					})
 				}
 			}
 
-			// --- Plan + Apply ---
-			plan := ui.NewPlan()
-			for _, rp := range repositoryPlans {
-				from := rp.currentTag
-				if from == "" {
-					from = "(none)"
-				}
-				plan.Add(ui.PlanCreate, "Create Release", rp.repository.Name, fmt.Sprintf("%s → %s", from, rp.nextVersion))
-			}
-			addStatusPlanItem(plan, issue, "", "ready_for_release")
-
-			// Build actions.
-			var actions []PlanAction
-			for _, rp := range repositoryPlans {
-				actions = append(actions, func() error {
-					_, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
-						Owner:      rp.owner,
-						Repository: rp.name,
-						Tag:        rp.nextVersion,
-						Target:     rp.branch,
-						Name:       rp.nextVersion,
-					})
-					return err
-				})
-			}
-
-			statusName, _ := resolveStatus("ready_for_release")
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil && statusName != "" {
-				actions = append(actions, func() error {
-					return tracker.SetStatus(ctx, issue, statusName)
-				})
+			tracker, _ := newIssueTracker()
+			if sa, ok := statusAction(tracker, issue, "", "ready_for_release"); ok {
+				actions = append(actions, sa)
 			}
 
 			// TODO: Notify release channel (phase 5)
 
-			if err := runPlanCard(cmd, plan, actions); err != nil {
-				return err
-			}
-			return nil
+			return runActions(cmd, ctx, actions)
 		},
 	}
 
