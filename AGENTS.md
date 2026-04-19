@@ -89,6 +89,6 @@ When adding a new command, use these as models:
 - **No local state files.** Issue tracker is the source of truth. Everything
   is queried from providers at runtime.
 - **Idempotent actions.** Commands should be safe to re-run.
-- **Multi-repo fan-out.** Lifecycle commands operate on all configured repos.
+- **Multi-repository fan-out.** Lifecycle commands operate on all configured repositories.
 - **Config resolution.** Global config merges under project config. Env vars
   with `BOSUN_` prefix override both via Viper.

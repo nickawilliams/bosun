@@ -8,6 +8,33 @@ See [DESIGN.md](DESIGN.md) for the full design document.
 
 ## Lifecycle Commands
 
+### Timeline
+
+| #   | Actor              | Issue Status            | VCS                          | Code Host       | Env               | Notify          |
+| --- | ------------------ | ----------------------- | ---------------------------- | --------------- | ----------------- | --------------- |
+| —   | _(backlog)_        | Backlog                 | —                            | —               | —                 | —               |
+| 1   | `bosun create`     | **→ Ready**             | —                            | —               | —                 | —               |
+| 2   | `bosun start`      | **→ In Progress**       | Branch + worktrees           | —               | —                 | —               |
+| —   | _developer works_  | In Progress             | Commits pushed               | —               | —                 | —               |
+| 3   | `bosun review`     | **→ Review**            | —                            | PRs opened      | —                 | Review channel  |
+| —   | _code review_      | Review                  | —                            | Approvals, CI   | —                 | —               |
+| 4   | `bosun preview`    | **→ In Preview Env**    | —                            | —               | Deployed from PRs | Thread w/ URL   |
+| —   | _test + iterate_   | In Preview Env          | Fixes pushed                 | PRs updated     | Env updated       | —               |
+| —   | _PRs merged_       | In Preview Env          | —                            | PRs merged      | —                 | —               |
+| 5   | `bosun prerelease` | **→ Ready for Release** | —                            | Tags + releases | —                 | Release channel |
+| 6   | `bosun release`    | **→ Done**              | —                            | —               | Prod deployed     | —               |
+| 7   | `bosun cleanup`    | _(Done)_                | Branches + worktrees deleted | —               | —                 | —               |
+
+`bosun status` is not a lifecycle step — it queries all systems and displays
+current state at any point.
+
+`preview` only transitions the issue status when the issue is in the expected
+source state (`Review`). If the issue is still `In Progress` (e.g., only draft
+PRs exist via `review --draft`), the deployment still happens but the status
+stays put.
+
+### Progress
+
 - [x] **create** — Create a new issue
   - [x] Issue Tracker: Create issue with given attributes
 - [x] **start** — Begin work on an issue
@@ -15,7 +42,7 @@ See [DESIGN.md](DESIGN.md) for the full design document.
   - [x] Workspace: Create worktrees under workspace root
   - [x] Issue Tracker: Transition to `In Progress`
 - [ ] **review** — Submit for code review
-  - [x] Code Host: Create pull request(s) per repo with changes
+  - [x] Code Host: Create pull request(s) per repository with changes
   - [ ] Notification: Notify review channel with PR + issue URLs
   - [x] Issue Tracker: Transition to `Review`
 - [ ] **preview** — Deploy to preview environment
@@ -23,7 +50,7 @@ See [DESIGN.md](DESIGN.md) for the full design document.
   - [ ] Notification: Reply to review thread with preview URL
   - [x] Issue Tracker: Transition to `In Preview Env`
 - [ ] **prerelease** — Prepare release artifacts
-  - [x] Code Host: Create release/tag per repo (version from latest tag + `--bump`)
+  - [x] Code Host: Create release/tag per repository (version from latest tag + `--bump`)
   - [ ] Notification: Notify release channel with release details
   - [x] Issue Tracker: Transition to `Ready for Release`
 - [ ] **release** — Deploy to production
@@ -31,12 +58,12 @@ See [DESIGN.md](DESIGN.md) for the full design document.
   - [ ] CI/CD: Trigger production deployment workflow
   - [x] Issue Tracker: Transition to `Done`
 - [x] **cleanup** — Remove workspace and feature branches
-  - [x] Workspace: Remove worktrees for all repos
+  - [x] Workspace: Remove worktrees for all repositories
   - [x] VCS: Delete local and remote feature branches
 - [ ] **status** — Show issue lifecycle status
   - [x] Issue Tracker: Issue details + status
-  - [x] VCS: Branch status per repo
-  - [x] Code Host: PR status and review state per repo
+  - [x] VCS: Branch status per repository
+  - [x] Code Host: PR status and review state per repository
   - [ ] CI/CD: Last build/deploy status
   - [ ] Ephemeral: Preview environment status + URL
 
@@ -140,7 +167,7 @@ bosun --help
 
 ### Additional: Project Setup + Config
 
-- [x] `bosun init` with auto-detection of repos and interactive setup
+- [x] `bosun init` with auto-detection of repositories and interactive setup
 - [x] `bosun config` subcommand (get, set, list, edit, path, show, check, unset)
 - [x] `bosun doctor` for config and connectivity health checks
 - [x] Centralized config schema with labels, options, defaults, secrets
@@ -177,7 +204,7 @@ bosun start --issue PROJ-123 --dry-run  # shows plan, exits
 - [x] Display modes (compact, comfy) via `display_mode` config
 - [x] Color modes (truecolor, ansi, none) via `color_mode` config + `NO_COLOR` support
 - [x] Breadcrumb titles on command headers
-- [x] Multi-select repo picker for `start` command
+- [x] Multi-select repository picker for `start` command
 - [x] `RunCardReplace` for in-place card updates (e.g., spinner → result)
 - [x] Schema-driven config forms (select, text, secret inputs)
 
