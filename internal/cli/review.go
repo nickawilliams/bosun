@@ -35,6 +35,7 @@ func newReviewCmd() *cobra.Command {
 			rootCard(cmd, issue).Print()
 
 			ctx := cmd.Context()
+			draft, _ := cmd.Flags().GetBool("draft")
 
 			// --- Resolve ---
 
@@ -100,15 +101,23 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Plan + Apply ---
 			plan := ui.NewPlan()
+			prLabel := "Pull Request"
+			createLabel := "Create Pull Request"
+			if draft {
+				prLabel = "Draft Pull Request"
+				createLabel = "Create Draft Pull Request"
+			}
 			for _, rp := range repositoryPlans {
 				branchDetail := fmt.Sprintf("%s → %s", rp.branch, baseBranch)
 				if rp.existing.Number > 0 {
-					plan.Add(ui.PlanNoChange, "Pull Request", rp.repository.Name, fmt.Sprintf("#%d", rp.existing.Number))
+					plan.Add(ui.PlanNoChange, prLabel, rp.repository.Name, fmt.Sprintf("#%d", rp.existing.Number))
 				} else {
-					plan.Add(ui.PlanCreate, "Create Pull Request", rp.repository.Name, branchDetail)
+					plan.Add(ui.PlanCreate, createLabel, rp.repository.Name, branchDetail)
 				}
 			}
-			addStatusPlanItem(plan, issue, detail.Status, "review")
+			if !draft {
+				addStatusPlanItem(plan, issue, detail.Status, "review")
+			}
 
 			// Build actions — one per new PR + status transition.
 			var actions []PlanAction
@@ -123,16 +132,19 @@ func newReviewCmd() *cobra.Command {
 						Head:       rp.branch,
 						Base:       baseBranch,
 						Title:      prTitle,
+						Draft:      draft,
 					})
 					return err
 				})
 			}
 
-			statusName, _ := resolveStatus("review")
-			if trackerErr == nil && statusName != "" {
-				actions = append(actions, func() error {
-					return tracker.SetStatus(ctx, issue, statusName)
-				})
+			if !draft {
+				statusName, _ := resolveStatus("review")
+				if trackerErr == nil && statusName != "" {
+					actions = append(actions, func() error {
+						return tracker.SetStatus(ctx, issue, statusName)
+					})
+				}
 			}
 
 			// TODO: Notify (phase 5)
@@ -146,5 +158,6 @@ func newReviewCmd() *cobra.Command {
 
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
+	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
 	return cmd
 }

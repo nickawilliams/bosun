@@ -74,11 +74,12 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 		return existing, nil
 	}
 
-	body := map[string]string{
+	body := map[string]any{
 		"title": req.Title,
 		"body":  req.Body,
 		"head":  req.Head,
 		"base":  req.Base,
+		"draft": req.Draft,
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/pulls", req.Owner, req.Repository)

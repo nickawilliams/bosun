@@ -19,6 +19,7 @@ type CreatePRRequest struct {
 	Base       string // Target branch (e.g., "main")
 	Title      string
 	Body       string
+	Draft      bool
 }
 
 // Release represents a release/tag on a code hosting platform.
