@@ -99,7 +99,7 @@ var configSchema = map[string]ConfigGroup{
 		Label: "Slack",
 
 		Keys: []ConfigKey{
-			{Key: "token", Label: "Bot token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true, Required: true},
+			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true, Required: true},
 			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
 			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
 		},
