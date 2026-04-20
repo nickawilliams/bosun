@@ -59,18 +59,21 @@ func newStartCmd() *cobra.Command {
 				case slugOverride != "":
 					slug = slugify(slugOverride)
 				case isInteractive():
-					slug = slugify(detail.Title)
+					suggested := slugify(detail.Title)
 					slugSlot := ui.NewSlot()
 					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch slug").Tight())
 					if err := runForm(
 						huh.NewInput().
 							Title("Slug").
+							Placeholder(suggested).
 							Value(&slug),
 					); err != nil {
 						return err
 					}
 					slugSlot.Clear()
-					if slug != "" {
+					if slug == "" {
+						slug = suggested
+					} else {
 						slug = slugify(slug)
 					}
 					ui.Complete(fmt.Sprintf("Branch slug: %s", slug))
