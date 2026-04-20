@@ -105,6 +105,64 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 	return repositories, nil
 }
 
+// resolveActiveRepositories resolves repositories scoped to the current
+// workspace when CWD is inside one, falling back to resolveRepositories
+// (global config patterns) otherwise. Commands that operate on worktrees
+// (review, prerelease) should use this instead of resolveRepositories so
+// they stay scoped to the workspace context.
+func resolveActiveRepositories(ctx context.Context, filterNames []string) ([]Repository, error) {
+	mgr, err := newWorkspaceManager()
+	if err != nil {
+		return resolveRepositories(filterNames)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return resolveRepositories(filterNames)
+	}
+
+	wsName, err := mgr.DetectWorkspace(cwd)
+	if err != nil {
+		return resolveRepositories(filterNames)
+	}
+
+	statuses, err := mgr.Status(ctx, wsName)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %s: %w", wsName, err)
+	}
+
+	repositories := make([]Repository, 0, len(statuses))
+	for _, s := range statuses {
+		repositories = append(repositories, Repository{Name: s.Name, Path: s.Path})
+	}
+
+	if len(filterNames) > 0 {
+		filter := make(map[string]bool, len(filterNames))
+		for _, n := range filterNames {
+			filter[n] = true
+		}
+		var filtered []Repository
+		for _, r := range repositories {
+			if filter[r.Name] {
+				filtered = append(filtered, r)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf(
+				"no repositories matched filter %v (workspace repos: %s)",
+				filterNames, repositoryNames(repositories),
+			)
+		}
+		repositories = filtered
+	}
+
+	if len(repositories) == 0 {
+		return nil, fmt.Errorf("no repositories found in workspace %s", wsName)
+	}
+
+	return repositories, nil
+}
+
 // newWorkspaceManager creates a workspace.Manager from current config.
 func newWorkspaceManager() (*workspace.Manager, error) {
 	projectRoot := config.FindProjectRoot()

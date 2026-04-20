@@ -33,7 +33,7 @@ func newPrereleaseCmd() *cobra.Command {
 			// --- Resolve ---
 
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
-			repositories, err := resolveRepositories(filterRepositories)
+			repositories, err := resolveActiveRepositories(ctx, filterRepositories)
 			if err != nil {
 				return err
 			}
