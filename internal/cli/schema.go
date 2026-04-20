@@ -88,6 +88,22 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "title_pattern", Label: "PR title pattern", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
 		},
 	},
+	"notification": {
+		Label: "Notification",
+
+		Keys: []ConfigKey{
+			{Key: "notification", Label: "Provider", Options: []string{"slack"}},
+		},
+	},
+	"slack": {
+		Label: "Slack",
+
+		Keys: []ConfigKey{
+			{Key: "token", Label: "Bot token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true, Required: true},
+			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
+			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
+		},
+	},
 	"color_mode": {
 		Label: "Color mode",
 

@@ -6,9 +6,11 @@ import (
 
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
+	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func newPrereleaseCmd() *cobra.Command {
@@ -44,6 +46,13 @@ func newPrereleaseCmd() *cobra.Command {
 			// Per-repository resolution.
 			g := git.New()
 			var actions []Action
+
+			type releaseResult struct {
+				repo    string
+				release code.Release
+				version string
+			}
+			var releaseResults []releaseResult
 
 			if host != nil {
 				for _, r := range repositories {
@@ -94,14 +103,20 @@ func newPrereleaseCmd() *cobra.Command {
 							return ActionNeeded, fmt.Sprintf("%s → %s", from, nextVersion), nil
 						},
 						Apply: func(ctx context.Context) error {
-							_, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
+							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 								Owner:      owner,
 								Repository: repoName,
 								Tag:        nextVersion,
 								Target:     branch,
 								Name:       nextVersion,
 							})
-							return err
+							if err != nil {
+								return err
+							}
+							releaseResults = append(releaseResults, releaseResult{
+								repo: r.Name, release: rel, version: nextVersion,
+							})
+							return nil
 						},
 					})
 				}
@@ -112,9 +127,28 @@ func newPrereleaseCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
-			// TODO: Notify release channel (phase 5)
+			if err := runActions(cmd, ctx, actions); err != nil {
+				return err
+			}
 
-			return runActions(cmd, ctx, actions)
+			// Post-apply: notify release channel.
+			if len(releaseResults) > 0 {
+				items := make([]notify.Item, len(releaseResults))
+				for i, r := range releaseResults {
+					items[i] = notify.Item{
+						Label:  r.repo,
+						URL:    r.release.URL,
+						Detail: r.version,
+					}
+				}
+				sendNotification(ctx, notify.Message{
+					Channel:  viper.GetString("slack.channel_release"),
+					IssueKey: issue,
+					Items:    items,
+				})
+			}
+
+			return nil
 		},
 	}
 

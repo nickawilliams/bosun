@@ -7,6 +7,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
@@ -72,6 +73,12 @@ func newReviewCmd() *cobra.Command {
 			g := git.New()
 			var actions []Action
 
+			type prResult struct {
+				repo string
+				pr   code.PullRequest
+			}
+			var prResults []prResult
+
 			if host != nil {
 				for _, r := range repositories {
 					branch, err := g.GetCurrentBranch(ctx, r.Path)
@@ -104,7 +111,7 @@ func newReviewCmd() *cobra.Command {
 							return ActionNeeded, fmt.Sprintf("%s → %s", branch, baseBranch), nil
 						},
 						Apply: func(ctx context.Context) error {
-							_, err := host.CreatePR(ctx, code.CreatePRRequest{
+							pr, err := host.CreatePR(ctx, code.CreatePRRequest{
 								Owner:      owner,
 								Repository: repoName,
 								Head:       branch,
@@ -112,7 +119,11 @@ func newReviewCmd() *cobra.Command {
 								Title:      prTitle,
 								Draft:      draft,
 							})
-							return err
+							if err != nil {
+								return err
+							}
+							prResults = append(prResults, prResult{repo: r.Name, pr: pr})
+							return nil
 						},
 					})
 				}
@@ -124,9 +135,30 @@ func newReviewCmd() *cobra.Command {
 				}
 			}
 
-			// TODO: Notify (phase 5)
+			if err := runActions(cmd, ctx, actions); err != nil {
+				return err
+			}
 
-			return runActions(cmd, ctx, actions)
+			// Post-apply: notify review channel.
+			if !draft && len(prResults) > 0 {
+				items := make([]notify.Item, len(prResults))
+				for i, r := range prResults {
+					items[i] = notify.Item{
+						Label:  r.repo,
+						URL:    r.pr.URL,
+						Detail: fmt.Sprintf("#%d", r.pr.Number),
+					}
+				}
+				sendNotification(ctx, notify.Message{
+					Channel:  viper.GetString("slack.channel_review"),
+					IssueKey: issue,
+					Title:    detail.Title,
+					IssueURL: detail.URL,
+					Items:    items,
+				})
+			}
+
+			return nil
 		},
 	}
 

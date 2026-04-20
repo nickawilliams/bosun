@@ -14,6 +14,8 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/issue/jira"
+	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/notify/slack"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
@@ -296,4 +298,81 @@ func buildPRTitle(issueKey, issueTitle string) string {
 	}
 
 	return buf.String()
+}
+
+// newNotifier creates a notify.Notifier from current config. Returns an error
+// if the notification provider is not configured — callers treat this as a
+// skip, not a fatal error. Does not prompt for missing values (opt-in only).
+func newNotifier() (notify.Notifier, error) {
+	provider := viper.GetString("notification")
+	if provider == "" {
+		return nil, fmt.Errorf("notification provider not configured")
+	}
+
+	switch provider {
+	case "slack":
+		if err := requireConfig("slack"); err != nil {
+			return nil, err
+		}
+		return slack.New(viper.GetString("slack.token")), nil
+	default:
+		return nil, fmt.Errorf("unsupported notification provider: %q", provider)
+	}
+}
+
+// sendNotification is a best-effort wrapper around notifier.Notify. Errors are
+// logged but do not fail the command — notifications are side effects.
+func sendNotification(ctx context.Context, msg notify.Message) {
+	if msg.Channel == "" {
+		return
+	}
+
+	notifier, err := newNotifier()
+	if err != nil {
+		ui.Skip(fmt.Sprintf("Notification: %v", err))
+		return
+	}
+
+	if err := ui.RunCard("Sending notification", func() error {
+		_, err := notifier.Notify(ctx, msg)
+		return err
+	}); err != nil {
+		ui.Fail(fmt.Sprintf("Notification failed: %v", err))
+	}
+}
+
+// replyToNotification is a best-effort wrapper that finds an existing thread
+// and posts a reply. Errors are logged but do not fail the command.
+func replyToNotification(ctx context.Context, channel, issueKey string, msg notify.Message) {
+	if channel == "" {
+		return
+	}
+
+	notifier, err := newNotifier()
+	if err != nil {
+		ui.Skip(fmt.Sprintf("Notification: %v", err))
+		return
+	}
+
+	var ref notify.ThreadRef
+	if err := ui.RunCard("Finding notification thread", func() error {
+		var e error
+		ref, e = notifier.FindThread(ctx, channel, issueKey)
+		return e
+	}); err != nil {
+		ui.Fail(fmt.Sprintf("Thread lookup failed: %v", err))
+		return
+	}
+
+	if ref.Timestamp == "" {
+		ui.Skip(fmt.Sprintf("No notification thread found for %s", issueKey))
+		return
+	}
+
+	msg.Channel = channel
+	if err := ui.RunCard("Replying to thread", func() error {
+		return notifier.ReplyToThread(ctx, ref, msg)
+	}); err != nil {
+		ui.Fail(fmt.Sprintf("Thread reply failed: %v", err))
+	}
 }

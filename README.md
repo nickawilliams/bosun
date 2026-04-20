@@ -43,15 +43,15 @@ stays put.
   - [x] Issue Tracker: Transition to `In Progress`
 - [ ] **review** — Submit for code review
   - [x] Code Host: Create pull request(s) per repository with changes
-  - [ ] Notification: Notify review channel with PR + issue URLs
+  - [x] Notification: Notify review channel with PR + issue URLs
   - [x] Issue Tracker: Transition to `Review`
 - [ ] **preview** — Deploy to preview environment
   - [ ] CI/CD: Trigger ephemeral environment deployment
-  - [ ] Notification: Reply to review thread with preview URL
+  - [x] Notification: Reply to review thread with preview URL
   - [x] Issue Tracker: Transition to `In Preview Env`
 - [ ] **prerelease** — Prepare release artifacts
   - [x] Code Host: Create release/tag per repository (version from latest tag + `--bump`)
-  - [ ] Notification: Notify release channel with release details
+  - [x] Notification: Notify release channel with release details
   - [x] Issue Tracker: Transition to `Ready for Release`
 - [ ] **release** — Deploy to production
   - [x] Pre-flight: Database migration confirmation
@@ -136,11 +136,11 @@ bosun status --issue PROJ-123
 
 ### Phase 5: Notifications
 
-- [ ] `notify.Notifier` interface and domain types
-- [ ] Slack adapter
-- [ ] Wire `review` (notify), `preview` (reply to thread), `prerelease` (release channel)
-- [ ] Thread lookup via Slack API
-- [ ] Tests for notifications
+- [x] `notify.Notifier` interface and domain types
+- [x] Slack adapter
+- [x] Wire `review` (notify), `preview` (reply to thread), `prerelease` (release channel)
+- [x] Thread lookup via Slack API
+- [x] Tests for notifications
 
 ### Phase 6: CI/CD
 
