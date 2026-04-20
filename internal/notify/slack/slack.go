@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -22,6 +23,16 @@ func New(token string) *Adapter {
 // NewWithOptions returns a Slack adapter with custom options (for testing).
 func NewWithOptions(token string, opts ...slackapi.Option) *Adapter {
 	return &Adapter{client: slackapi.New(token, opts...)}
+}
+
+// NewWithCookie returns a Slack adapter that authenticates using a xoxc-
+// token and d cookie (extracted from the Slack desktop app).
+func NewWithCookie(token, cookie string) *Adapter {
+	client := &http.Client{Transport: &cookieTransport{
+		base:   http.DefaultTransport,
+		cookie: cookie,
+	}}
+	return &Adapter{client: slackapi.New(token, slackapi.OptionHTTPClient(client))}
 }
 
 func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.ThreadRef, error) {

@@ -99,7 +99,9 @@ var configSchema = map[string]ConfigGroup{
 		Label: "Slack",
 
 		Keys: []ConfigKey{
-			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true, Required: true},
+			{Key: "auth", Label: "Auth method", Options: []string{"token", "local"}, Default: "token"},
+			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true},
+			{Key: "workspace", Label: "Workspace name", Example: "mycompany"},
 			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
 			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
 		},

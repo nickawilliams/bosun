@@ -311,6 +311,20 @@ func newNotifier() (notify.Notifier, error) {
 
 	switch provider {
 	case "slack":
+		auth := viper.GetString("slack.auth")
+		if auth == "local" {
+			workspace := viper.GetString("slack.workspace")
+			if workspace == "" {
+				return nil, fmt.Errorf("slack.workspace required for local auth")
+			}
+			token, cookie, err := slack.ResolveLocalToken(workspace)
+			if err != nil {
+				return nil, fmt.Errorf("resolving local Slack token: %w", err)
+			}
+			return slack.NewWithCookie(token, cookie), nil
+		}
+
+		// Token-based auth.
 		if err := requireConfig("slack"); err != nil {
 			return nil, err
 		}
