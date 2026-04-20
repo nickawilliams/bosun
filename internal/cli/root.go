@@ -72,6 +72,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Hidden commands.
 	cmd.AddCommand(newDemoCmd())
+	cmd.AddCommand(newCaptainCmd())
 
 	return cmd
 }
