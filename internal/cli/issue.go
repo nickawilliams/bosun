@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -165,10 +166,20 @@ func pickAssignedIssue() string {
 		return ""
 	}
 
+	sortIssuesByStatus(issues)
+
+	// Compute status column width for aligned display.
+	maxStatusLen := 0
+	for _, iss := range issues {
+		if len(iss.Status) > maxStatusLen {
+			maxStatusLen = len(iss.Status)
+		}
+	}
+
 	// Build select options.
 	opts := make([]huh.Option[string], len(issues)+1)
 	for i, iss := range issues {
-		label := fmt.Sprintf("%s  %s  (%s)", iss.Key, iss.Title, iss.Status)
+		label := fmt.Sprintf("%-*s  %s  %s", maxStatusLen, iss.Status, iss.Key, iss.Title)
 		opts[i] = huh.NewOption(label, iss.Key)
 	}
 	opts[len(issues)] = huh.NewOption("Enter manually...", manualEntry)
@@ -185,6 +196,29 @@ func pickAssignedIssue() string {
 	slot.Clear()
 
 	return selected
+}
+
+// sortIssuesByStatus sorts issues by lifecycle status sequence.
+// Issues with unknown statuses sort to the end. Within the same
+// status group, original order (updated DESC from the API) is
+// preserved via stable sort.
+func sortIssuesByStatus(issues []issuepkg.Issue) {
+	idx := buildStatusIndex()
+	if len(idx) == 0 {
+		return
+	}
+	end := len(idx)
+	slices.SortStableFunc(issues, func(a, b issuepkg.Issue) int {
+		ai, ok := idx[strings.ToLower(a.Status)]
+		if !ok {
+			ai = end
+		}
+		bi, ok := idx[strings.ToLower(b.Status)]
+		if !ok {
+			bi = end
+		}
+		return ai - bi
+	})
 }
 
 // extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.

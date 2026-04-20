@@ -213,6 +213,22 @@ func resolveStatus(key string) (string, error) {
 	return "", fmt.Errorf("status %q not mapped in config statuses section", key)
 }
 
+// buildStatusIndex returns a mapping from lowercase provider status
+// name to lifecycle sequence position. Unknown statuses are absent
+// from the map; callers should treat missing entries as sorting to
+// the end.
+func buildStatusIndex() map[string]int {
+	idx := make(map[string]int, len(lifecycleStatusKeys))
+	for i, key := range lifecycleStatusKeys {
+		name, err := resolveStatus(key)
+		if err != nil {
+			continue
+		}
+		idx[strings.ToLower(name)] = i
+	}
+	return idx
+}
+
 // validateStageTransition checks the issue's current status against the
 // expected status for a lifecycle command. If the status is unexpected, warns
 // and prompts for confirmation. In non-interactive mode, logs a warning and

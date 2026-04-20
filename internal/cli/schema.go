@@ -18,6 +18,17 @@ type ConfigGroup struct {
 	Keys  []ConfigKey // The config keys in this group.
 }
 
+// lifecycleStatusKeys defines the canonical ordering of lifecycle
+// stages. This sequence drives status sort order in the issue picker.
+var lifecycleStatusKeys = []string{
+	"ready",
+	"in_progress",
+	"review",
+	"preview",
+	"ready_for_release",
+	"done",
+}
+
 // configSchema is the central registry of all known config keys.
 var configSchema = map[string]ConfigGroup{
 	"issue_tracker": {

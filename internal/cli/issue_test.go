@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -101,6 +102,102 @@ func TestResolveIssue(t *testing.T) {
 			t.Error("resolveIssue() expected error, got nil")
 		}
 	})
+}
+
+func TestSortIssuesByStatus(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(func() { viper.Reset() })
+
+	t.Run("sorts by lifecycle sequence", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", Status: "Done"},
+			{Key: "P-2", Status: "In Progress"},
+			{Key: "P-3", Status: "Ready"},
+			{Key: "P-4", Status: "Review"},
+			{Key: "P-5", Status: "Ready for Release"},
+			{Key: "P-6", Status: "In Preview Env"},
+		}
+		sortIssuesByStatus(issues)
+
+		want := []string{"P-3", "P-2", "P-4", "P-6", "P-5", "P-1"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("unknown statuses sort to end", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", Status: "Custom Status"},
+			{Key: "P-2", Status: "In Progress"},
+			{Key: "P-3", Status: "Another Custom"},
+		}
+		sortIssuesByStatus(issues)
+
+		want := []string{"P-2", "P-1", "P-3"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", Status: "done"},
+			{Key: "P-2", Status: "in progress"},
+		}
+		sortIssuesByStatus(issues)
+
+		want := []string{"P-2", "P-1"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("stable sort preserves order within same status", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", Status: "In Progress"},
+			{Key: "P-2", Status: "In Progress"},
+			{Key: "P-3", Status: "In Progress"},
+		}
+		sortIssuesByStatus(issues)
+
+		want := []string{"P-1", "P-2", "P-3"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("empty slice", func(t *testing.T) {
+		var issues []issue.Issue
+		sortIssuesByStatus(issues) // should not panic
+	})
+}
+
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestExtractIssue(t *testing.T) {
