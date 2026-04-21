@@ -142,6 +142,9 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 }
 
 // buildBlocks constructs Slack Block Kit blocks from a notification message.
+// If msg.Body is set (from a user template), it is rendered as a single
+// section block under the header. Otherwise the default structured format
+// (per-item sections + issue link) is used.
 func buildBlocks(msg notify.Message) []slackapi.Block {
 	var blocks []slackapi.Block
 
@@ -153,6 +156,15 @@ func buildBlocks(msg notify.Message) []slackapi.Block {
 	blocks = append(blocks, slackapi.NewHeaderBlock(
 		slackapi.NewTextBlockObject(slackapi.PlainTextType, headerText, false, false),
 	))
+
+	// Template-rendered body takes precedence over structured fields.
+	if msg.Body != "" {
+		blocks = append(blocks, slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject(slackapi.MarkdownType, msg.Body, false, false),
+			nil, nil,
+		))
+		return blocks
+	}
 
 	// Summary line (for simple updates like preview).
 	if msg.Summary != "" {

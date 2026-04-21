@@ -248,7 +248,11 @@ func newReviewCmd() *cobra.Command {
 				}
 				ui.Details("Unpushed Changes", fields)
 
-				if !promptConfirm("Push before creating PRs?", true) {
+				confirmed, err := promptConfirm("Push before creating PRs?", true)
+				if err != nil {
+					return err
+				}
+				if !confirmed {
 					return fmt.Errorf("aborted: unpushed commits")
 				}
 
@@ -371,6 +375,12 @@ func newReviewCmd() *cobra.Command {
 							Title:    detail.Title,
 							IssueURL: detail.URL,
 							Items:    items,
+							Body: buildNotifyBody("slack.review_template", notifyTemplateData{
+								IssueKey:   issue,
+								IssueTitle: detail.Title,
+								IssueURL:   detail.URL,
+								Items:      items,
+							}),
 						})
 						return nil
 					},

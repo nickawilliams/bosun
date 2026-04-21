@@ -326,7 +326,11 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 	if !strings.EqualFold(current.Status, expectedStatus) {
 		ui.Skip(fmt.Sprintf("Issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus))
 		if isInteractive() {
-			if !promptConfirm("Proceed anyway?", false) {
+			confirmed, err := promptConfirm("Proceed anyway?", false)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
 				return fmt.Errorf("aborted: unexpected issue status")
 			}
 		} else {
@@ -418,6 +422,35 @@ func buildPRBody(data prTemplateData) string {
 		return ""
 	}
 	return result
+}
+
+// notifyTemplateData holds the fields available to notification templates.
+type notifyTemplateData struct {
+	IssueKey   string
+	IssueTitle string
+	IssueURL   string
+	Items      []notify.Item // Per-repository items (PRs, releases, etc.).
+}
+
+// buildNotifyBody renders a notification template from config. Returns empty
+// string if no template is configured for the given key.
+func buildNotifyBody(configKey string, data notifyTemplateData) string {
+	pattern := viper.GetString(configKey)
+	if pattern == "" {
+		return ""
+	}
+
+	tmpl, err := template.New("notify").Parse(pattern)
+	if err != nil {
+		return ""
+	}
+
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return ""
+	}
+
+	return buf.String()
 }
 
 // newNotifier creates a notify.Notifier from current config. Returns an error

@@ -10,6 +10,7 @@ type Message struct {
 	IssueURL string // Link to the issue.
 	Items    []Item // Per-repository details (PRs, releases, etc.).
 	Summary  string // Short text for simple updates (e.g., preview status).
+	Body     string // Template-rendered body (overrides default formatting when set).
 }
 
 // Item represents a single line item in a notification (one per repository).

@@ -120,6 +120,9 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workspace", Label: "Workspace name", Example: "mycompany"},
 			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
 			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
+			{Key: "review_template", Label: "Review message template"},
+			{Key: "release_template", Label: "Release message template"},
+			{Key: "preview_template", Label: "Preview message template"},
 		},
 	},
 	"color_mode": {
