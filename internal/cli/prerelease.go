@@ -127,25 +127,39 @@ func newPrereleaseCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
-			if err := runActions(cmd, ctx, actions); err != nil {
-				return err
+			releaseChannel := viper.GetString("slack.channel_release")
+			if releaseChannel != "" {
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Notify",
+					Target: releaseChannel,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						return ActionNeeded, "release channel", nil
+					},
+					Apply: func(ctx context.Context) error {
+						if len(releaseResults) == 0 {
+							return nil
+						}
+						items := make([]notify.Item, len(releaseResults))
+						for i, r := range releaseResults {
+							items[i] = notify.Item{
+								Label:  r.repo,
+								URL:    r.release.URL,
+								Detail: r.version,
+							}
+						}
+						sendNotification(ctx, notify.Message{
+							Channel:  releaseChannel,
+							IssueKey: issue,
+							Items:    items,
+						})
+						return nil
+					},
+				})
 			}
 
-			// Post-apply: notify release channel.
-			if len(releaseResults) > 0 {
-				items := make([]notify.Item, len(releaseResults))
-				for i, r := range releaseResults {
-					items[i] = notify.Item{
-						Label:  r.repo,
-						URL:    r.release.URL,
-						Detail: r.version,
-					}
-				}
-				sendNotification(ctx, notify.Message{
-					Channel:  viper.GetString("slack.channel_release"),
-					IssueKey: issue,
-					Items:    items,
-				})
+			if err := runActions(cmd, ctx, actions); err != nil {
+				return err
 			}
 
 			return nil

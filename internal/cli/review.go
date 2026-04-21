@@ -328,43 +328,57 @@ func newReviewCmd() *cobra.Command {
 				}
 			}
 
+			// Notification action — appears in plan, runs after PR creation.
+			reviewChannel := viper.GetString("slack.channel_review")
+			if !draft && reviewChannel != "" {
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Notify",
+					Target: reviewChannel,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						return ActionNeeded, "review channel", nil
+					},
+					Apply: func(ctx context.Context) error {
+						if len(prResults) == 0 {
+							return nil
+						}
+						// Request reviewers and add assignees (best-effort).
+						if host != nil {
+							for _, r := range prResults {
+								if len(reviewers) > 0 || len(teamReviewers) > 0 {
+									if err := host.RequestReviewers(ctx, r.owner, r.repoName, r.pr.Number, reviewers, teamReviewers); err != nil {
+										ui.Fail(fmt.Sprintf("%s: reviewers: %v", r.repo, err))
+									}
+								}
+								if len(assignees) > 0 {
+									if err := host.AddAssignees(ctx, r.owner, r.repoName, r.pr.Number, assignees); err != nil {
+										ui.Fail(fmt.Sprintf("%s: assignees: %v", r.repo, err))
+									}
+								}
+							}
+						}
+						items := make([]notify.Item, len(prResults))
+						for i, r := range prResults {
+							items[i] = notify.Item{
+								Label:  r.repo,
+								URL:    r.pr.URL,
+								Detail: fmt.Sprintf("#%d", r.pr.Number),
+							}
+						}
+						sendNotification(ctx, notify.Message{
+							Channel:  reviewChannel,
+							IssueKey: issue,
+							Title:    detail.Title,
+							IssueURL: detail.URL,
+							Items:    items,
+						})
+						return nil
+					},
+				})
+			}
+
 			if err := runActions(cmd, ctx, actions); err != nil {
 				return err
-			}
-
-			// Post-apply: request reviewers and add assignees.
-			if host != nil && len(prResults) > 0 {
-				for _, r := range prResults {
-					if len(reviewers) > 0 || len(teamReviewers) > 0 {
-						if err := host.RequestReviewers(ctx, r.owner, r.repoName, r.pr.Number, reviewers, teamReviewers); err != nil {
-							ui.Fail(fmt.Sprintf("%s: reviewers: %v", r.repo, err))
-						}
-					}
-					if len(assignees) > 0 {
-						if err := host.AddAssignees(ctx, r.owner, r.repoName, r.pr.Number, assignees); err != nil {
-							ui.Fail(fmt.Sprintf("%s: assignees: %v", r.repo, err))
-						}
-					}
-				}
-			}
-
-			// Post-apply: notify review channel.
-			if !draft && len(prResults) > 0 {
-				items := make([]notify.Item, len(prResults))
-				for i, r := range prResults {
-					items[i] = notify.Item{
-						Label:  r.repo,
-						URL:    r.pr.URL,
-						Detail: fmt.Sprintf("#%d", r.pr.Number),
-					}
-				}
-				sendNotification(ctx, notify.Message{
-					Channel:  viper.GetString("slack.channel_review"),
-					IssueKey: issue,
-					Title:    detail.Title,
-					IssueURL: detail.URL,
-					Items:    items,
-				})
 			}
 
 			return nil

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -33,16 +35,28 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
+			channel := viper.GetString("slack.channel_review")
+			if channel != "" {
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Notify",
+					Target: channel,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						return ActionNeeded, "reply to review thread", nil
+					},
+					Apply: func(ctx context.Context) error {
+						replyToNotification(ctx, channel, issue, notify.Message{
+							IssueKey: issue,
+							Summary:  fmt.Sprintf("Preview deployment requested for %s", issue),
+						})
+						return nil
+					},
+				})
+			}
+
 			if err := runActions(cmd, ctx, actions); err != nil {
 				return err
 			}
-
-			// Post-apply: reply to review notification thread.
-			channel := viper.GetString("slack.channel_review")
-			replyToNotification(ctx, channel, issue, notify.Message{
-				IssueKey: issue,
-				Summary:  fmt.Sprintf("Preview deployment requested for %s", issue),
-			})
 
 			return nil
 		},
