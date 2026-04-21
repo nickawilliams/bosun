@@ -53,6 +53,10 @@ func TestNotify(t *testing.T) {
 			{Label: "my-service", URL: "https://github.com/org/my-service/pull/42", Detail: "#42"},
 			{Label: "my-frontend", URL: "https://github.com/org/my-frontend/pull/43", Detail: "#43"},
 		},
+		Content: notify.Content{
+			Header: "PROJ-123: Add widget",
+			Body:   "PROJ-123 is ready for review",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Notify() error: %v", err)
@@ -209,7 +213,7 @@ func TestReplyToThread(t *testing.T) {
 		notify.ThreadRef{Channel: "C123", Timestamp: "2222222222.222222"},
 		notify.Message{
 			IssueKey: "PROJ-123",
-			Summary:  "Preview deployment requested for PROJ-123",
+			Content:  notify.Content{Text: "Preview deployment requested for PROJ-123"},
 		},
 	)
 	if err != nil {

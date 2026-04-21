@@ -49,13 +49,9 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, err
 	}
 
-	blocks := buildBlocks(msg)
-	fallback := buildFallbackText(msg)
+	opts := buildMsgOptions(msg.Content)
 
-	_, ts, err := a.client.PostMessageContext(ctx, channelID,
-		slackapi.MsgOptionBlocks(blocks...),
-		slackapi.MsgOptionText(fallback, false),
-	)
+	_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
 	if err != nil {
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
 	}
@@ -102,14 +98,10 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 }
 
 func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg notify.Message) error {
-	blocks := buildBlocks(msg)
-	fallback := buildFallbackText(msg)
+	opts := buildMsgOptions(msg.Content)
+	opts = append(opts, slackapi.MsgOptionTS(ref.Timestamp))
 
-	_, _, err := a.client.PostMessageContext(ctx, ref.Channel,
-		slackapi.MsgOptionTS(ref.Timestamp),
-		slackapi.MsgOptionBlocks(blocks...),
-		slackapi.MsgOptionText(fallback, false),
-	)
+	_, _, err := a.client.PostMessageContext(ctx, ref.Channel, opts...)
 	if err != nil {
 		return fmt.Errorf("replying to thread: %w", err)
 	}
@@ -150,55 +142,46 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 	return "", fmt.Errorf("channel %q not found", name)
 }
 
-// buildBlocks constructs Slack Block Kit blocks from a notification message.
-func buildBlocks(msg notify.Message) []slackapi.Block {
+// buildMsgOptions constructs Slack message options from notification content.
+// When block fields are set, it renders Block Kit blocks (not client-editable
+// but richer formatting). When only Text is set, it posts plain mrkdwn
+// (client-editable).
+func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
+	if !c.HasBlocks() {
+		return []slackapi.MsgOption{
+			slackapi.MsgOptionText(c.Text, false),
+		}
+	}
+
 	var blocks []slackapi.Block
 
-	// Header: issue key + title.
-	headerText := msg.IssueKey
-	if msg.Title != "" {
-		headerText += ": " + msg.Title
+	if c.Header != "" {
+		blocks = append(blocks, slackapi.NewHeaderBlock(
+			slackapi.NewTextBlockObject(slackapi.PlainTextType, c.Header, false, false),
+		))
 	}
-	blocks = append(blocks, slackapi.NewHeaderBlock(
-		slackapi.NewTextBlockObject(slackapi.PlainTextType, headerText, false, false),
-	))
 
-	// Body from template (or Summary for thread replies).
-	body := msg.Body
-	if body == "" {
-		body = msg.Summary
-	}
-	if body != "" {
+	if c.Body != "" {
 		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject(slackapi.MarkdownType, body, false, false),
+			slackapi.NewTextBlockObject(slackapi.MarkdownType, c.Body, false, false),
 			nil, nil,
 		))
 	}
 
-	return blocks
-}
+	if c.Context != "" {
+		blocks = append(blocks, slackapi.NewContextBlock("",
+			slackapi.NewTextBlockObject(slackapi.MarkdownType, c.Context, false, false),
+		))
+	}
 
-// buildFallbackText builds a plain-text fallback for clients that can't render blocks.
-func buildFallbackText(msg notify.Message) string {
-	var b strings.Builder
-	b.WriteString(msg.IssueKey)
-	if msg.Title != "" {
-		b.WriteString(": ")
-		b.WriteString(msg.Title)
+	// Fallback text for notifications/accessibility.
+	fallback := c.Body
+	if fallback == "" {
+		fallback = c.Header
 	}
-	if msg.Summary != "" {
-		b.WriteString(" — ")
-		b.WriteString(msg.Summary)
+
+	return []slackapi.MsgOption{
+		slackapi.MsgOptionBlocks(blocks...),
+		slackapi.MsgOptionText(fallback, false),
 	}
-	for _, item := range msg.Items {
-		b.WriteString("\n• ")
-		b.WriteString(item.Label)
-		b.WriteString(": ")
-		b.WriteString(item.Detail)
-		if item.URL != "" {
-			b.WriteString(" ")
-			b.WriteString(item.URL)
-		}
-	}
-	return b.String()
 }

@@ -164,7 +164,7 @@ func newPrereleaseCmd() *cobra.Command {
 							Channel:  releaseChannel,
 							IssueKey: issue,
 							Items:    items,
-							Body: buildNotifyBody("slack.release_template", notifyTemplateData{
+							Content: buildNotifyContent("release", notifyTemplateData{
 								IssueKey: issue,
 								Items:    items,
 							}),

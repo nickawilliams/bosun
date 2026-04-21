@@ -45,12 +45,6 @@ func newPreviewCmd() *cobra.Command {
 						return ActionNeeded, "reply to review thread", nil
 					},
 					Apply: func(ctx context.Context) error {
-						summary := fmt.Sprintf("Preview deployment requested for %s", issue)
-						if body := buildNotifyBody("slack.preview_template", notifyTemplateData{
-							IssueKey: issue,
-						}); body != "" {
-							summary = body
-						}
 						notifier, err := newNotifier()
 						if err != nil {
 							ui.Skip(fmt.Sprintf("Notification: %v", err))
@@ -66,7 +60,9 @@ func newPreviewCmd() *cobra.Command {
 						}
 						return notifier.ReplyToThread(ctx, ref, notify.Message{
 							IssueKey: issue,
-							Summary:  summary,
+							Content: buildNotifyContent("preview", notifyTemplateData{
+								IssueKey: issue,
+							}),
 						})
 					},
 				})

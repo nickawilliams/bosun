@@ -4,13 +4,27 @@ import "context"
 
 // Message represents a notification to be sent to a channel.
 type Message struct {
-	Channel  string // Channel name (without #), e.g., "bb-prs".
-	IssueKey string // e.g., "PROJ-123".
-	Title    string // Issue title.
-	IssueURL string // Link to the issue.
-	Items    []Item // Per-repository details (PRs, releases, etc.).
-	Summary  string // Short text for simple updates (e.g., preview status).
-	Body     string // Template-rendered body (overrides default formatting when set).
+	Channel  string  // Channel name (without #), e.g., "bb-prs".
+	IssueKey string  // e.g., "PROJ-123".
+	Title    string  // Issue title.
+	IssueURL string  // Link to the issue.
+	Items    []Item  // Per-repository details (PRs, releases, etc.).
+	Content  Content // Rendered notification content.
+}
+
+// Content holds the rendered notification text. When Block fields are set,
+// the adapter renders Block Kit blocks (header + section + context). When
+// only Text is set, the adapter posts plain mrkdwn (editable in client).
+type Content struct {
+	Text    string // Plain mrkdwn text (used when no block fields are set).
+	Header  string // PlainText header block (large bold text).
+	Body    string // mrkdwn section block (main content).
+	Context string // mrkdwn context block (small muted text).
+}
+
+// HasBlocks returns true if any block-level fields are set.
+func (c Content) HasBlocks() bool {
+	return c.Header != "" || c.Body != "" || c.Context != ""
 }
 
 // Item represents a single line item in a notification (one per repository).

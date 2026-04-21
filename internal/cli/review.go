@@ -386,7 +386,7 @@ func newReviewCmd() *cobra.Command {
 							Title:    detail.Title,
 							IssueURL: detail.URL,
 							Items:    items,
-							Body: buildNotifyBody("slack.review_template", notifyTemplateData{
+							Content: buildNotifyContent("review", notifyTemplateData{
 								IssueKey:   issue,
 								IssueTitle: detail.Title,
 								IssueURL:   detail.URL,

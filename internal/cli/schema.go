@@ -120,9 +120,6 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workspace", Label: "Workspace name", Example: "mycompany"},
 			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
 			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
-			{Key: "review_template", Label: "Review message template", Default: "<{{.IssueURL}}|{{.IssueKey}}> is ready for review:\n{{range .Items}}\n  <{{.URL}}|PR {{.Detail}}> `{{.Label}}`{{end}}"},
-			{Key: "release_template", Label: "Release message template", Default: "{{range .Items}}*{{.Label}}*  <{{.URL}}|{{.Detail}}>\n{{end}}{{if .IssueURL}}<{{.IssueURL}}|View in issue tracker>{{end}}"},
-			{Key: "preview_template", Label: "Preview message template", Default: "Preview deployment requested for {{.IssueKey}}"},
 		},
 	},
 	"color_mode": {

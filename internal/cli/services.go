@@ -432,24 +432,62 @@ type notifyTemplateData struct {
 	Items      []notify.Item // Per-repository items (PRs, releases, etc.).
 }
 
-// buildNotifyBody renders a notification template from config. Falls back to
-// the schema default if no template is configured for the given key.
-func buildNotifyBody(configKey string, data notifyTemplateData) string {
-	pattern := viper.GetString(configKey)
-	if pattern == "" {
-		// Fall back to schema default.
-		parts := strings.SplitN(configKey, ".", 2)
-		if len(parts) == 2 {
-			if group, ok := lookupGroup(parts[0]); ok {
-				for _, ck := range group.Keys {
-					if ck.Key == parts[1] {
-						pattern = ck.Default
-						break
-					}
-				}
-			}
-		}
+// Default block templates per notification type.
+var defaultNotifyTemplates = map[string]map[string]string{
+	"review": {
+		"header":  "{{.IssueKey}}: {{.IssueTitle}}",
+		"body":    "<{{.IssueURL}}|{{.IssueKey}}> is ready for review:{{range .Items}}\n  <{{.URL}}|PR {{.Detail}}> `{{.Label}}`{{end}}",
+		"context": "via bosun",
+	},
+	"release": {
+		"header":  "{{.IssueKey}}: {{.IssueTitle}}",
+		"body":    "{{range .Items}}<{{.URL}}|{{.Label}} {{.Detail}}>{{end}}",
+		"context": "via bosun",
+	},
+	"preview": {
+		"body": "Preview deployment requested for <{{.IssueURL}}|{{.IssueKey}}>",
+	},
+}
+
+// buildNotifyContent reads the template config for a notification type and
+// renders it with the given data. Supports two config shapes:
+//
+//	slack.templates.review: "plain text template"     → Content.Text (no blocks)
+//	slack.templates.review:                           → Content with block fields
+//	  header: "..."
+//	  body: "..."
+//	  context: "..."
+func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
+	key := "slack.templates." + notifType
+
+	// Check if it's a simple string template.
+	if s := viper.GetString(key); s != "" {
+		return notify.Content{Text: renderTemplate(s, data)}
 	}
+
+	// Check if it's a map of block fields.
+	sub := viper.GetStringMapString(key)
+
+	// Fall back to defaults.
+	defaults := defaultNotifyTemplates[notifType]
+
+	get := func(field string) string {
+		if v, ok := sub[field]; ok {
+			return v
+		}
+		return defaults[field]
+	}
+
+	return notify.Content{
+		Header:  renderTemplate(get("header"), data),
+		Body:    renderTemplate(get("body"), data),
+		Context: renderTemplate(get("context"), data),
+	}
+}
+
+// renderTemplate parses and executes a Go text/template. Returns empty
+// string on empty pattern or error.
+func renderTemplate(pattern string, data notifyTemplateData) string {
 	if pattern == "" {
 		return ""
 	}
