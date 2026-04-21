@@ -46,4 +46,12 @@ type VCS interface {
 	// IsDirty returns true if the worktree at the given path has
 	// uncommitted changes.
 	IsDirty(ctx context.Context, path string) (bool, error)
+
+	// Push pushes a local branch to the remote, setting up tracking.
+	Push(ctx context.Context, repositoryPath, branchName string) error
+
+	// UnpushedCommits returns the number of local commits on branchName
+	// that have not been pushed to the remote. Returns -1 if the branch
+	// has no remote counterpart (never been pushed).
+	UnpushedCommits(ctx context.Context, repositoryPath, branchName string) (int, error)
 }

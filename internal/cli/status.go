@@ -23,32 +23,24 @@ func newStatusCmd() *cobra.Command {
 			headerAnnotationTitle: "status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rootCard(cmd).Print()
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
 
 			ctx := cmd.Context()
 
 			// --- Issue details ---
 			tracker, trackerErr := newIssueTracker()
-			var detail issuepkg.Issue
 			if trackerErr != nil {
 				ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
 			} else {
-				issueSlot := ui.NewSlot()
-				if err := issueSlot.Run("Fetching issue", func() error {
-					var e error
-					detail, e = tracker.GetIssue(ctx, issue)
-					return e
-				}); err == nil {
-					issueSlot.Clear()
-					ui.NewCard(ui.CardInfo, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
-						Subtitle(detail.Title).
-						Text("").
-						KV("Status", detail.Status, "URL", detail.URL).
-						Print()
+				_, err = fetchIssue(ctx, tracker, issue, func(d issuepkg.Issue, c *ui.Card) {
+					c.Text("").KV("Status", d.Status, "URL", d.URL)
+				})
+				if err != nil {
+					ui.Skip(fmt.Sprintf("Issue details: %v", err))
 				}
 			}
 

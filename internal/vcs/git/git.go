@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/vcs"
@@ -132,6 +133,23 @@ func (a *Adapter) IsDirty(ctx context.Context, path string) (bool, error) {
 		return false, fmt.Errorf("checking dirty state: %w", err)
 	}
 	return out != "", nil
+}
+
+func (a *Adapter) Push(ctx context.Context, repositoryPath, branchName string) error {
+	return run(ctx, repositoryPath, "push", "-u", "origin", branchName)
+}
+
+func (a *Adapter) UnpushedCommits(ctx context.Context, repositoryPath, branchName string) (int, error) {
+	out, err := output(ctx, repositoryPath, "rev-list", "--count", "origin/"+branchName+".."+branchName)
+	if err != nil {
+		// Remote tracking branch doesn't exist — branch was never pushed.
+		return -1, nil
+	}
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		return 0, fmt.Errorf("parsing commit count: %w", err)
+	}
+	return n, nil
 }
 
 // run executes a git command in the given directory.

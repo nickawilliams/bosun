@@ -69,6 +69,7 @@ func promptConfirm(label string, defaultVal bool) bool {
 		return defaultVal
 	}
 
+	ui.BreakTimeline()
 	confirmed := defaultVal
 	err := runForm(
 		newConfirm().

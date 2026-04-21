@@ -105,6 +105,27 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 	return repositories, nil
 }
 
+// fetchIssue fetches issue details from the tracker and renders a
+// RunCardReplace card showing issue type, key, and title on success.
+// An optional decorate callback can customize the success card with
+// additional content (e.g., KV pairs) using the fetched detail.
+func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
+	var detail issue.Issue
+	err := ui.RunCardReplace("Fetching issue", func() error {
+		var e error
+		detail, e = tracker.GetIssue(ctx, issueKey)
+		return e
+	}, func() *ui.Card {
+		card := ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
+			Subtitle(detail.Title)
+		if len(decorate) > 0 {
+			decorate[0](detail, card)
+		}
+		return card
+	})
+	return detail, err
+}
+
 // resolveActiveRepositories resolves repositories scoped to the current
 // workspace when CWD is inside one, falling back to resolveRepositories
 // (global config patterns) otherwise. Commands that operate on worktrees
