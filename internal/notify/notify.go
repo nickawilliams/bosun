@@ -61,3 +61,17 @@ type Notifier interface {
 	// is no longer needed.
 	Close()
 }
+
+type noCacheKey struct{}
+
+// WithNoCache returns a context that tells the notifier to bypass cached
+// results and hit the API directly.
+func WithNoCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noCacheKey{}, true)
+}
+
+// NoCache reports whether the context requests a cache bypass.
+func NoCache(ctx context.Context) bool {
+	_, ok := ctx.Value(noCacheKey{}).(bool)
+	return ok
+}

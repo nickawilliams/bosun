@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -349,7 +350,7 @@ func checkNotificationAuth(ctx context.Context) (string, error) {
 	}
 	defer notifier.Close()
 
-	user, err := notifier.AuthTest(ctx)
+	user, err := notifier.AuthTest(notify.WithNoCache(ctx))
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
@@ -376,7 +377,7 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 			continue
 		}
 		// FindThread with a bogus issue key just to exercise channel resolution.
-		_, err := notifier.FindThread(ctx, ch, "__bosun_doctor_probe__")
+		_, err := notifier.FindThread(notify.WithNoCache(ctx), ch, "__bosun_doctor_probe__")
 		if err != nil {
 			results = append(results, fmt.Sprintf("#%s ✗ %v", ch, err))
 		} else {

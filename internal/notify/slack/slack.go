@@ -55,6 +55,7 @@ func (a *Adapter) Close() {
 	saveCache(a.cache)
 }
 
+
 func (a *Adapter) AuthTest(ctx context.Context) (string, error) {
 	resp, err := a.client.AuthTestContext(ctx)
 	if err != nil {
@@ -109,8 +110,10 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 // calls with the same parameters return the cached result without hitting the API.
 func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
 	cacheKey := channelID + ":" + issueKey
-	if ref, ok := a.cache.threads[cacheKey]; ok {
-		return ref, nil
+	if !notify.NoCache(ctx) {
+		if ref, ok := a.cache.threads[cacheKey]; ok {
+			return ref, nil
+		}
 	}
 
 	params := &slackapi.GetConversationHistoryParameters{
@@ -202,8 +205,10 @@ func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg n
 func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, error) {
 	name = strings.TrimPrefix(name, "#")
 
-	if id, ok := a.cache.channels[name]; ok {
-		return id, nil
+	if !notify.NoCache(ctx) {
+		if id, ok := a.cache.channels[name]; ok {
+			return id, nil
+		}
 	}
 
 	var cursor string
