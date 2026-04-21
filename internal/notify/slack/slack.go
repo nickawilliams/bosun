@@ -35,6 +35,14 @@ func NewWithCookie(token, cookie string) *Adapter {
 	return &Adapter{client: slackapi.New(token, slackapi.OptionHTTPClient(client))}
 }
 
+func (a *Adapter) AuthTest(ctx context.Context) (string, error) {
+	resp, err := a.client.AuthTestContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth test: %w", err)
+	}
+	return resp.User, nil
+}
+
 func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.ThreadRef, error) {
 	channelID, err := a.resolveChannelID(ctx, msg.Channel)
 	if err != nil {

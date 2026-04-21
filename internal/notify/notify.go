@@ -28,6 +28,10 @@ type ThreadRef struct {
 
 // Notifier defines notification operations needed by bosun.
 type Notifier interface {
+	// AuthTest verifies that the credentials are valid and returns the
+	// authenticated user/bot name.
+	AuthTest(ctx context.Context) (string, error)
+
 	// Notify sends a new message to a channel. Returns a ThreadRef
 	// that can be used for subsequent replies.
 	Notify(ctx context.Context, msg Message) (ThreadRef, error)

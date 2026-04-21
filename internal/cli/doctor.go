@@ -149,7 +149,9 @@ func codeHostChecks() []healthCheck {
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Notifications", Check: checkNotifications},
+		{Name: "Notification config", Check: checkNotificationConfig},
+		{Name: "Notification auth", Spinner: true, Check: checkNotificationAuth},
+		{Name: "Notification channels", Spinner: true, Check: checkNotificationChannels},
 	}
 }
 
@@ -299,19 +301,26 @@ func checkCodeHost(ctx context.Context) (string, error) {
 	return fmt.Sprintf("github → %s", username), nil
 }
 
-func checkNotifications(_ context.Context) (string, error) {
+func checkNotificationConfig(_ context.Context) (string, error) {
 	provider := viper.GetString("notification")
 	if provider == "" {
 		return "", errNotConfigured
 	}
 
-	// Validate that the notifier can be created (token present, etc.).
-	_, err := newNotifier()
-	if err != nil {
-		return "", err
+	auth := viper.GetString("slack.auth")
+	if auth == "" {
+		auth = "token"
 	}
 
-	// List configured channels.
+	detail := provider + " (auth: " + auth + ")"
+	if auth == "local" {
+		ws := viper.GetString("slack.workspace")
+		if ws == "" {
+			return "", fmt.Errorf("slack.workspace not set (required for local auth)")
+		}
+		detail += "\nworkspace: " + ws
+	}
+
 	var channels []string
 	if ch := viper.GetString("slack.channel_review"); ch != "" {
 		channels = append(channels, "#"+ch)
@@ -319,13 +328,63 @@ func checkNotifications(_ context.Context) (string, error) {
 	if ch := viper.GetString("slack.channel_release"); ch != "" {
 		channels = append(channels, "#"+ch)
 	}
-
-	detail := provider
 	if len(channels) > 0 {
-		detail += " → " + strings.Join(channels, ", ")
+		detail += "\nchannels: " + strings.Join(channels, ", ")
 	} else {
-		detail += " (no channels configured)"
+		detail += "\nno channels configured"
 	}
 
 	return detail, nil
+}
+
+func checkNotificationAuth(ctx context.Context) (string, error) {
+	provider := viper.GetString("notification")
+	if provider == "" {
+		return "", errNotConfigured
+	}
+
+	notifier, err := newNotifier()
+	if err != nil {
+		return "", err
+	}
+
+	user, err := notifier.AuthTest(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth failed: %w", err)
+	}
+
+	return fmt.Sprintf("authenticated as %s", user), nil
+}
+
+func checkNotificationChannels(ctx context.Context) (string, error) {
+	provider := viper.GetString("notification")
+	if provider == "" {
+		return "", errNotConfigured
+	}
+
+	notifier, err := newNotifier()
+	if err != nil {
+		return "", err
+	}
+
+	var results []string
+	for _, key := range []string{"slack.channel_review", "slack.channel_release"} {
+		ch := viper.GetString(key)
+		if ch == "" {
+			continue
+		}
+		// FindThread with a bogus issue key just to exercise channel resolution.
+		_, err := notifier.FindThread(ctx, ch, "__bosun_doctor_probe__")
+		if err != nil {
+			results = append(results, fmt.Sprintf("#%s ✗ %v", ch, err))
+		} else {
+			results = append(results, fmt.Sprintf("#%s ✓", ch))
+		}
+	}
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("no channels configured")
+	}
+
+	return strings.Join(results, "\n"), nil
 }
