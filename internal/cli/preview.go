@@ -36,6 +36,9 @@ func newPreviewCmd() *cobra.Command {
 
 			channel := viper.GetString("slack.channel_review")
 			previewNotifier, previewNotifierErr := newNotifier()
+			if previewNotifierErr == nil {
+				defer previewNotifier.Close()
+			}
 			if channel != "" && previewNotifierErr == nil {
 				var threadRef notify.ThreadRef
 				actions = append(actions, Action{

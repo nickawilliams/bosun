@@ -347,6 +347,7 @@ func checkNotificationAuth(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer notifier.Close()
 
 	user, err := notifier.AuthTest(ctx)
 	if err != nil {
@@ -366,6 +367,7 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer notifier.Close()
 
 	var results []string
 	for _, key := range []string{"slack.channel_review", "slack.channel_release"} {

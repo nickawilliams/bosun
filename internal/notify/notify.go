@@ -56,4 +56,8 @@ type Notifier interface {
 
 	// ReplyToThread sends a reply to an existing notification thread.
 	ReplyToThread(ctx context.Context, ref ThreadRef, msg Message) error
+
+	// Close persists any cached state. Should be called when the notifier
+	// is no longer needed.
+	Close()
 }

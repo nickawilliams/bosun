@@ -25,7 +25,7 @@ type apiCache struct {
 
 // New returns a new Slack adapter.
 func New(token string) *Adapter {
-	return &Adapter{client: slackapi.New(token, slackapi.OptionRetry(3))}
+	return &Adapter{client: slackapi.New(token, slackapi.OptionRetry(3)), cache: loadCache()}
 }
 
 // NewWithOptions returns a Slack adapter with custom options (for testing).
@@ -40,10 +40,19 @@ func NewWithCookie(token, cookie string) *Adapter {
 		base:   http.DefaultTransport,
 		cookie: cookie,
 	}}
-	return &Adapter{client: slackapi.New(token,
-		slackapi.OptionHTTPClient(client),
-		slackapi.OptionRetry(3),
-	)}
+	return &Adapter{
+		client: slackapi.New(token,
+			slackapi.OptionHTTPClient(client),
+			slackapi.OptionRetry(3),
+		),
+		cache: loadCache(),
+	}
+}
+
+// Close persists the cache to disk. Should be called when the adapter is
+// no longer needed (end of command).
+func (a *Adapter) Close() {
+	saveCache(a.cache)
 }
 
 func (a *Adapter) AuthTest(ctx context.Context) (string, error) {

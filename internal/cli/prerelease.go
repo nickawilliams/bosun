@@ -136,6 +136,9 @@ func newPrereleaseCmd() *cobra.Command {
 
 			releaseChannel := viper.GetString("slack.channel_release")
 			releaseNotifier, releaseNotifierErr := newNotifier()
+			if releaseNotifierErr == nil {
+				defer releaseNotifier.Close()
+			}
 			if releaseChannel != "" && releaseNotifierErr == nil {
 				releaseNotifyOp := ui.PlanCreate
 				actions = append(actions, Action{
