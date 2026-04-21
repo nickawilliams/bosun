@@ -49,6 +49,19 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, err
 	}
 
+	// Upsert: update existing message if one exists for this issue.
+	if msg.IssueKey != "" {
+		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
+		if existing.Timestamp != "" {
+			opts := buildMsgOptions(msg.Content)
+			_, _, _, err := a.client.UpdateMessageContext(ctx, channelID, existing.Timestamp, opts...)
+			if err != nil {
+				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
+			}
+			return existing, nil
+		}
+	}
+
 	opts := buildMsgOptions(msg.Content)
 
 	_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
@@ -65,6 +78,12 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 		return notify.ThreadRef{}, err
 	}
 
+	return a.findThreadInChannel(ctx, channelID, issueKey)
+}
+
+// findThreadInChannel searches recent messages in a resolved channel ID for
+// one containing the issue key. Returns a zero ThreadRef if not found.
+func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
 	params := &slackapi.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Limit:     200,
@@ -79,7 +98,6 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 		if strings.Contains(msg.Text, issueKey) {
 			return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
 		}
-		// Also check block text content.
 		for _, block := range msg.Blocks.BlockSet {
 			if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
 				if strings.Contains(section.Text.Text, issueKey) {
