@@ -40,7 +40,7 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
 					Label:  "Notify",
-					Target: channel,
+					Target: "#" + channel,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						return ActionNeeded, "reply to review thread", nil
 					},

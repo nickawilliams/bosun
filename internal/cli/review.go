@@ -338,7 +338,7 @@ func newReviewCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
 					Label:  "Notify",
-					Target: reviewChannel,
+					Target: "#" + reviewChannel,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						return ActionNeeded, "review channel", nil
 					},

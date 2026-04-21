@@ -132,7 +132,7 @@ func newPrereleaseCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
 					Label:  "Notify",
-					Target: releaseChannel,
+					Target: "#" + releaseChannel,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						return ActionNeeded, "release channel", nil
 					},
