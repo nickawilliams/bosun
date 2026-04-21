@@ -12,6 +12,8 @@ type cookieTransport struct {
 
 func (t *cookieTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
-	req.AddCookie(&http.Cookie{Name: "d", Value: t.cookie})
+	// Write to the header map directly to bypass Header.Set's validation,
+	// which rejects non-ASCII bytes that may be present in the raw cookie.
+	req.Header["Cookie"] = []string{"d=" + t.cookie}
 	return t.base.RoundTrip(req)
 }
