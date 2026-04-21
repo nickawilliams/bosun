@@ -83,7 +83,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	// Human-readable tree display.
 	cs := loadConfigSources()
 
-	rootCard(cmd).Tight().Print()
+	rootCard(cmd).Print()
 	tree := buildConfigTree(cs, sourceFilter, groupFilter)
 	tree.Print()
 
