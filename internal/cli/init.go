@@ -22,7 +22,6 @@ func newInitCmd() *cobra.Command {
 		RunE: runInit,
 	}
 
-	cmd.Flags().BoolP("interactive", "i", false, "prompt for every value")
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
 	cmd.Flags().Bool("force", false, "overwrite existing .bosun/ directory")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")

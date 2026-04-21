@@ -40,6 +40,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.PersistentFlags().Bool("dry-run", false, "show what would happen without making changes")
 	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
+	cmd.PersistentFlags().Bool("interactive", false, "prompt for configurable values")
 
 	cmd.AddGroup(
 		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},

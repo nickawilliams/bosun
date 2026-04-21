@@ -8,6 +8,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
@@ -17,6 +18,14 @@ var formTheme = ui.FormTheme()
 // isInteractive returns true if stdin is a terminal.
 func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// forceInteractive returns true if the user passed -i/--interactive and
+// stdin is a TTY. Use this to gate prompts for optional fields that would
+// otherwise be silently skipped.
+func forceInteractive(cmd *cobra.Command) bool {
+	fi, _ := cmd.Flags().GetBool("interactive")
+	return fi && isInteractive()
 }
 
 // runForm runs a huh form with the app theme applied. Keybinding
