@@ -49,14 +49,6 @@ func newReviewCmd() *cobra.Command {
 				return err
 			}
 
-			baseBranch, _ := cmd.Flags().GetString("base")
-			if baseBranch == "" {
-				baseBranch = viper.GetString("pull_request.base")
-			}
-			if baseBranch == "" {
-				baseBranch = "main"
-			}
-
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
 				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
@@ -93,6 +85,35 @@ func newReviewCmd() *cobra.Command {
 				})
 			}
 
+			// Use first repo's identity for API calls (list endpoints).
+			var apiOwner, apiRepo string
+			if len(resolved) > 0 {
+				apiOwner = resolved[0].owner
+				apiRepo = resolved[0].repoName
+			}
+
+			// --- Resolve PR metadata from flags, config, and interactive prompts ---
+
+			baseBranch, _ := cmd.Flags().GetString("base")
+			if baseBranch == "" {
+				baseBranch = viper.GetString("pull_request.base")
+			}
+			if baseBranch == "" && isInteractive() && host != nil {
+				if selected, err := typeaheadSelect("branches", func() ([]string, error) {
+					return host.ListBranches(ctx, apiOwner, apiRepo)
+				}); err != nil {
+					ui.Fail(fmt.Sprintf("Branch selection: %v", err))
+					baseBranch = "main"
+				} else if selected != "" {
+					baseBranch = selected
+				} else {
+					baseBranch = "main"
+				}
+			}
+			if baseBranch == "" {
+				baseBranch = "main"
+			}
+
 			// Build PR title and body from templates.
 			var templateBranch string
 			if len(resolved) > 0 {
@@ -120,13 +141,42 @@ func newReviewCmd() *cobra.Command {
 			if flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer"); len(flagReviewers) > 0 {
 				reviewers = append(reviewers, flagReviewers...)
 			}
+			if len(reviewers) == 0 && isInteractive() && host != nil {
+				if selected, err := typeaheadMultiSelect("reviewers", func() ([]string, error) {
+					return host.ListCollaborators(ctx, apiOwner, apiRepo)
+				}); err != nil {
+					ui.Fail(fmt.Sprintf("Reviewer selection: %v", err))
+				} else {
+					reviewers = selected
+				}
+			}
+
 			teamReviewers := viper.GetStringSlice("pull_request.team_reviewers")
 			if flagTeams, _ := cmd.Flags().GetStringSlice("team-reviewer"); len(flagTeams) > 0 {
 				teamReviewers = append(teamReviewers, flagTeams...)
 			}
+			if len(teamReviewers) == 0 && isInteractive() && host != nil {
+				if selected, err := typeaheadMultiSelect("team reviewers", func() ([]string, error) {
+					return host.ListTeams(ctx, apiOwner)
+				}); err != nil {
+					ui.Fail(fmt.Sprintf("Team reviewer selection: %v", err))
+				} else {
+					teamReviewers = selected
+				}
+			}
+
 			assignees := viper.GetStringSlice("pull_request.assignees")
 			if flagAssignees, _ := cmd.Flags().GetStringSlice("assignee"); len(flagAssignees) > 0 {
 				assignees = append(assignees, flagAssignees...)
+			}
+			if len(assignees) == 0 && isInteractive() && host != nil {
+				if selected, err := typeaheadMultiSelect("assignees", func() ([]string, error) {
+					return host.ListCollaborators(ctx, apiOwner, apiRepo)
+				}); err != nil {
+					ui.Fail(fmt.Sprintf("Assignee selection: %v", err))
+				} else {
+					assignees = selected
+				}
 			}
 
 			selfAssign := !viper.IsSet("pull_request.self_assign") || viper.GetBool("pull_request.self_assign")

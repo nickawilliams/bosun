@@ -57,6 +57,15 @@ type Host interface {
 	// GetAuthenticatedUser returns the login of the authenticated user.
 	GetAuthenticatedUser(ctx context.Context) (string, error)
 
+	// ListBranches returns branch names for a repository.
+	ListBranches(ctx context.Context, owner, repository string) ([]string, error)
+
+	// ListCollaborators returns usernames who can review or be assigned to PRs.
+	ListCollaborators(ctx context.Context, owner, repository string) ([]string, error)
+
+	// ListTeams returns team slugs for an organization.
+	ListTeams(ctx context.Context, owner string) ([]string, error)
+
 	// CreateRelease creates a release with a new tag.
 	CreateRelease(ctx context.Context, req CreateReleaseRequest) (Release, error)
 

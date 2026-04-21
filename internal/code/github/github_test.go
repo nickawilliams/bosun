@@ -235,6 +235,73 @@ func TestGetLatestTagEmpty(t *testing.T) {
 	}
 }
 
+func TestListBranches(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/branches" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode([]map[string]string{
+			{"name": "main"},
+			{"name": "develop"},
+			{"name": "feature/login"},
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	branches, err := a.ListBranches(context.Background(), "org", "repo")
+	if err != nil {
+		t.Fatalf("ListBranches() error: %v", err)
+	}
+	if len(branches) != 3 || branches[0] != "main" {
+		t.Errorf("branches = %v", branches)
+	}
+}
+
+func TestListCollaborators(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/collaborators" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode([]map[string]string{
+			{"login": "alice"},
+			{"login": "bob"},
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	logins, err := a.ListCollaborators(context.Background(), "org", "repo")
+	if err != nil {
+		t.Fatalf("ListCollaborators() error: %v", err)
+	}
+	if len(logins) != 2 || logins[0] != "alice" {
+		t.Errorf("logins = %v", logins)
+	}
+}
+
+func TestListTeams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/orgs/myorg/teams" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode([]map[string]string{
+			{"slug": "backend"},
+			{"slug": "frontend"},
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	teams, err := a.ListTeams(context.Background(), "myorg")
+	if err != nil {
+		t.Fatalf("ListTeams() error: %v", err)
+	}
+	if len(teams) != 2 || teams[0] != "backend" {
+		t.Errorf("teams = %v", teams)
+	}
+}
+
 func TestRequestReviewers(t *testing.T) {
 	var gotPath, gotMethod string
 	var gotBody map[string][]string

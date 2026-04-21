@@ -199,6 +199,72 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 	return "", nil
 }
 
+func (a *Adapter) ListBranches(ctx context.Context, owner, repository string) ([]string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/branches?per_page=100", owner, repository)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing branches: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, fmt.Errorf("parsing branches response: %w", err)
+	}
+
+	names := make([]string, len(results))
+	for i, r := range results {
+		names[i] = r.Name
+	}
+	return names, nil
+}
+
+func (a *Adapter) ListCollaborators(ctx context.Context, owner, repository string) ([]string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/collaborators?per_page=100", owner, repository)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing collaborators: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, fmt.Errorf("parsing collaborators response: %w", err)
+	}
+
+	logins := make([]string, len(results))
+	for i, r := range results {
+		logins[i] = r.Login
+	}
+	return logins, nil
+}
+
+func (a *Adapter) ListTeams(ctx context.Context, owner string) ([]string, error) {
+	path := fmt.Sprintf("/orgs/%s/teams?per_page=100", owner)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing teams: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, fmt.Errorf("parsing teams response: %w", err)
+	}
+
+	slugs := make([]string, len(results))
+	for i, r := range results {
+		slugs[i] = r.Slug
+	}
+	return slugs, nil
+}
+
 func (a *Adapter) RequestReviewers(ctx context.Context, owner, repo string, number int, reviewers, teamReviewers []string) error {
 	body := map[string]any{}
 	if len(reviewers) > 0 {
