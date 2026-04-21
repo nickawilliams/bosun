@@ -127,6 +127,7 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 			Cursor:          cursor,
 			Limit:           200,
 			ExcludeArchived: true,
+			Types:           []string{"public_channel", "private_channel"},
 		}
 
 		channels, nextCursor, err := a.client.GetConversationsContext(ctx, params)
