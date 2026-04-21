@@ -49,7 +49,10 @@ func newReviewCmd() *cobra.Command {
 				return err
 			}
 
-			baseBranch := viper.GetString("pull_request.base")
+			baseBranch, _ := cmd.Flags().GetString("base")
+			if baseBranch == "" {
+				baseBranch = viper.GetString("pull_request.base")
+			}
 			if baseBranch == "" {
 				baseBranch = "main"
 			}
@@ -122,6 +125,9 @@ func newReviewCmd() *cobra.Command {
 				teamReviewers = append(teamReviewers, flagTeams...)
 			}
 			assignees := viper.GetStringSlice("pull_request.assignees")
+			if flagAssignees, _ := cmd.Flags().GetStringSlice("assignee"); len(flagAssignees) > 0 {
+				assignees = append(assignees, flagAssignees...)
+			}
 
 			selfAssign := !viper.IsSet("pull_request.self_assign") || viper.GetBool("pull_request.self_assign")
 			if cmd.Flags().Changed("self-assign") {
@@ -301,10 +307,12 @@ func newReviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
+	cmd.Flags().String("base", "", "target branch (default: pull_request.base config or main)")
 	cmd.Flags().String("title", "", "override PR title")
 	cmd.Flags().String("body", "", "override PR body")
 	cmd.Flags().StringSlice("reviewer", nil, "request review from user (repeatable)")
 	cmd.Flags().StringSlice("team-reviewer", nil, "request review from team (repeatable)")
+	cmd.Flags().StringSlice("assignee", nil, "assign PR to user (repeatable)")
 	cmd.Flags().Bool("self-assign", false, "assign PR to yourself")
 	return cmd
 }
