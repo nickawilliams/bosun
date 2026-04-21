@@ -13,20 +13,14 @@ const maxSelectHeight = 10
 // typeaheadInput shows a single-line text input with the current value as a
 // placeholder. Pressing Enter with no input accepts the current value.
 func typeaheadInput(title, current string) (string, error) {
-	var value string
+	input, field := newDefaultInput(current)
 	slot := ui.NewSlot()
 	slot.Show(ui.NewCard(ui.CardInput, title).Tight())
-	if err := runForm(
-		huh.NewInput().
-			Placeholder(current).
-			Value(&value),
-	); err != nil {
+	if err := runForm(input); err != nil {
 		return current, err
 	}
 	slot.Clear()
-	if value == "" {
-		value = current
-	}
+	value := field.Resolved()
 	ui.Selected(title, value)
 	return value, nil
 }

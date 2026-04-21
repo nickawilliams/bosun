@@ -214,6 +214,48 @@ func findYAMLKey(lines []string, key string, startFrom int) int {
 	return -1
 }
 
+// setConfigListValue does a targeted update of a YAML list key,
+// preserving comments and structure. Finds the key, removes its existing
+// list items (and commented-out items), then inserts the new values.
+func setConfigListValue(path, key string, values []string) error {
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	keyIdx := findYAMLKey(lines, key, 0)
+
+	// Build the replacement block.
+	block := []string{key + ":"}
+	for _, v := range values {
+		block = append(block, "  - "+v)
+	}
+
+	if keyIdx == -1 {
+		lines = append(lines, block...)
+	} else {
+		// Find the extent of existing list children (items and
+		// commented-out items) immediately after the key line.
+		end := keyIdx + 1
+		for end < len(lines) {
+			trimmed := strings.TrimSpace(lines[end])
+			if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "# -") {
+				end++
+			} else {
+				break
+			}
+		}
+		result := make([]string, 0, len(lines))
+		result = append(result, lines[:keyIdx]...)
+		result = append(result, block...)
+		result = append(result, lines[end:]...)
+		lines = result
+	}
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+}
+
 // setYAMLKey finds a key starting from startFrom and updates its value,
 // or appends it if not found.
 func setYAMLKey(lines []string, key, value string, startFrom int) []string {

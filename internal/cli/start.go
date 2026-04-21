@@ -55,20 +55,15 @@ func newStartCmd() *cobra.Command {
 					slug = slugify(slugOverride)
 				case isInteractive():
 					suggested := slugify(detail.Title)
+					input, field := newDefaultInput(suggested)
 					slugSlot := ui.NewSlot()
 					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch Slug").Tight())
-					if err := runForm(
-						huh.NewInput().
-							Title("Slug").
-							Placeholder(suggested).
-							Value(&slug),
-					); err != nil {
+					if err := runForm(input.Title("Slug")); err != nil {
 						return err
 					}
 					slugSlot.Clear()
-					if slug == "" {
-						slug = suggested
-					} else {
+					slug = field.Resolved()
+					if slug != suggested {
 						slug = slugify(slug)
 					}
 					ui.Selected("Branch Slug", slug)

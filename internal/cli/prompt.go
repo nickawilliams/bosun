@@ -20,7 +20,7 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// forceInteractive returns true if the user passed -i/--interactive and
+// forceInteractive returns true if the user passed --interactive and
 // stdin is a TTY. Use this to gate prompts for optional fields that would
 // otherwise be silently skipped.
 func forceInteractive(cmd *cobra.Command) bool {
@@ -36,6 +36,7 @@ func forceInteractive(cmd *cobra.Command) bool {
 //
 // If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
+	ui.FlushBreak()
 	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
 		WithLayout(ui.NewTimelineLayout()).
@@ -72,13 +73,13 @@ func promptRequired(label string) string {
 }
 
 // promptConfirm shows a yes/no confirmation. Returns true if confirmed.
-// Defaults to the provided value. Returns defaultVal in non-interactive mode.
-func promptConfirm(label string, defaultVal bool) bool {
+// Defaults to the provided value. Returns (defaultVal, nil) in
+// non-interactive mode. Returns ErrCancelled if the user presses ctrl+c.
+func promptConfirm(label string, defaultVal bool) (bool, error) {
 	if !isInteractive() {
-		return defaultVal
+		return defaultVal, nil
 	}
 
-	ui.BreakTimeline()
 	confirmed := defaultVal
 	err := runForm(
 		newConfirm().
@@ -88,9 +89,9 @@ func promptConfirm(label string, defaultVal bool) bool {
 			Value(&confirmed),
 	)
 	if err != nil {
-		return defaultVal
+		return defaultVal, err
 	}
-	return confirmed
+	return confirmed, nil
 }
 
 // promptSecret prompts for a sensitive value with masked input.
@@ -119,4 +120,29 @@ func promptValue(label, defaultVal string) (string, error) {
 		return defaultVal, err
 	}
 	return value, nil
+}
+
+// defaultField pairs a form-bound value with a fallback. After the
+// form runs, Resolved returns the user's input or the fallback if
+// they left it blank (accepting the placeholder).
+type defaultField struct {
+	value    string
+	fallback string
+}
+
+// Resolved returns the user's input, or the fallback if blank.
+func (f *defaultField) Resolved() string {
+	if f.value == "" {
+		return f.fallback
+	}
+	return f.value
+}
+
+// newDefaultInput returns a huh.Input with fallback shown as placeholder
+// (blank accepts it) and a field to resolve the result after the form
+// runs. Callers can chain .Title(), .Description(), etc. on the
+// returned input.
+func newDefaultInput(fallback string) (*huh.Input, *defaultField) {
+	f := &defaultField{fallback: fallback}
+	return huh.NewInput().Placeholder(fallback).Value(&f.value), f
 }

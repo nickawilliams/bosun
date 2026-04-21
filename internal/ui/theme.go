@@ -98,6 +98,13 @@ func BreakTimeline() {
 	comfyBreak = true
 }
 
+// FlushBreak prints and clears a pending comfy break immediately.
+// Use before non-card output (e.g., huh forms) that won't call
+// comfyPrefix() itself.
+func FlushBreak() {
+	fmt.Print(comfyPrefix())
+}
+
 // BeginTimeline prints a leading blank line in comfy mode to
 // separate the timeline from the shell prompt above.
 func BeginTimeline() {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,6 +74,9 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 
 		// Need to resolve (prompt or error).
 		if err := resolveConfigKey(groupName, ck); err != nil {
+			if errors.Is(err, ErrCancelled) {
+				return err
+			}
 			if ck.Required {
 				return err
 			}
