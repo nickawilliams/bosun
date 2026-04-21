@@ -48,6 +48,15 @@ type Host interface {
 	// PullRequest with Number==0 if none exists.
 	GetPRForBranch(ctx context.Context, owner, repository, branch string) (PullRequest, error)
 
+	// RequestReviewers requests reviews from the given users and/or teams on a PR.
+	RequestReviewers(ctx context.Context, owner, repository string, number int, reviewers, teamReviewers []string) error
+
+	// AddAssignees adds assignees to a pull request.
+	AddAssignees(ctx context.Context, owner, repository string, number int, assignees []string) error
+
+	// GetAuthenticatedUser returns the login of the authenticated user.
+	GetAuthenticatedUser(ctx context.Context) (string, error)
+
 	// CreateRelease creates a release with a new tag.
 	CreateRelease(ctx context.Context, req CreateReleaseRequest) (Release, error)
 

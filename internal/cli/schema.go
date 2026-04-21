@@ -64,7 +64,7 @@ var configSchema = map[string]ConfigGroup{
 		Label: "Branch naming",
 
 		Keys: []ConfigKey{
-			{Key: "pattern", Label: "Branch pattern", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
+			{Key: "template", Label: "Branch template", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
 			{Key: "categories.story", Label: "Story category", Default: "feature"},
 			{Key: "categories.bug", Label: "Bug category", Default: "fix"},
 			{Key: "categories.task", Label: "Task category", Default: "chore"},
@@ -96,7 +96,12 @@ var configSchema = map[string]ConfigGroup{
 
 		Keys: []ConfigKey{
 			{Key: "base", Label: "Base branch", Default: "main"},
-			{Key: "title_pattern", Label: "PR title pattern", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
+			{Key: "title_template", Label: "PR title template", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
+			{Key: "body_template", Label: "PR body template"},
+			{Key: "reviewers", Label: "Reviewers (GitHub usernames)"},
+			{Key: "team_reviewers", Label: "Team reviewers (GitHub team slugs)"},
+			{Key: "assignees", Label: "Assignees (GitHub usernames)"},
+			{Key: "self_assign", Label: "Auto-assign PR author", Default: "true"},
 		},
 	},
 	"notification": {

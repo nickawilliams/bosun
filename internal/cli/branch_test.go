@@ -9,7 +9,7 @@ import (
 func TestBuildBranchName(t *testing.T) {
 	// Set up config for branch naming.
 	viper.Reset()
-	viper.Set("branch.pattern", "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}")
+	viper.Set("branch.template", "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}")
 	viper.Set("branch.categories.story", "feature")
 	viper.Set("branch.categories.bug", "fix")
 	t.Cleanup(func() { viper.Reset() })

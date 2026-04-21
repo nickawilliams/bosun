@@ -370,29 +370,54 @@ func newCodeHost() (code.Host, error) {
 	}
 }
 
+// prTemplateData holds the fields available to PR title and body templates.
+type prTemplateData struct {
+	IssueKey   string
+	IssueTitle string
+	IssueType  string
+	IssueURL   string
+	Branch     string
+	BaseBranch string
+}
+
+// executePRTemplate parses and executes a Go text/template with PR data.
+func executePRTemplate(name, pattern string, data prTemplateData) (string, error) {
+	tmpl, err := template.New(name).Parse(pattern)
+	if err != nil {
+		return "", err
+	}
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // buildPRTitle generates a PR title from the configured pattern and issue metadata.
-func buildPRTitle(issueKey, issueTitle string) string {
-	pattern := viper.GetString("pull_request.title_pattern")
+func buildPRTitle(data prTemplateData) string {
+	pattern := viper.GetString("pull_request.title_template")
 	if pattern == "" {
 		pattern = "[{{.IssueKey}}] {{.IssueTitle}}"
 	}
-
-	tmpl, err := template.New("pr-title").Parse(pattern)
+	result, err := executePRTemplate("pr-title", pattern, data)
 	if err != nil {
-		return fmt.Sprintf("[%s] %s", issueKey, issueTitle)
+		return fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
 	}
+	return result
+}
 
-	data := struct {
-		IssueKey   string
-		IssueTitle string
-	}{issueKey, issueTitle}
-
-	var buf strings.Builder
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Sprintf("[%s] %s", issueKey, issueTitle)
+// buildPRBody generates a PR body from the configured template and issue
+// metadata. Returns empty string if no template is configured.
+func buildPRBody(data prTemplateData) string {
+	pattern := viper.GetString("pull_request.body_template")
+	if pattern == "" {
+		return ""
 	}
-
-	return buf.String()
+	result, err := executePRTemplate("pr-body", pattern, data)
+	if err != nil {
+		return ""
+	}
+	return result
 }
 
 // newNotifier creates a notify.Notifier from current config. Returns an error

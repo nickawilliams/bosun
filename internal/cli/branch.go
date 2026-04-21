@@ -25,7 +25,7 @@ var (
 // the issue type (from the tracker), and the issue title. When slug is
 // non-empty it is used directly; otherwise one is derived from the title.
 func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, error) {
-	pattern := viper.GetString("branch.pattern")
+	pattern := viper.GetString("branch.template")
 	if pattern == "" {
 		pattern = defaultPattern
 	}

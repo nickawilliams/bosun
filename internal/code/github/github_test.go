@@ -235,6 +235,84 @@ func TestGetLatestTagEmpty(t *testing.T) {
 	}
 }
 
+func TestRequestReviewers(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string][]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	err := a.RequestReviewers(context.Background(), "org", "repo", 42, []string{"alice", "bob"}, []string{"backend"})
+	if err != nil {
+		t.Fatalf("RequestReviewers() error: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/repos/org/repo/pulls/42/requested_reviewers" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(gotBody["reviewers"]) != 2 || gotBody["reviewers"][0] != "alice" {
+		t.Errorf("reviewers = %v", gotBody["reviewers"])
+	}
+	if len(gotBody["team_reviewers"]) != 1 || gotBody["team_reviewers"][0] != "backend" {
+		t.Errorf("team_reviewers = %v", gotBody["team_reviewers"])
+	}
+}
+
+func TestAddAssignees(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string][]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	err := a.AddAssignees(context.Background(), "org", "repo", 42, []string{"charlie"})
+	if err != nil {
+		t.Fatalf("AddAssignees() error: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/repos/org/repo/issues/42/assignees" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(gotBody["assignees"]) != 1 || gotBody["assignees"][0] != "charlie" {
+		t.Errorf("body = %v", gotBody)
+	}
+}
+
+func TestGetAuthenticatedUser(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user" {
+			t.Errorf("path = %q, want /user", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	login, err := a.GetAuthenticatedUser(context.Background())
+	if err != nil {
+		t.Fatalf("GetAuthenticatedUser() error: %v", err)
+	}
+	if login != "octocat" {
+		t.Errorf("login = %q, want %q", login, "octocat")
+	}
+}
+
 func TestAuthHeader(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

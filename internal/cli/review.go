@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
@@ -48,7 +49,6 @@ func newReviewCmd() *cobra.Command {
 				return err
 			}
 
-			prTitle := buildPRTitle(issue, detail.Title)
 			baseBranch := viper.GetString("pull_request.base")
 			if baseBranch == "" {
 				baseBranch = "main"
@@ -59,7 +59,7 @@ func newReviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
 			}
 
-			// --- Pre-flight: push check ---
+			// --- Pre-flight: resolve repos, branches, remotes ---
 
 			g := git.New()
 
@@ -89,6 +89,63 @@ func newReviewCmd() *cobra.Command {
 					owner: identity.Owner, repoName: identity.Name,
 				})
 			}
+
+			// Build PR title and body from templates.
+			var templateBranch string
+			if len(resolved) > 0 {
+				templateBranch = resolved[0].branch
+			}
+			prData := prTemplateData{
+				IssueKey:   issue,
+				IssueTitle: detail.Title,
+				IssueType:  detail.Type,
+				IssueURL:   detail.URL,
+				Branch:     templateBranch,
+				BaseBranch: baseBranch,
+			}
+			prTitle, _ := cmd.Flags().GetString("title")
+			if prTitle == "" {
+				prTitle = buildPRTitle(prData)
+			}
+			prBody, _ := cmd.Flags().GetString("body")
+			if prBody == "" {
+				prBody = buildPRBody(prData)
+			}
+
+			// Resolve reviewers and assignees from config + flags.
+			reviewers := viper.GetStringSlice("pull_request.reviewers")
+			if flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer"); len(flagReviewers) > 0 {
+				reviewers = append(reviewers, flagReviewers...)
+			}
+			teamReviewers := viper.GetStringSlice("pull_request.team_reviewers")
+			if flagTeams, _ := cmd.Flags().GetStringSlice("team-reviewer"); len(flagTeams) > 0 {
+				teamReviewers = append(teamReviewers, flagTeams...)
+			}
+			assignees := viper.GetStringSlice("pull_request.assignees")
+
+			selfAssign := !viper.IsSet("pull_request.self_assign") || viper.GetBool("pull_request.self_assign")
+			if cmd.Flags().Changed("self-assign") {
+				selfAssign, _ = cmd.Flags().GetBool("self-assign")
+			}
+			if selfAssign && host != nil {
+				username, err := host.GetAuthenticatedUser(ctx)
+				if err != nil {
+					ui.Fail(fmt.Sprintf("Self-assign: %v", err))
+				} else if username != "" {
+					duplicate := false
+					for _, a := range assignees {
+						if strings.EqualFold(a, username) {
+							duplicate = true
+							break
+						}
+					}
+					if !duplicate {
+						assignees = append(assignees, username)
+					}
+				}
+			}
+
+			// --- Pre-flight: push check ---
 
 			type unpushedRepo struct {
 				rc    repoContext
@@ -141,8 +198,10 @@ func newReviewCmd() *cobra.Command {
 			var actions []Action
 
 			type prResult struct {
-				repo string
-				pr   code.PullRequest
+				repo     string
+				pr       code.PullRequest
+				owner    string
+				repoName string
 			}
 			var prResults []prResult
 
@@ -174,12 +233,16 @@ func newReviewCmd() *cobra.Command {
 								Head:       branch,
 								Base:       baseBranch,
 								Title:      prTitle,
+								Body:       prBody,
 								Draft:      draft,
 							})
 							if err != nil {
 								return err
 							}
-							prResults = append(prResults, prResult{repo: repoDisplayName, pr: pr})
+							prResults = append(prResults, prResult{
+								repo: repoDisplayName, pr: pr,
+								owner: owner, repoName: repoName,
+							})
 							return nil
 						},
 					})
@@ -194,6 +257,22 @@ func newReviewCmd() *cobra.Command {
 
 			if err := runActions(cmd, ctx, actions); err != nil {
 				return err
+			}
+
+			// Post-apply: request reviewers and add assignees.
+			if host != nil && len(prResults) > 0 {
+				for _, r := range prResults {
+					if len(reviewers) > 0 || len(teamReviewers) > 0 {
+						if err := host.RequestReviewers(ctx, r.owner, r.repoName, r.pr.Number, reviewers, teamReviewers); err != nil {
+							ui.Fail(fmt.Sprintf("%s: reviewers: %v", r.repo, err))
+						}
+					}
+					if len(assignees) > 0 {
+						if err := host.AddAssignees(ctx, r.owner, r.repoName, r.pr.Number, assignees); err != nil {
+							ui.Fail(fmt.Sprintf("%s: assignees: %v", r.repo, err))
+						}
+					}
+				}
 			}
 
 			// Post-apply: notify review channel.
@@ -222,5 +301,10 @@ func newReviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
+	cmd.Flags().String("title", "", "override PR title")
+	cmd.Flags().String("body", "", "override PR body")
+	cmd.Flags().StringSlice("reviewer", nil, "request review from user (repeatable)")
+	cmd.Flags().StringSlice("team-reviewer", nil, "request review from team (repeatable)")
+	cmd.Flags().Bool("self-assign", false, "assign PR to yourself")
 	return cmd
 }

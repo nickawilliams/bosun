@@ -240,7 +240,7 @@ func checkStatusMappings() (string, error) {
 }
 
 func checkBranchPattern() (string, error) {
-	pattern := viper.GetString("branch.pattern")
+	pattern := viper.GetString("branch.template")
 	if pattern == "" {
 		return "default", nil
 	}

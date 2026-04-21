@@ -199,6 +199,49 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 	return "", nil
 }
 
+func (a *Adapter) RequestReviewers(ctx context.Context, owner, repo string, number int, reviewers, teamReviewers []string) error {
+	body := map[string]any{}
+	if len(reviewers) > 0 {
+		body["reviewers"] = reviewers
+	}
+	if len(teamReviewers) > 0 {
+		body["team_reviewers"] = teamReviewers
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number)
+	resp, err := a.doRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return fmt.Errorf("requesting reviewers: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (a *Adapter) AddAssignees(ctx context.Context, owner, repo string, number int, assignees []string) error {
+	body := map[string]any{"assignees": assignees}
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number)
+	resp, err := a.doRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return fmt.Errorf("adding assignees: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (a *Adapter) GetAuthenticatedUser(ctx context.Context) (string, error) {
+	resp, err := a.doRequest(ctx, http.MethodGet, "/user", nil)
+	if err != nil {
+		return "", fmt.Errorf("getting authenticated user: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("parsing user response: %w", err)
+	}
+	return result.Login, nil
+}
+
 // doRequest executes an authenticated request against the GitHub API.
 func (a *Adapter) doRequest(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	url := a.baseURL + path
