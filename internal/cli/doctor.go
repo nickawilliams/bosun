@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,11 +15,21 @@ import (
 	"github.com/spf13/viper"
 )
 
-type checkResult struct {
-	name   string
-	status string // "pass", "warn", "fail"
-	detail string
+// healthCheck describes a single diagnostic check.
+type healthCheck struct {
+	Name     string
+	Required bool // fail vs warn on error
+	Spinner  bool // show spinner during check (for network calls)
+	Check    func(ctx context.Context) (string, error)
 }
+
+// errNotConfigured is returned by health checks to indicate a service
+// is absent (not an error). The doctor renders this as a warning (!)
+// rather than a failure (✗).
+var errNotConfigured = fmt.Errorf("(not configured)")
+
+// checkProvider returns one or more health checks for a service area.
+type checkProvider func() []healthCheck
 
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -29,89 +40,122 @@ func newDoctorCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
-			var results []checkResult
 
-			check := func(name string, required bool, fn func() (string, error)) {
-				detail, err := fn()
-				if err != nil {
-					status := "warn"
-					if required {
-						status = "fail"
-					}
-					results = append(results, checkResult{name, status, err.Error()})
+			providers := []checkProvider{
+				environmentChecks,
+				projectChecks,
+				issueTrackerChecks,
+				codeHostChecks,
+				notificationChecks,
+			}
+
+			var checks []healthCheck
+			for _, p := range providers {
+				checks = append(checks, p()...)
+			}
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+
+			passed, warned, failed := 0, 0, 0
+			for _, hc := range checks {
+				var detail string
+				var checkErr error
+
+				if hc.Spinner {
+					// Spinner checks (network calls) get a spinner.
+					_ = ui.RunCardReplace(hc.Name, func() error {
+						detail, checkErr = hc.Check(ctx)
+						return nil // never fail the spinner
+					}, func() *ui.Card {
+						return renderCheckCard(hc, detail, checkErr, &passed, &warned, &failed)
+					})
 				} else {
-					results = append(results, checkResult{name, "pass", detail})
+					detail, checkErr = hc.Check(ctx)
+					renderCheckCard(hc, detail, checkErr, &passed, &warned, &failed).Print()
 				}
 			}
 
-			// Configuration.
-			check("Global config", true, checkGlobalConfig)
-			check("Project config", false, checkProjectConfig)
-
-			// Tools.
-			check("Git", true, checkGit)
-
-			// Project.
-			check("Repositories", false, checkRepositories)
-			check("Branch pattern", false, checkBranchPattern)
-			check("Status mappings", false, checkStatusMappings)
-
-			// Issue tracker.
-			check("Issue tracker", false, checkIssueTrackerConfig)
-			if viper.GetString("issue_tracker") != "" {
-				check("Tracker auth", false, checkIssueTrackerConnectivity)
+			// Summary.
+			parts := []string{fmt.Sprintf("%d passed", passed)}
+			if warned > 0 {
+				parts = append(parts, fmt.Sprintf("%d warnings", warned))
 			}
-
-			// Render.
-			renderDoctorResults(results)
+			if failed > 0 {
+				parts = append(parts, fmt.Sprintf("%d failed", failed))
+			}
+			ui.Info("%s", strings.Join(parts, ", "))
 
 			return nil
 		},
 	}
 }
 
-func renderDoctorResults(results []checkResult) {
-	passed, warned, failed := 0, 0, 0
+// --- Providers ---
 
-	for _, r := range results {
-		detail := strings.Split(r.detail, "\n")
-		switch r.status {
-		case "pass":
-			passed++
-			if r.detail != "" {
-				ui.CompleteWithDetail(r.name, detail)
-			} else {
-				ui.Complete(r.name)
-			}
-		case "warn":
-			warned++
-			if r.detail != "" {
-				ui.Skip(fmt.Sprintf("%s: %s", r.name, r.detail))
-			} else {
-				ui.Skip(r.name)
-			}
-		case "fail":
-			failed++
-			if r.detail != "" {
-				ui.Fail(fmt.Sprintf("%s: %s", r.name, r.detail))
-			} else {
-				ui.Fail(r.name)
-			}
+// renderCheckCard builds the result card for a health check.
+func renderCheckCard(hc healthCheck, detail string, checkErr error, passed, warned, failed *int) *ui.Card {
+	if checkErr != nil {
+		if errors.Is(checkErr, errNotConfigured) {
+			*warned++
+			return ui.NewCard(ui.CardSkipped, hc.Name).Subtitle(checkErr.Error())
+		}
+		if hc.Required {
+			*failed++
+		} else {
+			*warned++
+		}
+		return ui.NewCard(ui.CardFailed, hc.Name).Subtitle(checkErr.Error())
+	}
+	*passed++
+	card := ui.NewCard(ui.CardSuccess, hc.Name)
+	if detail != "" {
+		if strings.Contains(detail, "\n") {
+			card.Muted(strings.Split(detail, "\n")...)
+		} else {
+			card.Subtitle(detail)
 		}
 	}
-
-	// Summary.
-	parts := []string{fmt.Sprintf("%d passed", passed)}
-	if warned > 0 {
-		parts = append(parts, fmt.Sprintf("%d warnings", warned))
-	}
-	if failed > 0 {
-		parts = append(parts, fmt.Sprintf("%d failed", failed))
-	}
-	ui.Info("%s", strings.Join(parts, ", "))
+	return card
 }
 
-func checkGlobalConfig() (string, error) {
+func environmentChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "Global config", Required: true, Check: checkGlobalConfig},
+		{Name: "Project config", Check: checkProjectConfig},
+		{Name: "Git", Required: true, Check: checkGit},
+	}
+}
+
+func projectChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "Repositories", Check: checkRepositories},
+		{Name: "Branch template", Check: checkBranchTemplate},
+		{Name: "Status mappings", Check: checkStatusMappings},
+	}
+}
+
+func issueTrackerChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "Issue tracker", Spinner: true, Check: checkIssueTracker},
+	}
+}
+
+func codeHostChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "Code host", Spinner: true, Check: checkCodeHost},
+	}
+}
+
+func notificationChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "Notifications", Check: checkNotifications},
+	}
+}
+
+// --- Check implementations ---
+
+func checkGlobalConfig(_ context.Context) (string, error) {
 	dir, err := config.GlobalConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine config directory: %w", err)
@@ -123,7 +167,7 @@ func checkGlobalConfig() (string, error) {
 	return path, nil
 }
 
-func checkProjectConfig() (string, error) {
+func checkProjectConfig(_ context.Context) (string, error) {
 	root := config.FindProjectRoot()
 	if root == "" {
 		return "", fmt.Errorf("no .bosun/ found (run bosun init)")
@@ -135,7 +179,7 @@ func checkProjectConfig() (string, error) {
 	return path, nil
 }
 
-func checkGit() (string, error) {
+func checkGit(_ context.Context) (string, error) {
 	_, err := exec.LookPath("git")
 	if err != nil {
 		return "", fmt.Errorf("not found on PATH")
@@ -144,13 +188,12 @@ func checkGit() (string, error) {
 	if err != nil {
 		return "found", nil
 	}
-	// Extract just the version number from "git version 2.50.1"
 	ver := strings.TrimSpace(string(out))
 	ver = strings.TrimPrefix(ver, "git version ")
 	return ver, nil
 }
 
-func checkRepositories() (string, error) {
+func checkRepositories(_ context.Context) (string, error) {
 	repositories, err := resolveRepositories(nil)
 	if err != nil {
 		return "", err
@@ -162,57 +205,15 @@ func checkRepositories() (string, error) {
 	return strings.Join(names, "\n"), nil
 }
 
-func checkIssueTrackerConfig() (string, error) {
-	if group, ok := lookupGroup("issue_tracker"); ok {
-		if missing := checkGroupCompleteness("issue_tracker", group); len(missing) > 0 {
-			return "", fmt.Errorf("not configured")
-		}
+func checkBranchTemplate(_ context.Context) (string, error) {
+	pattern := viper.GetString("branch.template")
+	if pattern == "" {
+		return "default", nil
 	}
-
-	provider := viper.GetString("issue_tracker")
-	switch provider {
-	case "jira":
-		if group, ok := lookupGroup("jira"); ok {
-			if missing := checkGroupCompleteness("jira", group); len(missing) > 0 {
-				return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
-			}
-		}
-		baseURL := viper.GetString("jira.base_url")
-		email := viper.GetString("jira.email")
-		host := strings.TrimPrefix(baseURL, "https://")
-		host = strings.TrimPrefix(host, "http://")
-		host = strings.TrimRight(host, "/")
-		return fmt.Sprintf("jira → %s (%s)", host, email), nil
-	default:
-		return "", fmt.Errorf("unsupported: %q", provider)
-	}
+	return pattern, nil
 }
 
-func checkIssueTrackerConnectivity() (string, error) {
-	tracker, err := newIssueTracker()
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_, err = tracker.GetIssue(ctx, "BOSUN-0")
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
-			return "", fmt.Errorf("auth failed (check token and email)")
-		}
-		if strings.Contains(errStr, "404") {
-			return "authenticated", nil
-		}
-		return "", fmt.Errorf("connection failed: %w", err)
-	}
-
-	return "connected", nil
-}
-
-func checkStatusMappings() (string, error) {
+func checkStatusMappings(_ context.Context) (string, error) {
 	group, ok := lookupGroup("statuses")
 	if !ok {
 		return "", fmt.Errorf("no status schema defined")
@@ -239,10 +240,92 @@ func checkStatusMappings() (string, error) {
 	return fmt.Sprintf("%d/%d", mapped, total), nil
 }
 
-func checkBranchPattern() (string, error) {
-	pattern := viper.GetString("branch.template")
-	if pattern == "" {
-		return "default", nil
+func checkIssueTracker(ctx context.Context) (string, error) {
+	provider := viper.GetString("issue_tracker")
+	if provider == "" {
+		return "", errNotConfigured
 	}
-	return pattern, nil
+
+	// Validate config completeness.
+	switch provider {
+	case "jira":
+		if group, ok := lookupGroup("jira"); ok {
+			if missing := checkGroupCompleteness("jira", group); len(missing) > 0 {
+				return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
+			}
+		}
+	default:
+		return "", fmt.Errorf("unsupported: %q", provider)
+	}
+
+	// Test connectivity.
+	tracker, err := newIssueTracker()
+	if err != nil {
+		return "", err
+	}
+
+	_, err = tracker.GetIssue(ctx, "BOSUN-0")
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
+			return "", fmt.Errorf("auth failed (check token and email)")
+		}
+		if strings.Contains(errStr, "404") {
+			// 404 means we authenticated but the issue doesn't exist — that's fine.
+			baseURL := viper.GetString("jira.base_url")
+			email := viper.GetString("jira.email")
+			host := strings.TrimPrefix(baseURL, "https://")
+			host = strings.TrimPrefix(host, "http://")
+			host = strings.TrimRight(host, "/")
+			return fmt.Sprintf("%s → %s (%s)", provider, host, email), nil
+		}
+		return "", fmt.Errorf("connection failed: %w", err)
+	}
+
+	return provider + " · authenticated", nil
+}
+
+func checkCodeHost(ctx context.Context) (string, error) {
+	host, err := newCodeHost()
+	if err != nil {
+		return "", errNotConfigured
+	}
+
+	username, err := host.GetAuthenticatedUser(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth failed: %w", err)
+	}
+
+	return fmt.Sprintf("github → %s", username), nil
+}
+
+func checkNotifications(_ context.Context) (string, error) {
+	provider := viper.GetString("notification")
+	if provider == "" {
+		return "", errNotConfigured
+	}
+
+	// Validate that the notifier can be created (token present, etc.).
+	_, err := newNotifier()
+	if err != nil {
+		return "", err
+	}
+
+	// List configured channels.
+	var channels []string
+	if ch := viper.GetString("slack.channel_review"); ch != "" {
+		channels = append(channels, "#"+ch)
+	}
+	if ch := viper.GetString("slack.channel_release"); ch != "" {
+		channels = append(channels, "#"+ch)
+	}
+
+	detail := provider
+	if len(channels) > 0 {
+		detail += " → " + strings.Join(channels, ", ")
+	} else {
+		detail += " (no channels configured)"
+	}
+
+	return detail, nil
 }
