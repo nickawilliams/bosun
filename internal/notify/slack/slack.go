@@ -25,7 +25,7 @@ type apiCache struct {
 
 // New returns a new Slack adapter.
 func New(token string) *Adapter {
-	return &Adapter{client: slackapi.New(token)}
+	return &Adapter{client: slackapi.New(token, slackapi.OptionRetry(3))}
 }
 
 // NewWithOptions returns a Slack adapter with custom options (for testing).
@@ -40,7 +40,10 @@ func NewWithCookie(token, cookie string) *Adapter {
 		base:   http.DefaultTransport,
 		cookie: cookie,
 	}}
-	return &Adapter{client: slackapi.New(token, slackapi.OptionHTTPClient(client))}
+	return &Adapter{client: slackapi.New(token,
+		slackapi.OptionHTTPClient(client),
+		slackapi.OptionRetry(3),
+	)}
 }
 
 func (a *Adapter) AuthTest(ctx context.Context) (string, error) {
