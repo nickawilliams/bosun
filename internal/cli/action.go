@@ -51,22 +51,39 @@ func (a *Action) op() ui.PlanOp {
 func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error {
 	plan := ui.NewPlan()
 	var pending []Action
+	var assessErr error
 
-	for i := range actions {
-		a := &actions[i]
-		state, detail, err := a.Assess(ctx)
-		if err != nil {
-			return err
+	// Show a spinner while assessing actions (may involve API calls).
+	rewind, spinErr := ui.RunCardRewindable("Building plan", func() error {
+		for i := range actions {
+			a := &actions[i]
+			state, detail, err := a.Assess(ctx)
+			if err != nil {
+				assessErr = err
+				return nil // don't fail the spinner card
+			}
+			switch state {
+			case ActionNeeded:
+				plan.Add(a.op(), a.Label, a.Target, detail)
+				pending = append(pending, *a)
+			case ActionCompleted:
+				plan.Add(ui.PlanNoChange, a.Label, a.Target, detail)
+			case ActionSkipped:
+				// Omit from plan entirely.
+			}
 		}
-		switch state {
-		case ActionNeeded:
-			plan.Add(a.op(), a.Label, a.Target, detail)
-			pending = append(pending, *a)
-		case ActionCompleted:
-			plan.Add(ui.PlanNoChange, a.Label, a.Target, detail)
-		case ActionSkipped:
-			// Omit from plan entirely.
-		}
+		return nil
+	})
+	if spinErr != nil {
+		return spinErr
+	}
+	if assessErr != nil {
+		return assessErr
+	}
+
+	// Rewind the spinner to replace it with the plan card.
+	if rewind != nil {
+		rewind()
 	}
 
 	applyFns := make([]PlanAction, len(pending))
