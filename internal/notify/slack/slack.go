@@ -49,11 +49,14 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, err
 	}
 
+	meta := bosunMetadata(msg.IssueKey)
+	opts := buildMsgOptions(msg.Content)
+	opts = append(opts, slackapi.MsgOptionMetadata(meta))
+
 	// Upsert: update existing message if one exists for this issue.
 	if msg.IssueKey != "" {
 		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
 		if existing.Timestamp != "" {
-			opts := buildMsgOptions(msg.Content)
 			_, _, _, err := a.client.UpdateMessageContext(ctx, channelID, existing.Timestamp, opts...)
 			if err != nil {
 				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
@@ -61,8 +64,6 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 			return existing, nil
 		}
 	}
-
-	opts := buildMsgOptions(msg.Content)
 
 	_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
 	if err != nil {
@@ -82,11 +83,13 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 }
 
 // findThreadInChannel searches recent messages in a resolved channel ID for
-// one containing the issue key. Returns a zero ThreadRef if not found.
+// a bosun notification matching the issue key. Checks metadata first (exact
+// match), then falls back to text/block content search.
 func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
 	params := &slackapi.GetConversationHistoryParameters{
-		ChannelID: channelID,
-		Limit:     200,
+		ChannelID:          channelID,
+		Limit:              200,
+		IncludeAllMetadata: true,
 	}
 
 	resp, err := a.client.GetConversationHistoryContext(ctx, params)
@@ -94,6 +97,17 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 		return notify.ThreadRef{}, fmt.Errorf("fetching channel history: %w", err)
 	}
 
+	// First pass: match on metadata (exact, reliable).
+	for _, msg := range resp.Messages {
+		if msg.Metadata.EventType == metadataEventType {
+			if key, _ := msg.Metadata.EventPayload["issue_key"].(string); key == issueKey {
+				return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
+			}
+		}
+	}
+
+	// Second pass: fall back to text/block content search (for messages
+	// sent before metadata was added, or by other tools).
 	for _, msg := range resp.Messages {
 		if strings.Contains(msg.Text, issueKey) {
 			return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
@@ -113,6 +127,18 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	}
 
 	return notify.ThreadRef{}, nil
+}
+
+const metadataEventType = "bosun_notification"
+
+// bosunMetadata builds the Slack message metadata for a bosun notification.
+func bosunMetadata(issueKey string) slackapi.SlackMetadata {
+	return slackapi.SlackMetadata{
+		EventType: metadataEventType,
+		EventPayload: map[string]any{
+			"issue_key": issueKey,
+		},
+	}
 }
 
 func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg notify.Message) error {
