@@ -12,6 +12,6 @@ type cookieTransport struct {
 
 func (t *cookieTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
-	req.Header.Set("Cookie", "d="+t.cookie)
+	req.AddCookie(&http.Cookie{Name: "d", Value: t.cookie})
 	return t.base.RoundTrip(req)
 }
