@@ -135,13 +135,21 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 
 			releaseChannel := viper.GetString("slack.channel_release")
-			if releaseChannel != "" {
+			releaseNotifier, releaseNotifierErr := newNotifier()
+			if releaseChannel != "" && releaseNotifierErr == nil {
+				releaseNotifyOp := ui.PlanCreate
 				actions = append(actions, Action{
-					Op:     ui.PlanCreate,
-					Label:  "Notify",
+					Op:    ui.PlanCreate,
+					OpRef: &releaseNotifyOp,
+					Label: "Notify",
 					Target: "#" + releaseChannel,
-					Assess: func(_ context.Context) (ActionState, string, error) {
-						return ActionNeeded, "release channel", nil
+					Assess: func(ctx context.Context) (ActionState, string, error) {
+						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
+						if ref.Timestamp != "" {
+							releaseNotifyOp = ui.PlanModify
+							return ActionNeeded, "update notification", nil
+						}
+						return ActionNeeded, "new notification", nil
 					},
 					Apply: func(ctx context.Context) error {
 						if len(releaseResults) == 0 {

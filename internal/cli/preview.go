@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -36,29 +35,23 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			channel := viper.GetString("slack.channel_review")
-			if channel != "" {
+			previewNotifier, previewNotifierErr := newNotifier()
+			if channel != "" && previewNotifierErr == nil {
+				var threadRef notify.ThreadRef
 				actions = append(actions, Action{
-					Op:     ui.PlanCreate,
+					Op:     ui.PlanModify,
 					Label:  "Notify",
 					Target: "#" + channel,
-					Assess: func(_ context.Context) (ActionState, string, error) {
+					Assess: func(ctx context.Context) (ActionState, string, error) {
+						ref, _ := previewNotifier.FindThread(ctx, channel, issue)
+						if ref.Timestamp == "" {
+							return ActionSkipped, "", nil
+						}
+						threadRef = ref
 						return ActionNeeded, "reply to review thread", nil
 					},
 					Apply: func(ctx context.Context) error {
-						notifier, err := newNotifier()
-						if err != nil {
-							ui.Skip(fmt.Sprintf("Notification: %v", err))
-							return nil
-						}
-						ref, err := notifier.FindThread(ctx, channel, issue)
-						if err != nil {
-							return fmt.Errorf("finding thread: %w", err)
-						}
-						if ref.Timestamp == "" {
-							ui.Skip(fmt.Sprintf("No notification thread found for %s", issue))
-							return nil
-						}
-						return notifier.ReplyToThread(ctx, ref, notify.Message{
+						return previewNotifier.ReplyToThread(ctx, threadRef, notify.Message{
 							IssueKey: issue,
 							Content: buildNotifyContent("preview", notifyTemplateData{
 								IssueKey: issue,

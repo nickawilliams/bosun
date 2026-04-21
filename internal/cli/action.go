@@ -23,9 +23,10 @@ const (
 // Action pairs a plan item with assess/apply logic. Assess queries external
 // state to determine whether the action is needed, and Apply performs it.
 type Action struct {
-	Op     ui.PlanOp // Operation type shown in the plan (create/modify/destroy).
-	Label  string    // Action label (e.g. "Pull Request", "Branch").
-	Target string    // Target name (e.g. repository name, issue key).
+	Op     ui.PlanOp  // Operation type shown in the plan (create/modify/destroy).
+	OpRef  *ui.PlanOp // If set, overrides Op after Assess (allows Assess to change the op).
+	Label  string     // Action label (e.g. "Pull Request", "Branch").
+	Target string     // Target name (e.g. repository name, issue key).
 
 	// Assess queries current state and returns the action's readiness plus a
 	// detail string for the plan item (e.g. "#42" for an existing PR,
@@ -36,6 +37,14 @@ type Action struct {
 	Apply func(ctx context.Context) error
 }
 
+// op returns the effective operation, preferring OpRef if set.
+func (a *Action) op() ui.PlanOp {
+	if a.OpRef != nil {
+		return *a.OpRef
+	}
+	return a.Op
+}
+
 // runActions assesses each action, builds a plan, and executes only the
 // actions that are still needed. It delegates to runPlanCard for confirmation
 // and apply.
@@ -43,15 +52,16 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 	plan := ui.NewPlan()
 	var pending []Action
 
-	for _, a := range actions {
+	for i := range actions {
+		a := &actions[i]
 		state, detail, err := a.Assess(ctx)
 		if err != nil {
 			return err
 		}
 		switch state {
 		case ActionNeeded:
-			plan.Add(a.Op, a.Label, a.Target, detail)
-			pending = append(pending, a)
+			plan.Add(a.op(), a.Label, a.Target, detail)
+			pending = append(pending, *a)
 		case ActionCompleted:
 			plan.Add(ui.PlanNoChange, a.Label, a.Target, detail)
 		case ActionSkipped:
