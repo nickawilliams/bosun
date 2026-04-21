@@ -98,6 +98,13 @@ func newPrereleaseCmd() *cobra.Command {
 						Target: r.Name,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							if currentTag == nextVersion {
+								// Capture existing release so notifications have
+								// data even when no new releases are created.
+								releaseResults = append(releaseResults, releaseResult{
+									repo:    r.Name,
+									release: code.Release{Tag: currentTag},
+									version: currentTag,
+								})
 								return ActionCompleted, currentTag, nil
 							}
 							return ActionNeeded, fmt.Sprintf("%s → %s", from, nextVersion), nil

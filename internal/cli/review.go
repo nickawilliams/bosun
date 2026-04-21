@@ -299,6 +299,12 @@ func newReviewCmd() *cobra.Command {
 								return 0, "", err
 							}
 							if existing.Number > 0 {
+								// Capture existing PR so notifications have data
+								// even when no new PRs are created.
+								prResults = append(prResults, prResult{
+									repo: repoDisplayName, pr: existing,
+									owner: owner, repoName: repoName,
+								})
 								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 							}
 							return ActionNeeded, fmt.Sprintf("%s → %s", branch, baseBranch), nil
