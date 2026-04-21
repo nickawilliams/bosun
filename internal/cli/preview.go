@@ -51,11 +51,23 @@ func newPreviewCmd() *cobra.Command {
 						}); body != "" {
 							summary = body
 						}
-						replyToNotification(ctx, channel, issue, notify.Message{
+						notifier, err := newNotifier()
+						if err != nil {
+							ui.Skip(fmt.Sprintf("Notification: %v", err))
+							return nil
+						}
+						ref, err := notifier.FindThread(ctx, channel, issue)
+						if err != nil {
+							return fmt.Errorf("finding thread: %w", err)
+						}
+						if ref.Timestamp == "" {
+							ui.Skip(fmt.Sprintf("No notification thread found for %s", issue))
+							return nil
+						}
+						return notifier.ReplyToThread(ctx, ref, notify.Message{
 							IssueKey: issue,
 							Summary:  summary,
 						})
-						return nil
 					},
 				})
 			}

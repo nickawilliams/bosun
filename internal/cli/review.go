@@ -369,7 +369,12 @@ func newReviewCmd() *cobra.Command {
 								Detail: fmt.Sprintf("#%d", r.pr.Number),
 							}
 						}
-						sendNotification(ctx, notify.Message{
+						notifier, err := newNotifier()
+						if err != nil {
+							ui.Skip(fmt.Sprintf("Notification: %v", err))
+							return nil
+						}
+						_, err = notifier.Notify(ctx, notify.Message{
 							Channel:  reviewChannel,
 							IssueKey: issue,
 							Title:    detail.Title,
@@ -382,7 +387,7 @@ func newReviewCmd() *cobra.Command {
 								Items:      items,
 							}),
 						})
-						return nil
+						return err
 					},
 				})
 			}
