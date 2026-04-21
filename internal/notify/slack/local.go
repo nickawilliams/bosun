@@ -20,6 +20,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// isASCII returns true if all bytes in s are valid ASCII (0x20-0x7e).
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // ResolveLocalToken extracts the xoxc- token and d cookie from the Slack
 // desktop app's local storage. Requires Slack to be installed and the user
 // to be logged in. The workspace parameter should match the workspace name
@@ -172,36 +182,55 @@ func readCookie(cookiesPath string, key []byte) (string, error) {
 	}
 	defer db.Close()
 
+	// Try plain value first (some Chromium versions store it unencrypted).
+	var plainValue string
 	var encrypted []byte
 	err = db.QueryRow(
-		`SELECT encrypted_value FROM cookies WHERE host_key = '.slack.com' AND name = 'd' LIMIT 1`,
-	).Scan(&encrypted)
+		`SELECT value, encrypted_value FROM cookies WHERE host_key = '.slack.com' AND name = 'd' LIMIT 1`,
+	).Scan(&plainValue, &encrypted)
 	if err != nil {
 		return "", fmt.Errorf("querying d cookie: %w", err)
 	}
 
+	if plainValue != "" && isASCII(plainValue) {
+		return plainValue, nil
+	}
+
 	if len(encrypted) == 0 {
-		return "", fmt.Errorf("d cookie is empty")
+		return "", fmt.Errorf("d cookie is empty (no plain or encrypted value)")
 	}
 
 	return decryptCookie(encrypted, key)
 }
 
 // decryptCookie decrypts a Chromium-encrypted cookie value.
+// Supports v10 (AES-128-CBC) and v11 (AES-256-GCM).
 func decryptCookie(encrypted, password []byte) (string, error) {
-	// Strip "v10" or "v11" prefix (3 bytes).
 	if len(encrypted) < 4 {
 		return "", fmt.Errorf("encrypted value too short (%d bytes)", len(encrypted))
 	}
 	if encrypted[0] != 'v' || encrypted[1] != '1' {
 		return "", fmt.Errorf("unexpected encryption version: %q", encrypted[:3])
 	}
-	encrypted = encrypted[3:]
 
-	// Derive key using PBKDF2.
+	version := string(encrypted[:3])
+	payload := encrypted[3:]
+
+	switch version {
+	case "v10":
+		return decryptV10(payload, password)
+	case "v11":
+		return decryptV11(payload, password)
+	default:
+		return "", fmt.Errorf("unsupported encryption version: %q", version)
+	}
+}
+
+// decryptV10 decrypts AES-128-CBC encrypted cookies (older Chromium).
+// Key is derived via PBKDF2 from the keychain password.
+func decryptV10(payload, password []byte) (string, error) {
 	derivedKey := pbkdf2.Key(password, []byte("saltysalt"), pbkdf2Iterations, 16, sha1.New)
 
-	// Decrypt using AES-128-CBC with IV = 16 space bytes.
 	block, err := aes.NewCipher(derivedKey)
 	if err != nil {
 		return "", fmt.Errorf("creating cipher: %w", err)
@@ -209,21 +238,64 @@ func decryptCookie(encrypted, password []byte) (string, error) {
 
 	iv := []byte("                ") // 16 space bytes (0x20)
 
-	if len(encrypted)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("ciphertext length %d is not a multiple of block size", len(encrypted))
+	if len(payload)%aes.BlockSize != 0 {
+		return "", fmt.Errorf("ciphertext length %d is not a multiple of block size", len(payload))
 	}
 
 	mode := cipher.NewCBCDecrypter(block, iv)
-	plaintext := make([]byte, len(encrypted))
-	mode.CryptBlocks(plaintext, encrypted)
+	plaintext := make([]byte, len(payload))
+	mode.CryptBlocks(plaintext, payload)
 
-	// Remove PKCS#5 padding.
 	plaintext, err = removePKCS5Padding(plaintext)
 	if err != nil {
 		return "", fmt.Errorf("removing padding: %w", err)
 	}
 
-	return string(plaintext), nil
+	result := string(plaintext)
+	if !isASCII(result) {
+		return "", fmt.Errorf("v10 decryption produced non-ASCII output (wrong key?)")
+	}
+
+	return result, nil
+}
+
+// decryptV11 decrypts AES-256-GCM encrypted cookies (newer Chromium/Electron).
+// The payload format is: 12-byte nonce + ciphertext + 16-byte GCM tag.
+// Key is derived via PBKDF2 from the keychain password (32 bytes for AES-256).
+func decryptV11(payload, password []byte) (string, error) {
+	const nonceLen = 12
+
+	if len(payload) < nonceLen+16 {
+		return "", fmt.Errorf("v11 payload too short (%d bytes)", len(payload))
+	}
+
+	// AES-256 key: 32 bytes via PBKDF2.
+	derivedKey := pbkdf2.Key(password, []byte("saltysalt"), pbkdf2Iterations, 32, sha1.New)
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return "", fmt.Errorf("creating cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("creating GCM: %w", err)
+	}
+
+	nonce := payload[:nonceLen]
+	ciphertext := payload[nonceLen:]
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("v11 GCM decryption failed: %w", err)
+	}
+
+	result := string(plaintext)
+	if !isASCII(result) {
+		return "", fmt.Errorf("v11 decryption produced non-ASCII output")
+	}
+
+	return result, nil
 }
 
 // removePKCS5Padding removes PKCS#5/PKCS#7 padding from decrypted data.
