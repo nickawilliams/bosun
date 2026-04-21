@@ -163,12 +163,7 @@ func newPrereleaseCmd() *cobra.Command {
 								Detail: r.version,
 							}
 						}
-						notifier, err := newNotifier()
-						if err != nil {
-							ui.Skip(fmt.Sprintf("Notification: %v", err))
-							return nil
-						}
-						_, err = notifier.Notify(ctx, notify.Message{
+						_, err := releaseNotifier.Notify(ctx, notify.Message{
 							Channel:  releaseChannel,
 							IssueKey: issue,
 							Items:    items,

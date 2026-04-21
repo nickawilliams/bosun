@@ -13,6 +13,14 @@ import (
 // Adapter implements notify.Notifier using the Slack API.
 type Adapter struct {
 	client *slackapi.Client
+	cache  apiCache
+}
+
+// apiCache stores results from Slack API calls to avoid redundant requests
+// within a single command invocation. No TTL — the adapter is short-lived.
+type apiCache struct {
+	channels map[string]string          // channel name → ID
+	threads  map[string]notify.ThreadRef // "channelID:issueKey" → ThreadRef
 }
 
 // New returns a new Slack adapter.
@@ -54,6 +62,8 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
 	// Upsert: update existing message if one exists for this issue.
+	// The findThreadInChannel call is cached, so repeated calls from
+	// Assess → Notify don't hit the API twice.
 	if msg.IssueKey != "" {
 		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
 		if existing.Timestamp != "" {
@@ -83,9 +93,14 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 }
 
 // findThreadInChannel searches recent messages in a resolved channel ID for
-// a bosun notification matching the issue key. Checks metadata first (exact
-// match), then falls back to text/block content search.
+// a bosun notification matching the issue key. Results are cached — repeated
+// calls with the same parameters return the cached result without hitting the API.
 func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
+	cacheKey := channelID + ":" + issueKey
+	if ref, ok := a.cache.threads[cacheKey]; ok {
+		return ref, nil
+	}
+
 	params := &slackapi.GetConversationHistoryParameters{
 		ChannelID:          channelID,
 		Limit:              200,
@@ -97,36 +112,53 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 		return notify.ThreadRef{}, fmt.Errorf("fetching channel history: %w", err)
 	}
 
+	var result notify.ThreadRef
+
 	// First pass: match on metadata (exact, reliable).
 	for _, msg := range resp.Messages {
 		if msg.Metadata.EventType == metadataEventType {
 			if key, _ := msg.Metadata.EventPayload["issue_key"].(string); key == issueKey {
-				return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
+				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+				break
 			}
 		}
 	}
 
 	// Second pass: fall back to text/block content search (for messages
 	// sent before metadata was added, or by other tools).
-	for _, msg := range resp.Messages {
-		if strings.Contains(msg.Text, issueKey) {
-			return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
-		}
-		for _, block := range msg.Blocks.BlockSet {
-			if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
-				if strings.Contains(section.Text.Text, issueKey) {
-					return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
+	if result.Timestamp == "" {
+		for _, msg := range resp.Messages {
+			if strings.Contains(msg.Text, issueKey) {
+				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+				break
+			}
+			for _, block := range msg.Blocks.BlockSet {
+				if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
+					if strings.Contains(section.Text.Text, issueKey) {
+						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+						break
+					}
+				}
+				if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
+					if strings.Contains(header.Text.Text, issueKey) {
+						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+						break
+					}
 				}
 			}
-			if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
-				if strings.Contains(header.Text.Text, issueKey) {
-					return notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}, nil
-				}
+			if result.Timestamp != "" {
+				break
 			}
 		}
 	}
 
-	return notify.ThreadRef{}, nil
+	// Cache the result (including zero refs — "not found" is also cached).
+	if a.cache.threads == nil {
+		a.cache.threads = make(map[string]notify.ThreadRef)
+	}
+	a.cache.threads[cacheKey] = result
+
+	return result, nil
 }
 
 const metadataEventType = "bosun_notification"
@@ -154,8 +186,13 @@ func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg n
 }
 
 // resolveChannelID finds the channel ID for a given channel name.
+// Results are cached for the lifetime of the adapter.
 func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, error) {
 	name = strings.TrimPrefix(name, "#")
+
+	if id, ok := a.cache.channels[name]; ok {
+		return id, nil
+	}
 
 	var cursor string
 	for {
@@ -173,6 +210,10 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 
 		for _, ch := range channels {
 			if ch.Name == name {
+				if a.cache.channels == nil {
+					a.cache.channels = make(map[string]string)
+				}
+				a.cache.channels[name] = ch.ID
 				return ch.ID, nil
 			}
 		}
