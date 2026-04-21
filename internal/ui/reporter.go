@@ -40,6 +40,14 @@ type Reporter interface {
 	DryRun(format string, args ...any)
 	// Saved prints feedback that a value was persisted.
 	Saved(label, value string)
+	// Selected prints feedback that a single value was chosen
+	// interactively. The label is the field title and value is the
+	// user's selection, rendered as a subtitle.
+	Selected(label, value string)
+	// SelectedMulti prints feedback that multiple values were chosen
+	// interactively. The label is the field title and values are the
+	// user's selections, rendered as indented detail items.
+	SelectedMulti(label string, values []string)
 
 	// --- Async tasks ---
 

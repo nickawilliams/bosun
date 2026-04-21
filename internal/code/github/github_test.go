@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -237,9 +238,6 @@ func TestGetLatestTagEmpty(t *testing.T) {
 
 func TestListBranches(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/org/repo/branches" {
-			t.Errorf("path = %q", r.URL.Path)
-		}
 		json.NewEncoder(w).Encode([]map[string]string{
 			{"name": "main"},
 			{"name": "develop"},
@@ -255,6 +253,44 @@ func TestListBranches(t *testing.T) {
 	}
 	if len(branches) != 3 || branches[0] != "main" {
 		t.Errorf("branches = %v", branches)
+	}
+}
+
+func TestListBranchesPaginated(t *testing.T) {
+	page := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		switch page {
+		case 1:
+			// GitHub uses /repositories/{id}/ in Link headers, not /repos/{owner}/{repo}/
+			w.Header().Set("Link", fmt.Sprintf(
+				`<%s/repositories/123/branches?per_page=2&page=2>; rel="next"`,
+				"http://"+r.Host,
+			))
+			json.NewEncoder(w).Encode([]map[string]string{
+				{"name": "alpha"},
+				{"name": "beta"},
+			})
+		case 2:
+			json.NewEncoder(w).Encode([]map[string]string{
+				{"name": "main"},
+			})
+		default:
+			t.Errorf("unexpected page %d", page)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	branches, err := a.ListBranches(context.Background(), "org", "repo")
+	if err != nil {
+		t.Fatalf("ListBranches() error: %v", err)
+	}
+	if len(branches) != 3 {
+		t.Fatalf("got %d branches, want 3", len(branches))
+	}
+	if branches[2] != "main" {
+		t.Errorf("branches = %v, want main on page 2", branches)
 	}
 }
 

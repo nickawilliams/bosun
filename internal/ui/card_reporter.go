@@ -75,6 +75,23 @@ func (r *cardReporter) Saved(label, value string) {
 	NewCard(CardSuccess, label).Muted(value).Print()
 }
 
+// Selected emits a CardSuccess with the label as title and the chosen
+// value as a subtitle. Use after an interactive single-value prompt.
+func (r *cardReporter) Selected(label, value string) {
+	NewCard(CardSuccess, label).Subtitle(value).Print()
+}
+
+// SelectedMulti emits a CardSuccess with the label as title and chosen
+// values as indented muted items. Use after an interactive multi-select
+// prompt. Prints "(none)" subtitle if values is empty.
+func (r *cardReporter) SelectedMulti(label string, values []string) {
+	if len(values) == 0 {
+		NewCard(CardSuccess, label).Subtitle("(none)").Print()
+		return
+	}
+	NewCard(CardSuccess, label).Muted(values...).Print()
+}
+
 // Task runs fn while showing a spinner card, then finalizes as
 // success or failure.
 func (r *cardReporter) Task(title string, fn func() error) error {

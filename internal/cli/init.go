@@ -91,7 +91,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 				Value(&wsInput))
 		}
 
-		rewind := ui.NewCard(ui.CardInput, "Project settings").PrintRewindable()
+		rewind := ui.NewCard(ui.CardInput, "Project Settings").PrintRewindable()
 		if err := runForm(fields...); err != nil {
 			return err
 		}

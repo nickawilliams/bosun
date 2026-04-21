@@ -214,12 +214,16 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	}
 
 	if c.subtitle != "" {
-		fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(c.subtitle))
+		for _, line := range wrapForTimeline(c.subtitle) {
+			fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
+		}
 	}
 
 	for _, body := range c.body {
 		for _, line := range renderCardBody(body) {
-			fmt.Fprintf(&b, "%s%s\n", conn, line)
+			for _, wrapped := range wrapForTimeline(line) {
+				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
+			}
 		}
 	}
 
@@ -300,6 +304,28 @@ func renderCardBody(b cardBody) []string {
 		return out
 	}
 	return nil
+}
+
+// timelineConnWidth is the visual width of the connector prefix
+// (" │  ") used for continuation lines beneath a card title.
+const timelineConnWidth = 5
+
+// wrapForTimeline word-wraps a string to fit within the terminal width,
+// accounting for the timeline connector prefix. Returns the wrapped
+// lines. Short strings that fit are returned as-is (single-element slice).
+func wrapForTimeline(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	maxWidth := TermWidth() - timelineConnWidth
+	if maxWidth < 20 {
+		maxWidth = 20
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return []string{s}
+	}
+	wrapped := lipgloss.Wrap(s, maxWidth, " ,.-")
+	return strings.Split(wrapped, "\n")
 }
 
 // --- Running card with animated spinner glyph ---

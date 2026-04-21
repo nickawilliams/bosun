@@ -57,7 +57,7 @@ func newCreateCmd() *cobra.Command {
 				}
 
 				if len(fields) > 0 {
-					rewind := ui.NewCard(ui.CardInput, "Issue details").PrintRewindable()
+					rewind := ui.NewCard(ui.CardInput, "Issue Details").PrintRewindable()
 					if err := runForm(fields...); err != nil {
 						return err
 					}

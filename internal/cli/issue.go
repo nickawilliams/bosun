@@ -185,7 +185,7 @@ func pickAssignedIssue() string {
 	opts[len(issues)] = huh.NewOption("Enter manually...", manualEntry)
 
 	var selected string
-	slot.Show(ui.NewCard(ui.CardInput, "Select issue").Tight())
+	slot.Show(ui.NewCard(ui.CardInput, "Select Issue").Tight())
 	if err := runForm(
 		huh.NewSelect[string]().
 			Options(opts...).

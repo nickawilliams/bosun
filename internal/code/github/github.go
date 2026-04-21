@@ -200,68 +200,89 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 }
 
 func (a *Adapter) ListBranches(ctx context.Context, owner, repository string) ([]string, error) {
+	var names []string
 	path := fmt.Sprintf("/repos/%s/%s/branches?per_page=100", owner, repository)
-	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing branches: %w", err)
-	}
-	defer resp.Body.Close()
 
-	var results []struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("parsing branches response: %w", err)
+	for path != "" {
+		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("listing branches: %w", err)
+		}
+
+		var page []struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("parsing branches response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, r := range page {
+			names = append(names, r.Name)
+		}
+
+		path = nextPagePath(resp.Header.Get("Link"))
 	}
 
-	names := make([]string, len(results))
-	for i, r := range results {
-		names[i] = r.Name
-	}
 	return names, nil
 }
 
 func (a *Adapter) ListCollaborators(ctx context.Context, owner, repository string) ([]string, error) {
+	var logins []string
 	path := fmt.Sprintf("/repos/%s/%s/collaborators?per_page=100", owner, repository)
-	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing collaborators: %w", err)
-	}
-	defer resp.Body.Close()
 
-	var results []struct {
-		Login string `json:"login"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("parsing collaborators response: %w", err)
+	for path != "" {
+		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("listing collaborators: %w", err)
+		}
+
+		var page []struct {
+			Login string `json:"login"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("parsing collaborators response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, r := range page {
+			logins = append(logins, r.Login)
+		}
+
+		path = nextPagePath(resp.Header.Get("Link"))
 	}
 
-	logins := make([]string, len(results))
-	for i, r := range results {
-		logins[i] = r.Login
-	}
 	return logins, nil
 }
 
 func (a *Adapter) ListTeams(ctx context.Context, owner string) ([]string, error) {
+	var slugs []string
 	path := fmt.Sprintf("/orgs/%s/teams?per_page=100", owner)
-	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing teams: %w", err)
-	}
-	defer resp.Body.Close()
 
-	var results []struct {
-		Slug string `json:"slug"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("parsing teams response: %w", err)
+	for path != "" {
+		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("listing teams: %w", err)
+		}
+
+		var page []struct {
+			Slug string `json:"slug"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("parsing teams response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, r := range page {
+			slugs = append(slugs, r.Slug)
+		}
+
+		path = nextPagePath(resp.Header.Get("Link"))
 	}
 
-	slugs := make([]string, len(results))
-	for i, r := range results {
-		slugs[i] = r.Slug
-	}
 	return slugs, nil
 }
 
@@ -342,4 +363,31 @@ func (a *Adapter) doRequest(ctx context.Context, method, path string, body any) 
 	}
 
 	return resp, nil
+}
+
+// nextPagePath extracts the path (with query) for the next page from a
+// GitHub Link header. Returns empty string if there is no next page.
+// GitHub may use /repos/{owner}/{repo}/... or /repositories/{id}/... forms.
+func nextPagePath(link string) string {
+	for _, part := range strings.Split(link, ",") {
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start < 0 || end < 0 || end <= start {
+			continue
+		}
+		rawURL := part[start+1 : end]
+		// Strip scheme + host to get path+query.
+		// E.g., "https://api.github.com/repositories/123/branches?page=2"
+		// → "/repositories/123/branches?page=2"
+		if idx := strings.Index(rawURL, "://"); idx >= 0 {
+			rest := rawURL[idx+3:] // skip "://"
+			if slash := strings.Index(rest, "/"); slash >= 0 {
+				return rest[slash:]
+			}
+		}
+	}
+	return ""
 }

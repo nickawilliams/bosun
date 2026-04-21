@@ -56,7 +56,7 @@ func newStartCmd() *cobra.Command {
 				case isInteractive():
 					suggested := slugify(detail.Title)
 					slugSlot := ui.NewSlot()
-					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch slug").Tight())
+					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch Slug").Tight())
 					if err := runForm(
 						huh.NewInput().
 							Title("Slug").
@@ -71,7 +71,7 @@ func newStartCmd() *cobra.Command {
 					} else {
 						slug = slugify(slug)
 					}
-					ui.Complete(fmt.Sprintf("Branch slug: %s", slug))
+					ui.Selected("Branch Slug", slug)
 				}
 			}
 
@@ -116,7 +116,7 @@ func newStartCmd() *cobra.Command {
 					return nil
 				}
 
-				ui.CompleteWithDetail("Repositories", selected)
+				ui.SelectedMulti("Repositories", selected)
 
 				repositories, err = resolveRepositories(selected)
 				if err != nil {

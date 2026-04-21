@@ -52,6 +52,14 @@ func Item(label, value string) {
 // inputs: check + bold primary label on one line, muted value on the next.
 func Saved(label, value string) { defaultReporter.Saved(label, value) }
 
+// Selected prints feedback that a single value was chosen interactively.
+// The label is the field title and value is the user's selection.
+func Selected(label, value string) { defaultReporter.Selected(label, value) }
+
+// SelectedMulti prints feedback that multiple values were chosen interactively.
+// The label is the field title and values are the user's selections.
+func SelectedMulti(label string, values []string) { defaultReporter.SelectedMulti(label, values) }
+
 // Header prints a styled command header. Pass the command name and optional
 // context (e.g., issue key, workspace name).
 func Header(command string, context ...string) { defaultReporter.Header(command, context...) }

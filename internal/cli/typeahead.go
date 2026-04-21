@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -11,9 +10,8 @@ import (
 // maxSelectHeight is the maximum number of visible options in a select list.
 const maxSelectHeight = 10
 
-// typeaheadInput shows a text input with the current value as a placeholder.
-// Pressing Enter with no input accepts the current value. Returns the entered
-// or accepted value.
+// typeaheadInput shows a single-line text input with the current value as a
+// placeholder. Pressing Enter with no input accepts the current value.
 func typeaheadInput(title, current string) (string, error) {
 	var value string
 	slot := ui.NewSlot()
@@ -29,7 +27,24 @@ func typeaheadInput(title, current string) (string, error) {
 	if value == "" {
 		value = current
 	}
-	ui.Complete(fmt.Sprintf("%s: %s", title, value))
+	ui.Selected(title, value)
+	return value, nil
+}
+
+// typeaheadText shows a multi-line text editor with the current value
+// pre-filled. Returns the edited value.
+func typeaheadText(title, current string) (string, error) {
+	value := current
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, title).Tight())
+	if err := runForm(
+		huh.NewText().
+			Value(&value),
+	); err != nil {
+		return current, err
+	}
+	slot.Clear()
+	ui.Selected(title, value)
 	return value, nil
 }
 
@@ -55,6 +70,20 @@ func typeaheadSelect(title, current string, fetch func() ([]string, error)) (str
 		return "", nil
 	}
 
+	// Move the current value to the front so it's visible and pre-selected.
+	if current != "" {
+		for i, item := range items {
+			if item == current && i > 0 {
+				reordered := make([]string, 0, len(items))
+				reordered = append(reordered, current)
+				reordered = append(reordered, items[:i]...)
+				reordered = append(reordered, items[i+1:]...)
+				items = reordered
+				break
+			}
+		}
+	}
+
 	opts := make([]huh.Option[string], len(items))
 	for i, item := range items {
 		opts[i] = huh.NewOption(item, item)
@@ -76,7 +105,7 @@ func typeaheadSelect(title, current string, fetch func() ([]string, error)) (str
 	}
 	slot.Clear()
 
-	ui.Complete(fmt.Sprintf("%s: %s", title, selected))
+	ui.Selected(title, selected)
 	return selected, nil
 }
 
@@ -133,10 +162,6 @@ func typeaheadMultiSelect(title string, current []string, fetch func() ([]string
 	}
 	slot.Clear()
 
-	if len(selected) > 0 {
-		ui.CompleteWithDetail(title, selected)
-	} else {
-		ui.Complete(fmt.Sprintf("%s: (none)", title))
-	}
+	ui.SelectedMulti(title, selected)
 	return selected, nil
 }

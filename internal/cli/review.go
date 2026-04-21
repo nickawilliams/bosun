@@ -98,8 +98,11 @@ func newReviewCmd() *cobra.Command {
 			if baseBranch == "" {
 				baseBranch = viper.GetString("pull_request.base")
 			}
+			if baseBranch == "" {
+				baseBranch = "main"
+			}
 			if forceInteractive(cmd) && !cmd.Flags().Changed("base") && host != nil {
-				selected, err := typeaheadSelect("Base branch", baseBranch, func() ([]string, error) {
+				selected, err := typeaheadSelect("Base Branch", baseBranch, func() ([]string, error) {
 					return host.ListBranches(ctx, apiOwner, apiRepo)
 				})
 				if err != nil {
@@ -108,9 +111,6 @@ func newReviewCmd() *cobra.Command {
 				if selected != "" {
 					baseBranch = selected
 				}
-			}
-			if baseBranch == "" {
-				baseBranch = "main"
 			}
 
 			// Build PR title and body from templates.
@@ -131,7 +131,7 @@ func newReviewCmd() *cobra.Command {
 				prTitle = buildPRTitle(prData)
 			}
 			if forceInteractive(cmd) && !cmd.Flags().Changed("title") {
-				val, err := typeaheadInput("PR title", prTitle)
+				val, err := typeaheadInput("Title", prTitle)
 				if err != nil {
 					return err
 				}
@@ -143,7 +143,7 @@ func newReviewCmd() *cobra.Command {
 				prBody = buildPRBody(prData)
 			}
 			if forceInteractive(cmd) && !cmd.Flags().Changed("body") {
-				val, err := typeaheadInput("PR body", prBody)
+				val, err := typeaheadText("Body", prBody)
 				if err != nil {
 					return err
 				}
@@ -170,7 +170,7 @@ func newReviewCmd() *cobra.Command {
 				teamReviewers = append(teamReviewers, flagTeams...)
 			}
 			if forceInteractive(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
-				selected, err := typeaheadMultiSelect("Team reviewers", teamReviewers, func() ([]string, error) {
+				selected, err := typeaheadMultiSelect("Team Reviewers", teamReviewers, func() ([]string, error) {
 					return host.ListTeams(ctx, apiOwner)
 				})
 				if err != nil {
@@ -183,16 +183,9 @@ func newReviewCmd() *cobra.Command {
 			if flagAssignees, _ := cmd.Flags().GetStringSlice("assignee"); len(flagAssignees) > 0 {
 				assignees = append(assignees, flagAssignees...)
 			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
-				selected, err := typeaheadMultiSelect("Assignees", assignees, func() ([]string, error) {
-					return host.ListCollaborators(ctx, apiOwner, apiRepo)
-				})
-				if err != nil {
-					return err
-				}
-				assignees = selected
-			}
 
+			// Resolve self-assign before the interactive prompt so the
+			// current user appears pre-selected in the list.
 			selfAssign := !viper.IsSet("pull_request.self_assign") || viper.GetBool("pull_request.self_assign")
 			if cmd.Flags().Changed("self-assign") {
 				selfAssign, _ = cmd.Flags().GetBool("self-assign")
@@ -213,6 +206,16 @@ func newReviewCmd() *cobra.Command {
 						assignees = append(assignees, username)
 					}
 				}
+			}
+
+			if forceInteractive(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
+				selected, err := typeaheadMultiSelect("Assignees", assignees, func() ([]string, error) {
+					return host.ListCollaborators(ctx, apiOwner, apiRepo)
+				})
+				if err != nil {
+					return err
+				}
+				assignees = selected
 			}
 
 			// --- Pre-flight: push check ---
