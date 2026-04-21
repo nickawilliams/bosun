@@ -228,6 +228,9 @@ func decryptCookie(encrypted, password []byte) (string, error) {
 
 // decryptV10 decrypts AES-128-CBC encrypted cookies (older Chromium).
 // Key is derived via PBKDF2 from the keychain password.
+//
+// Chromium database v24+ prepends a 32-byte SHA256 hash of the host_key
+// inside the encrypted payload. If present, it is stripped automatically.
 func decryptV10(payload, password []byte) (string, error) {
 	derivedKey := pbkdf2.Key(password, []byte("saltysalt"), pbkdf2Iterations, 16, sha1.New)
 
@@ -249,6 +252,12 @@ func decryptV10(payload, password []byte) (string, error) {
 	plaintext, err = removePKCS5Padding(plaintext)
 	if err != nil {
 		return "", fmt.Errorf("removing padding: %w", err)
+	}
+
+	// Chromium v24+ prepends a 32-byte SHA256 hash of the host_key.
+	// Detect and strip it by checking if the value after 32 bytes is ASCII.
+	if len(plaintext) > 32 && !isASCII(string(plaintext)) && isASCII(string(plaintext[32:])) {
+		plaintext = plaintext[32:]
 	}
 
 	result := string(plaintext)
