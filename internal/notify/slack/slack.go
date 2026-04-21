@@ -142,9 +142,6 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 }
 
 // buildBlocks constructs Slack Block Kit blocks from a notification message.
-// If msg.Body is set (from a user template), it is rendered as a single
-// section block under the header. Otherwise the default structured format
-// (per-item sections + issue link) is used.
 func buildBlocks(msg notify.Message) []slackapi.Block {
 	var blocks []slackapi.Block
 
@@ -157,42 +154,15 @@ func buildBlocks(msg notify.Message) []slackapi.Block {
 		slackapi.NewTextBlockObject(slackapi.PlainTextType, headerText, false, false),
 	))
 
-	// Template-rendered body takes precedence over structured fields.
-	if msg.Body != "" {
-		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject(slackapi.MarkdownType, msg.Body, false, false),
-			nil, nil,
-		))
-		return blocks
+	// Body from template (or Summary for thread replies).
+	body := msg.Body
+	if body == "" {
+		body = msg.Summary
 	}
-
-	// Summary line (for simple updates like preview).
-	if msg.Summary != "" {
+	if body != "" {
 		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject(slackapi.MarkdownType, msg.Summary, false, false),
+			slackapi.NewTextBlockObject(slackapi.MarkdownType, body, false, false),
 			nil, nil,
-		))
-	}
-
-	// Per-repository items.
-	for _, item := range msg.Items {
-		var text string
-		if item.URL != "" {
-			text = fmt.Sprintf("*%s*  <%s|%s>", item.Label, item.URL, item.Detail)
-		} else {
-			text = fmt.Sprintf("*%s*  %s", item.Label, item.Detail)
-		}
-		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject(slackapi.MarkdownType, text, false, false),
-			nil, nil,
-		))
-	}
-
-	// Context: issue URL.
-	if msg.IssueURL != "" {
-		link := fmt.Sprintf("<%s|View in issue tracker>", msg.IssueURL)
-		blocks = append(blocks, slackapi.NewContextBlock("",
-			slackapi.NewTextBlockObject(slackapi.MarkdownType, link, false, false),
 		))
 	}
 

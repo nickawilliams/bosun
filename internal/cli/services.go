@@ -432,10 +432,24 @@ type notifyTemplateData struct {
 	Items      []notify.Item // Per-repository items (PRs, releases, etc.).
 }
 
-// buildNotifyBody renders a notification template from config. Returns empty
-// string if no template is configured for the given key.
+// buildNotifyBody renders a notification template from config. Falls back to
+// the schema default if no template is configured for the given key.
 func buildNotifyBody(configKey string, data notifyTemplateData) string {
 	pattern := viper.GetString(configKey)
+	if pattern == "" {
+		// Fall back to schema default.
+		parts := strings.SplitN(configKey, ".", 2)
+		if len(parts) == 2 {
+			if group, ok := lookupGroup(parts[0]); ok {
+				for _, ck := range group.Keys {
+					if ck.Key == parts[1] {
+						pattern = ck.Default
+						break
+					}
+				}
+			}
+		}
+	}
 	if pattern == "" {
 		return ""
 	}
