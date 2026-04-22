@@ -324,10 +324,10 @@ func checkNotificationConfig(_ context.Context) (string, error) {
 
 	var channels []string
 	if ch := viper.GetString("slack.channel_review"); ch != "" {
-		channels = append(channels, "#"+ch)
+		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
 	}
 	if ch := viper.GetString("slack.channel_release"); ch != "" {
-		channels = append(channels, "#"+ch)
+		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
 	}
 	if len(channels) > 0 {
 		detail += "\nchannels: " + strings.Join(channels, ", ")
@@ -377,11 +377,12 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 			continue
 		}
 		// FindThread with a bogus issue key just to exercise channel resolution.
+		display := "#" + strings.TrimPrefix(ch, "#")
 		_, err := notifier.FindThread(notify.WithNoCache(ctx), ch, "__bosun_doctor_probe__")
 		if err != nil {
-			results = append(results, fmt.Sprintf("#%s ✗ %v", ch, err))
+			results = append(results, fmt.Sprintf("%s ✗ %v", display, err))
 		} else {
-			results = append(results, fmt.Sprintf("#%s ✓", ch))
+			results = append(results, fmt.Sprintf("%s ✓", display))
 		}
 	}
 
