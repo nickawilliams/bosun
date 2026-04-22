@@ -4,11 +4,25 @@ import "context"
 
 // Issue represents an issue from a tracker.
 type Issue struct {
-	Key    string // e.g., "PROJ-123"
-	Title  string
-	Status string // Current status name (e.g., "In Progress")
-	Type   string // e.g., "Story", "Bug"
-	URL    string // Web link to the issue
+	Key      string // e.g., "PROJ-123"
+	Title    string
+	Status   string // Current status name (e.g., "In Progress")
+	StatusID string // Provider status ID (e.g., "10219")
+	Type     string // e.g., "Story", "Bug"
+	URL      string // Web link to the issue
+}
+
+// BoardColumn represents a column on an agile board.
+type BoardColumn struct {
+	Name      string   // Column display name (e.g., "Ready")
+	StatusIDs []string // Status IDs mapped to this column
+}
+
+// Board represents an agile board.
+type Board struct {
+	ID   string // Board ID (e.g., "53")
+	Name string // Board display name (e.g., "Bridge Builders")
+	Type string // Board type (e.g., "scrum", "kanban")
 }
 
 // ListQuery defines filters for listing issues. All fields are
@@ -46,4 +60,14 @@ type Tracker interface {
 	// ListIssues returns issues matching the query, ordered by most
 	// recently updated first.
 	ListIssues(ctx context.Context, query ListQuery) ([]Issue, error)
+
+	// BoardColumns returns the columns of an agile board in display
+	// order (left to right). Each column contains the status IDs
+	// mapped to it. Returns nil, nil if boardID is empty.
+	BoardColumns(ctx context.Context, boardID string) ([]BoardColumn, error)
+
+	// ListBoards returns boards visible to the current user.
+	// If project is non-empty, results are filtered to boards
+	// relevant to that project.
+	ListBoards(ctx context.Context, project string) ([]Board, error)
 }

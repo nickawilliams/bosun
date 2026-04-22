@@ -23,10 +23,11 @@ type ConfigGroup struct {
 var lifecycleStatusKeys = []string{
 	"ready",
 	"in_progress",
+	"blocked",
 	"review",
 	"preview",
 	"ready_for_release",
-	"done",
+	"acceptance",
 }
 
 // configSchema is the central registry of all known config keys.
@@ -46,6 +47,7 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "email", Label: "Email", Required: true},
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_JIRA_TOKEN", Secret: true, Required: true},
 			{Key: "project", Label: "Project key", Example: "PROJ"},
+			{Key: "board_id", Label: "Board ID", Example: "123"},
 		},
 	},
 	"statuses": {
@@ -54,9 +56,11 @@ var configSchema = map[string]ConfigGroup{
 		Keys: []ConfigKey{
 			{Key: "ready", Label: "Ready", Default: "Ready"},
 			{Key: "in_progress", Label: "In Progress", Default: "In Progress"},
+			{Key: "blocked", Label: "Blocked", Default: "Blocked"},
 			{Key: "review", Label: "Review", Default: "Review"},
 			{Key: "preview", Label: "In Preview Env", Default: "In Preview Env"},
 			{Key: "ready_for_release", Label: "Ready for Release", Default: "Ready for Release"},
+			{Key: "acceptance", Label: "Acceptance", Default: "Acceptance"},
 			{Key: "done", Label: "Done", Default: "Done"},
 		},
 	},

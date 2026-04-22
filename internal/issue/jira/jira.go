@@ -154,7 +154,7 @@ func (a *Adapter) ListIssues(ctx context.Context, query issue.ListQuery) ([]issu
 
 	maxResults := query.MaxResults
 	if maxResults <= 0 {
-		maxResults = 50
+		maxResults = 200
 	}
 
 	path := fmt.Sprintf("/rest/api/3/search/jql?jql=%s&fields=summary,status,issuetype&maxResults=%d",
@@ -170,9 +170,12 @@ func (a *Adapter) ListIssues(ctx context.Context, query issue.ListQuery) ([]issu
 		Issues []struct {
 			Key    string `json:"key"`
 			Fields struct {
-				Summary   string                 `json:"summary"`
-				Status    struct{ Name string }  `json:"status"`
-				IssueType struct{ Name string }  `json:"issuetype"`
+				Summary string `json:"summary"`
+				Status  struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"status"`
+				IssueType struct{ Name string } `json:"issuetype"`
 			} `json:"fields"`
 		} `json:"issues"`
 	}
@@ -183,14 +186,89 @@ func (a *Adapter) ListIssues(ctx context.Context, query issue.ListQuery) ([]issu
 	issues := make([]issue.Issue, len(result.Issues))
 	for i, r := range result.Issues {
 		issues[i] = issue.Issue{
-			Key:    r.Key,
-			Title:  r.Fields.Summary,
-			Status: r.Fields.Status.Name,
-			Type:   r.Fields.IssueType.Name,
-			URL:    a.baseURL + "/browse/" + r.Key,
+			Key:      r.Key,
+			Title:    r.Fields.Summary,
+			Status:   r.Fields.Status.Name,
+			StatusID: r.Fields.Status.ID,
+			Type:     r.Fields.IssueType.Name,
+			URL:      a.baseURL + "/browse/" + r.Key,
 		}
 	}
 	return issues, nil
+}
+
+func (a *Adapter) ListBoards(ctx context.Context, project string) ([]issue.Board, error) {
+	path := "/rest/agile/1.0/board?maxResults=100"
+	if project != "" {
+		path += "&projectKeyOrId=" + url.QueryEscape(project)
+	}
+
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing boards: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Values []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"values"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing boards response: %w", err)
+	}
+
+	boards := make([]issue.Board, len(result.Values))
+	for i, b := range result.Values {
+		boards[i] = issue.Board{
+			ID:   fmt.Sprintf("%d", b.ID),
+			Name: b.Name,
+			Type: b.Type,
+		}
+	}
+	return boards, nil
+}
+
+func (a *Adapter) BoardColumns(ctx context.Context, boardID string) ([]issue.BoardColumn, error) {
+	if boardID == "" {
+		return nil, nil
+	}
+
+	path := fmt.Sprintf("/rest/agile/1.0/board/%s/configuration", boardID)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting board configuration: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		ColumnConfig struct {
+			Columns []struct {
+				Name     string `json:"name"`
+				Statuses []struct {
+					ID string `json:"id"`
+				} `json:"statuses"`
+			} `json:"columns"`
+		} `json:"columnConfig"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing board configuration: %w", err)
+	}
+
+	columns := make([]issue.BoardColumn, len(result.ColumnConfig.Columns))
+	for i, col := range result.ColumnConfig.Columns {
+		ids := make([]string, len(col.Statuses))
+		for j, s := range col.Statuses {
+			ids[j] = s.ID
+		}
+		columns[i] = issue.BoardColumn{
+			Name:      col.Name,
+			StatusIDs: ids,
+		}
+	}
+	return columns, nil
 }
 
 // buildJQL assembles a JQL query string from the given ListQuery filters.
@@ -214,7 +292,7 @@ func buildJQL(query issue.ListQuery) string {
 		clauses = append(clauses, "sprint IN openSprints()")
 	}
 
-	return strings.Join(clauses, " AND ") + " ORDER BY updated DESC"
+	return strings.Join(clauses, " AND ") + " ORDER BY statusCategory ASC, updated DESC"
 }
 
 // doRequest executes an authenticated request against the Jira API.
