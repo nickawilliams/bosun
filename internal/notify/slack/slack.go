@@ -239,6 +239,7 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, err
 	}
 
+	hash := notify.ContentHash(msg.Content)
 	meta := bosunMetadata(msg.IssueKey)
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
@@ -247,15 +248,26 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	// The findThreadInChannel call is cached, so repeated calls from
 	// Assess → Notify don't hit the API twice.
 	if msg.IssueKey != "" {
+		cacheKey := channelID + ":" + msg.IssueKey
 		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
 		if existing.Timestamp != "" {
+			// Skip update if content hasn't changed.
+			if existing.ContentHash == hash {
+				return existing, nil
+			}
 			_, _, _, err := a.client.UpdateMessageContext(ctx, channelID, existing.Timestamp, opts...)
 			if err == nil {
+				// Update the cached hash so subsequent runs detect no change.
+				existing.ContentHash = hash
+				if a.cache.threads == nil {
+					a.cache.threads = make(map[string]notify.ThreadRef)
+				}
+				a.cache.threads[cacheKey] = existing
 				return existing, nil
 			}
 			// Message was deleted — invalidate cache and fall through to post.
 			if strings.Contains(err.Error(), "message_not_found") {
-				delete(a.cache.threads, channelID+":"+msg.IssueKey)
+				delete(a.cache.threads, cacheKey)
 			} else {
 				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
 			}
@@ -267,7 +279,17 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
 	}
 
-	return notify.ThreadRef{Channel: channelID, Timestamp: ts}, nil
+	// Cache the new message with its content hash.
+	ref := notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}
+	cacheKey := channelID + ":" + msg.IssueKey
+	if msg.IssueKey != "" {
+		if a.cache.threads == nil {
+			a.cache.threads = make(map[string]notify.ThreadRef)
+		}
+		a.cache.threads[cacheKey] = ref
+	}
+
+	return ref, nil
 }
 
 func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (notify.ThreadRef, error) {
@@ -307,7 +329,8 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	for _, msg := range resp.Messages {
 		if msg.Metadata.EventType == metadataEventType {
 			if key, _ := msg.Metadata.EventPayload["issue_key"].(string); key == issueKey {
-				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+				hash, _ := msg.Metadata.EventPayload["content_hash"].(string)
+				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp, ContentHash: hash}
 				break
 			}
 		}
@@ -353,6 +376,8 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 const metadataEventType = "bosun_notification"
 
 // bosunMetadata builds the Slack message metadata for a bosun notification.
+// Note: metadata is only readable with app tokens, not xoxc- user tokens.
+// The text-search fallback in findThreadInChannel handles xoxc- tokens.
 func bosunMetadata(issueKey string) slackapi.SlackMetadata {
 	return slackapi.SlackMetadata{
 		EventType: metadataEventType,
@@ -361,6 +386,7 @@ func bosunMetadata(issueKey string) slackapi.SlackMetadata {
 		},
 	}
 }
+
 
 func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg notify.Message) error {
 	opts := buildMsgOptions(msg.Content)

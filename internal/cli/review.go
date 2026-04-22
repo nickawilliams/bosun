@@ -363,11 +363,35 @@ func newReviewCmd() *cobra.Command {
 					Target: reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)
-						if ref.Timestamp != "" {
-							notifyOp = ui.PlanModify
-							return ActionNeeded, "update notification", nil
+						if ref.Timestamp == "" {
+							return ActionNeeded, "new notification", nil
 						}
-						return ActionNeeded, "new notification", nil
+						// Check if content has changed by comparing hashes.
+						items := make([]notify.Item, len(prResults))
+						for i, r := range prResults {
+							items[i] = notify.Item{
+								Label:     r.repo,
+								URL:       r.pr.URL,
+								Detail:    fmt.Sprintf("#%d", r.pr.Number),
+								Body:      r.pr.Body,
+								BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
+							}
+						}
+						content := buildNotifyContent("review", notifyTemplateData{
+							IssueKey:   issue,
+							IssueTitle: detail.Title,
+							IssueType:  detail.Type,
+							IssueURL:   detail.URL,
+							IconURL:    avatarURL,
+							Items:      items,
+						})
+						hash := notify.ContentHash(content)
+						if ref.ContentHash == hash {
+							notifyOp = ui.PlanModify
+							return ActionCompleted, "notification unchanged", nil
+						}
+						notifyOp = ui.PlanModify
+						return ActionNeeded, "update notification", nil
 					},
 					Apply: func(ctx context.Context) error {
 						if len(prResults) == 0 {

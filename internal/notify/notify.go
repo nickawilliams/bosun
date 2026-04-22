@@ -1,6 +1,11 @@
 package notify
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+)
 
 // Message represents a notification to be sent to a channel.
 type Message struct {
@@ -81,8 +86,9 @@ type Item struct {
 
 // ThreadRef identifies an existing notification thread for replies.
 type ThreadRef struct {
-	Channel   string // Channel ID (resolved by adapter).
-	Timestamp string // Message timestamp (Slack thread_ts).
+	Channel     string // Channel ID (resolved by adapter).
+	Timestamp   string // Message timestamp (Slack thread_ts).
+	ContentHash string // Hash of the message content (for skip-if-unchanged).
 }
 
 // Notifier defines notification operations needed by bosun.
@@ -105,6 +111,14 @@ type Notifier interface {
 	// Close persists any cached state. Should be called when the notifier
 	// is no longer needed.
 	Close()
+}
+
+// ContentHash computes a short hash of the notification content for
+// change detection.
+func ContentHash(c Content) string {
+	data, _ := json.Marshal(c)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
 }
 
 type noCacheKey struct{}
