@@ -277,6 +277,7 @@ var serviceInitGroups = []initGroup{
 	{Label: "Issue Tracker", Provider: "issue_tracker", Detail: "jira"},
 	{Label: "Code Host", Provider: "code_host", Detail: "github"},
 	{Label: "Notifications", Provider: "notification", Detail: "slack"},
+	{Label: "CI/CD", Provider: "cicd", Detail: "github_actions"},
 }
 
 // detectRepositories scans a directory for git repositories: the directory

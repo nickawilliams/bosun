@@ -9,6 +9,8 @@ import (
 
 	"text/template"
 
+	"github.com/nickawilliams/bosun/internal/cicd"
+	"github.com/nickawilliams/bosun/internal/cicd/githubactions"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/config"
@@ -591,5 +593,54 @@ func newNotifier() (notify.Notifier, error) {
 	default:
 		return nil, fmt.Errorf("unsupported notification provider: %q", provider)
 	}
+}
+
+// newCICD creates a cicd.CICD from current config. Token resolution mirrors
+// newCodeHost: viper → gh CLI → env → JIT prompt.
+func newCICD() (cicd.CICD, error) {
+	// Reuse the same GitHub token used for code hosting.
+	if token := viper.GetString("github.token"); token != "" {
+		return githubactions.New(token), nil
+	}
+	if token := gh.ResolveToken(); token != "" {
+		return githubactions.New(token), nil
+	}
+
+	// Fall back to config-prompted flow.
+	if err := requireConfig("cicd"); err != nil {
+		return nil, err
+	}
+
+	provider := viper.GetString("cicd")
+	switch provider {
+	case "github_actions":
+		if err := requireConfig("github"); err != nil {
+			return nil, err
+		}
+		return githubactions.New(viper.GetString("github.token")), nil
+	default:
+		return nil, fmt.Errorf("unsupported CI/CD provider: %q", provider)
+	}
+}
+
+// resolveWorkflowName returns the configured workflow filename for a given
+// type (e.g., "preview" or "release"). Returns empty string if not configured.
+func resolveWorkflowName(workflowType string) string {
+	return viper.GetString("github_actions.workflow_" + workflowType)
+}
+
+// resolveWorkflowRepository returns the fixed owner/repo for CI/CD triggers
+// when github_actions.repository is set (single-workflow mode). Returns
+// empty strings and false when not configured (per-repo mode).
+func resolveWorkflowRepository() (owner, repo string, ok bool) {
+	val := viper.GetString("github_actions.repository")
+	if val == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(val, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 

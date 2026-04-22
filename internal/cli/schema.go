@@ -126,6 +126,22 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
 		},
 	},
+	"cicd": {
+		Label: "CI/CD",
+
+		Keys: []ConfigKey{
+			{Key: "cicd", Label: "Provider", Options: []string{"github_actions"}},
+		},
+	},
+	"github_actions": {
+		Label: "GitHub Actions",
+
+		Keys: []ConfigKey{
+			{Key: "repository", Label: "Workflow repository (owner/repo)", Example: "my-org/infra"},
+			{Key: "workflow_preview", Label: "Preview workflow", Example: "deploy-preview.yml"},
+			{Key: "workflow_release", Label: "Release workflow", Example: "deploy-release.yml"},
+		},
+	},
 	"color_mode": {
 		Label: "Color mode",
 
