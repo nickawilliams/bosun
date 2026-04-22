@@ -238,31 +238,41 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			if len(needsPush) > 0 {
-				fields := make(ui.Fields, len(needsPush))
-				for i, up := range needsPush {
+				kvPairs := make([]string, 0, len(needsPush)*2)
+				for _, up := range needsPush {
 					status := "not yet pushed"
 					if up.count > 0 {
 						status = fmt.Sprintf("%d unpushed commit(s)", up.count)
 					}
-					fields[i] = ui.Field{Key: up.rc.repo.Name, Value: status}
+					kvPairs = append(kvPairs, up.rc.repo.Name, status)
 				}
-				ui.Details("Unpushed Changes", fields)
+
+				slot := ui.NewSlot()
+				slot.Show(ui.NewCard(ui.CardInfo, "Unpushed Changes").KV(kvPairs...).Tight())
 
 				confirmed, err := promptConfirm("Push before creating PRs?", true)
 				if err != nil {
 					return err
 				}
 				if !confirmed {
+					slot.Show(ui.NewCard(ui.CardSkipped, "Push declined"))
+					slot.Finalize()
 					return fmt.Errorf("aborted: unpushed commits")
 				}
 
 				for _, up := range needsPush {
-					if err := ui.RunCard(fmt.Sprintf("Pushing %s", up.rc.repo.Name), func() error {
+					if err := slot.Run(fmt.Sprintf("Pushing %s", up.rc.repo.Name), func() error {
 						return g.Push(ctx, up.rc.repo.Path, up.rc.branch)
 					}); err != nil {
 						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
 					}
 				}
+				pushedPairs := make([]string, 0, len(needsPush)*2)
+				for _, up := range needsPush {
+					pushedPairs = append(pushedPairs, up.rc.repo.Name, up.rc.branch)
+				}
+				slot.Show(ui.NewCard(ui.CardSuccess, "Pushed").KV(pushedPairs...))
+				slot.Finalize()
 			}
 
 			// --- Plan + Apply ---
