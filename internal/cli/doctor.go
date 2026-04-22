@@ -122,8 +122,8 @@ func renderCheckCard(hc healthCheck, detail string, checkErr error, passed, warn
 
 func environmentChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Global config", Required: true, Check: checkGlobalConfig},
-		{Name: "Project config", Check: checkProjectConfig},
+		{Name: "Global Config", Required: true, Check: checkGlobalConfig},
+		{Name: "Project Config", Check: checkProjectConfig},
 		{Name: "Git", Required: true, Check: checkGit},
 	}
 }
@@ -131,28 +131,28 @@ func environmentChecks() []healthCheck {
 func projectChecks() []healthCheck {
 	return []healthCheck{
 		{Name: "Repositories", Check: checkRepositories},
-		{Name: "Branch template", Check: checkBranchTemplate},
-		{Name: "Status mappings", Check: checkStatusMappings},
+		{Name: "Branch Template", Check: checkBranchTemplate},
+		{Name: "Status Mappings", Check: checkStatusMappings},
 	}
 }
 
 func issueTrackerChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Issue tracker", Spinner: true, Check: checkIssueTracker},
+		{Name: "Issue Tracker", Spinner: true, Check: checkIssueTracker},
 	}
 }
 
 func codeHostChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Code host", Spinner: true, Check: checkCodeHost},
+		{Name: "Code Host", Spinner: true, Check: checkCodeHost},
 	}
 }
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Notification config", Check: checkNotificationConfig},
-		{Name: "Notification auth", Spinner: true, Check: checkNotificationAuth},
-		{Name: "Notification channels", Spinner: true, Check: checkNotificationChannels},
+		{Name: "Notification Config", Check: checkNotificationConfig},
+		{Name: "Notification Auth", Spinner: true, Check: checkNotificationAuth},
+		{Name: "Notification Channels", Spinner: true, Check: checkNotificationChannels},
 	}
 }
 
