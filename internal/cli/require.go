@@ -66,6 +66,16 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 			continue
 		}
 
+		// Board ID gets an interactive picker when possible.
+		if ck.Key == "board_id" && isInteractive() {
+			if picked := pickBoard(); picked != "" {
+				if err := saveConfigKey(fk, ck.Label, picked); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
 		// Apply default for optional keys without prompting.
 		if ck.Default != "" && !ck.Required {
 			viper.Set(fk, ck.Default)
@@ -84,6 +94,22 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 		}
 	}
 
+	return nil
+}
+
+// saveConfigKey persists a resolved config value to the project config file.
+func saveConfigKey(fk, label, val string) error {
+	configPath, err := configPathForScope(false)
+	if err != nil {
+		viper.Set(fk, val)
+		return nil
+	}
+	if err := setConfigValue(configPath, fk, val); err != nil {
+		viper.Set(fk, val)
+		return nil
+	}
+	viper.Set(fk, val)
+	ui.Saved(label, val)
 	return nil
 }
 

@@ -129,7 +129,11 @@ func pickOrPromptIssue() string {
 	}
 
 	// Try the picker first.
-	if picked := pickAssignedIssue(); picked != "" && picked != manualEntry {
+	picked, err := pickAssignedIssue()
+	if err != nil {
+		return "" // User cancelled (ctrl+c).
+	}
+	if picked != "" && picked != manualEntry {
 		return picked
 	}
 
@@ -140,46 +144,63 @@ func pickOrPromptIssue() string {
 // pickAssignedIssue fetches assigned issues and presents a select
 // picker. Returns the selected issue key, manualEntry if the user
 // chose to enter manually, or empty string if the picker could not
-// be shown.
-func pickAssignedIssue() string {
+// be shown. Returns ErrCancelled if the user pressed ctrl+c.
+func pickAssignedIssue() (string, error) {
 	tracker, err := newIssueTracker()
 	if err != nil {
-		return ""
+		return "", nil
 	}
 
 	slot := ui.NewSlot()
 
 	var issues []issuepkg.Issue
+	var columns []issuepkg.BoardColumn
 	if err := slot.Run("Fetching assigned issues", func() error {
 		var fetchErr error
 		issues, fetchErr = tracker.ListIssues(context.Background(), issuepkg.ListQuery{
 			AssignedToMe: true,
 		})
-		return fetchErr
+		if fetchErr != nil {
+			return fetchErr
+		}
+		boardID := viper.GetString("jira.board_id")
+		if boardID != "" {
+			// Best-effort: sort falls back to lifecycle keys on error.
+			columns, _ = tracker.BoardColumns(context.Background(), boardID)
+		}
+		return nil
 	}); err != nil {
-		return ""
+		return "", nil
 	}
 
 	if len(issues) == 0 {
 		slot.Clear()
 		ui.Skip("No assigned issues found")
-		return ""
+		return "", nil
 	}
 
-	sortIssuesByStatus(issues)
+	sortIssues(issues, columns)
 
-	// Compute status column width for aligned display.
-	maxStatusLen := 0
+	// Build a status ID → column name map so the picker can show
+	// the board column name instead of the raw Jira status name.
+	colNames := buildColumnNameIndex(columns)
+
+	// Compute column widths for aligned display.
+	var maxKeyLen, maxTitleLen int
 	for _, iss := range issues {
-		if len(iss.Status) > maxStatusLen {
-			maxStatusLen = len(iss.Status)
+		if len(iss.Key) > maxKeyLen {
+			maxKeyLen = len(iss.Key)
+		}
+		if len(iss.Title) > maxTitleLen {
+			maxTitleLen = len(iss.Title)
 		}
 	}
 
 	// Build select options.
 	opts := make([]huh.Option[string], len(issues)+1)
 	for i, iss := range issues {
-		label := fmt.Sprintf("%-*s  %s  %s", maxStatusLen, iss.Status, iss.Key, iss.Title)
+		name := displayStatus(iss, colNames)
+		label := fmt.Sprintf("%-*s  %-*s  %s", maxKeyLen, iss.Key, maxTitleLen, iss.Title, name)
 		opts[i] = huh.NewOption(label, iss.Key)
 	}
 	opts[len(issues)] = huh.NewOption("Enter manually...", manualEntry)
@@ -191,17 +212,52 @@ func pickAssignedIssue() string {
 			Options(opts...).
 			Value(&selected),
 	); err != nil {
-		return ""
+		return "", err
 	}
 	slot.Clear()
 
-	return selected
+	return selected, nil
+}
+
+// sortIssues sorts issues by board column order when columns are
+// available, falling back to the hardcoded lifecycle status sequence.
+// Issues with unknown statuses sort to the end. Within the same
+// group, original order (from the API) is preserved via stable sort.
+func sortIssues(issues []issuepkg.Issue, columns []issuepkg.BoardColumn) {
+	if len(columns) > 0 {
+		sortIssuesByBoard(issues, columns)
+		return
+	}
+	sortIssuesByStatus(issues)
+}
+
+// sortIssuesByBoard sorts issues using the board column order.
+// Statuses are mapped by ID to their column position (left to right).
+func sortIssuesByBoard(issues []issuepkg.Issue, columns []issuepkg.BoardColumn) {
+	idx := make(map[string]int)
+	pos := 0
+	for _, col := range columns {
+		for _, id := range col.StatusIDs {
+			idx[id] = pos
+			pos++
+		}
+	}
+	end := pos
+	slices.SortStableFunc(issues, func(a, b issuepkg.Issue) int {
+		ai, ok := idx[a.StatusID]
+		if !ok {
+			ai = end
+		}
+		bi, ok := idx[b.StatusID]
+		if !ok {
+			bi = end
+		}
+		return ai - bi
+	})
 }
 
 // sortIssuesByStatus sorts issues by lifecycle status sequence.
-// Issues with unknown statuses sort to the end. Within the same
-// status group, original order (updated DESC from the API) is
-// preserved via stable sort.
+// Used as a fallback when no board is configured.
 func sortIssuesByStatus(issues []issuepkg.Issue) {
 	idx := buildStatusIndex()
 	if len(idx) == 0 {
@@ -219,6 +275,87 @@ func sortIssuesByStatus(issues []issuepkg.Issue) {
 		}
 		return ai - bi
 	})
+}
+
+// skipBoard is the sentinel value used in the board picker to indicate
+// the user wants to skip board selection.
+const skipBoard = "__skip__"
+
+// pickBoard fetches visible boards and presents a select picker.
+// Returns the selected board ID, or empty string if the picker could
+// not be shown or the user chose to skip.
+func pickBoard() string {
+	tracker, err := newIssueTracker()
+	if err != nil {
+		return ""
+	}
+
+	slot := ui.NewSlot()
+
+	var boards []issuepkg.Board
+	if err := slot.Run("Fetching boards", func() error {
+		var fetchErr error
+		boards, fetchErr = tracker.ListBoards(
+			context.Background(),
+			viper.GetString("jira.project"),
+		)
+		return fetchErr
+	}); err != nil {
+		return ""
+	}
+
+	if len(boards) == 0 {
+		slot.Clear()
+		ui.Skip("No boards found")
+		return ""
+	}
+
+	opts := make([]huh.Option[string], len(boards)+1)
+	for i, b := range boards {
+		label := fmt.Sprintf("%s  (%s, id: %s)", b.Name, b.Type, b.ID)
+		opts[i] = huh.NewOption(label, b.ID)
+	}
+	opts[len(boards)] = huh.NewOption("Skip", skipBoard)
+
+	var selected string
+	slot.Show(ui.NewCard(ui.CardInput, "Select Board").Tight())
+	if err := runForm(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return ""
+	}
+	slot.Clear()
+
+	if selected == skipBoard {
+		return ""
+	}
+	return selected
+}
+
+// buildColumnNameIndex returns a map from status ID to the board column
+// name that contains it. Returns nil if columns is empty.
+func buildColumnNameIndex(columns []issuepkg.BoardColumn) map[string]string {
+	if len(columns) == 0 {
+		return nil
+	}
+	idx := make(map[string]string)
+	for _, col := range columns {
+		for _, id := range col.StatusIDs {
+			idx[id] = col.Name
+		}
+	}
+	return idx
+}
+
+// displayStatus returns the board column name for an issue if available,
+// otherwise falls back to the raw status name.
+func displayStatus(iss issuepkg.Issue, colNames map[string]string) string {
+	if name, ok := colNames[iss.StatusID]; ok {
+		return name
+	}
+	return iss.Status
 }
 
 // extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.

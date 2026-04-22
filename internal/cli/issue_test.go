@@ -149,7 +149,7 @@ func TestSortIssuesByStatus(t *testing.T) {
 
 	t.Run("case insensitive", func(t *testing.T) {
 		issues := []issue.Issue{
-			{Key: "P-1", Status: "done"},
+			{Key: "P-1", Status: "review"},
 			{Key: "P-2", Status: "in progress"},
 		}
 		sortIssuesByStatus(issues)
@@ -198,6 +198,128 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestSortIssuesByBoard(t *testing.T) {
+	columns := []issue.BoardColumn{
+		{Name: "Ready", StatusIDs: []string{"10219", "10210"}},
+		{Name: "In Progress", StatusIDs: []string{"3"}},
+		{Name: "Review", StatusIDs: []string{"10003"}},
+		{Name: "Done", StatusIDs: []string{"10002"}},
+	}
+
+	t.Run("sorts by column order", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", StatusID: "10002"}, // Done
+			{Key: "P-2", StatusID: "3"},     // In Progress
+			{Key: "P-3", StatusID: "10219"}, // Ready
+			{Key: "P-4", StatusID: "10210"}, // Ready (Product Backlog)
+			{Key: "P-5", StatusID: "10003"}, // Review
+		}
+		sortIssuesByBoard(issues, columns)
+
+		want := []string{"P-3", "P-4", "P-2", "P-5", "P-1"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("unknown status IDs sort to end", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", StatusID: "9999"}, // unknown
+			{Key: "P-2", StatusID: "3"},    // In Progress
+		}
+		sortIssuesByBoard(issues, columns)
+
+		want := []string{"P-2", "P-1"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("stable sort preserves order within same column", func(t *testing.T) {
+		issues := []issue.Issue{
+			{Key: "P-1", StatusID: "10219"}, // Ready
+			{Key: "P-2", StatusID: "10210"}, // Ready (Product Backlog)
+			{Key: "P-3", StatusID: "10219"}, // Ready
+		}
+		sortIssuesByBoard(issues, columns)
+
+		want := []string{"P-1", "P-3", "P-2"}
+		got := make([]string, len(issues))
+		for i, iss := range issues {
+			got[i] = iss.Key
+		}
+		if !equalSlices(got, want) {
+			t.Errorf("sort order = %v, want %v", got, want)
+		}
+	})
+}
+
+func TestBuildColumnNameIndex(t *testing.T) {
+	t.Run("maps status IDs to column names", func(t *testing.T) {
+		columns := []issue.BoardColumn{
+			{Name: "Ready", StatusIDs: []string{"10219", "10210"}},
+			{Name: "In Progress", StatusIDs: []string{"3"}},
+		}
+		idx := buildColumnNameIndex(columns)
+
+		if idx["10219"] != "Ready" {
+			t.Errorf("idx[10219] = %q, want %q", idx["10219"], "Ready")
+		}
+		if idx["10210"] != "Ready" {
+			t.Errorf("idx[10210] = %q, want %q", idx["10210"], "Ready")
+		}
+		if idx["3"] != "In Progress" {
+			t.Errorf("idx[3] = %q, want %q", idx["3"], "In Progress")
+		}
+	})
+
+	t.Run("nil for empty columns", func(t *testing.T) {
+		idx := buildColumnNameIndex(nil)
+		if idx != nil {
+			t.Errorf("expected nil, got %v", idx)
+		}
+	})
+}
+
+func TestDisplayStatus(t *testing.T) {
+	colNames := map[string]string{
+		"10219": "Ready",
+		"10210": "Ready",
+	}
+
+	t.Run("returns column name when mapped", func(t *testing.T) {
+		iss := issue.Issue{Status: "Product Backlog", StatusID: "10210"}
+		got := displayStatus(iss, colNames)
+		if got != "Ready" {
+			t.Errorf("displayStatus() = %q, want %q", got, "Ready")
+		}
+	})
+
+	t.Run("falls back to status name", func(t *testing.T) {
+		iss := issue.Issue{Status: "In Progress", StatusID: "3"}
+		got := displayStatus(iss, colNames)
+		if got != "In Progress" {
+			t.Errorf("displayStatus() = %q, want %q", got, "In Progress")
+		}
+	})
+
+	t.Run("falls back when colNames is nil", func(t *testing.T) {
+		iss := issue.Issue{Status: "Ready", StatusID: "10219"}
+		got := displayStatus(iss, nil)
+		if got != "Ready" {
+			t.Errorf("displayStatus() = %q, want %q", got, "Ready")
+		}
+	})
 }
 
 func TestExtractIssue(t *testing.T) {
