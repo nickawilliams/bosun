@@ -36,7 +36,11 @@ func (a *Adapter) CreateBranch(ctx context.Context, repositoryPath, branchName s
 	// Fetch latest before branching.
 	_ = run(ctx, repositoryPath, "fetch", "origin", defaultBranch)
 
-	return run(ctx, repositoryPath, "branch", branchName, "origin/"+defaultBranch)
+	if err := run(ctx, repositoryPath, "branch", branchName, "origin/"+defaultBranch); err != nil {
+		return err
+	}
+
+	return run(ctx, repositoryPath, "push", "-u", "origin", branchName)
 }
 
 func (a *Adapter) CreateBranchFromHead(ctx context.Context, repositoryPath, branchName string) error {
