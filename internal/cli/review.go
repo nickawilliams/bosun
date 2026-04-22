@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
@@ -238,21 +239,37 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			if len(needsPush) > 0 {
-				kvPairs := make([]string, 0, len(needsPush)*2)
+				mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+				normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
+				var repoLines []string
 				for _, up := range needsPush {
 					status := "not yet pushed"
 					if up.count > 0 {
 						status = fmt.Sprintf("%d unpushed commit(s)", up.count)
 					}
-					kvPairs = append(kvPairs, up.rc.repo.Name, status)
+					repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
+						mutedStyle.Render(up.rc.repo.Name),
+						mutedStyle.Render(ui.Palette.Dot),
+						normalStyle.Render(status)))
 				}
 
-				slot := ui.NewSlot()
-				slot.Show(ui.NewCard(ui.CardInfo, "Unpushed Changes").KV(kvPairs...).Tight())
+				promptContent := mutedStyle.Render("Do you want to push before continuing?") +
+					"\n\n" + strings.Join(repoLines, "\n")
 
-				confirmed, err := promptConfirm("Push before creating PRs?", true)
-				if err != nil {
-					return err
+				slot := ui.NewSlot()
+				slot.Show(ui.NewCard(ui.CardInput, "Unpushed Commits Detected").Tight())
+
+				confirmed := true
+				if isInteractive() {
+					if err := runForm(
+						newConfirm().
+							Title(promptContent).
+							Affirmative("Yes").
+							Negative("No").
+							Value(&confirmed),
+					); err != nil {
+						return err
+					}
 				}
 				if !confirmed {
 					slot.Show(ui.NewCard(ui.CardSkipped, "Push declined"))
