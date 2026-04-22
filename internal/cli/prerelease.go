@@ -145,7 +145,7 @@ func newPrereleaseCmd() *cobra.Command {
 					Op:    ui.PlanCreate,
 					OpRef: &releaseNotifyOp,
 					Label: "Notify",
-					Target: "#" + releaseChannel,
+					Target: releaseChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
 						if ref.Timestamp != "" {

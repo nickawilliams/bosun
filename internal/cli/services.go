@@ -428,20 +428,20 @@ func buildPRBody(data prTemplateData) string {
 type notifyTemplateData struct {
 	IssueKey   string
 	IssueTitle string
+	IssueType  string        // e.g., "Story", "Bug".
 	IssueURL   string
+	IconURL    string        // Avatar or icon URL for card blocks.
 	Items      []notify.Item // Per-repository items (PRs, releases, etc.).
 }
 
 // Default block templates per notification type.
 var defaultNotifyTemplates = map[string]map[string]string{
 	"review": {
-		"header":  "{{.IssueKey}}: {{.IssueTitle}}",
-		"body":    "<{{.IssueURL}}|{{.IssueKey}}> is ready for review:{{range .Items}}\n  <{{.URL}}|PR {{.Detail}}> `{{.Label}}`{{end}}",
+		"header":  "Ready for Review",
 		"context": "via bosun",
 	},
 	"release": {
-		"header":  "{{.IssueKey}}: {{.IssueTitle}}",
-		"body":    "{{range .Items}}<{{.URL}}|{{.Label}} {{.Detail}}>{{end}}",
+		"header":  "Release",
 		"context": "via bosun",
 	},
 	"preview": {
@@ -478,10 +478,64 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		return defaults[field]
 	}
 
+	// Build issue + ephemeral as two-column fields.
+	var fields []notify.Field
+	if data.IssueKey != "" {
+		issueType := "Issue"
+		if data.IssueType != "" {
+			issueType = data.IssueType
+		}
+		issueLink := data.IssueKey + ": " + data.IssueTitle
+		if data.IssueURL != "" {
+			issueLink = fmt.Sprintf("<%s|%s: %s>", data.IssueURL, data.IssueKey, data.IssueTitle)
+		}
+		fields = append(fields,
+			notify.Field{
+				Key:   fmt.Sprintf("*:jira: %s*\n%s", issueType, issueLink),
+				Value: "*:cloud: Ephemeral*\n_-none-_",
+			},
+		)
+	}
+
+	// Build per-repo card sections.
+	var sections []notify.Section
+	for _, item := range data.Items {
+		// Card title: PR title (same as what we set on the PR).
+		title := data.IssueKey
+		if data.IssueTitle != "" {
+			title = fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
+		}
+		// Card subtitle: repo name + PR number.
+		subtitle := fmt.Sprintf("`%s` %s", item.Label, item.Detail)
+		var buttons []notify.CardButton
+		if item.URL != "" {
+			buttons = append(buttons, notify.CardButton{
+				Text:  "View Pull Request",
+				URL:   item.URL,
+				Style: "primary",
+			})
+			if item.BranchURL != "" {
+				buttons = append(buttons, notify.CardButton{
+					Text: "View Branch",
+					URL:  item.BranchURL,
+				})
+			}
+		}
+		sections = append(sections, notify.Section{
+			Text:     title,
+			Subtitle: subtitle,
+			Body:     item.Body,
+			IconURL:  data.IconURL,
+			Buttons:  buttons,
+		})
+	}
+
 	return notify.Content{
-		Header:  renderTemplate(get("header"), data),
-		Body:    renderTemplate(get("body"), data),
-		Context: renderTemplate(get("context"), data),
+		Header:   renderTemplate(get("header"), data),
+		Body:     renderTemplate(get("body"), data),
+		Fields:   fields,
+		Sections: sections,
+		Context:  renderTemplate(get("context"), data),
 	}
 }
 

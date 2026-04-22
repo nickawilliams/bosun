@@ -6,6 +6,7 @@ import "context"
 type PullRequest struct {
 	Number int
 	Title  string
+	Body   string // Description text.
 	URL    string
 	State  string // "open", "closed", "merged"
 	Review string // "approved", "changes_requested", "pending", ""

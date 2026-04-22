@@ -92,6 +92,7 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 	var result struct {
 		Number  int    `json:"number"`
 		Title   string `json:"title"`
+		Body    string `json:"body"`
 		HTMLURL string `json:"html_url"`
 		State   string `json:"state"`
 	}
@@ -102,6 +103,7 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 	return code.PullRequest{
 		Number: result.Number,
 		Title:  result.Title,
+		Body:   result.Body,
 		URL:    result.HTMLURL,
 		State:  result.State,
 	}, nil
@@ -116,10 +118,11 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 	defer resp.Body.Close()
 
 	var results []struct {
-		Number   int    `json:"number"`
-		Title    string `json:"title"`
-		HTMLURL  string `json:"html_url"`
-		State    string `json:"state"`
+		Number   int     `json:"number"`
+		Title    string  `json:"title"`
+		Body     string  `json:"body"`
+		HTMLURL  string  `json:"html_url"`
+		State    string  `json:"state"`
 		MergedAt *string `json:"merged_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
@@ -139,6 +142,7 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 	return code.PullRequest{
 		Number: pr.Number,
 		Title:  pr.Title,
+		Body:   pr.Body,
 		URL:    pr.HTMLURL,
 		State:  state,
 	}, nil

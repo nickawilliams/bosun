@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,6 +10,174 @@ import (
 	"github.com/nickawilliams/bosun/internal/notify"
 	slackapi "github.com/slack-go/slack"
 )
+
+// rawBlock implements slack.Block by marshaling arbitrary JSON. This lets
+// us use block types (like "card") that slack-go doesn't have native types for.
+type rawBlock struct {
+	blockType slackapi.MessageBlockType
+	data      json.RawMessage
+}
+
+func (b rawBlock) BlockType() slackapi.MessageBlockType { return b.blockType }
+func (b rawBlock) ID() string                           { return "" }
+func (b rawBlock) MarshalJSON() ([]byte, error)         { return b.data, nil }
+
+// cardBlock builds a raw "card" block with the given fields.
+func cardBlock(s notify.Section, idPrefix string) rawBlock {
+	card := map[string]any{
+		"type": "card",
+		"title": map[string]any{
+			"type": "mrkdwn", "text": s.Text, "verbatim": false,
+		},
+	}
+	if s.IconURL != "" {
+		card["icon"] = map[string]any{
+			"type": "image", "image_url": s.IconURL, "alt_text": "Icon",
+		}
+	}
+	if s.Subtitle != "" {
+		card["subtitle"] = map[string]any{
+			"type": "mrkdwn", "text": s.Subtitle, "verbatim": false,
+		}
+	}
+	if s.Body != "" {
+		card["body"] = map[string]any{
+			"type": "mrkdwn", "text": truncate(s.Body, 200), "verbatim": false,
+		}
+	}
+	if len(s.Buttons) > 0 {
+		actions := make([]map[string]any, len(s.Buttons))
+		for i, btn := range s.Buttons {
+			action := map[string]any{
+				"type":      "button",
+				"text":      map[string]any{"type": "plain_text", "text": btn.Text, "emoji": true},
+				"url":       btn.URL,
+				"action_id": fmt.Sprintf("%s_%d", idPrefix, i),
+			}
+			if btn.Style != "" {
+				action["style"] = btn.Style
+			}
+			actions[i] = action
+		}
+		card["actions"] = actions
+	}
+
+	data, _ := json.Marshal(card)
+	return rawBlock{blockType: "card", data: data}
+}
+
+// tableBlock builds a raw "table" block from rows of cells.
+// Rows are arrays of cells (not objects with a "cells" key).
+func tableBlock(rows []notify.TableRow) rawBlock {
+	jsonRows := make([][]map[string]any, len(rows))
+	for i, row := range rows {
+		cells := make([]map[string]any, len(row.Cells))
+		for j, cell := range row.Cells {
+			cells[j] = buildTableCell(cell)
+		}
+		jsonRows[i] = cells
+	}
+
+	table := map[string]any{
+		"type": "table",
+		"rows": jsonRows,
+	}
+
+	data, _ := json.Marshal(table)
+	return rawBlock{blockType: "table", data: data}
+}
+
+// buildTableCell converts a TableCell to a rich_text or raw_text JSON cell.
+func buildTableCell(c notify.TableCell) map[string]any {
+	// Emoji-only cell.
+	if c.Emoji != "" && c.Text == "" {
+		return map[string]any{
+			"type": "rich_text",
+			"elements": []map[string]any{
+				{
+					"type": "rich_text_section",
+					"elements": []map[string]any{
+						{"type": "emoji", "name": c.Emoji},
+					},
+				},
+			},
+		}
+	}
+
+	// Empty cell.
+	if c.Text == "" && c.Emoji == "" {
+		return map[string]any{
+			"type": "rich_text",
+			"elements": []map[string]any{
+				{"type": "rich_text_section", "elements": []map[string]any{
+					{"type": "text", "text": " "},
+				}},
+			},
+		}
+	}
+
+	// Text cell with optional formatting.
+	var elements []map[string]any
+
+	if c.Emoji != "" {
+		elements = append(elements, map[string]any{"type": "emoji", "name": c.Emoji})
+		elements = append(elements, map[string]any{"type": "text", "text": " "})
+	}
+
+	if c.URL != "" {
+		el := map[string]any{"type": "link", "url": c.URL, "text": c.Text}
+		if c.Bold || c.Italic {
+			style := map[string]any{}
+			if c.Bold {
+				style["bold"] = true
+			}
+			if c.Italic {
+				style["italic"] = true
+			}
+			el["style"] = style
+		}
+		elements = append(elements, el)
+	} else {
+		el := map[string]any{"type": "text", "text": c.Text}
+		if c.Bold || c.Italic {
+			style := map[string]any{}
+			if c.Bold {
+				style["bold"] = true
+			}
+			if c.Italic {
+				style["italic"] = true
+			}
+			el["style"] = style
+		}
+		elements = append(elements, el)
+	}
+
+	// Subtitle on a new line in the same cell.
+	if c.Subtitle != "" {
+		elements = append(elements,
+			map[string]any{"type": "text", "text": "\n"},
+			map[string]any{"type": "text", "text": c.Subtitle},
+		)
+	}
+
+	return map[string]any{
+		"type": "rich_text",
+		"elements": []map[string]any{
+			{
+				"type":     "rich_text_section",
+				"elements": elements,
+			},
+		},
+	}
+}
+
+// truncate shortens s to max bytes, adding "…" if truncated.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
+}
 
 // Adapter implements notify.Notifier using the Slack API.
 type Adapter struct {
@@ -81,10 +250,15 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
 		if existing.Timestamp != "" {
 			_, _, _, err := a.client.UpdateMessageContext(ctx, channelID, existing.Timestamp, opts...)
-			if err != nil {
+			if err == nil {
+				return existing, nil
+			}
+			// Message was deleted — invalidate cache and fall through to post.
+			if strings.Contains(err.Error(), "message_not_found") {
+				delete(a.cache.threads, channelID+":"+msg.IssueKey)
+			} else {
 				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
 			}
-			return existing, nil
 		}
 	}
 
@@ -200,9 +374,15 @@ func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg n
 	return nil
 }
 
-// resolveChannelID finds the channel ID for a given channel name.
+// resolveChannelID resolves a channel or user target to a Slack ID.
+// Supports: "@U..." (user ID), "#channel" or "channel" (channel name lookup).
 // Results are cached for the lifetime of the adapter.
 func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, error) {
+	// @U... — user ID, pass through directly.
+	if strings.HasPrefix(name, "@") {
+		return strings.TrimPrefix(name, "@"), nil
+	}
+
 	name = strings.TrimPrefix(name, "#")
 
 	if !notify.NoCache(ctx) {
@@ -270,6 +450,41 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 		))
 	}
 
+	for i, btn := range c.Actions {
+		b := slackapi.NewButtonBlockElement(
+			fmt.Sprintf("action_%d", i), "",
+			slackapi.NewTextBlockObject(slackapi.PlainTextType, btn.Text, true, false),
+		)
+		if btn.URL != "" {
+			b.WithURL(btn.URL)
+		}
+		if btn.Style != "" {
+			b.WithStyle(slackapi.Style(btn.Style))
+		}
+		blocks = append(blocks, slackapi.NewActionBlock("", b))
+	}
+
+	if len(c.Table) > 0 {
+		blocks = append(blocks, tableBlock(c.Table))
+	}
+
+	if len(c.Fields) > 0 {
+		fields := make([]*slackapi.TextBlockObject, len(c.Fields)*2)
+		for i, f := range c.Fields {
+			fields[i*2] = slackapi.NewTextBlockObject(slackapi.MarkdownType, f.Key, false, false)
+			fields[i*2+1] = slackapi.NewTextBlockObject(slackapi.MarkdownType, f.Value, false, false)
+		}
+		blocks = append(blocks, slackapi.NewSectionBlock(nil, fields, nil))
+	}
+
+	if len(c.Sections) > 0 && (c.Header != "" || c.Body != "" || len(c.Fields) > 0) {
+		blocks = append(blocks, slackapi.NewDividerBlock())
+	}
+
+	for i, s := range c.Sections {
+		blocks = append(blocks, cardBlock(s, fmt.Sprintf("view_%d", i)))
+	}
+
 	if c.Context != "" {
 		blocks = append(blocks, slackapi.NewContextBlock("",
 			slackapi.NewTextBlockObject(slackapi.MarkdownType, c.Context, false, false),
@@ -277,9 +492,15 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 	}
 
 	// Fallback text for notifications/accessibility.
-	fallback := c.Body
-	if fallback == "" {
-		fallback = c.Header
+	fallback := c.Header
+	if c.Body != "" {
+		fallback = c.Header + " — " + c.Body
+	}
+	for _, f := range c.Fields {
+		fallback += "\n" + f.Key + ": " + f.Value
+	}
+	for _, s := range c.Sections {
+		fallback += "\n" + s.Text
 	}
 
 	return []slackapi.MsgOption{

@@ -13,25 +13,70 @@ type Message struct {
 }
 
 // Content holds the rendered notification text. When Block fields are set,
-// the adapter renders Block Kit blocks (header + section + context). When
-// only Text is set, the adapter posts plain mrkdwn (editable in client).
+// the adapter renders Block Kit blocks. When only Text is set, the adapter
+// posts plain mrkdwn (editable in client).
 type Content struct {
-	Text    string // Plain mrkdwn text (used when no block fields are set).
-	Header  string // PlainText header block (large bold text).
-	Body    string // mrkdwn section block (main content).
-	Context string // mrkdwn context block (small muted text).
+	Text     string       // Plain mrkdwn text (used when no block fields are set).
+	Header   string       // PlainText header block (large bold text).
+	Body     string       // mrkdwn section block (main content, below header).
+	Actions  []CardButton // Link buttons rendered as an actions block.
+	Table    []TableRow   // Info table rendered before cards.
+	Fields   []Field      // Two-column key/value fields rendered as section fields.
+	Sections []Section    // Per-item card blocks.
+	Context  string       // mrkdwn context block (small muted text, after cards).
+}
+
+// TableRow is a row in an info table.
+type TableRow struct {
+	Cells []TableCell
+}
+
+// TableCell is a cell in a table row. Supports text with optional
+// formatting, links, and emoji.
+type TableCell struct {
+	Text     string // Cell text content.
+	Subtitle string // Second line of text (rendered after a newline).
+	Emoji    string // Emoji shortcode (without colons), e.g., "jira".
+	URL      string // If set, text is rendered as a link.
+	Bold     bool
+	Italic   bool
+}
+
+// Field is a key/value pair rendered in a two-column layout.
+// Both Key and Value support mrkdwn (links, bold, code, etc.).
+type Field struct {
+	Key   string
+	Value string
+}
+
+// CardButton is a link button rendered in a card's actions area.
+type CardButton struct {
+	Text  string // Button label.
+	URL   string // Link URL.
+	Style string // "primary" (green), "danger" (red), or "" (default).
+}
+
+// Section represents a card block in the notification.
+type Section struct {
+	Text     string       // Card title (mrkdwn).
+	Subtitle string       // Card subtitle (mrkdwn).
+	Body     string       // Card body (truncated to 200 chars by adapter).
+	IconURL  string       // Small icon image URL.
+	Buttons  []CardButton // Action buttons.
 }
 
 // HasBlocks returns true if any block-level fields are set.
 func (c Content) HasBlocks() bool {
-	return c.Header != "" || c.Body != "" || c.Context != ""
+	return c.Header != "" || c.Body != "" || len(c.Actions) > 0 || len(c.Table) > 0 || len(c.Fields) > 0 || len(c.Sections) > 0 || c.Context != ""
 }
 
 // Item represents a single line item in a notification (one per repository).
 type Item struct {
-	Label  string // e.g., repository name: "my-service".
-	URL    string // e.g., PR URL or release URL.
-	Detail string // e.g., "#42", "v1.2.3", "feature/X → main".
+	Label     string // e.g., repository name: "my-service".
+	URL       string // e.g., PR URL or release URL.
+	Detail    string // e.g., "#42", "v1.2.3", "feature/X → main".
+	Body      string // e.g., PR description (truncated for display).
+	BranchURL string // e.g., GitHub branch tree URL.
 }
 
 // ThreadRef identifies an existing notification thread for replies.

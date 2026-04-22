@@ -44,7 +44,7 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:     ui.PlanModify,
 					Label:  "Notify",
-					Target: "#" + channel,
+					Target: channel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := previewNotifier.FindThread(ctx, channel, issue)
 						if ref.Timestamp == "" {

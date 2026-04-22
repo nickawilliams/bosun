@@ -279,6 +279,7 @@ func newReviewCmd() *cobra.Command {
 				pr       code.PullRequest
 				owner    string
 				repoName string
+				branch   string
 			}
 			var prResults []prResult
 
@@ -303,7 +304,7 @@ func newReviewCmd() *cobra.Command {
 								// even when no new PRs are created.
 								prResults = append(prResults, prResult{
 									repo: repoDisplayName, pr: existing,
-									owner: owner, repoName: repoName,
+									owner: owner, repoName: repoName, branch: branch,
 								})
 								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 							}
@@ -324,7 +325,7 @@ func newReviewCmd() *cobra.Command {
 							}
 							prResults = append(prResults, prResult{
 								repo: repoDisplayName, pr: pr,
-								owner: owner, repoName: repoName,
+								owner: owner, repoName: repoName, branch: branch,
 							})
 							return nil
 						},
@@ -344,13 +345,22 @@ func newReviewCmd() *cobra.Command {
 			if notifierErr == nil {
 				defer notifier.Close()
 			}
+
+			// Resolve GitHub avatar for card icons.
+			var avatarURL string
+			if host != nil {
+				if user, err := host.GetAuthenticatedUser(ctx); err == nil {
+					avatarURL = fmt.Sprintf("https://github.com/%s.png?size=36", user)
+				}
+			}
+
 			if !draft && reviewChannel != "" && notifierErr == nil {
 				notifyOp := ui.PlanCreate
 				actions = append(actions, Action{
 					Op:    ui.PlanCreate,
 					OpRef: &notifyOp,
 					Label: "Notify",
-					Target: "#" + reviewChannel,
+					Target: reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)
 						if ref.Timestamp != "" {
@@ -381,9 +391,11 @@ func newReviewCmd() *cobra.Command {
 						items := make([]notify.Item, len(prResults))
 						for i, r := range prResults {
 							items[i] = notify.Item{
-								Label:  r.repo,
-								URL:    r.pr.URL,
-								Detail: fmt.Sprintf("#%d", r.pr.Number),
+								Label:     r.repo,
+								URL:       r.pr.URL,
+								Detail:    fmt.Sprintf("#%d", r.pr.Number),
+								Body:      r.pr.Body,
+								BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
 							}
 						}
 						_, err := notifier.Notify(ctx, notify.Message{
@@ -395,7 +407,9 @@ func newReviewCmd() *cobra.Command {
 							Content: buildNotifyContent("review", notifyTemplateData{
 								IssueKey:   issue,
 								IssueTitle: detail.Title,
+								IssueType:  detail.Type,
 								IssueURL:   detail.URL,
+								IconURL:    avatarURL,
 								Items:      items,
 							}),
 						})
