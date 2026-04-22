@@ -6,22 +6,19 @@ import (
 )
 
 func newCaptainCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "captain",
+	return &cobra.Command{
+		Use:    "captain on deck",
 		Hidden: true,
-	}
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "on",
-		Short: "on deck",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "Captain On Deck!",
+		},
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 && args[0] == "deck" {
+			if args[0] == "on" && args[1] == "deck" {
+				rootCard(cmd).Print()
 				audio.Play()
 			}
 			return nil
 		},
-		Args: cobra.ExactArgs(1),
-	})
-
-	return cmd
+	}
 }
