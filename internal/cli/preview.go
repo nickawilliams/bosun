@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -27,9 +29,35 @@ func newPreviewCmd() *cobra.Command {
 			tracker, _ := newIssueTracker()
 
 			// --- Plan + Apply ---
-			// TODO: Trigger deployment (phase 6)
 
 			var actions []Action
+
+			// CI/CD: trigger preview deployment.
+			pipeline, pipelineErr := newCICD()
+			if pipelineErr != nil {
+				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
+			}
+			workflowName := resolveWorkflowName("preview")
+			if owner, repo, ok := resolveWorkflowRepository(); ok && pipeline != nil && workflowName != "" {
+				actions = append(actions, Action{
+					Op:     ui.PlanCreate,
+					Label:  "Trigger Preview Deploy",
+					Target: repo,
+					Assess: func(_ context.Context) (ActionState, string, error) {
+						return ActionNeeded, fmt.Sprintf("main → %s", workflowName), nil
+					},
+					Apply: func(ctx context.Context) error {
+						return pipeline.TriggerWorkflow(ctx, cicd.TriggerRequest{
+							Owner:      owner,
+							Repository: repo,
+							Workflow:   workflowName,
+							Ref:        "main",
+							Inputs:     map[string]string{"issue": issue},
+						})
+					},
+				})
+			}
+
 			if sa, ok := statusAction(tracker, issue, "", "preview"); ok {
 				actions = append(actions, sa)
 			}
