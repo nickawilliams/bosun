@@ -1,5 +1,11 @@
 package cli
 
+// SourceOption represents a single option returned by a ConfigKey Source.
+type SourceOption struct {
+	Label string // Display text (e.g., "My Board (scrum, id: 42)").
+	Value string // Stored value (e.g., "42").
+}
+
 // ConfigKey describes a single configuration value.
 type ConfigKey struct {
 	Key      string   // Config key (relative to group, e.g. "base_url").
@@ -10,6 +16,7 @@ type ConfigKey struct {
 	EnvVar   string   // Environment variable name (if value comes from env).
 	Secret   bool     // Mask input (for tokens/passwords).
 	Required bool     // Must have a value for the group to be valid.
+	Source   func() ([]SourceOption, error) // Dynamic value source for interactive picker.
 }
 
 // ConfigGroup describes a related set of config values (e.g., "jira").
@@ -137,9 +144,9 @@ var configSchema = map[string]ConfigGroup{
 		Label: "GitHub Actions",
 
 		Keys: []ConfigKey{
-			{Key: "repository", Label: "Workflow repository (owner/repo)", Example: "my-org/infra"},
-			{Key: "workflow_preview", Label: "Preview workflow", Example: "deploy-preview.yml"},
-			{Key: "workflow_release", Label: "Release workflow", Example: "deploy-release.yml"},
+			{Key: "repository", Label: "Workflow Repository (owner/repo)", Example: "my-org/infra"},
+			{Key: "workflow_preview", Label: "Preview Workflow", Example: "deploy-preview.yml"},
+			{Key: "workflow_release", Label: "Release Workflow", Example: "deploy-release.yml"},
 		},
 	},
 	"color_mode": {
@@ -156,6 +163,18 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "display_mode", Label: "Display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
 		},
 	},
+}
+
+// registerSource sets a Source function on a ConfigKey within a group.
+// Called from init() to avoid package-level initialization cycles.
+func registerSource(group, key string, source func() ([]SourceOption, error)) {
+	g := configSchema[group]
+	for i := range g.Keys {
+		if g.Keys[i].Key == key {
+			g.Keys[i].Source = source
+		}
+	}
+	configSchema[group] = g
 }
 
 // lookupGroup returns the config group for a given name.

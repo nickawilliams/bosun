@@ -66,14 +66,20 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 			continue
 		}
 
-		// Board ID gets an interactive picker when possible.
-		if ck.Key == "board_id" && isInteractive() {
-			if picked := pickBoard(); picked != "" {
+		// Dynamic source — fetch options and show a picker.
+		if ck.Source != nil && isInteractive() {
+			picked, err := pickFromSource(ck)
+			if err == nil && picked != "" {
 				if err := saveConfigKey(fk, ck.Label, picked); err != nil {
 					return err
 				}
+				continue
 			}
-			continue
+			// Source failed or returned empty — fall through to standard
+			// prompt for required keys, skip for optional.
+			if !ck.Required {
+				continue
+			}
 		}
 
 		// Apply default for optional keys without prompting.
@@ -230,4 +236,53 @@ func configPathForScope(global bool) (string, error) {
 		return configPathForScope(true)
 	}
 	return filepath.Join(projectRoot, ".bosun", "config.yaml"), nil
+}
+
+const manualEntrySource = "__manual__"
+
+// pickFromSource fetches options from a ConfigKey's Source, presents a select
+// picker with an "Enter manually..." fallback, and returns the selected value.
+// Returns ("", err) on source failure and ("", nil) if the user chose manual
+// entry or the source returned no options.
+func pickFromSource(ck ConfigKey) (string, error) {
+	slot := ui.NewSlot()
+
+	var items []SourceOption
+	if err := slot.Run("Fetching "+ck.Label, func() error {
+		var e error
+		items, e = ck.Source()
+		return e
+	}); err != nil {
+		slot.Clear()
+		return "", err
+	}
+
+	if len(items) == 0 {
+		slot.Clear()
+		return "", nil
+	}
+
+	opts := make([]huh.Option[string], len(items)+1)
+	for i, item := range items {
+		opts[i] = huh.NewOption(item.Label, item.Value)
+	}
+	opts[len(items)] = huh.NewOption("Enter manually...", manualEntrySource)
+
+	var selected string
+	height := min(len(opts), maxSelectHeight)
+	slot.Show(ui.NewCard(ui.CardInput, ck.Label).Tight())
+	if err := runForm(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Height(height).
+			Value(&selected),
+	); err != nil {
+		return "", err
+	}
+	slot.Clear()
+
+	if selected == manualEntrySource {
+		return "", nil
+	}
+	return selected, nil
 }

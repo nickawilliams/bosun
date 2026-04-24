@@ -277,61 +277,31 @@ func sortIssuesByStatus(issues []issuepkg.Issue) {
 	})
 }
 
-// skipBoard is the sentinel value used in the board picker to indicate
-// the user wants to skip board selection.
-const skipBoard = "__skip__"
+func init() { registerSource("jira", "board_id", boardSource) }
 
-// pickBoard fetches visible boards and presents a select picker.
-// Returns the selected board ID, or empty string if the picker could
-// not be shown or the user chose to skip.
-func pickBoard() string {
+// boardSource returns available boards as SourceOptions for the config picker.
+func boardSource() ([]SourceOption, error) {
 	tracker, err := newIssueTracker()
 	if err != nil {
-		return ""
+		return nil, err
 	}
 
-	slot := ui.NewSlot()
-
-	var boards []issuepkg.Board
-	if err := slot.Run("Fetching boards", func() error {
-		var fetchErr error
-		boards, fetchErr = tracker.ListBoards(
-			context.Background(),
-			viper.GetString("jira.project"),
-		)
-		return fetchErr
-	}); err != nil {
-		return ""
+	boards, err := tracker.ListBoards(
+		context.Background(),
+		viper.GetString("jira.project"),
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(boards) == 0 {
-		slot.Clear()
-		ui.Skip("No boards found")
-		return ""
-	}
-
-	opts := make([]huh.Option[string], len(boards)+1)
+	opts := make([]SourceOption, len(boards))
 	for i, b := range boards {
-		label := fmt.Sprintf("%s  (%s, id: %s)", b.Name, b.Type, b.ID)
-		opts[i] = huh.NewOption(label, b.ID)
+		opts[i] = SourceOption{
+			Label: fmt.Sprintf("%s  (%s, id: %s)", b.Name, b.Type, b.ID),
+			Value: b.ID,
+		}
 	}
-	opts[len(boards)] = huh.NewOption("Skip", skipBoard)
-
-	var selected string
-	slot.Show(ui.NewCard(ui.CardInput, "Select Board").Tight())
-	if err := runForm(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Value(&selected),
-	); err != nil {
-		return ""
-	}
-	slot.Clear()
-
-	if selected == skipBoard {
-		return ""
-	}
-	return selected
+	return opts, nil
 }
 
 // buildColumnNameIndex returns a map from status ID to the board column
