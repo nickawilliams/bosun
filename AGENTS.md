@@ -59,6 +59,11 @@ Use Card directly only for these patterns:
   dependency unavailable, precondition unmet)
 - `CardInfo` — informational display, not an operation result
 
+### Title case for card titles
+
+Use title case for all card titles, action labels, and spinner messages
+(e.g., "Trigger Preview Deploy", "Fetching Boards", "Select Board").
+
 ### What not to do
 
 - Do not use `fmt.Print*` directly in command `RunE` functions. Use
