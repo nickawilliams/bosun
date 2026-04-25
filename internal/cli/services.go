@@ -623,24 +623,114 @@ func newCICD() (cicd.CICD, error) {
 	}
 }
 
-// resolveWorkflowName returns the configured workflow filename for a given
-// type (e.g., "preview" or "release"). Returns empty string if not configured.
-func resolveWorkflowName(workflowType string) string {
-	return viper.GetString("github_actions.workflow_" + workflowType)
+// WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
+type WorkflowTarget struct {
+	Owner    string // GitHub owner (e.g., "ExtrackerInc").
+	Repo     string // GitHub repo name (e.g., "devops-tooling").
+	Workflow string // Workflow filename for the API call (e.g., "deploy.yml").
+	Label    string // Display label for plan cards (local repo name or workflow repo).
 }
 
-// resolveWorkflowRepository returns the fixed owner/repo for CI/CD triggers
-// when github_actions.repository is set (single-workflow mode). Returns
-// empty strings and false when not configured (per-repo mode).
-func resolveWorkflowRepository() (owner, repo string, ok bool) {
-	val := viper.GetString("github_actions.repository")
-	if val == "" {
-		return "", "", false
+// parseWorkflowPath parses an absolute workflow path
+// (owner/repo/.github/workflows/file.yml) into a WorkflowTarget.
+func parseWorkflowPath(path string) (WorkflowTarget, error) {
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
+		return WorkflowTarget{}, fmt.Errorf("invalid workflow path %q: expected owner/repo/.github/workflows/file.yml", path)
 	}
-	parts := strings.SplitN(val, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+	// Extract just the filename from the full path for the API call.
+	workflow := path[strings.LastIndex(path, "/")+1:]
+	return WorkflowTarget{
+		Owner:    parts[0],
+		Repo:     parts[1],
+		Workflow: workflow,
+		Label:    parts[1],
+	}, nil
+}
+
+// resolveWorkflowTargets resolves configured workflow targets for a lifecycle
+// stage ("preview" or "release"). Returns nil if the stage is not configured.
+//
+// Config shapes:
+//   - String → global mode: one workflow triggered once
+//   - Map    → per-repo mode: keyed by local repo name, intersected with
+//     active workspace repos. Values are strings or lists of strings.
+//
+// Relative paths (starting with ".github/") are resolved to absolute paths
+// using the local repo's git remote.
+func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
+	key := "github_actions.workflows." + stage
+
+	// Try string first (global mode).
+	if s := viper.GetString(key); s != "" {
+		t, err := parseWorkflowPath(s)
+		if err != nil {
+			return nil, err
+		}
+		return []WorkflowTarget{t}, nil
 	}
-	return parts[0], parts[1], true
+
+	// Try map (per-repo mode).
+	raw := viper.Get(key)
+	if raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+
+	// Build repo name → Repository lookup from active workspace.
+	repos, err := resolveActiveRepositories(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	repoByName := make(map[string]Repository, len(repos))
+	for _, r := range repos {
+		repoByName[r.Name] = r
+	}
+
+	var targets []WorkflowTarget
+	for repoName, v := range m {
+		repo, active := repoByName[repoName]
+		if !active {
+			continue
+		}
+
+		// Collect workflow path strings (value is string or []interface{}).
+		var paths []string
+		switch val := v.(type) {
+		case string:
+			paths = []string{val}
+		case []any:
+			for _, item := range val {
+				if s, ok := item.(string); ok {
+					paths = append(paths, s)
+				}
+			}
+		default:
+			continue
+		}
+
+		for _, p := range paths {
+			// Resolve relative paths to absolute.
+			if strings.HasPrefix(p, ".github/") {
+				identity, err := gh.ParseRemote(ctx, repo.Path)
+				if err != nil {
+					continue
+				}
+				p = fmt.Sprintf("%s/%s/%s", identity.Owner, identity.Name, p)
+			}
+
+			t, err := parseWorkflowPath(p)
+			if err != nil {
+				continue
+			}
+			t.Label = repoName
+			targets = append(targets, t)
+		}
+	}
+
+	return targets, nil
 }
 
