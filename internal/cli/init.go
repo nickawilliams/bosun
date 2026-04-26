@@ -241,8 +241,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 				return err
 			}
 
-			// Resolve the detail group based on the selected provider.
-			if ig.Detail != "" {
+			// Resolve provider-specific config: custom setup or schema-driven.
+			if ig.Setup != nil {
+				if err := ig.Setup(); err != nil {
+					return err
+				}
+			} else if ig.Detail != "" {
 				detailGroup, ok := lookupGroup(ig.Detail)
 				if !ok {
 					continue
@@ -266,9 +270,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 // initGroup describes an optional service group for the init wizard.
 type initGroup struct {
-	Label    string // Human-readable name for the confirmation prompt.
-	Provider string // Schema group for provider selection (e.g., "issue_tracker").
-	Detail   string // Schema group for provider-specific config (e.g., "jira").
+	Label    string     // Human-readable name for the confirmation prompt.
+	Provider string     // Schema group for provider selection (e.g., "issue_tracker").
+	Detail   string     // Schema group for provider-specific config (e.g., "jira").
+	Setup    func() error // Custom setup flow, replaces resolveGroup(Detail) when set.
 }
 
 // serviceInitGroups defines the ordered list of optional service groups
@@ -277,7 +282,7 @@ var serviceInitGroups = []initGroup{
 	{Label: "Issue Tracker", Provider: "issue_tracker", Detail: "jira"},
 	{Label: "Code Host", Provider: "code_host", Detail: "github"},
 	{Label: "Notifications", Provider: "notification", Detail: "slack"},
-	{Label: "CI/CD", Provider: "cicd", Detail: "github_actions"},
+	{Label: "CI/CD", Provider: "cicd", Detail: "github_actions", Setup: setupGitHubActions},
 }
 
 // detectRepositories scans a directory for git repositories: the directory

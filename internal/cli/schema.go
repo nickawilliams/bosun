@@ -144,8 +144,8 @@ var configSchema = map[string]ConfigGroup{
 		Label: "GitHub Actions",
 
 		Keys: []ConfigKey{
-			{Key: "workflows.preview", Label: "Preview Workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
-			{Key: "workflows.release", Label: "Release Workflow", Example: "org/repo/.github/workflows/deploy.yml"},
+			{Key: "preview", Label: "Preview Workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
+			{Key: "release", Label: "Release Workflow", Example: "org/repo/.github/workflows/deploy.yml"},
 		},
 	},
 	"color_mode": {

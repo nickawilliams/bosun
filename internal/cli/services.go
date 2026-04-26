@@ -659,7 +659,7 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
 func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
-	key := "github_actions.workflows." + stage
+	key := "github_actions." + stage
 
 	// Try string first (global mode).
 	if s := viper.GetString(key); s != "" {
