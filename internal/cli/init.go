@@ -24,7 +24,6 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
-	cmd.Flags().Bool("force", false, "skip confirmation when reinitializing")
 	cmd.Flags().Bool("quick", false, "only prompt for required values without defaults")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")
 	cmd.Flags().StringSlice("repositories", nil, "repository glob patterns (e.g. ./* or ~/Projects/myorg/*)")
@@ -34,10 +33,9 @@ func newInitCmd() *cobra.Command {
 
 func runInit(cmd *cobra.Command, args []string) error {
 	rootCard(cmd).Print()
-	skipPrompts := isAutoApprove(cmd)
+	skipConfirm := isAutoApprove(cmd)
 	quick, _ := cmd.Flags().GetBool("quick")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")
-	force, _ := cmd.Flags().GetBool("force")
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -50,7 +48,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	reinit := false
 	if _, err := os.Stat(bosunDir); err == nil {
 		reinit = true
-		if !force && !skipPrompts {
+		if !skipConfirm {
 			confirmed, err := promptConfirm("Project already initialized — reconfigure?", false)
 			if err != nil {
 				return err
@@ -94,7 +92,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Prompt for project settings unless --yes.
 	needRepositories := len(repositoryGlobs) == 0
 	needWS := wsRoot == ""
-	if (needRepositories || needWS) && !skipPrompts && isInteractive() {
+	if (needRepositories || needWS) && isInteractive() {
 		// Determine defaults: prefer existing config on reinit, then
 		// detected globs, then a sensible fallback.
 		repoDefault := strings.Join(detectedGlobs, ", ")
@@ -147,7 +145,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if len(repositoryGlobs) == 0 && len(detectedGlobs) > 0 {
 		repositoryGlobs = detectedGlobs
 	}
-	if len(repositoryGlobs) == 0 && !skipPrompts && isInteractive() {
+	if len(repositoryGlobs) == 0 && isInteractive() {
 		input, err := promptValue(
 			"No repositories detected. Enter repository patterns (comma-separated, or leave blank)",
 			"")
@@ -218,7 +216,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	ui.Details(heading, fields)
 
 	// Service configuration wizard — runs unless --yes.
-	if !skipPrompts && isInteractive() {
+	if isInteractive() {
 		// Reload config so resolveGroup can read/write the new file.
 		if err := config.Load(); err != nil {
 			return err
