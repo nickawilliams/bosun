@@ -89,9 +89,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Resolve workspace_root.
 	wsRoot, _ := cmd.Flags().GetString("workspace-root")
 
-	// Prompt for project settings unless --yes.
+	// Prompt for project settings. In quick mode on reinit, skip if
+	// values are already in config.
 	needRepositories := len(repositoryGlobs) == 0
 	needWS := wsRoot == ""
+	if quick && reinit {
+		if needRepositories && len(existingRepos) > 0 {
+			repositoryGlobs = existingRepos
+			needRepositories = false
+		}
+		if needWS && existingWSRoot != "" {
+			wsRoot = existingWSRoot
+			needWS = false
+		}
+	}
 	if (needRepositories || needWS) && isInteractive() {
 		// Determine defaults: prefer existing config on reinit, then
 		// detected globs, then a sensible fallback.
