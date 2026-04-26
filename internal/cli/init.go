@@ -25,6 +25,7 @@ func newInitCmd() *cobra.Command {
 
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
 	cmd.Flags().Bool("force", false, "skip confirmation when reinitializing")
+	cmd.Flags().Bool("quick", false, "only prompt for required values without defaults")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")
 	cmd.Flags().StringSlice("repositories", nil, "repository glob patterns (e.g. ./* or ~/Projects/myorg/*)")
 
@@ -33,7 +34,8 @@ func newInitCmd() *cobra.Command {
 
 func runInit(cmd *cobra.Command, args []string) error {
 	rootCard(cmd).Print()
-	interactive, _ := cmd.Flags().GetBool("interactive")
+	skipPrompts := isAutoApprove(cmd)
+	quick, _ := cmd.Flags().GetBool("quick")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")
 	force, _ := cmd.Flags().GetBool("force")
 
@@ -48,7 +50,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	reinit := false
 	if _, err := os.Stat(bosunDir); err == nil {
 		reinit = true
-		if !force {
+		if !force && !skipPrompts {
 			confirmed, err := promptConfirm("Project already initialized — reconfigure?", false)
 			if err != nil {
 				return err
@@ -89,12 +91,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Resolve workspace_root.
 	wsRoot, _ := cmd.Flags().GetString("workspace-root")
 
-	// Prompt for all missing values in a single form.
+	// Prompt for project settings unless --yes.
 	needRepositories := len(repositoryGlobs) == 0
 	needWS := wsRoot == ""
-	if (needRepositories || needWS) && interactive && isInteractive() {
-		// Determine placeholder defaults: prefer existing config on
-		// reinit, then detected globs, then a sensible fallback.
+	if (needRepositories || needWS) && !skipPrompts && isInteractive() {
+		// Determine defaults: prefer existing config on reinit, then
+		// detected globs, then a sensible fallback.
 		repoDefault := strings.Join(detectedGlobs, ", ")
 		if reinit && len(existingRepos) > 0 {
 			repoDefault = strings.Join(existingRepos, ", ")
@@ -145,7 +147,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if len(repositoryGlobs) == 0 && len(detectedGlobs) > 0 {
 		repositoryGlobs = detectedGlobs
 	}
-	if len(repositoryGlobs) == 0 && !interactive && isInteractive() {
+	if len(repositoryGlobs) == 0 && !skipPrompts && isInteractive() {
 		input, err := promptValue(
 			"No repositories detected. Enter repository patterns (comma-separated, or leave blank)",
 			"")
@@ -215,14 +217,40 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	ui.Details(heading, fields)
 
-	// Service configuration wizard (--interactive only).
-	if interactive && isInteractive() {
+	// Service configuration wizard — runs unless --yes.
+	if !skipPrompts && isInteractive() {
 		// Reload config so resolveGroup can read/write the new file.
 		if err := config.Load(); err != nil {
 			return err
 		}
 
 		for _, ig := range serviceInitGroups {
+			if quick {
+				// Quick mode: only resolve missing required keys.
+				providerGroup, ok := lookupGroup(ig.Provider)
+				if !ok {
+					continue
+				}
+				if err := resolveGroup(ig.Provider, providerGroup); err != nil {
+					return err
+				}
+				if ig.Setup != nil {
+					// Custom setups handle their own quick logic.
+					continue
+				}
+				if ig.Detail != "" {
+					detailGroup, ok := lookupGroup(ig.Detail)
+					if !ok {
+						continue
+					}
+					if err := resolveGroup(ig.Detail, detailGroup); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+
+			// Full mode: confirm, then prompt for everything with defaults.
 			confirmed, err := promptConfirm(fmt.Sprintf("Configure %s?", ig.Label), false)
 			if err != nil {
 				return err
@@ -232,12 +260,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			// Resolve the provider group (e.g., issue_tracker → "jira").
 			providerGroup, ok := lookupGroup(ig.Provider)
 			if !ok {
 				continue
 			}
-			if err := resolveGroup(ig.Provider, providerGroup); err != nil {
+			if err := resolveGroupReconfigure(ig.Provider, providerGroup); err != nil {
 				return err
 			}
 
@@ -251,7 +278,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 				if !ok {
 					continue
 				}
-				if err := resolveGroup(ig.Detail, detailGroup); err != nil {
+				if err := resolveGroupReconfigure(ig.Detail, detailGroup); err != nil {
 					return err
 				}
 			}
@@ -259,9 +286,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.Info("Next steps")
-	if !interactive {
-		ui.Muted("Run: bosun init --interactive to configure services")
-	}
 	ui.Muted("Run: bosun doctor to verify configuration")
 	ui.Muted("Run: bosun start --issue <issue> to begin work")
 
@@ -270,9 +294,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 // initGroup describes an optional service group for the init wizard.
 type initGroup struct {
-	Label    string     // Human-readable name for the confirmation prompt.
-	Provider string     // Schema group for provider selection (e.g., "issue_tracker").
-	Detail   string     // Schema group for provider-specific config (e.g., "jira").
+	Label    string       // Human-readable name for the confirmation prompt.
+	Provider string       // Schema group for provider selection (e.g., "issue_tracker").
+	Detail   string       // Schema group for provider-specific config (e.g., "jira").
 	Setup    func() error // Custom setup flow, replaces resolveGroup(Detail) when set.
 }
 
@@ -335,16 +359,6 @@ func defaultRepositoryGlobs(dir string, detected []string) []string {
 		globs = append(globs, "./*")
 	}
 	return globs
-}
-
-// firstNonEmpty returns the first non-empty string from the arguments.
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // writeInitConfig writes the initial .bosun/config.yaml.

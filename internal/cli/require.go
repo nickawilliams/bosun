@@ -57,12 +57,26 @@ func requireConfig(keys ...string) error {
 }
 
 // resolveGroup ensures all required keys in a config group are populated.
+// Keys that already have values are skipped (JIT mode for commands).
 func resolveGroup(groupName string, group ConfigGroup) error {
+	return resolveGroupMode(groupName, group, false)
+}
+
+// resolveGroupReconfigure prompts for all keys in a config group, using
+// current values as defaults. Used by the init wizard so the user can
+// review and change existing configuration.
+func resolveGroupReconfigure(groupName string, group ConfigGroup) error {
+	return resolveGroupMode(groupName, group, true)
+}
+
+// resolveGroupMode is the shared implementation for group resolution.
+// When forcePrompt is true, every key is prompted even if already set.
+func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt bool) error {
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
 		// Already set (config file, env var via AutomaticEnv, etc.)?
-		if viper.GetString(fk) != "" {
+		if !forcePrompt && viper.GetString(fk) != "" {
 			continue
 		}
 
@@ -82,8 +96,8 @@ func resolveGroup(groupName string, group ConfigGroup) error {
 			}
 		}
 
-		// Apply default for optional keys without prompting.
-		if ck.Default != "" && !ck.Required {
+		// Apply default for optional keys without prompting (JIT only).
+		if !forcePrompt && ck.Default != "" && !ck.Required {
 			viper.Set(fk, ck.Default)
 			continue
 		}
@@ -157,6 +171,17 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		return nil
 	}
 
+	// Determine the default value: prefer current config, then schema
+	// default, then example placeholder.
+	current := viper.GetString(fk)
+	defaultVal := current
+	if defaultVal == "" {
+		defaultVal = ck.Default
+	}
+	if defaultVal == "" {
+		defaultVal = ck.Example
+	}
+
 	// Select from options or free-text input.
 	var val string
 	rewind := ui.NewCard(ui.CardInput, ck.Label).Tight().PrintRewindable()
@@ -165,14 +190,11 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		for i, o := range ck.Options {
 			opts[i] = huh.NewOption(o, o)
 		}
+		val = current
 		if err := runForm(huh.NewSelect[string]().Options(opts...).Value(&val)); err != nil {
 			return err
 		}
 	} else {
-		defaultVal := ck.Default
-		if defaultVal == "" {
-			defaultVal = ck.Example
-		}
 		val = defaultVal
 		if err := runForm(huh.NewInput().Value(&val)); err != nil {
 			return err
