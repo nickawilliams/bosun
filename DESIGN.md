@@ -83,10 +83,6 @@ directs the crew and signals state changes.
   branch name derivation (same parser, different input). Error if none
   resolve.
 
-## Open Questions
-
-None currently.
-
 ---
 
 ## Architecture
@@ -445,21 +441,3 @@ underlying repository on temporary branch names. The only constraint is git's ru
 can only be checked out in one worktree at a time, which ephemeral tools
 handle by using their own branch names.
 
----
-
-## Future Ideas
-
-- OAuth authentication for Jira (browser-based 3LO flow via `bosun auth
-  jira`, refresh token storage in system keychain, abstract auth method
-  behind an interface so Basic and OAuth are swappable)
-- Standalone `bosun issues` command for browsing assigned issues without
-  committing to a lifecycle action
-- Auto-configure local development environments for affected repositories
-- Code coverage checks against minimums
-- Local dev orchestration (start backends, point frontends at them)
-- LLM-assisted PR description generation (port diffscribe's approach)
-- Combobox-style issue picker: server-side search via `OptionsFunc` or
-  custom bubbletea model so typing queries the tracker API, replacing the
-  current Select + manual-entry two-step with a single unified widget
-- Markdown rendering via glamour: render PR body previews, issue
-  descriptions, and release notes with styled markdown in the timeline
