@@ -48,6 +48,7 @@ func newDoctorCmd() *cobra.Command {
 				issueTrackerChecks,
 				codeHostChecks,
 				notificationChecks,
+				cicdChecks,
 			}
 
 			var checks []healthCheck
@@ -391,4 +392,66 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 	}
 
 	return strings.Join(results, "\n"), nil
+}
+
+func cicdChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "CI/CD Config", Check: checkCICDConfig},
+		{Name: "CI/CD Auth", Spinner: true, Check: checkCICDAuth},
+	}
+}
+
+func checkCICDConfig(_ context.Context) (string, error) {
+	provider := viper.GetString("cicd")
+	if provider == "" {
+		return "", errNotConfigured
+	}
+
+	var details []string
+	details = append(details, "provider: "+provider)
+
+	if preview := viper.GetString("github_actions.workflows.preview"); preview != "" {
+		details = append(details, "preview: "+preview)
+	}
+
+	release := viper.Get("github_actions.workflows.release")
+	switch v := release.(type) {
+	case string:
+		details = append(details, "release: "+v)
+	case map[string]any:
+		details = append(details, fmt.Sprintf("release: %d repos configured", len(v)))
+	}
+
+	if input := viper.GetString("github_actions.service_input"); input != "" {
+		details = append(details, "service input: "+input)
+	}
+
+	return strings.Join(details, "\n"), nil
+}
+
+func checkCICDAuth(ctx context.Context) (string, error) {
+	provider := viper.GetString("cicd")
+	if provider == "" {
+		return "", errNotConfigured
+	}
+
+	pipeline, err := newCICD()
+	if err != nil {
+		return "", fmt.Errorf("cannot initialize: %w", err)
+	}
+
+	// Use the code host to verify the GitHub token works, since the
+	// CI/CD adapter uses the same token.
+	host, err := newCodeHost()
+	if err != nil {
+		return "", fmt.Errorf("cannot verify token: %w", err)
+	}
+
+	username, err := host.GetAuthenticatedUser(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth failed: %w", err)
+	}
+
+	_ = pipeline // validated by newCICD succeeding
+	return fmt.Sprintf("github actions → %s", username), nil
 }
