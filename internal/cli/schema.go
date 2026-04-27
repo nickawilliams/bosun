@@ -144,9 +144,13 @@ var configSchema = map[string]ConfigGroup{
 		Label: "GitHub Actions",
 
 		Keys: []ConfigKey{
-			{Key: "workflows.preview", Label: "preview workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
-			{Key: "workflows.release", Label: "release workflow", Example: "org/repo/.github/workflows/deploy.yml"},
-			{Key: "service_input", Label: "service input parameter", Default: "services-to-deploy"},
+			{Key: "workflows.preview.target", Label: "preview workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
+			{Key: "workflows.preview.inputs.services", Label: "preview services input", Default: "services-to-deploy"},
+			{Key: "workflows.preview.inputs.name", Label: "preview name input"},
+			{Key: "workflows.preview.url_template", Label: "preview URL template", Example: "https://host-ui-{{.Name}}.example.dev"},
+			{Key: "workflows.release.target", Label: "release workflow", Example: "org/repo/.github/workflows/deploy.yml"},
+			{Key: "workflows.release.inputs.services", Label: "release services input", Default: "services-to-deploy"},
+			{Key: "workflows.release.inputs.issue", Label: "release issue input"},
 		},
 	},
 	"color_mode": {

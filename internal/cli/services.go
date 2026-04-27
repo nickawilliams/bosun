@@ -428,12 +428,14 @@ func buildPRBody(data prTemplateData) string {
 
 // notifyTemplateData holds the fields available to notification templates.
 type notifyTemplateData struct {
-	IssueKey   string
-	IssueTitle string
-	IssueType  string        // e.g., "Story", "Bug".
-	IssueURL   string
-	IconURL    string        // Avatar or icon URL for card blocks.
-	Items      []notify.Item // Per-repository items (PRs, releases, etc.).
+	IssueKey    string
+	IssueTitle  string
+	IssueType   string        // e.g., "Story", "Bug".
+	IssueURL    string
+	IconURL     string        // Avatar or icon URL for card blocks.
+	Items       []notify.Item // Per-repository items (PRs, releases, etc.).
+	PreviewName string        // Ephemeral environment name (e.g., "brave-falcon").
+	PreviewURL  string        // Rendered preview environment URL.
 }
 
 // Default block templates per notification type.
@@ -491,10 +493,16 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		if data.IssueURL != "" {
 			issueLink = fmt.Sprintf("<%s|%s: %s>", data.IssueURL, data.IssueKey, data.IssueTitle)
 		}
+		ephemeralValue := "_-none-_"
+		if data.PreviewURL != "" {
+			ephemeralValue = fmt.Sprintf("<%s|%s>", data.PreviewURL, data.PreviewName)
+		} else if data.PreviewName != "" {
+			ephemeralValue = data.PreviewName
+		}
 		fields = append(fields,
 			notify.Field{
 				Key:   fmt.Sprintf("*:jira: %s*\n%s", issueType, issueLink),
-				Value: "*:cloud: Ephemeral*\n_-none-_",
+				Value: fmt.Sprintf("*:cloud: Ephemeral*\n%s", ephemeralValue),
 			},
 		)
 	}
@@ -659,7 +667,7 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
 func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
-	key := "github_actions.workflows." + stage
+	key := "github_actions.workflows." + stage + ".target"
 
 	// Try string first (global mode).
 	if s := viper.GetString(key); s != "" {
@@ -741,6 +749,7 @@ func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget
 // Config shapes:
 //   - String → single service name (e.g., services.legacy-ui: "frontend")
 //   - List   → multiple service names (e.g., services.extracker: ["api", "worker"])
+//   - Map    → service names with path prefixes (e.g., services.extracker: {api: ["cmd/api/"]})
 //   - Absent → repo name used as-is
 func resolveServiceNames(ctx context.Context) ([]string, error) {
 	repos, err := resolveActiveRepositories(ctx, nil)
@@ -750,31 +759,75 @@ func resolveServiceNames(ctx context.Context) ([]string, error) {
 
 	var services []string
 	for _, r := range repos {
-		key := "services." + r.Name
-		raw := viper.Get(key)
-
-		switch val := raw.(type) {
-		case string:
-			services = append(services, val)
-		case []any:
-			for _, item := range val {
-				if s, ok := item.(string); ok {
-					services = append(services, s)
-				}
-			}
-		default:
-			// Not configured — repo name is the service name.
-			services = append(services, r.Name)
-		}
+		services = append(services, resolveRepoServiceNames(r.Name)...)
 	}
 
 	return services, nil
 }
 
-// serviceInputName returns the configured workflow input parameter name
-// for passing service names (e.g., "services-to-deploy"). Returns empty
-// string if not configured, which signals callers to skip the input.
-func serviceInputName() string {
-	return viper.GetString("github_actions.service_input")
+// resolveRepoServiceNames returns the service names configured for a single
+// repository. Supports string, list, and map config shapes. Falls back to
+// the repo name when not configured.
+func resolveRepoServiceNames(repoName string) []string {
+	key := "services." + repoName
+	raw := viper.Get(key)
+
+	switch val := raw.(type) {
+	case string:
+		return []string{val}
+	case []any:
+		var names []string
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				names = append(names, s)
+			}
+		}
+		return names
+	case map[string]any:
+		var names []string
+		for k := range val {
+			if k != "_shared" {
+				names = append(names, k)
+			}
+		}
+		return names
+	default:
+		// Not configured — repo name is the service name.
+		return []string{repoName}
+	}
+}
+
+// stageInputName returns the configured workflow input parameter name for a
+// given bosun concept (e.g., "services", "issue", "name") within a lifecycle
+// stage. Returns empty string if not configured, signaling callers to skip.
+//
+// Config path: github_actions.workflows.<stage>.inputs.<concept>
+func stageInputName(stage, concept string) string {
+	return viper.GetString("github_actions.workflows." + stage + ".inputs." + concept)
+}
+
+// stageURLTemplate holds the data available when rendering a stage URL.
+type stageURLTemplate struct {
+	Name string // Environment name (e.g., "brave-falcon").
+}
+
+// renderStageURL renders the url_template for a stage with the given name.
+// Returns empty string if the template is not configured or rendering fails.
+//
+// Config path: github_actions.workflows.<stage>.url_template
+func renderStageURL(stage, name string) string {
+	pattern := viper.GetString("github_actions.workflows." + stage + ".url_template")
+	if pattern == "" {
+		return ""
+	}
+	tmpl, err := template.New("stage-url").Parse(pattern)
+	if err != nil {
+		return ""
+	}
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, stageURLTemplate{Name: name}); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 

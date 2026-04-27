@@ -58,6 +58,7 @@ const (
 type Card struct {
 	state    CardState
 	title    string
+	value    string // Rendered after title as-is (no title-casing), muted style.
 	subtitle string
 	body     []cardBody
 	tight    bool // suppress comfy spacing (e.g. single-field prompts)
@@ -90,6 +91,13 @@ func NewCard(state CardState, title string) *Card {
 // below without a visual gap.
 func (c *Card) Tight() *Card {
 	c.tight = true
+	return c
+}
+
+// Value sets an inline value rendered after the title, separated by a colon.
+// The value is not title-cased and uses muted non-bold style.
+func (c *Card) Value(s string) *Card {
+	c.value = s
 	return c
 }
 
@@ -210,7 +218,12 @@ func (c *Card) renderWithGlyph(glyph string) string {
 		gap = ruleStyle.Render("─") + " "
 		fmt.Fprintf(&b, "%s%s%s%s %s\n", pad, glyph, gap, rendered, ruleStyle.Render(trail))
 	} else {
-		fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
+		if c.value != "" {
+			valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+			fmt.Fprintf(&b, "%s%s%s%s %s\n", pad, glyph, gap, titleStyle.Render(c.title+":"), valueStyle.Render(c.value))
+		} else {
+			fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
+		}
 	}
 
 	if c.subtitle != "" {
@@ -292,14 +305,25 @@ func renderCardBody(b cardBody) []string {
 				maxKey = len(p[0])
 			}
 		}
-		out := make([]string, len(b.pairs))
-		for i, p := range b.pairs {
+		// Prefix width: padded key + " · " (dot with spaces), minus one
+		// because the continuation format "% *s %s" adds its own space.
+		prefixWidth := maxKey + 2
+		var out []string
+		for _, p := range b.pairs {
+			lines := strings.Split(p[1], "\n")
 			paddedKey := fmt.Sprintf("%-*s", maxKey, p[0])
-			out[i] = fmt.Sprintf("%s %s %s",
+			out = append(out, fmt.Sprintf("%s %s %s",
 				mutedStyle.Render(paddedKey),
 				mutedStyle.Render(Palette.Dot),
-				normalStyle.Render(p[1]),
-			)
+				normalStyle.Render(lines[0]),
+			))
+			// Continuation lines aligned under the value column.
+			for _, cont := range lines[1:] {
+				out = append(out, fmt.Sprintf("%*s %s",
+					prefixWidth, "",
+					mutedStyle.Render(cont),
+				))
+			}
 		}
 		return out
 	}

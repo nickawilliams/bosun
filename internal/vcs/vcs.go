@@ -54,4 +54,9 @@ type VCS interface {
 	// that have not been pushed to the remote. Returns -1 if the branch
 	// has no remote counterpart (never been pushed).
 	UnpushedCommits(ctx context.Context, repositoryPath, branchName string) (int, error)
+
+	// ChangedFiles returns the file paths changed on the current branch
+	// relative to the default branch (origin/<default>...HEAD). Paths are
+	// relative to the repository root. Returns nil when no files differ.
+	ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error)
 }

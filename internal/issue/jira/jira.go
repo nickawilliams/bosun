@@ -271,6 +271,39 @@ func (a *Adapter) BoardColumns(ctx context.Context, boardID string) ([]issue.Boa
 	return columns, nil
 }
 
+const propertyKey = "bosun"
+
+func (a *Adapter) GetProperty(ctx context.Context, issueKey string) (json.RawMessage, error) {
+	path := fmt.Sprintf("/rest/api/3/issue/%s/properties/%s", issueKey, propertyKey)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		// 404 means property doesn't exist yet — not an error.
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting property for %s: %w", issueKey, err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing property response: %w", err)
+	}
+	return result.Value, nil
+}
+
+func (a *Adapter) SetProperty(ctx context.Context, issueKey string, value any) error {
+	path := fmt.Sprintf("/rest/api/3/issue/%s/properties/%s", issueKey, propertyKey)
+	resp, err := a.doRequest(ctx, http.MethodPut, path, value)
+	if err != nil {
+		return fmt.Errorf("setting property for %s: %w", issueKey, err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // buildJQL assembles a JQL query string from the given ListQuery filters.
 func buildJQL(query issue.ListQuery) string {
 	clauses := []string{"resolution = Unresolved"}

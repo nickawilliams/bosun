@@ -12,12 +12,15 @@ Planned work, deferred refactors, and future ideas.
 - [x] WorkflowSpec config (global string or per-repo map)
 - [x] Relative workflow paths (resolved from git remote)
 - [x] Init wizard for GitHub Actions setup
-- [ ] Monorepo service discovery — current `services` config requires manual
-  mapping of repo → service names. Workflow filenames (`*-production.yml`)
-  and the ephemeral services manifest (`ephemeral-services.json`) use
-  different naming conventions, so auto-detection isn't straightforward.
-  Options: repo-level `.bosun.yaml` for self-describing repos, fetching
-  the manifest from the workflow repo during init, or manual config (current).
+- [x] Monorepo service discovery — `services` config supports string, list,
+  and map forms. Map form includes per-service path prefixes for
+  change-based filtering (diff branch vs default, skip unchanged services).
+  Pre-flight push check ensures diff matches CI state.
+- [ ] CI build-status-based service detection — query GitHub Actions workflow
+  runs to check which services actually have built images (like ephemeral-ui's
+  `pr-build-status.ts` approach). More accurate than file-diff for monorepos
+  with transitive dependencies. Would use service → workflow path mapping
+  from the map-form services config and the existing `cicd.CICD` interface.
 - [ ] Glob pattern expansion for workflow paths
 - [ ] Workflow inputs and ref override (object form config)
 

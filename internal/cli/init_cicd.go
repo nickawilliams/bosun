@@ -11,12 +11,12 @@ import (
 // workflows for preview and release stages.
 func setupGitHubActions() error {
 	// --- Preview workflow ---
-	preview, err := promptDefault("Preview Workflow", viper.GetString("github_actions.workflows.preview"))
+	preview, err := promptDefault("Preview Workflow", viper.GetString("github_actions.workflows.preview.target"))
 	if err != nil {
 		return err
 	}
 	if preview != "" {
-		if err := saveConfigKey("github_actions.workflows.preview", "Preview Workflow", preview); err != nil {
+		if err := saveConfigKey("github_actions.workflows.preview.target", "Preview Workflow", preview); err != nil {
 			return err
 		}
 	} else {
@@ -24,7 +24,7 @@ func setupGitHubActions() error {
 	}
 
 	// --- Service input parameter ---
-	serviceInputDefault := viper.GetString("github_actions.service_input")
+	serviceInputDefault := viper.GetString("github_actions.workflows.preview.inputs.services")
 	if serviceInputDefault == "" {
 		// Matches schema default in schema.go. The config schema refactor
 		// (ROADMAP.md) will unify these into a single source of truth.
@@ -35,7 +35,7 @@ func setupGitHubActions() error {
 		return err
 	}
 	if serviceInput != "" {
-		if err := saveConfigKey("github_actions.service_input", "Service Input Parameter", serviceInput); err != nil {
+		if err := saveConfigKey("github_actions.workflows.preview.inputs.services", "Service Input Parameter", serviceInput); err != nil {
 			return err
 		}
 	} else {
@@ -81,12 +81,12 @@ func setupGitHubActions() error {
 	// --- Release workflow(s) ---
 	if reposErr != nil || len(repos) == 0 {
 		// No repos configured — prompt for a single release workflow path.
-		release, err := promptDefault("Release Workflow", viper.GetString("github_actions.workflows.release"))
+		release, err := promptDefault("Release Workflow", viper.GetString("github_actions.workflows.release.target"))
 		if err != nil {
 			return err
 		}
 		if release != "" {
-			if err := saveConfigKey("github_actions.workflows.release", "Release Workflow", release); err != nil {
+			if err := saveConfigKey("github_actions.workflows.release.target", "Release Workflow", release); err != nil {
 				return err
 			}
 		} else {
@@ -99,7 +99,7 @@ func setupGitHubActions() error {
 	releaseMap := make(map[string]string)
 
 	for _, r := range repos {
-		existing := viper.GetString("github_actions.workflows.release." + r.Name)
+		existing := viper.GetString("github_actions.workflows.release.target." + r.Name)
 		if existing == "" {
 			existing = ".github/workflows/production.yml"
 		}
@@ -120,7 +120,7 @@ func setupGitHubActions() error {
 	// Single repo — save as a plain string.
 	if len(releaseMap) == 1 {
 		for _, v := range releaseMap {
-			if err := saveConfigKey("github_actions.workflows.release", "Release Workflow", v); err != nil {
+			if err := saveConfigKey("github_actions.workflows.release.target", "Release Workflow", v); err != nil {
 				return err
 			}
 		}
@@ -128,13 +128,13 @@ func setupGitHubActions() error {
 	}
 
 	// Multiple repos — save as a YAML map.
-	viper.Set("github_actions.workflows.release", releaseMap)
+	viper.Set("github_actions.workflows.release.target", releaseMap)
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}
-	if err := setConfigMap(configPath, "github_actions.workflows.release", releaseMap); err != nil {
+	if err := setConfigMap(configPath, "github_actions.workflows.release.target", releaseMap); err != nil {
 		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}

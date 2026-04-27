@@ -65,7 +65,9 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 			switch state {
 			case ActionNeeded:
 				plan.Add(a.op(), a.Label, a.Target, detail)
-				pending = append(pending, *a)
+				if a.op() != ui.PlanDetail {
+					pending = append(pending, *a)
+				}
 			case ActionCompleted:
 				plan.Add(ui.PlanNoChange, a.Label, a.Target, detail)
 			case ActionSkipped:

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,7 +79,22 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
-			// TODO: CI/CD status (phase 6)
+			// --- Preview environment ---
+			if tracker != nil {
+				if raw, err := tracker.GetProperty(ctx, issue); err == nil && raw != nil {
+					var props struct {
+						PreviewName string `json:"preview_name"`
+					}
+					if json.Unmarshal(raw, &props) == nil && props.PreviewName != "" {
+						previewURL := renderStageURL("preview", props.PreviewName)
+						value := props.PreviewName
+						if previewURL != "" {
+							value += "\n" + previewURL
+						}
+						ui.Details("preview", ui.Fields{{Key: "environment", Value: value}})
+					}
+				}
+			}
 
 			return nil
 		},

@@ -15,6 +15,7 @@ const (
 	PlanModify                 // ~ modify existing resource
 	PlanDestroy                // - destroy resource
 	PlanNoChange               // = no change (already exists)
+	PlanDetail                 // + informational sub-item (not counted in summaries)
 )
 
 // PlanItem describes a single action in a plan.
@@ -46,10 +47,10 @@ func (p *Plan) IsEmpty() bool {
 	return len(p.items) == 0
 }
 
-// HasChanges returns true if the plan has any non-NoChange items.
+// HasChanges returns true if the plan has any actionable items.
 func (p *Plan) HasChanges() bool {
 	for _, item := range p.items {
-		if item.Op != PlanNoChange {
+		if item.Op != PlanNoChange && item.Op != PlanDetail {
 			return true
 		}
 	}
@@ -196,7 +197,7 @@ func (p *Plan) Summary() string {
 	destroyStyle := lipgloss.NewStyle().Foreground(Palette.Error)
 	unchangedStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 
-	if n := counts[PlanCreate]; n > 0 {
+	if n := counts[PlanCreate] + counts[PlanDetail]; n > 0 {
 		parts = append(parts, createStyle.Render(fmt.Sprintf("%d to create", n)))
 	}
 	if n := counts[PlanModify]; n > 0 {
@@ -226,7 +227,7 @@ func (p *Plan) SummaryPastTense() string {
 	destroyStyle := lipgloss.NewStyle().Foreground(Palette.Error)
 	unchangedStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 
-	if n := counts[PlanCreate]; n > 0 {
+	if n := counts[PlanCreate] + counts[PlanDetail]; n > 0 {
 		parts = append(parts, createStyle.Render(fmt.Sprintf("%d created", n)))
 	}
 	if n := counts[PlanModify]; n > 0 {
@@ -244,6 +245,15 @@ func (p *Plan) SummaryPastTense() string {
 
 // SummaryPartial returns a mixed-tense summary for partial application.
 func (p *Plan) SummaryPartial(succeeded, failed int) string {
+	// Detail items are display-only and always succeed with the parent action.
+	detailCount := 0
+	for _, item := range p.items {
+		if item.Op == PlanDetail {
+			detailCount++
+		}
+	}
+	succeeded += detailCount
+
 	failStyle := lipgloss.NewStyle().Foreground(Palette.Error)
 	successStyle := lipgloss.NewStyle().Foreground(Palette.Success)
 
@@ -315,6 +325,8 @@ func planSymbol(op PlanOp) (string, lipgloss.Style) {
 		return "-", lipgloss.NewStyle().Foreground(Palette.Error)
 	case PlanNoChange:
 		return "=", lipgloss.NewStyle().Foreground(Palette.Muted)
+	case PlanDetail:
+		return "+", lipgloss.NewStyle().Foreground(Palette.Success)
 	}
 	return " ", lipgloss.NewStyle()
 }

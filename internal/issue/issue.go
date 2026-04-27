@@ -1,6 +1,9 @@
 package issue
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Issue represents an issue from a tracker.
 type Issue struct {
@@ -70,4 +73,13 @@ type Tracker interface {
 	// If project is non-empty, results are filtered to boards
 	// relevant to that project.
 	ListBoards(ctx context.Context, project string) ([]Board, error)
+
+	// GetProperty retrieves a stored property value from an issue.
+	// Returns nil with no error if the property does not exist.
+	GetProperty(ctx context.Context, issueKey string) (json.RawMessage, error)
+
+	// SetProperty stores a property value on an issue. The value is
+	// serialized as JSON. Use this for machine-readable metadata that
+	// should not be visible to end users.
+	SetProperty(ctx context.Context, issueKey string, value any) error
 }

@@ -178,6 +178,49 @@ func TestIsDirty(t *testing.T) {
 	}
 }
 
+func TestChangedFiles(t *testing.T) {
+	repo := initTestRepositoryWithRemote(t)
+	a := New()
+	ctx := context.Background()
+
+	// No changes on main — should return nil.
+	files, err := a.ChangedFiles(ctx, repo)
+	if err != nil {
+		t.Fatalf("ChangedFiles() error: %v", err)
+	}
+	if files != nil {
+		t.Errorf("ChangedFiles() on default branch = %v, want nil", files)
+	}
+
+	// Create a feature branch, add a file, commit.
+	run(ctx, repo, "checkout", "-b", "feature/test")
+	os.WriteFile(filepath.Join(repo, "new.txt"), []byte("hello"), 0o644)
+	run(ctx, repo, "add", "new.txt")
+	run(ctx, repo, "commit", "-m", "add new.txt")
+
+	files, err = a.ChangedFiles(ctx, repo)
+	if err != nil {
+		t.Fatalf("ChangedFiles() on feature branch error: %v", err)
+	}
+	if len(files) != 1 || files[0] != "new.txt" {
+		t.Errorf("ChangedFiles() = %v, want [new.txt]", files)
+	}
+
+	// Add a file in a subdirectory.
+	os.MkdirAll(filepath.Join(repo, "cmd", "api"), 0o755)
+	os.WriteFile(filepath.Join(repo, "cmd", "api", "main.go"), []byte("package main"), 0o644)
+	run(ctx, repo, "add", "cmd/api/main.go")
+	run(ctx, repo, "commit", "-m", "add cmd/api/main.go")
+
+	files, err = a.ChangedFiles(ctx, repo)
+	if err != nil {
+		t.Fatalf("ChangedFiles() after second commit error: %v", err)
+	}
+	if len(files) != 2 {
+		t.Errorf("ChangedFiles() returned %d files, want 2: %v", len(files), files)
+	}
+}
+
 func TestWorktree(t *testing.T) {
 	repository :=initTestRepository(t)
 	a := New()

@@ -156,6 +156,25 @@ func (a *Adapter) UnpushedCommits(ctx context.Context, repositoryPath, branchNam
 	return n, nil
 }
 
+func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error) {
+	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
+	if err != nil {
+		return nil, fmt.Errorf("getting default branch for diff: %w", err)
+	}
+
+	// Fetch latest to ensure accurate merge-base.
+	_ = run(ctx, repositoryPath, "fetch", "origin", defaultBranch)
+
+	out, err := output(ctx, repositoryPath, "diff", "--name-only", "origin/"+defaultBranch+"...HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("listing changed files: %w", err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // run executes a git command in the given directory.
 func run(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)

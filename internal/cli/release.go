@@ -55,9 +55,12 @@ func newReleaseCmd() *cobra.Command {
 			// --- Plan + Apply ---
 
 			tracker, _ := newIssueTracker()
+			var currentStatus string
 			if tracker != nil {
-				if _, err := fetchIssue(ctx, tracker, issue); err != nil {
+				if detail, err := fetchIssue(ctx, tracker, issue); err != nil {
 					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
+				} else {
+					currentStatus = detail.Status
 				}
 			}
 
@@ -70,7 +73,7 @@ func newReleaseCmd() *cobra.Command {
 			}
 			if pipeline != nil {
 				targets, _ := resolveWorkflowTargets(ctx, "release")
-				inputs, _ := buildWorkflowInputs(cmd, ctx, issue)
+				inputs, _ := buildWorkflowInputs(cmd, ctx, "release", issue)
 				for _, t := range targets {
 					target := t
 					actions = append(actions, Action{
@@ -93,7 +96,7 @@ func newReleaseCmd() *cobra.Command {
 				}
 			}
 
-			if sa, ok := statusAction(tracker, issue, "", "done"); ok {
+			if sa, ok := statusAction(tracker, issue, currentStatus, "done"); ok {
 				actions = append(actions, sa)
 			}
 

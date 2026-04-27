@@ -410,11 +410,11 @@ func checkCICDConfig(_ context.Context) (string, error) {
 	var details []string
 	details = append(details, "provider: "+provider)
 
-	if preview := viper.GetString("github_actions.workflows.preview"); preview != "" {
+	if preview := viper.GetString("github_actions.workflows.preview.target"); preview != "" {
 		details = append(details, "preview: "+preview)
 	}
 
-	release := viper.Get("github_actions.workflows.release")
+	release := viper.Get("github_actions.workflows.release.target")
 	switch v := release.(type) {
 	case string:
 		details = append(details, "release: "+v)
@@ -422,7 +422,7 @@ func checkCICDConfig(_ context.Context) (string, error) {
 		details = append(details, fmt.Sprintf("release: %d repos configured", len(v)))
 	}
 
-	if input := viper.GetString("github_actions.service_input"); input != "" {
+	if input := stageInputName("preview", "services"); input != "" {
 		details = append(details, "service input: "+input)
 	}
 
