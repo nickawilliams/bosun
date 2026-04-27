@@ -65,6 +65,7 @@ func newReleaseCmd() *cobra.Command {
 			}
 			if pipeline != nil {
 				targets, _ := resolveWorkflowTargets(ctx, "release")
+				inputs, _ := buildWorkflowInputs(cmd, ctx, issue)
 				for _, t := range targets {
 					target := t
 					actions = append(actions, Action{
@@ -80,7 +81,7 @@ func newReleaseCmd() *cobra.Command {
 								Repository: target.Repo,
 								Workflow:   target.Workflow,
 								Ref:        "main",
-								Inputs:     map[string]string{"issue": issue},
+								Inputs:     inputs,
 							})
 						},
 					})
@@ -97,5 +98,6 @@ func newReleaseCmd() *cobra.Command {
 
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
+	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	return cmd
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -39,6 +40,7 @@ func newPreviewCmd() *cobra.Command {
 			}
 			if pipeline != nil {
 				targets, _ := resolveWorkflowTargets(ctx, "preview")
+				inputs, _ := buildWorkflowInputs(cmd, ctx, issue)
 				for _, t := range targets {
 					target := t
 					actions = append(actions, Action{
@@ -54,7 +56,7 @@ func newPreviewCmd() *cobra.Command {
 								Repository: target.Repo,
 								Workflow:   target.Workflow,
 								Ref:        "main",
-								Inputs:     map[string]string{"issue": issue},
+								Inputs:     inputs,
 							})
 						},
 					})
@@ -104,5 +106,36 @@ func newPreviewCmd() *cobra.Command {
 	}
 
 	addIssueFlag(cmd)
+	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	return cmd
+}
+
+// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
+// Always includes the issue key. If a service_input is configured, resolves
+// service names from the --service flag or the services config.
+func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, issue string) (map[string]string, error) {
+	inputs := map[string]string{"issue": issue}
+
+	inputName := serviceInputName()
+	if inputName == "" {
+		return inputs, nil
+	}
+
+	// --service flag overrides auto-detection.
+	flagServices, _ := cmd.Flags().GetStringSlice("service")
+	if len(flagServices) > 0 {
+		inputs[inputName] = strings.Join(flagServices, ",")
+		return inputs, nil
+	}
+
+	// Auto-detect from workspace repos + services config.
+	services, err := resolveServiceNames(ctx)
+	if err != nil {
+		return inputs, err
+	}
+	if len(services) > 0 {
+		inputs[inputName] = strings.Join(services, ",")
+	}
+
+	return inputs, nil
 }
