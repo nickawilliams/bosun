@@ -21,7 +21,7 @@ func newReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, issue).Print()
+			rootCard(cmd).Print()
 
 			ctx := cmd.Context()
 
@@ -55,6 +55,11 @@ func newReleaseCmd() *cobra.Command {
 			// --- Plan + Apply ---
 
 			tracker, _ := newIssueTracker()
+			if tracker != nil {
+				if _, err := fetchIssue(ctx, tracker, issue); err != nil {
+					ui.Fail(fmt.Sprintf("Fetching issue: %v", err))
+				}
+			}
 
 			var actions []Action
 
