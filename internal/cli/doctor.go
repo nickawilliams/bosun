@@ -123,37 +123,37 @@ func renderCheckCard(hc healthCheck, detail string, checkErr error, passed, warn
 
 func environmentChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Global Config", Required: true, Check: checkGlobalConfig},
-		{Name: "Project Config", Check: checkProjectConfig},
-		{Name: "Git", Required: true, Check: checkGit},
+		{Name: "global config", Required: true, Check: checkGlobalConfig},
+		{Name: "project config", Check: checkProjectConfig},
+		{Name: "git", Required: true, Check: checkGit},
 	}
 }
 
 func projectChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Repositories", Check: checkRepositories},
-		{Name: "Branch Template", Check: checkBranchTemplate},
-		{Name: "Status Mappings", Check: checkStatusMappings},
+		{Name: "repositories", Check: checkRepositories},
+		{Name: "branch template", Check: checkBranchTemplate},
+		{Name: "status mappings", Check: checkStatusMappings},
 	}
 }
 
 func issueTrackerChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Issue Tracker", Spinner: true, Check: checkIssueTracker},
+		{Name: "issue tracker", Spinner: true, Check: checkIssueTracker},
 	}
 }
 
 func codeHostChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Code Host", Spinner: true, Check: checkCodeHost},
+		{Name: "code host", Spinner: true, Check: checkCodeHost},
 	}
 }
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "Notification Config", Check: checkNotificationConfig},
-		{Name: "Notification Auth", Spinner: true, Check: checkNotificationAuth},
-		{Name: "Notification Channels", Spinner: true, Check: checkNotificationChannels},
+		{Name: "notification config", Check: checkNotificationConfig},
+		{Name: "notification auth", Spinner: true, Check: checkNotificationAuth},
+		{Name: "notification channels", Spinner: true, Check: checkNotificationChannels},
 	}
 }
 
@@ -396,8 +396,8 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 
 func cicdChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "CI/CD Config", Check: checkCICDConfig},
-		{Name: "CI/CD Auth", Spinner: true, Check: checkCICDAuth},
+		{Name: "CI/CD config", Check: checkCICDConfig},
+		{Name: "CI/CD auth", Spinner: true, Check: checkCICDAuth},
 	}
 }
 

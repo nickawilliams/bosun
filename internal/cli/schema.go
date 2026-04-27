@@ -40,127 +40,127 @@ var lifecycleStatusKeys = []string{
 // configSchema is the central registry of all known config keys.
 var configSchema = map[string]ConfigGroup{
 	"issue_tracker": {
-		Label: "Issue tracker",
+		Label: "issue tracker",
 
 		Keys: []ConfigKey{
-			{Key: "issue_tracker", Label: "Provider", Options: []string{"jira"}, Required: true},
+			{Key: "issue_tracker", Label: "provider", Options: []string{"jira"}, Required: true},
 		},
 	},
 	"jira": {
-		Label: "Jira",
+		Label: "jira",
 
 		Keys: []ConfigKey{
-			{Key: "base_url", Label: "Base URL", Example: "https://mycompany.atlassian.net", Required: true},
-			{Key: "email", Label: "Email", Required: true},
+			{Key: "base_url", Label: "base URL", Example: "https://mycompany.atlassian.net", Required: true},
+			{Key: "email", Label: "email", Required: true},
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_JIRA_TOKEN", Secret: true, Required: true},
-			{Key: "project", Label: "Project key", Example: "PROJ"},
-			{Key: "board_id", Label: "Board ID", Example: "123"},
+			{Key: "project", Label: "project key", Example: "PROJ"},
+			{Key: "board_id", Label: "board ID", Example: "123"},
 		},
 	},
 	"statuses": {
-		Label: "Status mappings",
+		Label: "status mappings",
 
 		Keys: []ConfigKey{
-			{Key: "ready", Label: "Ready", Default: "Ready"},
-			{Key: "in_progress", Label: "In Progress", Default: "In Progress"},
-			{Key: "blocked", Label: "Blocked", Default: "Blocked"},
-			{Key: "review", Label: "Review", Default: "Review"},
-			{Key: "preview", Label: "In Preview Env", Default: "In Preview Env"},
-			{Key: "ready_for_release", Label: "Ready for Release", Default: "Ready for Release"},
-			{Key: "acceptance", Label: "Acceptance", Default: "Acceptance"},
-			{Key: "done", Label: "Done", Default: "Done"},
+			{Key: "ready", Label: "ready", Default: "Ready"},
+			{Key: "in_progress", Label: "in progress", Default: "In Progress"},
+			{Key: "blocked", Label: "blocked", Default: "Blocked"},
+			{Key: "review", Label: "review", Default: "Review"},
+			{Key: "preview", Label: "in preview env", Default: "In Preview Env"},
+			{Key: "ready_for_release", Label: "ready for release", Default: "Ready for Release"},
+			{Key: "acceptance", Label: "acceptance", Default: "Acceptance"},
+			{Key: "done", Label: "done", Default: "Done"},
 		},
 	},
 	"branch": {
-		Label: "Branch naming",
+		Label: "branch naming",
 
 		Keys: []ConfigKey{
-			{Key: "template", Label: "Branch template", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
-			{Key: "categories.story", Label: "Story category", Default: "feature"},
-			{Key: "categories.bug", Label: "Bug category", Default: "fix"},
-			{Key: "categories.task", Label: "Task category", Default: "chore"},
+			{Key: "template", Label: "branch template", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
+			{Key: "categories.story", Label: "story category", Default: "feature"},
+			{Key: "categories.bug", Label: "bug category", Default: "fix"},
+			{Key: "categories.task", Label: "task category", Default: "chore"},
 		},
 	},
 	"workspace": {
-		Label: "Workspace",
+		Label: "workspace",
 
 		Keys: []ConfigKey{
-			{Key: "workspace_root", Label: "Workspace root", Example: ".workspaces"},
+			{Key: "workspace_root", Label: "workspace root", Example: ".workspaces"},
 		},
 	},
 	"code_host": {
-		Label: "Code host",
+		Label: "code host",
 
 		Keys: []ConfigKey{
-			{Key: "code_host", Label: "Provider", Options: []string{"github"}, Required: true},
+			{Key: "code_host", Label: "provider", Options: []string{"github"}, Required: true},
 		},
 	},
 	"github": {
 		Label: "GitHub",
 
 		Keys: []ConfigKey{
-			{Key: "token", Label: "Personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
+			{Key: "token", Label: "personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
 		},
 	},
 	"pull_request": {
-		Label: "Pull request",
+		Label: "pull request",
 
 		Keys: []ConfigKey{
-			{Key: "base", Label: "Base branch", Default: "main"},
+			{Key: "base", Label: "base branch", Default: "main"},
 			{Key: "title_template", Label: "PR title template", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
 			{Key: "body_template", Label: "PR body template"},
-			{Key: "reviewers", Label: "Reviewers (GitHub usernames)"},
-			{Key: "team_reviewers", Label: "Team reviewers (GitHub team slugs)"},
-			{Key: "assignees", Label: "Assignees (GitHub usernames)"},
-			{Key: "self_assign", Label: "Auto-assign PR author", Default: "true"},
+			{Key: "reviewers", Label: "reviewers (GitHub usernames)"},
+			{Key: "team_reviewers", Label: "team reviewers (GitHub team slugs)"},
+			{Key: "assignees", Label: "assignees (GitHub usernames)"},
+			{Key: "self_assign", Label: "auto-assign PR author", Default: "true"},
 		},
 	},
 	"notification": {
-		Label: "Notification",
+		Label: "notification",
 
 		Keys: []ConfigKey{
-			{Key: "notification", Label: "Provider", Options: []string{"slack"}},
+			{Key: "notification", Label: "provider", Options: []string{"slack"}},
 		},
 	},
 	"slack": {
-		Label: "Slack",
+		Label: "slack",
 
 		Keys: []ConfigKey{
-			{Key: "auth", Label: "Auth method", Options: []string{"token", "local"}, Default: "token"},
+			{Key: "auth", Label: "auth method", Options: []string{"token", "local"}, Default: "token"},
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true},
-			{Key: "workspace", Label: "Workspace name", Example: "mycompany"},
-			{Key: "channel_review", Label: "Review channel", Example: "bb-prs"},
-			{Key: "channel_release", Label: "Release channel", Example: "release_coordination"},
+			{Key: "workspace", Label: "workspace name", Example: "mycompany"},
+			{Key: "channel_review", Label: "review channel", Example: "bb-prs"},
+			{Key: "channel_release", Label: "release channel", Example: "release_coordination"},
 		},
 	},
 	"cicd": {
 		Label: "CI/CD",
 
 		Keys: []ConfigKey{
-			{Key: "cicd", Label: "Provider", Options: []string{"github_actions"}},
+			{Key: "cicd", Label: "provider", Options: []string{"github_actions"}},
 		},
 	},
 	"github_actions": {
 		Label: "GitHub Actions",
 
 		Keys: []ConfigKey{
-			{Key: "workflows.preview", Label: "Preview Workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
-			{Key: "workflows.release", Label: "Release Workflow", Example: "org/repo/.github/workflows/deploy.yml"},
-			{Key: "service_input", Label: "Service Input Parameter", Default: "services-to-deploy"},
+			{Key: "workflows.preview", Label: "preview workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
+			{Key: "workflows.release", Label: "release workflow", Example: "org/repo/.github/workflows/deploy.yml"},
+			{Key: "service_input", Label: "service input parameter", Default: "services-to-deploy"},
 		},
 	},
 	"color_mode": {
-		Label: "Color mode",
+		Label: "color mode",
 
 		Keys: []ConfigKey{
-			{Key: "color_mode", Label: "Color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
+			{Key: "color_mode", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
 		},
 	},
 	"display_mode": {
-		Label: "Display mode",
+		Label: "display mode",
 
 		Keys: []ConfigKey{
-			{Key: "display_mode", Label: "Display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
+			{Key: "display_mode", Label: "display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
 		},
 	},
 }

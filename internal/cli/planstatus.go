@@ -23,7 +23,7 @@ func statusAction(tracker issue.Tracker, issueKey, currentStatus, targetStatusKe
 
 	return Action{
 		Op:     ui.PlanModify,
-		Label:  "Update Issue Status",
+		Label:  "update issue status",
 		Target: issueKey,
 		Assess: func(_ context.Context) (ActionState, string, error) {
 			if currentStatus != "" && strings.EqualFold(currentStatus, statusName) {

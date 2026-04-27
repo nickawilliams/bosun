@@ -313,9 +313,9 @@ type initGroup struct {
 // serviceInitGroups defines the ordered list of optional service groups
 // presented during interactive init.
 var serviceInitGroups = []initGroup{
-	{Label: "Issue Tracker", Provider: "issue_tracker", Detail: "jira"},
-	{Label: "Code Host", Provider: "code_host", Detail: "github"},
-	{Label: "Notifications", Provider: "notification", Detail: "slack"},
+	{Label: "issue tracker", Provider: "issue_tracker", Detail: "jira"},
+	{Label: "code host", Provider: "code_host", Detail: "github"},
+	{Label: "notifications", Provider: "notification", Detail: "slack"},
 	{Label: "CI/CD", Provider: "cicd", Detail: "github_actions", Setup: setupGitHubActions},
 }
 
