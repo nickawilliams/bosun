@@ -10,6 +10,8 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func newConfigSetCmd() *cobra.Command {
@@ -135,54 +137,39 @@ func resolveConfigPath(global bool) (string, error) {
 	return filepath.Join(projectRoot, ".bosun", "config.yaml"), nil
 }
 
-// setConfigValue does a targeted update of a single key in a YAML file,
-// preserving comments and structure. For nested keys like "jira.base_url",
-// it finds or creates the parent key and sets the child.
+// setConfigValue sets a key in a config file using a fresh viper instance
+// scoped to that file only. Handles dot-separated keys at any depth.
 func setConfigValue(path, key, value string) error {
-	content, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reading config: %w", err)
-	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.ReadInConfig() // ignore error — file may not exist yet
 
-	lines := strings.Split(string(content), "\n")
-	segments := strings.Split(key, ".")
-
-	// Walk down parent segments, creating any that don't exist.
-	startFrom := 0
-	for _, seg := range segments[:len(segments)-1] {
-		idx := findYAMLKey(lines, seg, startFrom)
-		if idx == -1 {
-			indent := strings.Repeat(" ", startFrom*2/max(startFrom, 1))
-			if startFrom > 0 {
-				// Infer indent from sibling lines.
-				for i := startFrom; i < len(lines); i++ {
-					if t := strings.TrimSpace(lines[i]); t != "" && !strings.HasPrefix(t, "#") {
-						indent = strings.Repeat(" ", len(lines[i])-len(strings.TrimLeft(lines[i], " ")))
-						break
-					}
-				}
-			}
-			newLine := indent + seg + ":"
-			if startFrom > 0 && startFrom <= len(lines) {
-				lines = append(lines[:startFrom+1], append([]string{newLine}, lines[startFrom+1:]...)...)
-				idx = startFrom + 1
-			} else {
-				lines = append(lines, newLine)
-				idx = len(lines) - 1
-			}
-		}
-		startFrom = idx + 1
-	}
-
-	// Set the leaf key.
-	leaf := segments[len(segments)-1]
-	lines = setYAMLKey(lines, leaf, value, startFrom)
-
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	v.Set(key, value)
+	return v.WriteConfigAs(path)
 }
 
-// unsetConfigValue removes a key from a YAML file, preserving
-// structure. Returns true if the key was found and removed.
+// setConfigMap sets a map value at a key in a config file.
+func setConfigMap(path, key string, values map[string]string) error {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.ReadInConfig()
+
+	v.Set(key, values)
+	return v.WriteConfigAs(path)
+}
+
+// setConfigListValue sets a list value at a key in a config file.
+func setConfigListValue(path, key string, values []string) error {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.ReadInConfig()
+
+	v.Set(key, values)
+	return v.WriteConfigAs(path)
+}
+
+// unsetConfigValue removes a key from a config file. Returns true if
+// the key was found and removed.
 func unsetConfigValue(path, key string) (bool, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -192,113 +179,39 @@ func unsetConfigValue(path, key string) (bool, error) {
 		return false, fmt.Errorf("reading config: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	parts := strings.SplitN(key, ".", 2)
+	// Parse into a raw map so we can delete keys.
+	var data map[string]any
+	if err := yaml.Unmarshal(content, &data); err != nil {
+		return false, fmt.Errorf("parsing config: %w", err)
+	}
 
-	var idx int
-	if len(parts) == 1 {
-		idx = findYAMLKey(lines, key, 0)
-	} else {
-		parentIdx := findYAMLKey(lines, parts[0], 0)
-		if parentIdx == -1 {
+	// Walk dot-separated segments to the parent, then delete the leaf.
+	segments := strings.Split(key, ".")
+	parent := data
+	for _, seg := range segments[:len(segments)-1] {
+		child, ok := parent[seg]
+		if !ok {
 			return false, nil
 		}
-		idx = findYAMLKey(lines, parts[1], parentIdx+1)
+		childMap, ok := child.(map[string]any)
+		if !ok {
+			return false, nil
+		}
+		parent = childMap
 	}
 
-	if idx == -1 {
+	leaf := segments[len(segments)-1]
+	if _, ok := parent[leaf]; !ok {
 		return false, nil
 	}
+	delete(parent, leaf)
 
-	lines = append(lines[:idx], lines[idx+1:]...)
-
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+	out, err := yaml.Marshal(data)
+	if err != nil {
+		return false, fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
 		return false, fmt.Errorf("writing config: %w", err)
 	}
 	return true, nil
-}
-
-// findYAMLKey returns the line index of a key at the expected indentation
-// level, or -1 if not found. startFrom specifies where to begin searching.
-func findYAMLKey(lines []string, key string, startFrom int) int {
-	prefix := key + ":"
-	for i := startFrom; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, prefix) {
-			return i
-		}
-	}
-	return -1
-}
-
-// setConfigListValue does a targeted update of a YAML list key,
-// preserving comments and structure. Finds the key, removes its existing
-// list items (and commented-out items), then inserts the new values.
-func setConfigListValue(path, key string, values []string) error {
-	content, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reading config: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	keyIdx := findYAMLKey(lines, key, 0)
-
-	// Build the replacement block.
-	block := []string{key + ":"}
-	for _, v := range values {
-		block = append(block, "  - "+v)
-	}
-
-	if keyIdx == -1 {
-		lines = append(lines, block...)
-	} else {
-		// Find the extent of existing list children (items and
-		// commented-out items) immediately after the key line.
-		end := keyIdx + 1
-		for end < len(lines) {
-			trimmed := strings.TrimSpace(lines[end])
-			if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "# -") {
-				end++
-			} else {
-				break
-			}
-		}
-		result := make([]string, 0, len(lines))
-		result = append(result, lines[:keyIdx]...)
-		result = append(result, block...)
-		result = append(result, lines[end:]...)
-		lines = result
-	}
-
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
-}
-
-// setYAMLKey finds a key starting from startFrom and updates its value,
-// or appends it if not found.
-func setYAMLKey(lines []string, key, value string, startFrom int) []string {
-	idx := findYAMLKey(lines, key, startFrom)
-	if idx != -1 {
-		indent := len(lines[idx]) - len(strings.TrimLeft(lines[idx], " "))
-		lines[idx] = strings.Repeat(" ", indent) + key + ": " + value
-	} else {
-		indent := ""
-		if startFrom > 0 && startFrom < len(lines) {
-			for i := startFrom; i < len(lines); i++ {
-				if strings.TrimSpace(lines[i]) != "" && !strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-					indent = strings.Repeat(" ", len(lines[i])-len(strings.TrimLeft(lines[i], " ")))
-					break
-				}
-			}
-			if indent == "" {
-				indent = "  "
-			}
-		}
-		newLine := indent + key + ": " + value
-		if startFrom > 0 && startFrom <= len(lines) {
-			lines = append(lines[:startFrom+1], append([]string{newLine}, lines[startFrom+1:]...)...)
-		} else {
-			lines = append(lines, newLine)
-		}
-	}
-	return lines
 }
