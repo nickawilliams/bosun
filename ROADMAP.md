@@ -31,6 +31,13 @@ types are schema fields instead of code branches.
 (`init_cicd.go`) stays as-is since its polymorphic config doesn't fit the
 schema model.
 
+**Additional considerations:**
+- Schema defaults should be available at runtime via viper (currently only
+  applied during resolveGroup, so custom setup code duplicates defaults)
+- Support explicitly unsetting a value during init prompts (empty input
+  currently means "accept the default" — there's no way to express "leave
+  this unset")
+
 ### Status Command — CI/CD Integration
 
 - [ ] Last build/deploy status per repository
