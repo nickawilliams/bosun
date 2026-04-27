@@ -20,7 +20,7 @@ func setupGitHubActions() error {
 			return err
 		}
 	} else {
-		ui.Skip("Preview Workflow")
+		ui.Skip("preview workflow")
 	}
 
 	// --- Service input parameter ---
@@ -39,7 +39,7 @@ func setupGitHubActions() error {
 			return err
 		}
 	} else {
-		ui.Skip("Service Input Parameter")
+		ui.Skip("service input parameter")
 	}
 
 	// --- Service name mapping ---
@@ -67,14 +67,14 @@ func setupGitHubActions() error {
 			}
 			configPath, cpErr := configPathForScope(false)
 			if cpErr != nil {
-				ui.Skip(fmt.Sprintf("Could not save service mapping: %v", cpErr))
+				ui.Skip(fmt.Sprintf("could not save service mapping: %v", cpErr))
 			} else if err := setConfigMap(configPath, "services", serviceMap); err != nil {
-				ui.Skip(fmt.Sprintf("Could not save service mapping: %v", err))
+				ui.Skip(fmt.Sprintf("could not save service mapping: %v", err))
 			} else {
-				ui.Saved("Services", fmt.Sprintf("%d custom mappings", len(serviceMap)))
+				ui.Saved("services", fmt.Sprintf("%d custom mappings", len(serviceMap)))
 			}
 		} else {
-			ui.Skip("Services (all default to repo name)")
+			ui.Skip("services (all default to repo name)")
 		}
 	}
 
@@ -90,7 +90,7 @@ func setupGitHubActions() error {
 				return err
 			}
 		} else {
-			ui.Skip("Release Workflow")
+			ui.Skip("release workflow")
 		}
 		return nil
 	}
@@ -113,7 +113,7 @@ func setupGitHubActions() error {
 	}
 
 	if len(releaseMap) == 0 {
-		ui.Skip("Release Workflows")
+		ui.Skip("release workflows")
 		return nil
 	}
 
@@ -131,13 +131,13 @@ func setupGitHubActions() error {
 	viper.Set("github_actions.workflows.release", releaseMap)
 	configPath, err := configPathForScope(false)
 	if err != nil {
-		ui.Skip(fmt.Sprintf("Could not save release workflows: %v", err))
+		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}
 	if err := setConfigMap(configPath, "github_actions.workflows.release", releaseMap); err != nil {
-		ui.Skip(fmt.Sprintf("Could not save release workflows: %v", err))
+		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}
-	ui.Saved("Release Workflows", fmt.Sprintf("%d repos configured", len(releaseMap)))
+	ui.Saved("release workflows", fmt.Sprintf("%d repos configured", len(releaseMap)))
 	return nil
 }

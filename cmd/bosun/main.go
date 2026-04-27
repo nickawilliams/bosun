@@ -25,7 +25,7 @@ func main() {
 		fang.WithoutManpage(),
 		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
 			if errors.Is(err, cli.ErrCancelled) {
-				ui.NewCard(ui.CardSkipped, "User cancelled").Print()
+				ui.NewCard(ui.CardSkipped, "user cancelled").Print()
 			} else {
 				ui.Fail(err.Error())
 			}

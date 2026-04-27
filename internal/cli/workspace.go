@@ -50,7 +50,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would create workspace")
+				ui.DryRun("would create workspace")
 				ui.Details("", ui.NewFields(
 					"Repositories", fmt.Sprintf("%v", repositoryNames),
 					"From HEAD", fmt.Sprintf("%v", fromHead),
@@ -68,7 +68,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				return err
 			}
 
-			return ui.RunCard("Creating workspace", func() error {
+			return ui.RunCard("creating workspace", func() error {
 				return mgr.Create(context.Background(), name, repositories, fromHead)
 			})
 		},
@@ -97,7 +97,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			rootCard(cmd, name).Print()
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would add repositories: %v", repositoryNames)
+				ui.DryRun("would add repositories: %v", repositoryNames)
 				return nil
 			}
 
@@ -111,7 +111,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 				return err
 			}
 
-			return ui.RunCard("Adding repositories", func() error {
+			return ui.RunCard("adding repositories", func() error {
 				return mgr.Add(context.Background(), name, repositories, fromHead)
 			})
 		},
@@ -147,7 +147,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			}
 
 			if len(statuses) == 0 {
-				ui.Skip(fmt.Sprintf("No repositories found in workspace %q", name))
+				ui.Skip(fmt.Sprintf("no repositories found in workspace %q", name))
 				return nil
 			}
 
@@ -180,7 +180,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 
 			if isDryRun(cmd) {
-				ui.DryRun("Would remove workspace (force: %v)", force)
+				ui.DryRun("would remove workspace (force: %v)", force)
 				return nil
 			}
 
@@ -195,7 +195,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 
 			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
-			return ui.RunCard("Removing workspace", func() error {
+			return ui.RunCard("removing workspace", func() error {
 				return mgr.Remove(context.Background(), name, wsRepos, force)
 			})
 		},

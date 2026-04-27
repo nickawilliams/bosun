@@ -40,7 +40,7 @@ func newPrereleaseCmd() *cobra.Command {
 
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
-				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
+				ui.Skip(fmt.Sprintf("code host: %v", hostErr))
 			}
 
 			// Per-repository resolution.
@@ -72,7 +72,7 @@ func newPrereleaseCmd() *cobra.Command {
 					repoName := identity.Name
 
 					var currentTag string
-					if err := ui.RunCard(fmt.Sprintf("Fetching latest tag for %s", r.Name), func() error {
+					if err := ui.RunCard(fmt.Sprintf("fetching latest tag for %s", r.Name), func() error {
 						var e error
 						currentTag, e = host.GetLatestTag(ctx, owner, repoName)
 						return e
@@ -94,7 +94,7 @@ func newPrereleaseCmd() *cobra.Command {
 
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  "Create Release",
+						Label:  "create release",
 						Target: r.Name,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							if currentTag == nextVersion {
@@ -144,7 +144,7 @@ func newPrereleaseCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:    ui.PlanCreate,
 					OpRef: &releaseNotifyOp,
-					Label: "Notify",
+					Label: "notify",
 					Target: releaseChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)

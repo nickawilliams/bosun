@@ -40,7 +40,7 @@ func newReviewCmd() *cobra.Command {
 			if trackerErr == nil {
 				detail, err = fetchIssue(ctx, tracker, issue)
 				if err != nil {
-					ui.Skip(fmt.Sprintf("Issue details: %v", err))
+					ui.Skip(fmt.Sprintf("issue details: %v", err))
 				}
 			}
 
@@ -52,7 +52,7 @@ func newReviewCmd() *cobra.Command {
 
 			host, hostErr := newCodeHost()
 			if hostErr != nil {
-				ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
+				ui.Skip(fmt.Sprintf("code host: %v", hostErr))
 			}
 
 			// --- Pre-flight: resolve repos, branches, remotes ---
@@ -194,7 +194,7 @@ func newReviewCmd() *cobra.Command {
 			if selfAssign && host != nil {
 				username, err := host.GetAuthenticatedUser(ctx)
 				if err != nil {
-					ui.Fail(fmt.Sprintf("Self-assign: %v", err))
+					ui.Fail(fmt.Sprintf("self-assign: %v", err))
 				} else if username != "" {
 					duplicate := false
 					for _, a := range assignees {
@@ -257,7 +257,7 @@ func newReviewCmd() *cobra.Command {
 					"\n\n" + strings.Join(repoLines, "\n")
 
 				slot := ui.NewSlot()
-				slot.Show(ui.NewCard(ui.CardInput, "Unpushed Commits Detected").Tight())
+				slot.Show(ui.NewCard(ui.CardInput, "unpushed commits detected").Tight())
 
 				confirmed := true
 				if isInteractive() {
@@ -272,13 +272,13 @@ func newReviewCmd() *cobra.Command {
 					}
 				}
 				if !confirmed {
-					slot.Show(ui.NewCard(ui.CardSkipped, "Push declined"))
+					slot.Show(ui.NewCard(ui.CardSkipped, "push declined"))
 					slot.Finalize()
 					return fmt.Errorf("aborted: unpushed commits")
 				}
 
 				for _, up := range needsPush {
-					if err := slot.Run(fmt.Sprintf("Pushing %s", up.rc.repo.Name), func() error {
+					if err := slot.Run(fmt.Sprintf("pushing %s", up.rc.repo.Name), func() error {
 						return g.Push(ctx, up.rc.repo.Path, up.rc.branch)
 					}); err != nil {
 						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
@@ -288,15 +288,15 @@ func newReviewCmd() *cobra.Command {
 				for _, up := range needsPush {
 					pushedPairs = append(pushedPairs, up.rc.repo.Name, up.rc.branch)
 				}
-				slot.Show(ui.NewCard(ui.CardSuccess, "Pushed").KV(pushedPairs...))
+				slot.Show(ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...))
 				slot.Finalize()
 			}
 
 			// --- Plan + Apply ---
 
-			createLabel := "Create Pull Request"
+			createLabel := "create pull request"
 			if draft {
-				createLabel = "Create Draft Pull Request"
+				createLabel = "create draft pull request"
 			}
 
 			var actions []Action
@@ -386,7 +386,7 @@ func newReviewCmd() *cobra.Command {
 				actions = append(actions, Action{
 					Op:    ui.PlanCreate,
 					OpRef: &notifyOp,
-					Label: "Notify",
+					Label: "notify",
 					Target: reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)

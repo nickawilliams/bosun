@@ -30,7 +30,7 @@ func newPreviewCmd() *cobra.Command {
 			tracker, _ := newIssueTracker()
 			if tracker != nil {
 				if _, err := fetchIssue(ctx, tracker, issue); err != nil {
-					ui.Fail(fmt.Sprintf("Fetching issue: %v", err))
+					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
 				}
 			}
 
@@ -50,7 +50,7 @@ func newPreviewCmd() *cobra.Command {
 					target := t
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  "Trigger Preview Deploy",
+						Label:  "trigger preview deploy",
 						Target: target.Label,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							return ActionNeeded, fmt.Sprintf("main → %s", target.Workflow), nil
@@ -81,7 +81,7 @@ func newPreviewCmd() *cobra.Command {
 				var threadRef notify.ThreadRef
 				actions = append(actions, Action{
 					Op:     ui.PlanModify,
-					Label:  "Notify",
+					Label:  "notify",
 					Target: channel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := previewNotifier.FindThread(ctx, channel, issue)

@@ -44,7 +44,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 	// Interactive: show the plan as a CardInput, run huh confirm.
 	// Normal cancel: rewind prompt, show cancelled card in place.
 	// Ctrl+c interrupt: don't rewind, just bail (timeline shows the interrupt).
-	rewind := ui.NewCard(ui.CardInput, "Pending: "+plan.Summary()).Tight().PrintRewindable()
+	rewind := ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().PrintRewindable()
 
 	var confirmed bool
 	err := runForm(

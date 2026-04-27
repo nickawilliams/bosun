@@ -38,7 +38,7 @@ func newConfigSetCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Saved(fmt.Sprintf("Set %s = %s", key, value), configPath)
+			ui.Saved(fmt.Sprintf("set %s = %s", key, value), configPath)
 			return nil
 		},
 	}
@@ -77,7 +77,7 @@ func newConfigUnsetCmd() *cobra.Command {
 				return nil
 			}
 
-			ui.Saved(fmt.Sprintf("Removed %s", key), configPath)
+			ui.Saved(fmt.Sprintf("removed %s", key), configPath)
 			return nil
 		},
 	}

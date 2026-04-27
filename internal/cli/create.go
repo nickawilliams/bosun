@@ -57,7 +57,7 @@ func newCreateCmd() *cobra.Command {
 				}
 
 				if len(fields) > 0 {
-					rewind := ui.NewCard(ui.CardInput, "Issue Details").PrintRewindable()
+					rewind := ui.NewCard(ui.CardInput, "issue details").PrintRewindable()
 					if err := runForm(fields...); err != nil {
 						return err
 					}
@@ -88,7 +88,7 @@ func newCreateCmd() *cobra.Command {
 			actions := []Action{
 				{
 					Op:     ui.PlanCreate,
-					Label:  "Create Issue",
+					Label:  "create issue",
 					Target: project,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						return ActionNeeded, fmt.Sprintf("%s: %q", issueType, title), nil

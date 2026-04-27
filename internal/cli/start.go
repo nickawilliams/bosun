@@ -57,7 +57,7 @@ func newStartCmd() *cobra.Command {
 					suggested := slugify(detail.Title)
 					input, field := newDefaultInput(suggested)
 					slugSlot := ui.NewSlot()
-					slugSlot.Show(ui.NewCard(ui.CardInput, "Branch Slug").Tight())
+					slugSlot.Show(ui.NewCard(ui.CardInput, "branch slug").Tight())
 					if err := runForm(input.Title("Slug")); err != nil {
 						return err
 					}
@@ -66,7 +66,7 @@ func newStartCmd() *cobra.Command {
 					if slug != suggested {
 						slug = slugify(slug)
 					}
-					ui.Selected("Branch Slug", slug)
+					ui.Selected("branch slug", slug)
 				}
 			}
 
@@ -75,7 +75,7 @@ func newStartCmd() *cobra.Command {
 			if detail.Key != "" {
 				name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
 				if err != nil {
-					ui.Skip(fmt.Sprintf("Branch naming: %v (using %s)", err, issue))
+					ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
 				} else {
 					branchName = name
 				}
@@ -96,7 +96,7 @@ func newStartCmd() *cobra.Command {
 
 				var selected []string
 				repositorySlot := ui.NewSlot()
-				repositorySlot.Show(ui.NewCard(ui.CardInput, "Repositories").Tight())
+				repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
 				if err := runForm(
 					huh.NewMultiSelect[string]().
 						Options(opts...).
@@ -107,11 +107,11 @@ func newStartCmd() *cobra.Command {
 				repositorySlot.Clear()
 
 				if len(selected) == 0 {
-					ui.Skip("No repositories selected")
+					ui.Skip("no repositories selected")
 					return nil
 				}
 
-				ui.SelectedMulti("Repositories", selected)
+				ui.SelectedMulti("repositories", selected)
 
 				repositories, err = resolveRepositories(selected)
 				if err != nil {
@@ -140,7 +140,7 @@ func newStartCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
-					Label:  "Create Branch",
+					Label:  "create branch",
 					Target: repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						exists, err := g.BranchExists(ctx, repoPath, branchName)
@@ -173,7 +173,7 @@ func newStartCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
-					Label:  "Create Worktree",
+					Label:  "create worktree",
 					Target: repoName,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						if _, err := os.Stat(worktreePath); err == nil {

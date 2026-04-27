@@ -50,7 +50,7 @@ func typeaheadSelect(title, current string, fetch func() ([]string, error)) (str
 	slot := ui.NewSlot()
 
 	var items []string
-	if err := slot.Run("Fetching "+title, func() error {
+	if err := slot.Run("fetching "+title, func() error {
 		var e error
 		items, e = fetch()
 		return e
@@ -60,7 +60,7 @@ func typeaheadSelect(title, current string, fetch func() ([]string, error)) (str
 
 	if len(items) == 0 {
 		slot.Clear()
-		ui.Skip("No " + title + " found")
+		ui.Skip("no " + title + " found")
 		return "", nil
 	}
 
@@ -111,7 +111,7 @@ func typeaheadMultiSelect(title string, current []string, fetch func() ([]string
 	slot := ui.NewSlot()
 
 	var items []string
-	if err := slot.Run("Fetching "+title, func() error {
+	if err := slot.Run("fetching "+title, func() error {
 		var e error
 		items, e = fetch()
 		return e
@@ -121,7 +121,7 @@ func typeaheadMultiSelect(title string, current []string, fetch func() ([]string
 
 	if len(items) == 0 {
 		slot.Clear()
-		ui.Skip("No " + title + " found")
+		ui.Skip("no " + title + " found")
 		return nil, nil
 	}
 

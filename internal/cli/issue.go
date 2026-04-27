@@ -155,7 +155,7 @@ func pickAssignedIssue() (string, error) {
 
 	var issues []issuepkg.Issue
 	var columns []issuepkg.BoardColumn
-	if err := slot.Run("Fetching assigned issues", func() error {
+	if err := slot.Run("fetching assigned issues", func() error {
 		var fetchErr error
 		issues, fetchErr = tracker.ListIssues(context.Background(), issuepkg.ListQuery{
 			AssignedToMe: true,
@@ -175,7 +175,7 @@ func pickAssignedIssue() (string, error) {
 
 	if len(issues) == 0 {
 		slot.Clear()
-		ui.Skip("No assigned issues found")
+		ui.Skip("no assigned issues found")
 		return "", nil
 	}
 
@@ -206,7 +206,7 @@ func pickAssignedIssue() (string, error) {
 	opts[len(issues)] = huh.NewOption("Enter manually...", manualEntry)
 
 	var selected string
-	slot.Show(ui.NewCard(ui.CardInput, "Select Issue").Tight())
+	slot.Show(ui.NewCard(ui.CardInput, "select issue").Tight())
 	if err := runForm(
 		huh.NewSelect[string]().
 			Options(opts...).

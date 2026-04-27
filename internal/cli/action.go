@@ -54,7 +54,7 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 	var assessErr error
 
 	// Show a spinner while assessing actions (may involve API calls).
-	rewind, spinErr := ui.RunCardRewindable("Assessing", func() error {
+	rewind, spinErr := ui.RunCardRewindable("assessing", func() error {
 		for i := range actions {
 			a := &actions[i]
 			state, detail, err := a.Assess(ctx)

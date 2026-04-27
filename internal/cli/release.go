@@ -30,7 +30,7 @@ func newReleaseCmd() *cobra.Command {
 			if !migrationsDone {
 				if isInteractive() {
 					var confirmed bool
-					rewind := ui.NewCard(ui.CardInput, "Have any required database migrations been run?").Tight().PrintRewindable()
+					rewind := ui.NewCard(ui.CardInput, "have any required database migrations been run?").Tight().PrintRewindable()
 					if err := runForm(
 						newConfirm().
 							Affirmative("Yes").
@@ -41,15 +41,15 @@ func newReleaseCmd() *cobra.Command {
 					}
 					rewind()
 					if !confirmed {
-						ui.Skip("Run migrations first, then use --migrations-done")
+						ui.Skip("run migrations first, then use --migrations-done")
 						return nil
 					}
-					ui.Complete("Migrations confirmed")
+					ui.Complete("migrations confirmed")
 				} else {
 					return fmt.Errorf("use --migrations-done to confirm migrations have been run")
 				}
 			} else {
-				ui.Saved("Migrations confirmed", "--migrations-done")
+				ui.Saved("migrations confirmed", "--migrations-done")
 			}
 
 			// --- Plan + Apply ---
@@ -57,7 +57,7 @@ func newReleaseCmd() *cobra.Command {
 			tracker, _ := newIssueTracker()
 			if tracker != nil {
 				if _, err := fetchIssue(ctx, tracker, issue); err != nil {
-					ui.Fail(fmt.Sprintf("Fetching issue: %v", err))
+					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
 				}
 			}
 
@@ -75,7 +75,7 @@ func newReleaseCmd() *cobra.Command {
 					target := t
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  "Trigger Production Deploy",
+						Label:  "trigger production deploy",
 						Target: target.Label,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							return ActionNeeded, fmt.Sprintf("main → %s", target.Workflow), nil

@@ -105,6 +105,13 @@ func FlushBreak() {
 	fmt.Print(comfyPrefix())
 }
 
+// ClearBreak discards a pending comfy connector without printing
+// it. Use to create a visual gap between unrelated timeline
+// sections where the │ connector would be misleading.
+func ClearBreak() {
+	comfyBreak = false
+}
+
 // BeginTimeline prints a leading blank line in comfy mode to
 // separate the timeline from the shell prompt above.
 func BeginTimeline() {

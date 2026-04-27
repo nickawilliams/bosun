@@ -113,7 +113,7 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 // additional content (e.g., KV pairs) using the fetched detail.
 func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
 	var detail issue.Issue
-	err := ui.RunCardReplace("Fetching issue", func() error {
+	err := ui.RunCardReplace("fetching issue", func() error {
 		var e error
 		detail, e = tracker.GetIssue(ctx, issueKey)
 		return e
@@ -326,7 +326,7 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 	}
 
 	if !strings.EqualFold(current.Status, expectedStatus) {
-		ui.Skip(fmt.Sprintf("Issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus))
+		ui.Skip(fmt.Sprintf("issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus))
 		if isInteractive() {
 			confirmed, err := promptConfirm("Proceed anyway?", false)
 			if err != nil {
@@ -336,7 +336,7 @@ func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKe
 				return fmt.Errorf("aborted: unexpected issue status")
 			}
 		} else {
-			ui.Skip("Proceeding (non-interactive mode)")
+			ui.Skip("proceeding (non-interactive mode)")
 		}
 	}
 

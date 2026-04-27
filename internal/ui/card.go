@@ -184,7 +184,7 @@ func (c *Card) PrintRewindable() func() {
 // Used by the spinner to animate the state indicator in place.
 func (c *Card) renderWithGlyph(glyph string) string {
 	var b strings.Builder
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary).Transform(titleCase)
 	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	const pad = " "
 	conn := pad + c.renderConnector() + "  "

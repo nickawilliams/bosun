@@ -34,13 +34,13 @@ func newStatusCmd() *cobra.Command {
 			// --- Issue details ---
 			tracker, trackerErr := newIssueTracker()
 			if trackerErr != nil {
-				ui.Skip(fmt.Sprintf("Issue tracker: %v", trackerErr))
+				ui.Skip(fmt.Sprintf("issue tracker: %v", trackerErr))
 			} else {
 				_, err = fetchIssue(ctx, tracker, issue, func(d issuepkg.Issue, c *ui.Card) {
 					c.Text("").KV("Status", d.Status, "URL", d.URL)
 				})
 				if err != nil {
-					ui.Skip(fmt.Sprintf("Issue details: %v", err))
+					ui.Skip(fmt.Sprintf("issue details: %v", err))
 				}
 			}
 
@@ -51,11 +51,11 @@ func newStatusCmd() *cobra.Command {
 			if len(repositoryStatuses) > 0 {
 				host, hostErr := newCodeHost()
 				if hostErr != nil {
-					ui.Skip(fmt.Sprintf("Code host: %v", hostErr))
+					ui.Skip(fmt.Sprintf("code host: %v", hostErr))
 				} else {
 					var prStatuses []prStatus
 					prSlot := ui.NewSlot()
-					_ = prSlot.Run("Fetching pull requests", func() error {
+					_ = prSlot.Run("fetching pull requests", func() error {
 						prStatuses = collectPRStatus(ctx, host, repositoryStatuses)
 						return nil
 					})
@@ -73,7 +73,7 @@ func newStatusCmd() *cobra.Command {
 								Value: value,
 							})
 						}
-						ui.Details("Pull Requests", fields)
+						ui.Details("pull requests", fields)
 					}
 				}
 			}
@@ -105,18 +105,18 @@ func resolveRepositoryStatuses(ctx context.Context) []workspace.RepositoryStatus
 		if wsName, err := mgr.DetectWorkspace(cwd); err == nil {
 			statuses, err := mgr.Status(ctx, wsName)
 			if err != nil {
-				ui.Skip(fmt.Sprintf("Workspace status: %v", err))
+				ui.Skip(fmt.Sprintf("workspace status: %v", err))
 				return nil
 			}
 			if len(statuses) == 0 {
-				ui.Skip("No repositories found in workspace " + wsName)
+				ui.Skip("no repositories found in workspace " + wsName)
 				return nil
 			}
 			renderRepositoryStatuses(statuses)
 			return statuses
 		}
 		// Workspace configured but CWD is not inside one.
-		ui.Skip("Not inside a workspace")
+		ui.Skip("not inside a workspace")
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func renderRepositoryStatuses(statuses []workspace.RepositoryStatus) {
 			Value: s.Branch + " · " + status,
 		})
 	}
-	ui.Details("Repositories", fields)
+	ui.Details("repositories", fields)
 }
 
 // collectPRStatus checks each repository for PRs matching its branch.

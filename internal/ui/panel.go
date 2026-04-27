@@ -43,7 +43,8 @@ func (p *Panel) Render() string {
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(Palette.Primary)
+		Foreground(Palette.Primary).
+		Transform(titleCase)
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

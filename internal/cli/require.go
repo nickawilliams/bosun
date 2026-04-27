@@ -214,13 +214,13 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		viper.Set(fk, val)
-		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
+		ui.Skip(fmt.Sprintf("could not save %s: %v", fk, err))
 		return nil
 	}
 
 	if err := setConfigValue(configPath, fk, val); err != nil {
 		viper.Set(fk, val)
-		ui.Skip(fmt.Sprintf("Could not save %s: %v", fk, err))
+		ui.Skip(fmt.Sprintf("could not save %s: %v", fk, err))
 		return nil
 	}
 
@@ -274,7 +274,7 @@ func pickFromSource(ck ConfigKey) (string, error) {
 	slot := ui.NewSlot()
 
 	var items []SourceOption
-	if err := slot.Run("Fetching "+ck.Label, func() error {
+	if err := slot.Run("fetching "+ck.Label, func() error {
 		var e error
 		items, e = ck.Source()
 		return e

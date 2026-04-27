@@ -54,7 +54,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			if !confirmed {
-				ui.Skip("Keeping existing configuration")
+				ui.Skip("keeping existing configuration")
 				return nil
 			}
 		}
@@ -81,7 +81,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	var detectedGlobs []string
 	if len(repositoryGlobs) == 0 && !noDetect {
 		if repositories := detectRepositories(cwd); len(repositories) > 0 {
-			ui.CompleteWithDetail("Detected repositories", repositories)
+			ui.CompleteWithDetail("detected repositories", repositories)
 			detectedGlobs = defaultRepositoryGlobs(cwd, repositories)
 		}
 	}
@@ -134,7 +134,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 				Description("Directory where workspaces are created"))
 		}
 
-		rewind := ui.NewCard(ui.CardInput, "Project Settings").PrintRewindable()
+		rewind := ui.NewCard(ui.CardInput, "project settings").PrintRewindable()
 		if err := runForm(fields...); err != nil {
 			return err
 		}
@@ -172,7 +172,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if isDryRun(cmd) {
-		ui.DryRun("Would initialize bosun project")
+		ui.DryRun("would initialize bosun project")
 		fields := ui.NewFields(
 			"Config", ".bosun/config.yaml",
 			"Repositories", strings.Join(repositoryGlobs, ", "),
@@ -213,9 +213,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if repositoryDisplay == "" {
 		repositoryDisplay = "(none — add repository patterns to .bosun/config.yaml)"
 	}
-	heading := "Initialized bosun project"
+	heading := "initialized bosun project"
 	if reinit {
-		heading = "Updated project settings"
+		heading = "updated project settings"
 	}
 	fields := ui.NewFields(
 		"Config", configPath,
@@ -294,9 +294,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	ui.Info("Next steps")
-	ui.Muted("Run: bosun doctor to verify configuration")
-	ui.Muted("Run: bosun start --issue <issue> to begin work")
+	ui.NewCard(ui.CardInfo, "next steps").
+		Muted("Run: bosun doctor to verify configuration").
+		Muted("Run: bosun start --issue <issue> to begin work").
+		Print()
 
 	return nil
 }
