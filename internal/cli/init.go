@@ -157,7 +157,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		repositoryGlobs = detectedGlobs
 	}
 	if len(repositoryGlobs) == 0 && isInteractive() {
-		input, err := promptValue(
+		input, err := promptDefault(
 			"No repositories detected. Enter repository patterns (comma-separated, or leave blank)",
 			"")
 		if err != nil {

@@ -146,3 +146,19 @@ func newDefaultInput(fallback string) (*huh.Input, *defaultField) {
 	f := &defaultField{fallback: fallback}
 	return huh.NewInput().Placeholder(fallback).Value(&f.value), f
 }
+
+// promptDefault displays a prompt with a default shown as placeholder text.
+// Empty input accepts the default. Returns the resolved value.
+func promptDefault(label, fallback string) (string, error) {
+	if !isInteractive() {
+		return fallback, nil
+	}
+
+	input, field := newDefaultInput(fallback)
+	rewind := ui.NewCard(ui.CardInput, label).Tight().PrintRewindable()
+	if err := runForm(input); err != nil {
+		return fallback, err
+	}
+	rewind()
+	return field.Resolved(), nil
+}

@@ -195,15 +195,19 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 			return err
 		}
 	} else {
-		val = defaultVal
-		if err := runForm(huh.NewInput().Value(&val)); err != nil {
+		input, field := newDefaultInput(defaultVal)
+		if err := runForm(input); err != nil {
 			return err
 		}
+		val = field.Resolved()
 	}
 	rewind()
 
 	if val == "" {
-		return fmt.Errorf("%s is required", ck.Label)
+		if ck.Required {
+			return fmt.Errorf("%s is required", ck.Label)
+		}
+		return nil
 	}
 
 	// Save to project config if inside a project, global otherwise.
