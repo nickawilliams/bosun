@@ -64,6 +64,12 @@ Use Card directly only for these patterns:
 Use title case for all card titles, action labels, and spinner messages
 (e.g., "Trigger Preview Deploy", "Fetching Boards", "Select Board").
 
+### Follow established patterns
+
+When adding new code to an existing flow, check how the surrounding code
+handles the same concern (prompting, error handling, config access, etc.)
+and follow that pattern by default. Only deviate with an explicit reason.
+
 ### What not to do
 
 - Do not use `fmt.Print*` directly in command `RunE` functions. Use
