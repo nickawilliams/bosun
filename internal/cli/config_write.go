@@ -145,21 +145,38 @@ func setConfigValue(path, key, value string) error {
 	}
 
 	lines := strings.Split(string(content), "\n")
-	parts := strings.SplitN(key, ".", 2)
+	segments := strings.Split(key, ".")
 
-	if len(parts) == 1 {
-		lines = setYAMLKey(lines, key, value, 0)
-	} else {
-		parent := parts[0]
-		child := parts[1]
-		parentIdx := findYAMLKey(lines, parent, 0)
-		if parentIdx == -1 {
-			lines = append(lines, parent+":")
-			lines = append(lines, fmt.Sprintf("  %s: %s", child, value))
-		} else {
-			lines = setYAMLKey(lines, child, value, parentIdx+1)
+	// Walk down parent segments, creating any that don't exist.
+	startFrom := 0
+	for _, seg := range segments[:len(segments)-1] {
+		idx := findYAMLKey(lines, seg, startFrom)
+		if idx == -1 {
+			indent := strings.Repeat(" ", startFrom*2/max(startFrom, 1))
+			if startFrom > 0 {
+				// Infer indent from sibling lines.
+				for i := startFrom; i < len(lines); i++ {
+					if t := strings.TrimSpace(lines[i]); t != "" && !strings.HasPrefix(t, "#") {
+						indent = strings.Repeat(" ", len(lines[i])-len(strings.TrimLeft(lines[i], " ")))
+						break
+					}
+				}
+			}
+			newLine := indent + seg + ":"
+			if startFrom > 0 && startFrom <= len(lines) {
+				lines = append(lines[:startFrom+1], append([]string{newLine}, lines[startFrom+1:]...)...)
+				idx = startFrom + 1
+			} else {
+				lines = append(lines, newLine)
+				idx = len(lines) - 1
+			}
 		}
+		startFrom = idx + 1
 	}
+
+	// Set the leaf key.
+	leaf := segments[len(segments)-1]
+	lines = setYAMLKey(lines, leaf, value, startFrom)
 
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }

@@ -659,7 +659,7 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
 func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
-	key := "github_actions." + stage
+	key := "github_actions.workflows." + stage
 
 	// Try string first (global mode).
 	if s := viper.GetString(key); s != "" {
@@ -732,5 +732,49 @@ func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget
 	}
 
 	return targets, nil
+}
+
+// resolveServiceNames maps active workspace repositories to their service
+// names using the top-level services: config. Repos not listed in the config
+// default to using the repo name as the service name.
+//
+// Config shapes:
+//   - String → single service name (e.g., services.legacy-ui: "frontend")
+//   - List   → multiple service names (e.g., services.extracker: ["api", "worker"])
+//   - Absent → repo name used as-is
+func resolveServiceNames(ctx context.Context) ([]string, error) {
+	repos, err := resolveActiveRepositories(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var services []string
+	for _, r := range repos {
+		key := "services." + r.Name
+		raw := viper.Get(key)
+
+		switch val := raw.(type) {
+		case string:
+			services = append(services, val)
+		case []any:
+			for _, item := range val {
+				if s, ok := item.(string); ok {
+					services = append(services, s)
+				}
+			}
+		default:
+			// Not configured — repo name is the service name.
+			services = append(services, r.Name)
+		}
+	}
+
+	return services, nil
+}
+
+// serviceInputName returns the configured workflow input parameter name
+// for passing service names (e.g., "services-to-deploy"). Returns empty
+// string if not configured, which signals callers to skip the input.
+func serviceInputName() string {
+	return viper.GetString("github_actions.service_input")
 }
 
