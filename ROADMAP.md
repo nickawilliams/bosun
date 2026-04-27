@@ -12,6 +12,12 @@ Planned work, deferred refactors, and future ideas.
 - [x] WorkflowSpec config (global string or per-repo map)
 - [x] Relative workflow paths (resolved from git remote)
 - [x] Init wizard for GitHub Actions setup
+- [ ] Monorepo service discovery — current `services` config requires manual
+  mapping of repo → service names. Workflow filenames (`*-production.yml`)
+  and the ephemeral services manifest (`ephemeral-services.json`) use
+  different naming conventions, so auto-detection isn't straightforward.
+  Options: repo-level `.bosun.yaml` for self-describing repos, fetching
+  the manifest from the workflow repo during init, or manual config (current).
 - [ ] Glob pattern expansion for workflow paths
 - [ ] Workflow inputs and ref override (object form config)
 
