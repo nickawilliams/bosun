@@ -146,7 +146,7 @@ var configSchema = map[string]ConfigGroup{
 		Keys: []ConfigKey{
 			{Key: "workflows.preview", Label: "Preview Workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
 			{Key: "workflows.release", Label: "Release Workflow", Example: "org/repo/.github/workflows/deploy.yml"},
-			{Key: "service_input", Label: "Service Input Parameter", Example: "services-to-deploy"},
+			{Key: "service_input", Label: "Service Input Parameter", Default: "services-to-deploy"},
 		},
 	},
 	"color_mode": {
