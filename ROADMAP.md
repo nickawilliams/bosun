@@ -52,10 +52,51 @@ schema model.
 - [ ] Last build/deploy status per repository
 - [ ] Preview environment status + URL
 
+### Non-Interactive Output Mode
+
+Full support for raw, machine-readable output across all commands when stdout
+is not a TTY. Today only commands annotated `output: "raw"` (e.g. `config get`)
+switch to compact mode; `ui.IsTerminal()` exists but is never consulted, so
+piped invocations still get styled chrome.
+
+**Scope:**
+- Auto-detect non-TTY stdout in `PersistentPreRunE` and force compact display
+  + no-color (still overridable by explicit config/flags).
+- Audit every command for a sensible raw representation. Example: `config show`
+  should emit the resolved config as YAML when non-interactive.
+- Consider a `--output {auto,text,yaml,json}` convention so users can opt into
+  structured output explicitly even from a TTY.
+
 ### Man Pages and Shell Completions
 
 - [ ] Man page generation (`tools/gen-man/`)
 - [ ] Shell completions generation (`tools/gen-completions/`)
+
+### Shell Integration
+
+A `bosun shell-init [bash|zsh|fish]` command that prints an `eval`-able shell
+function, à la `zoxide` / `direnv` / `nvm`. The function wraps the real binary
+and runs `builtin cd` after it exits, so commands can effectively change the
+parent shell's working directory.
+
+**Why:** A child process can only `chdir(2)` itself; it can't move the parent
+shell. Several planned flows want this — without it, the best we can do is
+print a "now run `cd …`" hint.
+
+**Use cases:**
+- `bosun switch <workspace>` — fuzzy-pick a workspace (and optionally a repo
+  within it) and `cd` there. Replaces hand-typing
+  `cd .workspaces/feature/PROJ-123/api`.
+- `bosun start` — drop the user into the new worktree on success.
+- `bosun workspace rm` — `cd` to project root when the removed workspace
+  contained the user's CWD (today we just print a recovery hint and `chdir`
+  the bosun process before deletion).
+
+**Scope:**
+- New `shell-init` command, one template per supported shell.
+- Wire format between binary and wrapper (env var, sentinel stdout line, fd 3
+  — pick one; needs to coexist with normal command output).
+- Onboarding docs for `eval "$(bosun shell-init zsh)"` in user rc files.
 
 ### Issue Picker Improvements
 
