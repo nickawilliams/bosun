@@ -232,6 +232,12 @@ func (c *Card) renderWithGlyph(glyph string) string {
 		}
 	}
 
+	// Root cards visually separate the title row from the body content
+	// with a blank connector line.
+	if c.state == CardRoot && len(c.body) > 0 {
+		fmt.Fprintf(&b, "%s\n", conn)
+	}
+
 	for _, body := range c.body {
 		for _, line := range renderCardBody(body) {
 			for _, wrapped := range wrapForTimeline(line) {
