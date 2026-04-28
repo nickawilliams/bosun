@@ -63,26 +63,30 @@ func newPreviewCmd() *cobra.Command {
 				}
 			}
 
-			// Resolve preview name: --name flag → existing → interactive prompt → auto-generate.
+			// Resolve preview name: --name flag → interactive prompt (default
+			// to existing or generated) → existing → generated.
 			var previewName, previewURL string
-			isUpdate := false
+			var isUpdate bool
 			if nameKey := stageInputName(stage, "name"); nameKey != "" {
 				previewName, _ = cmd.Flags().GetString("name")
-				if previewName == "" && existingPreview != "" {
-					previewName = existingPreview
-					isUpdate = true
-				}
-				if previewName == "" && forceInteractive(cmd) {
-					generated := generateEphemeralName()
-					resolved, err := promptDefault("preview name", generated)
-					if err != nil {
-						return err
-					}
-					previewName = resolved
-				}
 				if previewName == "" {
-					previewName = generateEphemeralName()
+					// Default value for prompt and non-interactive fallback:
+					// reuse existing if known, otherwise generate.
+					defaultName := existingPreview
+					if defaultName == "" {
+						defaultName = generateEphemeralName()
+					}
+					if forceInteractive(cmd) {
+						resolved, err := promptDefault("preview name", defaultName)
+						if err != nil {
+							return err
+						}
+						previewName = resolved
+					} else {
+						previewName = defaultName
+					}
 				}
+				isUpdate = previewName == existingPreview && existingPreview != ""
 				previewURL = renderStageURL(stage, previewName)
 				card := ui.NewCard(ui.CardSuccess, "preview").Value(previewName)
 				if isUpdate {
