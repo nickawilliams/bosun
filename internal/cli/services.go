@@ -21,6 +21,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
@@ -204,13 +205,27 @@ func newWorkspaceManager() (*workspace.Manager, error) {
 	return workspace.NewManager(git.New(), wsRoot), nil
 }
 
-// resolveWorkspaceName returns the workspace name from args or auto-detects
-// it from CWD.
-func resolveWorkspaceName(args []string) (string, error) {
+// resolveWorkspaceName returns the workspace name from the resolution chain:
+// (1) --workspace flag, (2) BOSUN_WORKSPACE env var, (3) positional arg,
+// (4) auto-detected from CWD.
+func resolveWorkspaceName(cmd *cobra.Command, args []string) (string, error) {
+	if cmd != nil {
+		if name, _ := cmd.Flags().GetString("workspace"); name != "" {
+			return name, nil
+		}
+	}
+	if name := viper.GetString("workspace"); name != "" {
+		return name, nil
+	}
 	if len(args) > 0 {
 		return args[0], nil
 	}
+	return detectWorkspaceFromCWD()
+}
 
+// detectWorkspaceFromCWD returns the workspace name implied by the current
+// working directory, or an error if CWD is not inside a workspace.
+func detectWorkspaceFromCWD() (string, error) {
 	projectRoot := config.FindProjectRoot()
 	if projectRoot == "" {
 		return "", fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
@@ -229,7 +244,17 @@ func resolveWorkspaceName(args []string) (string, error) {
 		return "", err
 	}
 
-	return workspace.DetectName(wsRoot, cwd)
+	if name, err := workspace.DetectName(wsRoot, cwd); err == nil {
+		return name, nil
+	}
+
+	// Fall back to the path relative to workspace root (CWD is the workspace
+	// directory itself, not inside a worktree).
+	rel, err := filepath.Rel(wsRoot, cwd)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("not inside a workspace under %s", wsRoot)
+	}
+	return rel, nil
 }
 
 // cliRepositoriesToWorkspaceRepositories converts CLI Repository types to workspace Repository types.
