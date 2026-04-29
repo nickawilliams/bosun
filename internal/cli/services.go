@@ -507,33 +507,55 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		return defaults[field]
 	}
 
-	// Build issue + ephemeral as two-column fields.
-	var fields []notify.Field
+	var sections []notify.Section
+
+	// Jira ticket card.
 	if data.IssueKey != "" {
 		issueType := "Issue"
 		if data.IssueType != "" {
 			issueType = data.IssueType
 		}
-		issueLink := data.IssueKey + ": " + data.IssueTitle
+		title := data.IssueKey
+		if data.IssueTitle != "" {
+			title = fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
+		}
+		var buttons []notify.CardButton
 		if data.IssueURL != "" {
-			issueLink = fmt.Sprintf("<%s|%s: %s>", data.IssueURL, data.IssueKey, data.IssueTitle)
+			buttons = append(buttons, notify.CardButton{
+				Text:  "View Issue",
+				URL:   data.IssueURL,
+				Style: "primary",
+			})
 		}
-		ephemeralValue := "_-none-_"
-		if data.PreviewURL != "" {
-			ephemeralValue = fmt.Sprintf("<%s|%s>", data.PreviewURL, data.PreviewName)
-		} else if data.PreviewName != "" {
-			ephemeralValue = data.PreviewName
-		}
-		fields = append(fields,
-			notify.Field{
-				Key:   fmt.Sprintf("*:jira: %s*\n%s", issueType, issueLink),
-				Value: fmt.Sprintf("*:cloud: Ephemeral*\n%s", ephemeralValue),
-			},
-		)
+		sections = append(sections, notify.Section{
+			Text:     ":jira: " + title,
+			Subtitle: issueType,
+			Buttons:  buttons,
+		})
 	}
 
-	// Build per-repo card sections.
-	var sections []notify.Section
+	// Ephemeral deployment card.
+	if data.PreviewName != "" || data.PreviewURL != "" {
+		name := data.PreviewName
+		if name == "" {
+			name = "Preview"
+		}
+		var buttons []notify.CardButton
+		if data.PreviewURL != "" {
+			buttons = append(buttons, notify.CardButton{
+				Text:  "View Deployment",
+				URL:   data.PreviewURL,
+				Style: "primary",
+			})
+		}
+		sections = append(sections, notify.Section{
+			Text:     ":cloud: " + name,
+			Subtitle: "Ephemeral preview",
+			Buttons:  buttons,
+		})
+	}
+
+	// Per-repo PR card sections.
 	for _, item := range data.Items {
 		// Card title: PR title (same as what we set on the PR).
 		title := data.IssueKey
@@ -568,7 +590,6 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 	return notify.Content{
 		Header:   renderTemplate(get("header"), data),
 		Body:     renderTemplate(get("body"), data),
-		Fields:   fields,
 		Sections: sections,
 		Context:  renderTemplate(get("context"), data),
 	}
