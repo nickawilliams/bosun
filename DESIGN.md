@@ -189,6 +189,35 @@ repositories:
 workspace_root: _workspaces
 ```
 
+**CI/CD workflows** (project config, optional — `bosun init` prompts for these):
+
+```yaml
+github_actions:
+  workflows:
+    preview:
+      url_template: "https://{{.Name}}.preview.example.com"
+      up:
+        target: org/repo/.github/workflows/deploy-preview.yml
+        inputs:
+          services: services-to-deploy
+          name: name
+      down:
+        target: org/repo/.github/workflows/teardown-preview.yml
+        inputs:
+          name: name
+    release:
+      target: org/repo/.github/workflows/deploy.yml
+      inputs:
+        services: services-to-deploy
+```
+
+The `preview` stage has paired `up` (deploy) and `down` (teardown) actions
+with their own targets and inputs. `url_template` lives at the stage level
+since it describes the env both actions reference; `bosun preview` uses it
+to probe whether an environment is already running before redeploying. The
+`down` block is optional — when configured, `bosun preview` schedules a
+teardown of the prior environment if you supply a different `--name`.
+
 ### Project Structure
 
 ```
