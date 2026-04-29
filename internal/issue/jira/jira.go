@@ -304,6 +304,20 @@ func (a *Adapter) SetProperty(ctx context.Context, issueKey string, value any) e
 	return nil
 }
 
+func (a *Adapter) DeleteProperty(ctx context.Context, issueKey string) error {
+	path := fmt.Sprintf("/rest/api/3/issue/%s/properties/%s", issueKey, propertyKey)
+	resp, err := a.doRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		// 404 means the property already doesn't exist — treat as success.
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return nil
+		}
+		return fmt.Errorf("deleting property for %s: %w", issueKey, err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // buildJQL assembles a JQL query string from the given ListQuery filters.
 func buildJQL(query issue.ListQuery) string {
 	clauses := []string{"resolution = Unresolved"}

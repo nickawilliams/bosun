@@ -82,4 +82,8 @@ type Tracker interface {
 	// serialized as JSON. Use this for machine-readable metadata that
 	// should not be visible to end users.
 	SetProperty(ctx context.Context, issueKey string, value any) error
+
+	// DeleteProperty removes a stored property from an issue. A missing
+	// property is not an error.
+	DeleteProperty(ctx context.Context, issueKey string) error
 }
