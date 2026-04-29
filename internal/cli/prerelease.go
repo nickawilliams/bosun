@@ -94,8 +94,9 @@ func newPrereleaseCmd() *cobra.Command {
 
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  "create release",
-						Target: r.Name,
+						Action: "release",
+						Type:   "repo",
+						Name:   r.Name,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							if currentTag == nextVersion {
 								// Capture existing release so notifications have
@@ -142,10 +143,11 @@ func newPrereleaseCmd() *cobra.Command {
 			if releaseChannel != "" && releaseNotifierErr == nil {
 				releaseNotifyOp := ui.PlanCreate
 				actions = append(actions, Action{
-					Op:    ui.PlanCreate,
-					OpRef: &releaseNotifyOp,
-					Label: "notify",
-					Target: releaseChannel,
+					Op:     ui.PlanCreate,
+					OpRef:  &releaseNotifyOp,
+					Action: "notify",
+					Type:   "channel",
+					Name:   releaseChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
 						if ref.Timestamp != "" {

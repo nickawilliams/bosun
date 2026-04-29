@@ -10,21 +10,21 @@ import (
 // setupGitHubActions guides the user through configuring GitHub Actions
 // workflows for preview and release stages.
 func setupGitHubActions() error {
-	// --- Preview workflow ---
-	preview, err := promptDefault("Preview Workflow", viper.GetString("github_actions.workflows.preview.target"))
+	// --- Preview up (deploy) workflow ---
+	preview, err := promptDefault("Preview Up Workflow", viper.GetString("github_actions.workflows.preview.up.target"))
 	if err != nil {
 		return err
 	}
 	if preview != "" {
-		if err := saveConfigKey("github_actions.workflows.preview.target", "Preview Workflow", preview); err != nil {
+		if err := saveConfigKey("github_actions.workflows.preview.up.target", "Preview Up Workflow", preview); err != nil {
 			return err
 		}
 	} else {
-		ui.Skip("preview workflow")
+		ui.Skip("preview up workflow")
 	}
 
 	// --- Service input parameter ---
-	serviceInputDefault := viper.GetString("github_actions.workflows.preview.inputs.services")
+	serviceInputDefault := viper.GetString("github_actions.workflows.preview.up.inputs.services")
 	if serviceInputDefault == "" {
 		// Matches schema default in schema.go. The config schema refactor
 		// (ROADMAP.md) will unify these into a single source of truth.
@@ -35,7 +35,7 @@ func setupGitHubActions() error {
 		return err
 	}
 	if serviceInput != "" {
-		if err := saveConfigKey("github_actions.workflows.preview.inputs.services", "Service Input Parameter", serviceInput); err != nil {
+		if err := saveConfigKey("github_actions.workflows.preview.up.inputs.services", "Service Input Parameter", serviceInput); err != nil {
 			return err
 		}
 	} else {
@@ -76,6 +76,11 @@ func setupGitHubActions() error {
 		} else {
 			ui.Skip("services (all default to repo name)")
 		}
+	}
+
+	// --- Preview down (teardown) workflow ---
+	if err := setupPreviewDownWorkflow(); err != nil {
+		return err
 	}
 
 	// --- Release workflow(s) ---
@@ -140,4 +145,40 @@ func setupGitHubActions() error {
 	}
 	ui.Saved("release workflows", fmt.Sprintf("%d repos configured", len(releaseMap)))
 	return nil
+}
+
+// setupPreviewDownWorkflow prompts for the preview down (teardown) workflow
+// and its name input parameter. The down stage is name-scoped (no services
+// input) and optional — leaving the workflow blank skips the section. The
+// name input parameter defaults to whatever was configured for preview up,
+// since most teams will want them aligned.
+func setupPreviewDownWorkflow() error {
+	target, err := promptDefault("Preview Down Workflow", viper.GetString("github_actions.workflows.preview.down.target"))
+	if err != nil {
+		return err
+	}
+	if target == "" {
+		ui.Skip("preview down workflow")
+		return nil
+	}
+	if err := saveConfigKey("github_actions.workflows.preview.down.target", "Preview Down Workflow", target); err != nil {
+		return err
+	}
+
+	nameDefault := viper.GetString("github_actions.workflows.preview.down.inputs.name")
+	if nameDefault == "" {
+		nameDefault = viper.GetString("github_actions.workflows.preview.up.inputs.name")
+	}
+	if nameDefault == "" {
+		nameDefault = "name"
+	}
+	nameInput, err := promptDefault("Preview Down Name Input Parameter", nameDefault)
+	if err != nil {
+		return err
+	}
+	if nameInput == "" {
+		ui.Skip("preview down name input")
+		return nil
+	}
+	return saveConfigKey("github_actions.workflows.preview.down.inputs.name", "Preview Down Name Input Parameter", nameInput)
 }

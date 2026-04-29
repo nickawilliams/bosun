@@ -84,8 +84,15 @@ func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 	return pc.RunApply(wrappedActions)
 }
 
-// isAutoApprove returns true if the --yes flag is set.
+// isAutoApprove returns true if the --yes or --force flag is set. Commands
+// that don't define one of the flags get a false from cobra (with an
+// ignored error), so the check is safe to apply uniformly.
 func isAutoApprove(cmd *cobra.Command) bool {
-	v, _ := cmd.Flags().GetBool("yes")
-	return v
+	if v, _ := cmd.Flags().GetBool("yes"); v {
+		return true
+	}
+	if v, _ := cmd.Flags().GetBool("force"); v {
+		return true
+	}
+	return false
 }

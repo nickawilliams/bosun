@@ -88,8 +88,9 @@ func newCreateCmd() *cobra.Command {
 			actions := []Action{
 				{
 					Op:     ui.PlanCreate,
-					Label:  "create issue",
-					Target: project,
+					Action: "issue",
+					Type:   "project",
+					Name:   project,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						return ActionNeeded, fmt.Sprintf("%s: %q", issueType, title), nil
 					},

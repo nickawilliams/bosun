@@ -140,8 +140,9 @@ func newStartCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
-					Label:  "create branch",
-					Target: repoName,
+					Action: "branch",
+					Type:   "repo",
+					Name:   repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						exists, err := g.BranchExists(ctx, repoPath, branchName)
 						if err != nil {
@@ -173,8 +174,9 @@ func newStartCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
-					Label:  "create worktree",
-					Target: repoName,
+					Action: "worktree",
+					Type:   "repo",
+					Name:   repoName,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						if _, err := os.Stat(worktreePath); err == nil {
 							return ActionCompleted, displayPath, nil

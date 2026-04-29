@@ -18,12 +18,15 @@ const (
 	PlanDetail                 // + informational sub-item (not counted in summaries)
 )
 
-// PlanItem describes a single action in a plan.
+// PlanItem describes a single action in a plan. The four core fields (Op,
+// Action, Type, Name) form the identity of the change; Detail is
+// supplementary human-readable context.
 type PlanItem struct {
 	Op     PlanOp
-	Action string // "Create Pull Request" or just "Pull Request" (for =)
-	Target string // repository name, issue key, channel name
-	Detail string // branch name, PR number, status transition
+	Action string // operation noun: "deploy", "branch", "notify"
+	Type   string // subject category: "repo", "env", "channel", "issue"
+	Name   string // subject identifier: "api", "brave-falcon", "#reviews"
+	Detail string // free-form qualifier: transition, state, description
 }
 
 // Plan collects planned actions and renders them as a diff-style list.
@@ -37,8 +40,8 @@ func NewPlan() *Plan {
 }
 
 // Add appends a plan item.
-func (p *Plan) Add(op PlanOp, action, target, detail string) *Plan {
-	p.items = append(p.items, PlanItem{Op: op, Action: action, Target: target, Detail: detail})
+func (p *Plan) Add(op PlanOp, action, subjectType, name, detail string) *Plan {
+	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail})
 	return p
 }
 
@@ -73,44 +76,13 @@ func (p *Plan) Render() string {
 	summary := p.Summary()
 	fmt.Fprintf(&b, " %s  %s %s\n", glyphStyle.Render(cardGlyphInfo), headingStyle.Render("Plan:"), summary)
 
-	// Compute column widths for alignment.
-	maxAction := 0
-	maxTarget := 0
+	widths := p.columnWidths()
+
 	for _, item := range p.items {
-		if len(item.Action) > maxAction {
-			maxAction = len(item.Action)
-		}
-		if len(item.Target) > maxTarget {
-			maxTarget = len(item.Target)
-		}
-	}
-
-	// Render each item.
-	for _, item := range p.items {
-		symbol, symbolStyle := planSymbol(item.Op)
-		actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-		targetStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-
-		// NoChange items are entirely muted.
-		if item.Op == PlanNoChange {
-			actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			targetStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-		}
-
-		paddedAction := fmt.Sprintf("%-*s", maxAction, item.Action)
-		paddedTarget := fmt.Sprintf("%-*s", maxTarget, item.Target)
-
-		line := fmt.Sprintf(" %s    %s  %s  %s  %s",
+		fmt.Fprintf(&b, " %s    %s\n",
 			connStyle.Render("│"),
-			symbolStyle.Render(symbol),
-			actionStyle.Render(paddedAction),
-			targetStyle.Render(paddedTarget),
-			detailStyle.Render(item.Detail),
+			renderPlanRow(item, widths),
 		)
-
-		fmt.Fprintf(&b, "%s\n", line)
 	}
 
 	return b.String()
@@ -145,41 +117,11 @@ func (p *Plan) RenderItems() string {
 		return ""
 	}
 
-	maxAction := 0
-	maxTarget := 0
-	for _, item := range p.items {
-		if len(item.Action) > maxAction {
-			maxAction = len(item.Action)
-		}
-		if len(item.Target) > maxTarget {
-			maxTarget = len(item.Target)
-		}
-	}
-
+	widths := p.columnWidths()
 	var b strings.Builder
 	for _, item := range p.items {
-		symbol, symbolStyle := planSymbol(item.Op)
-		actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-		targetStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-
-		if item.Op == PlanNoChange {
-			actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			targetStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-		}
-
-		paddedAction := fmt.Sprintf("%-*s", maxAction, item.Action)
-		paddedTarget := fmt.Sprintf("%-*s", maxTarget, item.Target)
-
-		fmt.Fprintf(&b, "  %s  %s  %s  %s\n",
-			symbolStyle.Render(symbol),
-			actionStyle.Render(paddedAction),
-			targetStyle.Render(paddedTarget),
-			detailStyle.Render(item.Detail),
-		)
+		fmt.Fprintf(&b, "  %s\n", renderPlanRow(item, widths))
 	}
-
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -269,49 +211,70 @@ func (p *Plan) SummaryPartial(succeeded, failed int) string {
 }
 
 // RenderItemLines returns the formatted action lines as a slice for reuse
-// by PlanCard. Each line includes the symbol, action, target, and detail
+// by PlanCard. Each line includes the symbol, action, type, name, and detail
 // but no spine or heading.
 func (p *Plan) RenderItemLines() []string {
 	if len(p.items) == 0 {
 		return nil
 	}
 
-	maxAction := 0
-	maxTarget := 0
-	for _, item := range p.items {
-		if len(item.Action) > maxAction {
-			maxAction = len(item.Action)
-		}
-		if len(item.Target) > maxTarget {
-			maxTarget = len(item.Target)
-		}
-	}
-
+	widths := p.columnWidths()
 	var lines []string
 	for _, item := range p.items {
-		symbol, symbolStyle := planSymbol(item.Op)
-		actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-		targetStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
+		lines = append(lines, "  "+renderPlanRow(item, widths))
+	}
+	return lines
+}
 
-		if item.Op == PlanNoChange {
-			actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			targetStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-			detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+// planColumnWidths captures the width of each variable-length column.
+type planColumnWidths struct {
+	action int
+	typ    int
+	name   int
+}
+
+// columnWidths returns the max widths for the action, type, and name columns
+// across all plan items. Used to align the diff-style display.
+func (p *Plan) columnWidths() planColumnWidths {
+	var w planColumnWidths
+	for _, item := range p.items {
+		if len(item.Action) > w.action {
+			w.action = len(item.Action)
 		}
+		if len(item.Type) > w.typ {
+			w.typ = len(item.Type)
+		}
+		if len(item.Name) > w.name {
+			w.name = len(item.Name)
+		}
+	}
+	return w
+}
 
-		paddedAction := fmt.Sprintf("%-*s", maxAction, item.Action)
-		paddedTarget := fmt.Sprintf("%-*s", maxTarget, item.Target)
+// renderPlanRow renders one PlanItem as the symbol + action + type + name +
+// detail, padded to the given column widths. NoChange items render fully
+// muted to convey "no work to do."
+func renderPlanRow(item PlanItem, w planColumnWidths) string {
+	symbol, symbolStyle := planSymbol(item.Op)
+	actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
+	typeStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	nameStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
 
-		lines = append(lines, fmt.Sprintf("  %s  %s  %s  %s",
-			symbolStyle.Render(symbol),
-			actionStyle.Render(paddedAction),
-			targetStyle.Render(paddedTarget),
-			detailStyle.Render(item.Detail),
-		))
+	if item.Op == PlanNoChange {
+		actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+		typeStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+		nameStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+		detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
 	}
 
-	return lines
+	return fmt.Sprintf("%s  %s  %s  %s  %s",
+		symbolStyle.Render(symbol),
+		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),
+		typeStyle.Render(fmt.Sprintf("%-*s", w.typ, item.Type)),
+		nameStyle.Render(fmt.Sprintf("%-*s", w.name, item.Name)),
+		detailStyle.Render(item.Detail),
+	)
 }
 
 // planSymbol returns the diff symbol and its style for a given operation.

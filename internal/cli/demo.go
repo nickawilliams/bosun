@@ -50,11 +50,11 @@ func newDemoCmd() *cobra.Command {
 // buildDemoPlan constructs a plan with all four operation types.
 func buildDemoPlan() *ui.Plan {
 	return ui.NewPlan().
-		Add(ui.PlanCreate, "create branch", "api", "feature/ABC-123").
-		Add(ui.PlanCreate, "create worktree", "api", "workspaces/ABC-123/api").
-		Add(ui.PlanModify, "update status", "ABC-123", "Open → In Progress").
-		Add(ui.PlanDestroy, "delete branch", "web", "feature/OLD-456").
-		Add(ui.PlanNoChange, "branch", "infra", "feature/ABC-123")
+		Add(ui.PlanCreate, "branch", "repo", "api", "feature/ABC-123").
+		Add(ui.PlanCreate, "worktree", "repo", "api", "workspaces/ABC-123/api").
+		Add(ui.PlanModify, "status", "issue", "ABC-123", "Open → In Progress").
+		Add(ui.PlanDestroy, "branch", "repo", "web", "feature/OLD-456").
+		Add(ui.PlanNoChange, "branch", "repo", "infra", "feature/ABC-123")
 }
 
 // --- Static sections ---

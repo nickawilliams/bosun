@@ -73,8 +73,9 @@ func newCleanupCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
-					Label:  "remove worktree",
-					Target: repoName,
+					Action: "worktree",
+					Type:   "repo",
+					Name:   repoName,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						if _, err := os.Stat(worktreePath); err != nil {
 							return ActionCompleted, branchName, nil
@@ -93,8 +94,9 @@ func newCleanupCmd() *cobra.Command {
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
-					Label:  "delete branch",
-					Target: repoName,
+					Action: "branch",
+					Type:   "repo",
+					Name:   repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						exists, err := g.BranchExists(ctx, repoPath, branchName)
 						if err != nil {

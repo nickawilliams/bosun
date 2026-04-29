@@ -78,8 +78,9 @@ func newReleaseCmd() *cobra.Command {
 					target := t
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  "trigger production deploy",
-						Target: target.Label,
+						Action: "deploy",
+						Type:   "repo",
+						Name:   target.Label,
 						Assess: func(_ context.Context) (ActionState, string, error) {
 							return ActionNeeded, fmt.Sprintf("main → %s", target.Workflow), nil
 						},

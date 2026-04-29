@@ -294,11 +294,6 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Plan + Apply ---
 
-			createLabel := "create pull request"
-			if draft {
-				createLabel = "create draft pull request"
-			}
-
 			var actions []Action
 
 			type prResult struct {
@@ -319,8 +314,9 @@ func newReviewCmd() *cobra.Command {
 
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
-						Label:  createLabel,
-						Target: repoDisplayName,
+						Action: "pr",
+						Type:   "repo",
+						Name:   repoDisplayName,
 						Assess: func(ctx context.Context) (ActionState, string, error) {
 							existing, err := host.GetPRForBranch(ctx, owner, repoName, branch)
 							if err != nil {
@@ -335,7 +331,11 @@ func newReviewCmd() *cobra.Command {
 								})
 								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 							}
-							return ActionNeeded, fmt.Sprintf("%s → %s", branch, baseBranch), nil
+							detail := fmt.Sprintf("%s → %s", branch, baseBranch)
+							if draft {
+								detail += " (draft)"
+							}
+							return ActionNeeded, detail, nil
 						},
 						Apply: func(ctx context.Context) error {
 							pr, err := host.CreatePR(ctx, code.CreatePRRequest{
@@ -384,10 +384,11 @@ func newReviewCmd() *cobra.Command {
 			if !draft && reviewChannel != "" && notifierErr == nil {
 				notifyOp := ui.PlanCreate
 				actions = append(actions, Action{
-					Op:    ui.PlanCreate,
-					OpRef: &notifyOp,
-					Label: "notify",
-					Target: reviewChannel,
+					Op:     ui.PlanCreate,
+					OpRef:  &notifyOp,
+					Action: "notify",
+					Type:   "channel",
+					Name:   reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
 						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)
 						if ref.Timestamp == "" {

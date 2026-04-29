@@ -25,8 +25,9 @@ const (
 type Action struct {
 	Op     ui.PlanOp  // Operation type shown in the plan (create/modify/destroy).
 	OpRef  *ui.PlanOp // If set, overrides Op after Assess (allows Assess to change the op).
-	Label  string     // Action label (e.g. "Pull Request", "Branch").
-	Target string     // Target name (e.g. repository name, issue key).
+	Action string     // Operation noun: "deploy", "branch", "notify", "status".
+	Type   string     // Subject category: "repo", "env", "channel", "issue".
+	Name   string     // Subject identifier: "api", "brave-falcon", "#reviews".
 
 	// Assess queries current state and returns the action's readiness plus a
 	// detail string for the plan item (e.g. "#42" for an existing PR,
@@ -64,12 +65,12 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 			}
 			switch state {
 			case ActionNeeded:
-				plan.Add(a.op(), a.Label, a.Target, detail)
+				plan.Add(a.op(), a.Action, a.Type, a.Name, detail)
 				if a.op() != ui.PlanDetail {
 					pending = append(pending, *a)
 				}
 			case ActionCompleted:
-				plan.Add(ui.PlanNoChange, a.Label, a.Target, detail)
+				plan.Add(ui.PlanNoChange, a.Action, a.Type, a.Name, detail)
 			case ActionSkipped:
 				// Omit from plan entirely.
 			}
