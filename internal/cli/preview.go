@@ -168,6 +168,10 @@ func newPreviewCmd() *cobra.Command {
 // during resolution, the env just doesn't get an explicit teardown trigger.
 func buildTeardownActions(ctx context.Context, pipeline cicd.CICD, name, issueKey string) []Action {
 	const stage = "preview.down"
+	if strings.TrimSpace(name) == "" {
+		ui.Fail("preview down: refusing to trigger without an env name")
+		return nil
+	}
 	targets, err := resolveWorkflowTargets(ctx, stage)
 	if err != nil || len(targets) == 0 {
 		ui.Skip("preview down: no workflow configured")
@@ -179,6 +183,13 @@ func buildTeardownActions(ctx context.Context, pipeline cicd.CICD, name, issueKe
 	}
 
 	nameKey := stageInputName(stage, "name")
+	if nameKey == "" {
+		// Without a configured name input, the workflow would be invoked
+		// with no name — which many teardown workflows interpret as "clean
+		// everything." Refuse rather than risk it.
+		ui.Fail("preview down: github_actions.workflows.preview.down.inputs.name is not configured")
+		return nil
+	}
 	issueInputKey := stageInputName(stage, "issue")
 
 	actions := make([]Action, 0, len(targets))
@@ -193,9 +204,11 @@ func buildTeardownActions(ctx context.Context, pipeline cicd.CICD, name, issueKe
 				return ActionNeeded, name, nil
 			},
 			Apply: func(ctx context.Context) error {
-				inputs := map[string]string{}
-				if nameKey != "" {
-					inputs[nameKey] = name
+				if strings.TrimSpace(name) == "" {
+					return fmt.Errorf("preview down: refusing to trigger without an env name")
+				}
+				inputs := map[string]string{
+					nameKey: name,
 				}
 				if issueInputKey != "" {
 					inputs[issueInputKey] = issueKey
@@ -258,7 +271,15 @@ func currentAction(name string) Action {
 // Returns the resolved PR data so callers can reuse it for notifications.
 func buildDeployActions(cmd *cobra.Command, ctx context.Context, pipeline cicd.CICD, tracker issue.Tracker, issueKey string, resolution previewResolution) ([]Action, []repoPR) {
 	const stage = "preview.up"
-	targets, _ := resolveWorkflowTargets(ctx, stage)
+	targets, err := resolveWorkflowTargets(ctx, stage)
+	if err != nil {
+		ui.Fail(fmt.Sprintf("preview up: %v", err))
+		return nil, nil
+	}
+	if len(targets) == 0 {
+		ui.Skip("preview up: no workflow configured")
+		return nil, nil
+	}
 	inputs, _ := buildWorkflowInputs(cmd, ctx, stage, issueKey)
 
 	if nameKey := stageInputName(stage, "name"); nameKey != "" {
