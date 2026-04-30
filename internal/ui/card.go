@@ -1,14 +1,15 @@
 package ui
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"unicode"
-	"unicode/utf8"
 )
 
 // CardState represents the lifecycle state of a card.
@@ -49,6 +50,30 @@ const (
 	// spine that runs through every card below.
 	cardGlyphRoot = "╭"
 )
+
+// AppVersion is the application version displayed in the upper-right
+// corner of the root card box. Set from main via ldflags.
+var AppVersion = "dev"
+
+// BreadcrumbPrefix is an optional glyph rendered before the breadcrumb
+// title on the root card closing line. Leave empty to omit.
+var BreadcrumbPrefix = ""
+
+// BreadcrumbPostfix is an optional glyph rendered after the breadcrumb
+// title, before the trailing rule on the root card closing line.
+// Leave empty to omit.
+var BreadcrumbPostfix = ""
+
+//go:embed logo.txt
+var logoRaw string
+
+// asciiLogo is the block-character art rendered in place of the
+// plain "Bosun" text on root cards. The content is embedded from
+// logo.txt at build time — edit that file to change the art.
+var asciiLogo = func() []string {
+	lines := strings.Split(strings.TrimSuffix(logoRaw, "\n"), "\n")
+	return lines
+}()
 
 // Card represents a single unit of output in the bosun timeline.
 // Cards render with a state glyph in the left gutter and one or more
@@ -198,25 +223,104 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	conn := pad + c.renderConnector() + "  "
 
 	// Between the glyph and the title is normally two spaces. Root
-	// cards draw a horizontal rule through the title so the heading
-	// reads as a visual divider: ╭── Title ─────────────────
+	// cards wrap the ASCII art logo in a full-width box that extends
+	// to the terminal edge. The left side doubles as the timeline
+	// connector and the right border sweeps back to the breadcrumb:
+	//
+	//  ╭──────────────────────────────────────────────────────────╮
+	//  │  ▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖▗▖  ▗▖                            │
+	//  │  ...                                                     │
+	//  │                                                          │
+	//  │  Command ────────────────────────────────────────────────╯
+	//  │
 	gap := "  "
 	if c.state == CardRoot {
 		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		rendered := renderBreadcrumbTitle(c.title)
-		// Title visible width (without ANSI).
-		titleWidth := lipgloss.Width(rendered)
-		// Available width: terminal minus pad(1) + glyph(1) + pre-dash(1) + space(1) + title + space(1).
-		trailLen := TermWidth() - 5 - titleWidth
-		if trailLen < 2 {
-			trailLen = 2
+		logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
+
+		// Box spans the full terminal width.
+		// Layout: pad(1) + border(1) + inner + border(1) = TermWidth()
+		boxInner := TermWidth() - 3
+		if boxInner < 10 {
+			boxInner = 10
 		}
-		trail := ""
-		for range trailLen {
-			trail += "─"
+
+		// Top border — the glyph (╭) starts the box.
+		fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
+			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
+
+		// Logo lines: │  art ...padding... │
+		// The first line includes the version string right-aligned.
+		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+		versionStr := versionStyle.Render(AppVersion)
+		versionWidth := lipgloss.Width(versionStr)
+		for i, line := range asciiLogo {
+			artWidth := lipgloss.Width(line)
+			if i == 0 {
+				// │  art  ...padding...  version  │
+				rightPad := boxInner - 2 - artWidth - versionWidth - 2
+				if rightPad < 1 {
+					rightPad = 1
+				}
+				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
+					ruleStyle.Render("│"),
+					logoStyle.Render(line),
+					strings.Repeat(" ", rightPad),
+					versionStr,
+					ruleStyle.Render("│"))
+			} else {
+				rightPad := boxInner - 2 - artWidth
+				if rightPad < 1 {
+					rightPad = 1
+				}
+				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
+					ruleStyle.Render("│"),
+					logoStyle.Render(line),
+					strings.Repeat(" ", rightPad),
+					ruleStyle.Render("│"))
+			}
 		}
-		gap = ruleStyle.Render("─") + " "
-		fmt.Fprintf(&b, "%s%s%s%s %s\n", pad, glyph, gap, rendered, ruleStyle.Render(trail))
+
+		// Bottom: breadcrumb closes the right side with ╯.
+		segments := strings.Split(c.title, " › ")
+		if len(segments) > 1 {
+			primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+			sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
+			styledSegs := make([]string, len(segments)-1)
+			for i, seg := range segments[1:] {
+				styledSegs[i] = primaryStyle.Render(titleCase(seg))
+			}
+			breadcrumb := strings.Join(styledSegs, sepStyle.Render(" › "))
+
+			// Optional prefix/postfix glyphs around the breadcrumb.
+			prefix := ""
+			prefixWidth := 0
+			if BreadcrumbPrefix != "" {
+				prefix = ruleStyle.Render(BreadcrumbPrefix) + " "
+				prefixWidth = lipgloss.Width(prefix)
+			}
+			postfix := " "
+			postfixWidth := 1
+			if BreadcrumbPostfix != "" {
+				postfix = " " + ruleStyle.Render(BreadcrumbPostfix) + " "
+				postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
+			}
+
+			ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(breadcrumb) - postfixWidth
+			if ruleLen < 1 {
+				ruleLen = 1
+			}
+			fmt.Fprintf(&b, "%s%s  %s%s%s%s\n", pad,
+				ruleStyle.Render("│"),
+				prefix,
+				breadcrumb,
+				postfix,
+				ruleStyle.Render(strings.Repeat("─", ruleLen)+"╯"))
+		} else {
+			fmt.Fprintf(&b, "%s%s  %s\n", pad,
+				ruleStyle.Render("│"),
+				ruleStyle.Render(strings.Repeat("─", boxInner-2)+"╯"))
+		}
 	} else {
 		if c.value != "" {
 			valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)

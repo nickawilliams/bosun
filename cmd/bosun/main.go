@@ -17,6 +17,7 @@ var (
 )
 
 func main() {
+	ui.AppVersion = version
 	cmd := cli.NewRootCmd()
 
 	opts := []fang.Option{

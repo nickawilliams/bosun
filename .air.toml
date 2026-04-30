@@ -6,7 +6,7 @@ tmp_dir = ".out/air"
 [build]
 cmd = "make build"
 entrypoint = ["/usr/bin/true"]
-include_ext = ["go", "toml", "yaml"]
+include_ext = ["go", "toml", "yaml", "txt"]
 
 [log]
 time = true
