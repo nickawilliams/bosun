@@ -162,28 +162,28 @@ func httpProbe(ctx context.Context, url string) (bool, error) {
 
 // probePreviewName probes the URL for the given name. Returns probeUnknown
 // when name is empty or the stage has no url_template configured (no probe
-// possible). Honors --force on probe failure: prints a notice and returns
-// probeDead so the caller proceeds as if the env doesn't exist.
-func probePreviewName(ctx context.Context, stage, name string, force bool) (probeOutcome, error) {
+// possible). Honors --force on probe failure: returns probeDead with the
+// probed URL as forceFallbackURL so the caller can print a notice after the
+// surrounding spinner closes.
+func probePreviewName(ctx context.Context, stage, name string, force bool) (outcome probeOutcome, forceFallbackURL string, err error) {
 	if name == "" {
-		return probeUnknown, nil
+		return probeUnknown, "", nil
 	}
 	url := renderStageURL(stage, name)
 	if url == "" {
-		return probeUnknown, nil
+		return probeUnknown, "", nil
 	}
-	alive, err := httpProbe(ctx, url)
-	if err != nil {
+	alive, perr := httpProbe(ctx, url)
+	if perr != nil {
 		if force {
-			ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", url))
-			return probeDead, nil
+			return probeDead, url, nil
 		}
-		return 0, fmt.Errorf("verifying %s: %w", url, err)
+		return 0, "", fmt.Errorf("verifying %s: %w", url, perr)
 	}
 	if alive {
-		return probeAlive, nil
+		return probeAlive, "", nil
 	}
-	return probeDead, nil
+	return probeDead, "", nil
 }
 
 // adoptChoice represents the user's decision when an env conflict is detected.
@@ -247,9 +247,39 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 
 	metaName := strings.TrimSpace(fetchExistingPreviewName(ctx, tracker, issueKey))
 
-	metaProbe, err := probePreviewName(ctx, stage, metaName, force)
-	if err != nil {
-		return previewResolution{}, err
+	// Run resolution work inside one spinner so the user always gets
+	// feedback during the HTTP probes (up to ~6s combined). Probes run
+	// sequentially; force-fallback notices and stale-metadata cleanup
+	// print after the spinner closes to avoid interleaving with the
+	// spinner's TUI output. The spinner shows even when both names are
+	// empty (Row 1) — the work is near-instant in that case but the
+	// initial card frame keeps feedback consistent across all paths.
+	var (
+		metaProbe, flagProbe probeOutcome
+		metaForceURL         string
+		flagForceURL         string
+	)
+	rewind, probeErr := ui.RunCardRewindable("resolving preview", func() error {
+		var e error
+		metaProbe, metaForceURL, e = probePreviewName(ctx, stage, metaName, force)
+		if e != nil {
+			return e
+		}
+		flagProbe, flagForceURL, e = probePreviewName(ctx, stage, flagName, force)
+		return e
+	})
+	if probeErr != nil {
+		return previewResolution{}, probeErr
+	}
+	if rewind != nil {
+		rewind()
+	}
+
+	if metaForceURL != "" {
+		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", metaForceURL))
+	}
+	if flagForceURL != "" {
+		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", flagForceURL))
 	}
 
 	// Stale metadata cleanup happens immediately during resolution. Trade-
@@ -264,11 +294,6 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 		}
 		metaName = ""
 		metaProbe = probeUnknown
-	}
-
-	flagProbe, err := probePreviewName(ctx, stage, flagName, force)
-	if err != nil {
-		return previewResolution{}, err
 	}
 
 	res := previewResolution{}
