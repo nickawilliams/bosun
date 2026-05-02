@@ -21,21 +21,41 @@ func newDemoCmd() *cobra.Command {
 			headerAnnotationTitle: "UI components",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			demoCards(cmd)
-			demoTree()
-			ui.ClearBreak()
-			fmt.Println()
-			demoPlanCardStates()
-			demoFormStatic()
-
-			if interactive {
-				demoSpinners()
-				if err := demoForms(); err != nil {
-					return err
-				}
-				demoSlot()
-				demoPlanApply()
+			if !interactive {
+				demoCards(cmd)
+				demoTree()
+				ui.ClearBreak()
+				fmt.Println()
+				demoPlanCardStates()
+				demoFormStatic()
+				return nil
 			}
+
+			rootCard(cmd, "interactive walkthrough").Print()
+
+			demoSpinners()
+			if err := demoContinue("Next: groups (parent-with-children, aggregation)"); err != nil {
+				return err
+			}
+
+			demoGroups()
+			if err := demoContinue("Next: forms (single input, confirm, multi-field)"); err != nil {
+				return err
+			}
+
+			if err := demoForms(); err != nil {
+				return err
+			}
+			if err := demoContinue("Next: slot (transient card replacement)"); err != nil {
+				return err
+			}
+
+			demoSlot()
+			if err := demoContinue("Next: plan apply (animated action execution)"); err != nil {
+				return err
+			}
+
+			demoPlanApply()
 
 			return nil
 		},
@@ -187,6 +207,14 @@ func demoFormStatic() {
 // --- Interactive sections (gated by --interactive) ---
 
 func demoSpinners() {
+	// Fast operation — exercises the spinner timing floor. Without it,
+	// BubbleTea v2 escape sequences leak into stdout when the program
+	// quits before its terminal-mode queries round-trip.
+	_ = ui.RunCard("spinner: fast (timing floor)", func() error {
+		time.Sleep(5 * time.Millisecond)
+		return nil
+	})
+
 	_ = ui.RunCard("spinner: success", func() error {
 		time.Sleep(1500 * time.Millisecond)
 		return nil
@@ -195,6 +223,72 @@ func demoSpinners() {
 	_ = ui.RunCard("spinner: failure", func() error {
 		time.Sleep(1200 * time.Millisecond)
 		return errors.New("permission denied")
+	})
+}
+
+func demoGroups() {
+	r := ui.Default()
+
+	// Stagger delay between children so humans can track each step
+	// appearing. 300ms is in the "noticeable but short" range per
+	// UI animation research (100ms = instant, 200-400ms = short
+	// transition, 1000ms = attention-holding).
+	const step = 300 * time.Millisecond
+
+	// Flat group, all succeed.
+	r.Group("group: all succeed", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("first child")
+		time.Sleep(step)
+		g.Complete("second child")
+		time.Sleep(step)
+		g.Complete("third child")
+	})
+
+	// Mixed outcomes — failure dominates aggregation.
+	r.Group("group: mixed outcomes (failure dominates)", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("succeeded")
+		time.Sleep(step)
+		g.Skip("skipped (precondition unmet)")
+		time.Sleep(step)
+		g.Fail("failed: permission denied")
+		time.Sleep(step)
+		g.Complete("ran anyway")
+	})
+
+	// All skipped — parent finalizes as skipped.
+	r.Group("group: all skipped", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Skip("not configured")
+		time.Sleep(step)
+		g.Skip("not configured")
+	})
+
+	// Group with a Task child — exercises spinner indented under parent.
+	r.Group("group: with spinner child", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("pre-flight check")
+		_ = g.Task("running async work", func() error {
+			time.Sleep(800 * time.Millisecond)
+			return nil
+		})
+		time.Sleep(step)
+		g.Complete("post-flight check")
+	})
+
+	// Nested groups — child is itself a group.
+	r.Group("group: nested", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("outer first")
+		g.Group("inner group", func(inner ui.Reporter) {
+			time.Sleep(step)
+			inner.Complete("inner child a")
+			time.Sleep(step)
+			inner.Complete("inner child b")
+		})
+		time.Sleep(step)
+		g.Complete("outer last")
 	})
 }
 
@@ -310,6 +404,29 @@ func demoPlanApply() {
 }
 
 // --- Helpers ---
+
+// demoContinue shows a yes/no gate between demo sections. The title
+// previews what comes next so the reviewer can inspect the previous
+// section's output at their own pace. Returns ErrCancelled if the
+// user declines.
+func demoContinue(title string) error {
+	var confirmed bool
+	rewind := ui.NewCard(ui.CardInput, "continue").Tight().PrintRewindable()
+	if err := runForm(
+		newConfirm().
+			Title(title).
+			Affirmative("Continue").
+			Negative("Stop").
+			Value(&confirmed),
+	); err != nil {
+		return err
+	}
+	rewind()
+	if !confirmed {
+		return ErrCancelled
+	}
+	return nil
+}
 
 func defaultStr(s, fallback string) string {
 	if s == "" {
