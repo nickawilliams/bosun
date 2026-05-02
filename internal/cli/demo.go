@@ -33,28 +33,31 @@ func newDemoCmd() *cobra.Command {
 
 			rootCard(cmd, "interactive walkthrough").Print()
 
+			if err := demoContinue("Spinners", true); err != nil {
+				return err
+			}
 			demoSpinners()
-			if err := demoContinue("Next: groups (parent-with-children, aggregation)"); err != nil {
+
+			if err := demoContinue("Groups", false); err != nil {
 				return err
 			}
-
 			demoGroups()
-			if err := demoContinue("Next: forms (single input, confirm, multi-field)"); err != nil {
+
+			if err := demoContinue("Forms", false); err != nil {
 				return err
 			}
-
 			if err := demoForms(); err != nil {
 				return err
 			}
-			if err := demoContinue("Next: slot (transient card replacement)"); err != nil {
+
+			if err := demoContinue("Slot", false); err != nil {
 				return err
 			}
-
 			demoSlot()
-			if err := demoContinue("Next: plan apply (animated action execution)"); err != nil {
+
+			if err := demoContinue("Plan Apply", false); err != nil {
 				return err
 			}
-
 			demoPlanApply()
 
 			return nil
@@ -335,7 +338,7 @@ func demoForms() error {
 		issuePriority string
 	)
 	createTitle := "form: multi-field"
-	rewind = ui.NewCard(ui.CardInput, createTitle).
+	rewind = ui.NewCard(ui.CardInput, createTitle).Tight().
 		PrintRewindable()
 	if err := runForm(
 		huh.NewInput().
@@ -405,16 +408,28 @@ func demoPlanApply() {
 
 // --- Helpers ---
 
-// demoContinue shows a yes/no gate between demo sections. The title
-// previews what comes next so the reviewer can inspect the previous
-// section's output at their own pace. Returns ErrCancelled if the
-// user declines.
-func demoContinue(title string) error {
-	var confirmed bool
-	rewind := ui.NewCard(ui.CardInput, "continue").Tight().PrintRewindable()
+// demoContinue shows a gate card between demo sections. The title
+// names the next batch of components; the body gives the user a
+// moment to review what just rendered. Returns ErrCancelled if the
+// user chooses Stop.
+// demoContinue shows a gate card between demo sections. The title
+// names the upcoming batch of components. When first is true, the
+// body invites the user to start; otherwise it gives them a moment
+// to review what just rendered. After the user chooses Continue, the
+// card stays on screen (rewound to its title only) as a section
+// heading for the output that follows.
+func demoContinue(title string, first bool) error {
+	body := "Review the output above, then continue when ready."
+	if first {
+		body = "Each section pauses so you can review at your own pace."
+	}
+
+	confirmed := true
+	rewind := ui.NewCard(ui.CardInput, title).
+		Muted(body).
+		Tight().PrintRewindable()
 	if err := runForm(
 		newConfirm().
-			Title(title).
 			Affirmative("Continue").
 			Negative("Stop").
 			Value(&confirmed),
@@ -425,6 +440,8 @@ func demoContinue(title string) error {
 	if !confirmed {
 		return ErrCancelled
 	}
+	// Re-print the title as a section heading (no body, no form).
+	ui.NewCard(ui.CardInfo, title).Print()
 	return nil
 }
 
