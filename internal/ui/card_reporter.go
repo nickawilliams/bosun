@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // cardReporter is the default Reporter implementation. It renders
@@ -98,13 +100,63 @@ func (r *cardReporter) Task(title string, fn func() error) error {
 	return RunCard(title, fn)
 }
 
-// Group renders a Timeline Card with children, scoping fn's emissions
-// to a child reporter that indents under the parent and tallies
-// outcomes for aggregation. See group.go / RunGroup for behavior.
+// Group renders a Timeline Card with children via a single BubbleTea
+// program that animates both parent and child spinners simultaneously.
+// The callback runs in a goroutine; its Reporter emissions become
+// messages that the BubbleTea model renders in real-time. After the
+// callback returns, BubbleTea exits and the final static render is
+// printed.
 func (r *cardReporter) Group(title string, fn func(g Reporter)) {
-	g := beginGroup(r, title, 0)
-	fn(g)
-	g.finalize()
+	indentLevel := 0
+	msgCh := make(chan groupMsg, 256)
+
+	g := &group{
+		outer:  r,
+		title:  title,
+		indent: indentLevel + 1,
+		msgCh:  msgCh,
+	}
+
+	go func() {
+		fn(g)
+		msgCh <- groupDoneMsg{}
+	}()
+
+	fmt.Print(comfyPrefix())
+
+	model := newGroupModel(title, indentLevel, msgCh)
+	p := tea.NewProgram(model)
+	final, err := p.Run()
+
+	if err != nil {
+		// Non-interactive fallback: drain messages and print directly.
+		drainGroupFallback(title, indentLevel, g, msgCh)
+		comfyBreak = true
+		return
+	}
+
+	m := final.(*groupModel)
+	printFinalGroup(m.root, g.counts)
+	comfyBreak = true
+}
+
+// drainGroupFallback handles the case where BubbleTea can't run
+// (non-interactive terminal). It waits for the callback to finish
+// and prints all accumulated children statically.
+func drainGroupFallback(title string, indent int, g *group, msgCh <-chan groupMsg) {
+	// Callback is already running in a goroutine; drain its messages.
+	for msg := range msgCh {
+		switch msg := msg.(type) {
+		case groupChildMsg:
+			fmt.Print(msg.rendered)
+		case groupTaskDoneMsg:
+			fmt.Print(msg.rendered)
+		case groupDoneMsg:
+			finalState := g.aggregate()
+			fmt.Print(NewCard(finalState, title).Indent(indent).Render())
+			return
+		}
+	}
 }
 
 // Details emits a CardInfo with key-value pairs as body. An empty
