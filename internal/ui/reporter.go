@@ -55,6 +55,16 @@ type Reporter interface {
 	// finalizes as success or failure. Returns fn's error.
 	Task(title string, fn func() error) error
 
+	// --- Grouped output ---
+
+	// Group renders a Timeline Card with children. The parent header
+	// shows pending while fn runs; emissions on the inner Reporter
+	// appear indented under the parent in real-time. When fn returns,
+	// the parent finalizes to a state aggregated from its children
+	// (failure dominates; all-skipped → skipped; success+skipped →
+	// success; info doesn't propagate).
+	Group(title string, fn func(g Reporter))
+
 	// --- Structured output ---
 
 	// Details renders a block of key-value pairs. Use an empty

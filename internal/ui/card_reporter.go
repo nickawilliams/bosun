@@ -98,6 +98,15 @@ func (r *cardReporter) Task(title string, fn func() error) error {
 	return RunCard(title, fn)
 }
 
+// Group renders a Timeline Card with children, scoping fn's emissions
+// to a child reporter that indents under the parent and tallies
+// outcomes for aggregation. See group.go / RunGroup for behavior.
+func (r *cardReporter) Group(title string, fn func(g Reporter)) {
+	g := beginGroup(r, title, 0)
+	fn(g)
+	g.finalize()
+}
+
 // Details emits a CardInfo with key-value pairs as body. An empty
 // heading produces a bare KV block without a card title.
 func (r *cardReporter) Details(heading string, fields Fields) {

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -87,6 +88,7 @@ type Card struct {
 	subtitle string
 	body     []cardBody
 	tight    bool // suppress comfy spacing (e.g. single-field prompts)
+	indent   int  // additional left-margin depth (1 = +4 spaces); used by Group children
 }
 
 type cardBodyKind int
@@ -116,6 +118,13 @@ func NewCard(state CardState, title string) *Card {
 // below without a visual gap.
 func (c *Card) Tight() *Card {
 	c.tight = true
+	return c
+}
+
+// Indent shifts the card's rendering right by n*4 spaces. Used by
+// Group to nest children under a parent's spine.
+func (c *Card) Indent(n int) *Card {
+	c.indent = n
 	return c
 }
 
@@ -216,6 +225,29 @@ func (c *Card) PrintRewindable() func() {
 // renderWithGlyph renders the card with a custom leading glyph.
 // Used by the spinner to animate the state indicator in place.
 func (c *Card) renderWithGlyph(glyph string) string {
+	out := c.renderInner(glyph)
+	if c.indent <= 0 {
+		return out
+	}
+	// Build an indent prefix that continues the parent's timeline
+	// spine at each nesting level: " │  " per level. This keeps
+	// the vertical connector visible through nested children
+	// instead of leaving a blank gap.
+	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	var prefix string
+	for range c.indent {
+		prefix += " " + connStyle.Render("│") + "  "
+	}
+	trimmed := strings.TrimSuffix(out, "\n")
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// renderInner is the indent-agnostic render path.
+func (c *Card) renderInner(glyph string) string {
 	var b strings.Builder
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary).Transform(titleCase)
 	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
@@ -523,11 +555,20 @@ func (m cardSpinnerModel) waitForResult() tea.Cmd {
 // animated spinner in the glyph position while fn runs, and prints
 // the finalized card in success or failed state when fn returns.
 func RunCard(title string, fn func() error) error {
-	card := NewCard(CardRunning, title)
+	return runCardWith(NewCard(CardRunning, title), fn)
+}
 
+// runCardWith is the inner implementation of RunCard that takes a
+// pre-built card so callers can configure indent / tight before the
+// spinner runs. The card's state is mutated to its final value
+// before printing.
+func runCardWith(card *Card, fn func() error) error {
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	// Emit comfy connector before the spinner starts — BubbleTea's
@@ -569,7 +610,10 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	fmt.Print(comfyPrefix())
@@ -610,7 +654,10 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	prevComfy := comfyBreak

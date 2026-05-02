@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -220,6 +221,7 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 
 	resultCh := make(chan planApplyResult, 1)
 	go func() {
+		start := time.Now()
 		succeeded, failed := 0, 0
 		var firstErr error
 		for _, action := range actions {
@@ -232,6 +234,7 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 				succeeded++
 			}
 		}
+		holdSpinner(start)
 		resultCh <- planApplyResult{err: firstErr, succeeded: succeeded, failed: failed}
 	}()
 
