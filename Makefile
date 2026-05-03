@@ -85,7 +85,7 @@ OMZ_PLUGIN_DEST := $(OMZ_PLUGIN_DIR)/bosun.plugin.zsh
 		uninstall/man \
 		deps changelog releasenotes version version/bump_type version/github_actions \
 		release/commit release/tag test bench lint format prep watch help vars _print-var \
-		publish/homebrew publish/macports
+		publish/homebrew publish/macports completions/generate
 
 ## Build all artifacts
 all: build
@@ -144,9 +144,15 @@ deps:
 	@echo "Downloading Go module dependencies..."
 	@$(GO) mod download
 
+## Generate the man page
 man:
 	@echo "Generating man page..."
 	@MAN_OUT_DIR=$(dir $(MANPAGE_SRC)) $(GO) run ./tools/gen-man
+
+## Generate shell completions
+completions/generate:
+	@echo "Generating shell completions..."
+	@$(GO) run ./tools/gen-completions
 
 ## Generate CHANGELOG.md from conventional commits
 changelog:

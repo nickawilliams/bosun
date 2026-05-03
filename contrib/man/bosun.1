@@ -1,0 +1,77 @@
+.nh
+.TH "BOSUN" "1" "May 2026" "bosun" "User Commands"
+
+.SH NAME
+bosun \- Automate SDLC lifecycle tasks
+
+.SH SYNOPSIS
+\fBbosun\fP [\fIflags\fP] [\fIcommand\fP]
+
+.SH DESCRIPTION
+Automate SDLC lifecycle tasks
+
+.SH OPTIONS
+.TP
+\fB\-\-dry\-run\fP
+Show what would happen without making changes.
+.TP
+\fB\-\-interactive\fP
+Prompt for configurable values.
+.TP
+\fB\-y\fP, \fB\-\-yes\fP
+Skip confirmation prompt.
+.TP
+\fB\-h\fP, \fB\-\-help\fP
+Display help and exit.
+.TP
+\fB\-v\fP, \fB\-\-version\fP
+Display version and exit.
+
+.SH COMMANDS
+.TP
+\fBcreate\fP
+Create a new issue
+.TP
+\fBstart\fP
+Begin work on an issue
+.TP
+\fBreview\fP
+Submit issue for code review
+.TP
+\fBpreview\fP
+Deploy to preview environment
+.TP
+\fBprerelease\fP
+Prepare release artifacts
+.TP
+\fBrelease\fP
+Deploy to production
+.TP
+\fBcleanup\fP
+Remove workspace and feature branches
+.TP
+\fBconfig\fP
+View and manage bosun configuration
+.TP
+\fBdoctor\fP
+Check bosun configuration and connectivity
+.TP
+\fBinit\fP
+Initialize a new bosun project
+.TP
+\fBstatus\fP
+Show issue lifecycle status
+.TP
+\fBworkspace\fP
+Manage git worktree workspaces
+
+.SH EXIT STATUS
+.TP
+0
+Success.
+.TP
+1
+An error occurred.
+
+.SH SEE ALSO
+\fBbash\fP(1), \fBzsh\fP(1), \fBfish\fP(1)
