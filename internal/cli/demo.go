@@ -24,6 +24,7 @@ func newDemoCmd() *cobra.Command {
 			if !interactive {
 				demoCards(cmd)
 				demoTree()
+				demoGroupsStatic()
 				ui.ClearBreak()
 				fmt.Println()
 				demoPlanCardStates()
@@ -157,6 +158,20 @@ func demoPlanCardStates() {
 	f.Init()
 	fmt.Print(f.View())
 	fmt.Print("\n\n")
+}
+
+func demoGroupsStatic() {
+	r := ui.Default()
+
+	r.Group("group: mixed outcomes with nesting", func(g ui.Reporter) {
+		g.Complete("passed check")
+		g.Skip("skipped: not configured")
+		g.Group("inner group", func(inner ui.Reporter) {
+			inner.Complete("inner child a")
+			inner.Fail("inner child b: connection refused")
+		})
+		g.Complete("continued after failure")
+	})
 }
 
 func demoTree() {
