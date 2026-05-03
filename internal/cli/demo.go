@@ -58,9 +58,9 @@ func newDemoCmd() *cobra.Command {
 			if err := demoContinue("Plan Card", false); err != nil {
 				return err
 			}
-			demoPlanApply()
-			demoPlanDryRun()
-			demoPlanNoWork()
+			demoPlanApply(cmd)
+			demoPlanDryRun(cmd)
+			demoPlanNoWork(cmd)
 
 			return nil
 		},
@@ -396,34 +396,32 @@ func demoSlot() {
 		Print()
 }
 
-func demoPlanApply() {
+func demoPlanApply(cmd *cobra.Command) {
+	// Full lifecycle: proposed → confirmation gate → apply → success.
 	plan := buildDemoPlan()
-	pc := ui.NewPlanCard(plan)
-
-	_ = pc.RunApply([]func() error{
+	actions := []PlanAction{
 		func() error { time.Sleep(400 * time.Millisecond); return nil },
 		func() error { time.Sleep(300 * time.Millisecond); return nil },
 		func() error { time.Sleep(500 * time.Millisecond); return nil },
 		func() error { time.Sleep(200 * time.Millisecond); return nil },
-	})
+	}
+	_ = runPlanCard(cmd, plan, actions, PlanOpts{Confirm: true, Apply: true})
 }
 
-func demoPlanDryRun() {
+func demoPlanDryRun(cmd *cobra.Command) {
 	// Dry-run: plan renders in proposed state without applying.
+	ui.Info("dry-run mode (apply disabled)")
 	plan := buildDemoPlan()
-	pc := ui.NewPlanCard(plan)
-	pc.Print()
-	ui.Info("dry-run: plan shown without apply")
+	_ = runPlanCard(cmd, plan, nil, PlanOpts{Confirm: false, Apply: false})
 }
 
-func demoPlanNoWork() {
+func demoPlanNoWork(cmd *cobra.Command) {
 	// No-work: all items are no-change, plan finalizes as success.
+	ui.Info("no-work branch (all items unchanged)")
 	plan := ui.NewPlan().
 		Add(ui.PlanNoChange, "branch", "repo", "api", "feature/ABC-123").
 		Add(ui.PlanNoChange, "branch", "repo", "web", "feature/ABC-123")
-	pc := ui.NewPlanCard(plan)
-	pc.SetState(ui.PlanSuccess)
-	pc.Print()
+	_ = runPlanCard(cmd, plan, nil, PlanOpts{Confirm: true, Apply: true})
 }
 
 // --- Helpers ---
