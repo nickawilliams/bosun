@@ -13,10 +13,32 @@ var ErrCancelled = errors.New("cancelled")
 // PlanAction is a function that executes one step of a plan.
 type PlanAction func() error
 
+// PlanOpts controls the two independent axes of Plan Card behavior.
+type PlanOpts struct {
+	// Confirm enables the interactive confirmation gate between
+	// proposed and apply. Default: on for Phase.Plan commands (lifecycle);
+	// off for direct mutating Tasks (workspace).
+	Confirm bool
+
+	// Apply enables execution of actions after the proposed state.
+	// When false the plan renders in proposed state and returns
+	// ErrCancelled without mutating. --dry-run sets this to false.
+	Apply bool
+}
+
+// DefaultPlanOpts returns the standard axes for lifecycle commands:
+// confirmation on, apply gated by --dry-run.
+func DefaultPlanOpts(cmd *cobra.Command) PlanOpts {
+	return PlanOpts{
+		Confirm: true,
+		Apply:   !isDryRun(cmd),
+	}
+}
+
 // runPlanCard orchestrates the full plan lifecycle: proposed → confirm →
 // applying (with spinner) → final state. Returns nil on success,
 // ErrCancelled on dry-run/cancel/interrupt, or the first execution error.
-func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error {
+func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts PlanOpts) error {
 	if plan.IsEmpty() {
 		return nil
 	}
@@ -30,20 +52,20 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 		return nil
 	}
 
-	// --dry-run: show proposed, exit.
-	if isDryRun(cmd) {
+	// Apply disabled (--dry-run): show proposed, exit.
+	if !opts.Apply {
 		pc.Print()
 		return ErrCancelled
 	}
 
-	// --yes or non-interactive: straight to apply.
-	if isAutoApprove(cmd) || !isInteractive() {
+	// No confirmation gate: straight to apply.
+	if !opts.Confirm || isAutoApprove(cmd) || !isInteractive() {
 		return applyPlanCard(pc, actions)
 	}
 
-	// Interactive: show the plan as a CardInput, run huh confirm.
-	// Normal cancel: rewind prompt, show cancelled card in place.
-	// Ctrl+c interrupt: don't rewind, just bail (timeline shows the interrupt).
+	// Interactive confirmation gate: show the plan as a CardInput,
+	// run huh confirm. Normal cancel: rewind prompt, show cancelled
+	// card in place. Ctrl+c interrupt: don't rewind, just bail.
 	rewind := ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().PrintRewindable()
 
 	var confirmed bool
@@ -56,12 +78,9 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 	)
 
 	if err != nil {
-		// ctrl+c: don't try to rewind — just return and let main.go
-		// append the "User cancelled" card below whatever huh left.
 		return ErrCancelled
 	}
 
-	// Normal form submission — huh cleaned up its output, rewind works.
 	rewind()
 
 	if !confirmed {
@@ -70,7 +89,6 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction) error 
 		return ErrCancelled
 	}
 
-	// Confirmed — apply.
 	return applyPlanCard(pc, actions)
 }
 
