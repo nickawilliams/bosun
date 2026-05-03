@@ -85,7 +85,8 @@ OMZ_PLUGIN_DEST := $(OMZ_PLUGIN_DIR)/bosun.plugin.zsh
 		uninstall/man \
 		deps changelog releasenotes version version/bump_type version/github_actions \
 		release/commit release/tag test bench lint format prep watch help vars _print-var \
-		publish/homebrew publish/macports completions/generate
+		publish/homebrew publish/macports completions/generate \
+		test/completions test/completions/bash test/completions/zsh test/completions/fish
 
 ## Build all artifacts
 all: build
@@ -244,6 +245,21 @@ watch:
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(OUT_DIR)
+
+## Run all completion smoke tests
+test/completions: test/completions/bash test/completions/zsh test/completions/fish
+
+## Run Bash completion smoke test
+test/completions/bash:
+	@bash contrib/completions/bash/bosun.test.bash
+
+## Run Zsh completion smoke test
+test/completions/zsh:
+	@zsh contrib/completions/zsh/bosun.test.zsh
+
+## Run Fish completion smoke test
+test/completions/fish:
+	@fish contrib/completions/fish/bosun.test.fish
 
 ## Run all tests with coverage
 test:
