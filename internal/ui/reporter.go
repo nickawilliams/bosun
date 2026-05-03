@@ -115,6 +115,14 @@ var defaultReporter Reporter = newCardReporter()
 // Default returns the package-level default Reporter.
 func Default() Reporter { return defaultReporter }
 
+// IsRaw reports whether the default Reporter is a raw (non-rendering)
+// variant. Used by Card.Print and other direct-output functions to
+// suppress timeline rendering in raw mode.
+func IsRaw() bool {
+	_, ok := defaultReporter.(*rawReporter)
+	return ok
+}
+
 // SetDefault replaces the default reporter. Intended for tests and
 // for eventual --output flags. Not thread-safe; set before any
 // goroutines call the package-level helpers.

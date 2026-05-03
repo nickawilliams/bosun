@@ -40,7 +40,9 @@ func NewRootCmd() *cobra.Command {
 			return nil
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
-			ui.EndTimeline()
+			if !ui.IsRaw() {
+				ui.EndTimeline()
+			}
 		},
 	}
 

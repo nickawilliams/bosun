@@ -189,8 +189,11 @@ func (c *Card) Render() string {
 	return c.renderWithGlyph(c.glyph())
 }
 
-// Print writes the card to stdout.
+// Print writes the card to stdout. Suppressed in raw mode.
 func (c *Card) Print() {
+	if IsRaw() {
+		return
+	}
 	fmt.Print(comfyPrefix() + c.Render())
 	if !c.tight {
 		comfyBreak = true
@@ -200,13 +203,11 @@ func (c *Card) Print() {
 // PrintRewindable writes the card to stdout and returns a function
 // that, when called, erases the card by moving the cursor back to
 // its first row and clearing from there to the end of the screen.
-// Useful for transient "live" cards (e.g., an active prompt) that
-// should be replaced with a terminal-state card after an interactive
-// operation completes. Note: this only works reliably when huh/
-// BubbleTea cleans up its own output on normal exit. For ctrl+c
-// interrupts, callers should skip the rewind and append output
-// below the interrupted form instead.
+// Suppressed in raw mode (returns a no-op rewind).
 func (c *Card) PrintRewindable() func() {
+	if IsRaw() {
+		return func() {}
+	}
 	prev := comfyBreak
 	rendered := comfyPrefix() + c.Render()
 	fmt.Print(rendered)

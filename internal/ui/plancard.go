@@ -53,8 +53,11 @@ func (pc *PlanCard) Render() string {
 	return pc.renderWithGlyph(pc.glyph())
 }
 
-// Print writes the card to stdout.
+// Print writes the card to stdout. Suppressed in raw mode.
 func (pc *PlanCard) Print() {
+	if IsRaw() {
+		return
+	}
 	fmt.Print(comfyPrefix() + pc.Render())
 	comfyBreak = true
 }
