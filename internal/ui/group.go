@@ -293,60 +293,27 @@ func (m *groupModel) waitForMsg() tea.Cmd {
 }
 
 func (m *groupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case groupChildMsg:
-		m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
-		switch msg.state {
-		case CardSuccess:
-			m.current.counts.success++
-		case CardSkipped:
-			m.current.counts.skipped++
-		case CardFailed:
-			m.current.counts.failed++
-		case CardInfo:
-			m.current.counts.info++
-		}
-		return m, m.waitForMsg()
-
-	case groupTaskStartMsg:
-		m.current.activeTask = &groupActiveTask{title: msg.title, indent: msg.indent}
-		return m, m.waitForMsg()
-
-	case groupTaskDoneMsg:
-		if m.current.activeTask != nil {
-			m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
-			m.current.activeTask = nil
-			if msg.err != nil {
-				m.current.counts.failed++
-			} else {
-				m.current.counts.success++
+	// Group messages from the callback goroutine.
+	if gm, ok := msg.(groupMsg); ok {
+		m.processMsg(gm)
+		// Drain any additional pending messages so they render in
+		// the same frame. This eliminates the one-tick delay between
+		// sequential messages (e.g. taskDone immediately followed by
+		// groupDone when the task was the last operation).
+		for {
+			select {
+			case next := <-m.msgCh:
+				m.processMsg(next)
+			default:
+				if m.done {
+					return m, tea.Quit
+				}
+				return m, tea.Batch(m.spinner.Tick, m.waitForMsg())
 			}
 		}
-		return m, m.waitForMsg()
+	}
 
-	case groupBeginMsg:
-		child := &groupNode{
-			title:  msg.title,
-			indent: msg.indent,
-			parent: m.current,
-		}
-		m.current.children = append(m.current.children, groupRenderedChild{node: child})
-		m.current = child
-		return m, m.waitForMsg()
-
-	case groupEndMsg:
-		m.current.finalized = true
-		m.current.finalState = aggregateCounts(m.current.counts)
-		if m.current.parent != nil {
-			m.current.parent.counts.success++ // sub-group contributes to parent
-			m.current = m.current.parent
-		}
-		return m, m.waitForMsg()
-
-	case groupDoneMsg:
-		m.done = true
-		return m, tea.Quit
-
+	switch msg := msg.(type) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -361,10 +328,66 @@ func (m *groupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *groupModel) View() tea.View {
-	if m.done {
-		return tea.NewView("")
+// processMsg applies a single group message to the model state.
+func (m *groupModel) processMsg(msg groupMsg) {
+	switch msg := msg.(type) {
+	case groupChildMsg:
+		m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
+		switch msg.state {
+		case CardSuccess:
+			m.current.counts.success++
+		case CardSkipped:
+			m.current.counts.skipped++
+		case CardFailed:
+			m.current.counts.failed++
+		case CardInfo:
+			m.current.counts.info++
+		}
+
+	case groupTaskStartMsg:
+		m.current.activeTask = &groupActiveTask{title: msg.title, indent: msg.indent}
+
+	case groupTaskDoneMsg:
+		if m.current.activeTask != nil {
+			m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
+			m.current.activeTask = nil
+			if msg.err != nil {
+				m.current.counts.failed++
+			} else {
+				m.current.counts.success++
+			}
+		}
+
+	case groupBeginMsg:
+		child := &groupNode{
+			title:  msg.title,
+			indent: msg.indent,
+			parent: m.current,
+		}
+		m.current.children = append(m.current.children, groupRenderedChild{node: child})
+		m.current = child
+
+	case groupEndMsg:
+		m.current.finalized = true
+		m.current.finalState = aggregateCounts(m.current.counts)
+		if m.current.parent != nil {
+			m.current.parent.counts.success++
+			m.current = m.current.parent
+		}
+
+	case groupDoneMsg:
+		m.root.finalized = true
+		m.root.finalState = aggregateCounts(m.root.counts)
+		m.done = true
 	}
+}
+
+func (m *groupModel) View() tea.View {
+	// Always render the current state — including the final frame.
+	// When done, the root is finalized so renderNode uses aggregate
+	// glyphs instead of spinners. BubbleTea's last render replaces
+	// the animated content with the final static content in one
+	// frame, avoiding a visible clear-then-reprint flash.
 	var b strings.Builder
 	m.renderNode(&b, m.root)
 	return tea.NewView(b.String())
@@ -394,19 +417,3 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 	}
 }
 
-// printFinalGroup recursively prints the static post-BubbleTea render
-// of a group tree. Called after the BubbleTea program exits (which
-// clears its own output), so this is the permanent timeline content.
-func printFinalGroup(node *groupNode, counts groupCounts) {
-	finalState := aggregateCounts(counts)
-	finalCard := NewCard(finalState, node.title).Indent(node.indent)
-	fmt.Print(finalCard.Render())
-
-	for _, child := range node.children {
-		if child.node != nil {
-			printFinalGroup(child.node, child.node.counts)
-		} else {
-			fmt.Print(child.rendered)
-		}
-	}
-}
