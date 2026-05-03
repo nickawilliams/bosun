@@ -406,7 +406,7 @@ func (c *Card) glyph() string {
 	case CardRoot:
 		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
 	case CardData:
-		return " " // no status glyph — represents state, not an outcome
+		return lipgloss.NewStyle().Foreground(Palette.Muted).Render("·")
 	}
 	return " "
 }
