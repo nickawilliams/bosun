@@ -582,6 +582,12 @@ func RunCard(title string, fn func() error) error {
 // spinner runs. The card's state is mutated to its final value
 // before printing.
 func runCardWith(card *Card, fn func() error) error {
+	// Raw mode: run synchronously without BubbleTea to avoid
+	// terminal-mode-query escape leaks on non-TTY stdout.
+	if IsRaw() {
+		return fn()
+	}
+
 	resultCh := make(chan error, 1)
 	go func() {
 		start := time.Now()
@@ -624,6 +630,10 @@ func runCardWith(card *Card, fn func() error) error {
 // card (returned by successCard) instead of the original card in success
 // state. On failure, prints the original card in failed state as usual.
 func RunCardReplace(title string, fn func() error, successCard func() *Card) error {
+	if IsRaw() {
+		return fn()
+	}
+
 	card := NewCard(CardRunning, title)
 
 	resultCh := make(chan error, 1)
@@ -666,6 +676,11 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 // the success card, restoring the terminal to its pre-call state.
 // On failure the card is printed normally and a nil rewind is returned.
 func RunCardRewindable(title string, fn func() error) (func(), error) {
+	if IsRaw() {
+		err := fn()
+		return func() {}, err
+	}
+
 	card := NewCard(CardRunning, title)
 
 	resultCh := make(chan error, 1)

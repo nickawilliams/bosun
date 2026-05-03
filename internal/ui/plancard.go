@@ -224,6 +224,17 @@ type planApplyDoneMsg struct {
 // the card from Applying to its final state (Success/Partial/Failure).
 // Returns nil on full success, or the first error encountered.
 func (pc *PlanCard) RunApply(actions []func() error) error {
+	// Raw mode: run actions synchronously without BubbleTea.
+	if IsRaw() {
+		var firstErr error
+		for _, action := range actions {
+			if err := action(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
+
 	pc.SetState(PlanApplying)
 
 	resultCh := make(chan planApplyResult, 1)
