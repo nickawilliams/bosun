@@ -406,7 +406,7 @@ func (c *Card) glyph() string {
 	case CardRoot:
 		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
 	case CardData:
-		return lipgloss.NewStyle().Foreground(Palette.Muted).Render("·")
+		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphInfo)
 	}
 	return " "
 }
