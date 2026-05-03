@@ -67,13 +67,9 @@ type Reporter interface {
 
 	// --- Structured output ---
 
-	// Details renders a block of key-value pairs. Use an empty
-	// heading for a bare KV block (matching legacy ui.NewKV).
+	// Details renders a Data Card: a heading with key-value body,
+	// no status glyph. Empty fields are suppressed entirely.
 	Details(heading string, fields Fields)
-
-	// Table returns a table builder. The caller adds rows and
-	// calls Render.
-	Table(columns ...Column) *Table
 }
 
 // Fields is an ordered list of key-value pairs. Ordered so that

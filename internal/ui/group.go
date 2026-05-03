@@ -192,6 +192,9 @@ func (g *group) Task(title string, fn func() error) error {
 }
 
 func (g *group) Details(heading string, fields Fields) {
+	if len(fields) == 0 {
+		return
+	}
 	pairs := make([]string, 0, len(fields)*2)
 	for _, f := range fields {
 		pairs = append(pairs, f.Key, f.Value)
@@ -199,11 +202,7 @@ func (g *group) Details(heading string, fields Fields) {
 	if heading == "" {
 		heading = "Details"
 	}
-	g.sendChild(CardInfo, NewCard(CardInfo, heading).KV(pairs...))
-}
-
-func (g *group) Table(columns ...Column) *Table {
-	return g.outer.Table(columns...)
+	g.sendChild(CardData, NewCard(CardData, heading).KV(pairs...))
 }
 
 func (g *group) Group(title string, fn func(Reporter)) {

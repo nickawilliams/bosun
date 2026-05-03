@@ -35,6 +35,7 @@ const (
 	CardInfo
 	CardInput
 	CardRoot
+	CardData // structured state snapshot, no status glyph
 )
 
 const (
@@ -404,6 +405,8 @@ func (c *Card) glyph() string {
 		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
 	case CardRoot:
 		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
+	case CardData:
+		return " " // no status glyph — represents state, not an outcome
 	}
 	return " "
 }

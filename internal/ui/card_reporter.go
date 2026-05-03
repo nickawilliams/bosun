@@ -164,9 +164,12 @@ func drainGroupFallback(title string, indent int, g *group, msgCh <-chan groupMs
 	}
 }
 
-// Details emits a CardInfo with key-value pairs as body. An empty
-// heading produces a bare KV block without a card title.
+// Details emits a Data Card (no status glyph) with key-value pairs
+// as body. Empty bodies are suppressed entirely per the spec.
 func (r *cardReporter) Details(heading string, fields Fields) {
+	if len(fields) == 0 {
+		return
+	}
 	pairs := make([]string, 0, len(fields)*2)
 	for _, f := range fields {
 		pairs = append(pairs, f.Key, f.Value)
@@ -174,10 +177,6 @@ func (r *cardReporter) Details(heading string, fields Fields) {
 	if heading == "" {
 		heading = "Details"
 	}
-	NewCard(CardInfo, heading).KV(pairs...).Print()
+	NewCard(CardData, heading).KV(pairs...).Print()
 }
 
-// Table returns a new table builder.
-func (r *cardReporter) Table(columns ...Column) *Table {
-	return NewTable(columns...)
-}
