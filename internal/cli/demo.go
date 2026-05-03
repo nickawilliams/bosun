@@ -105,6 +105,13 @@ func demoCards(cmd *cobra.Command) {
 		).
 		Print()
 
+	// Data Card — structured state snapshot, no status glyph.
+	ui.Details("issue EX-1234", ui.NewFields(
+		"Title", "Add login page",
+		"Status", "In Progress",
+		"URL", "https://jira.example.com/browse/EX-1234",
+	))
+
 	// Card states — one bare card per state.
 	ui.NewCard(ui.CardPending, "pending").Print()
 	ui.NewCard(ui.CardSuccess, "success").Print()
