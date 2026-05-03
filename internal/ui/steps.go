@@ -1,17 +1,5 @@
 package ui
 
-import (
-	"charm.land/lipgloss/v2"
-)
-
-var (
-	stepCheckStyle = lipgloss.NewStyle().Foreground(Palette.Success)
-	stepSkipStyle  = lipgloss.NewStyle().Foreground(Palette.Warning)
-	stepFailStyle  = lipgloss.NewStyle().Foreground(Palette.Error)
-	stepArrowStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-	stepItemStyle  = lipgloss.NewStyle().Foreground(Palette.NormalFg)
-)
-
 // Complete prints a completed step with a green checkmark.
 func Complete(label string) { defaultReporter.Complete(label) }
 

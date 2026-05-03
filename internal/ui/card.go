@@ -743,28 +743,3 @@ func titleCase(s string) string {
 	}
 	return strings.Join(words, " ")
 }
-
-// renderBreadcrumbTitle renders a breadcrumb title (segments joined
-// by " › ") with the first segment in Secondary and the rest in
-// Primary. Non-breadcrumb titles render entirely in Primary.
-func renderBreadcrumbTitle(title string) string {
-	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	secondaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
-	sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-
-	segments := strings.Split(title, " › ")
-	if len(segments) <= 1 {
-		return primaryStyle.Render(titleCase(title))
-	}
-
-	styled := make([]string, len(segments))
-	for i, seg := range segments {
-		tc := titleCase(seg)
-		if i == 0 {
-			styled[i] = secondaryStyle.Render(tc)
-		} else {
-			styled[i] = primaryStyle.Render(tc)
-		}
-	}
-	return strings.Join(styled, sepStyle.Render(" › "))
-}
