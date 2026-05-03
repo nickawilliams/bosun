@@ -143,7 +143,7 @@ endef
 # Main Targets
 # ============================================================================
 
-.PHONY: all build clean test lint format prep watch
+.PHONY: all build clean test bench lint format prep watch
 
 ## Build all artifacts
 all: build
@@ -165,6 +165,11 @@ test:
 	@$(GO) tool cover -html=$(OUT_DIR)/coverage/coverage.out -o $(OUT_DIR)/coverage/index.html
 	@echo "Coverage (LCOV): $(OUT_DIR)/coverage/lcov.info"
 	@echo "Coverage (HTML): $(OUT_DIR)/coverage/index.html"
+
+## Run benchmarks across all packages
+bench:
+	@echo "Running benchmarks..."
+	@$(GO) test -run='^$$' -bench=. -benchmem ./...
 
 ## Run golangci-lint
 lint:
