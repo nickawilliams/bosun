@@ -107,10 +107,13 @@ func demoCards(cmd *cobra.Command) {
 		Print()
 
 	// Data Card — structured state snapshot, no status glyph.
-	ui.Details("issue EX-1234", ui.NewFields(
+	// The heading uses an OSC 8 hyperlink so "EX-1234" is clickable
+	// in supporting terminals (iTerm2, Terminal.app, Windows Terminal).
+	issueURL := "https://jira.example.com/browse/EX-1234"
+	ui.Details("issue \x1b]8;;"+issueURL+"\x1b\\EX-1234\x1b]8;;\x1b\\", ui.NewFields(
 		"Title", "Add login page",
 		"Status", "In Progress",
-		"URL", "https://jira.example.com/browse/EX-1234",
+		"URL", issueURL,
 	))
 
 	// Card states — one bare card per state.
