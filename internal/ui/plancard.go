@@ -181,6 +181,10 @@ func (m planCardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		m.err = msg.result.err
 		m.card.SetResults(msg.result.succeeded, msg.result.failed)
+		// Set final state so View() renders it as BubbleTea's last
+		// frame, avoiding a clear-then-reprint flash.
+		result := planApplyResult{err: m.err, succeeded: msg.result.succeeded, failed: msg.result.failed}
+		m.card.setFinalState(result)
 		return m, tea.Quit
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -198,7 +202,7 @@ func (m planCardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m planCardSpinnerModel) View() tea.View {
 	if m.done {
-		return tea.NewView("")
+		return tea.NewView(m.card.Render())
 	}
 	return tea.NewView(m.card.renderWithGlyph(m.spinner.View()))
 }
@@ -252,12 +256,11 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 		return result.err
 	}
 
+	// BubbleTea's final View() already rendered the finalized plan
+	// card in place (state set in Update's planApplyDoneMsg handler).
 	m := model.(planCardSpinnerModel)
-	result := planApplyResult{err: m.err, succeeded: pc.succeeded, failed: pc.failed}
-	pc.setFinalState(result)
-	pc.Print()
-
-	return result.err
+	comfyBreak = true
+	return m.err
 }
 
 // setFinalState determines the terminal state based on action results.

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -118,7 +119,9 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	}
 
 	go func() {
+		start := time.Now()
 		fn(g)
+		holdSpinner(start)
 		msgCh <- groupDoneMsg{}
 	}()
 
@@ -135,8 +138,10 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 		return
 	}
 
-	m := final.(*groupModel)
-	printFinalGroup(m.root, g.counts)
+	// BubbleTea's final View() rendered the finalized group content
+	// in place (root finalized in groupDoneMsg handler), so the
+	// output is already on screen. No reprint needed.
+	_ = final
 	comfyBreak = true
 }
 

@@ -497,11 +497,12 @@ func wrapForTimeline(s string) []string {
 // --- Running card with animated spinner glyph ---
 
 type cardSpinnerModel struct {
-	spinner  spinner.Model
-	card     *Card
-	done     bool
-	err      error
-	resultCh <-chan error
+	spinner     spinner.Model
+	card        *Card
+	done        bool
+	err         error
+	resultCh    <-chan error
+	successCard func() *Card // optional: if set, render this instead of card on success
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {
@@ -523,6 +524,15 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDoneMsg:
 		m.done = true
 		m.err = msg.err
+		// Set the card's final state so View() renders the finalized
+		// card as BubbleTea's last frame, avoiding a clear-then-reprint
+		// flash.
+		if m.err != nil {
+			m.card.state = CardFailed
+			m.card.Subtitle(m.err.Error())
+		} else {
+			m.card.state = CardSuccess
+		}
 		return m, tea.Quit
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -540,7 +550,12 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m cardSpinnerModel) View() tea.View {
 	if m.done {
-		return tea.NewView("")
+		// Render the finalized card so BubbleTea's last frame
+		// replaces the spinner in place without a visible gap.
+		if m.err == nil && m.successCard != nil {
+			return tea.NewView(m.successCard().Render())
+		}
+		return tea.NewView(m.card.Render())
 	}
 	return tea.NewView(m.card.renderWithGlyph(m.spinner.View()))
 }
@@ -590,16 +605,15 @@ func runCardWith(card *Card, fn func() error) error {
 		return taskErr
 	}
 
+	// BubbleTea's final View() already rendered the finalized card
+	// in place (state set in Update's taskDoneMsg handler), so the
+	// output is on screen. No reprint needed — just propagate the
+	// comfy break state and return.
 	m := model.(cardSpinnerModel)
-	if m.err != nil {
-		card.state = CardFailed
-		card.Subtitle(m.err.Error())
-		card.Print()
-		return m.err
+	if !card.tight {
+		comfyBreak = true
 	}
-	card.state = CardSuccess
-	card.Print()
-	return nil
+	return m.err
 }
 
 // RunCardReplace works like RunCard but on success, prints a replacement
@@ -618,7 +632,9 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 
 	fmt.Print(comfyPrefix())
 
-	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
+	sm := newCardSpinnerModel(card, resultCh)
+	sm.successCard = successCard
+	p := tea.NewProgram(sm)
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback.
@@ -633,15 +649,11 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 		return taskErr
 	}
 
+	// BubbleTea's final View() already rendered the finalized card
+	// (or replacement card on success) in place.
 	m := model.(cardSpinnerModel)
-	if m.err != nil {
-		card.state = CardFailed
-		card.Subtitle(m.err.Error())
-		card.Print()
-		return m.err
-	}
-	successCard().Print()
-	return nil
+	comfyBreak = true
+	return m.err
 }
 
 // RunCardRewindable works like RunCard but on success, prints the
@@ -676,15 +688,14 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 	}
 
 	if taskErr != nil {
-		card.state = CardFailed
-		card.Subtitle(taskErr.Error())
-		card.Print()
+		// BubbleTea's final View() already rendered the failed card.
 		return nil, taskErr
 	}
 
-	card.state = CardSuccess
-	rendered := comfyPrefix() + card.Render()
-	fmt.Print(rendered)
+	// BubbleTea's final View() rendered the success card in place.
+	// Compute total lines (prefix printed before BubbleTea + the
+	// card BubbleTea rendered) so the rewind function can erase it.
+	rendered := card.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
 	if !card.tight {
 		comfyBreak = true
