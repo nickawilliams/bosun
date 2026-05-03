@@ -1,0 +1,260 @@
+name: Reset
+
+# Manually-triggered iteration reset. Force-resets main to a chosen commit,
+# deletes releases and tags matching a pattern, and (optionally) rewinds the
+# homebrew tap and macports fork past commits we made. Never touches upstream
+# macports PRs — at most warns when they exist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_to:
+        description: "Commit SHA that main should be reset to (required)"
+        required: true
+        type: string
+      tags_pattern:
+        description: "Glob pattern of tags/releases to delete"
+        required: false
+        type: string
+        default: 'v*'
+      reset_tap:
+        description: "Rewind the homebrew tap past our commits"
+        required: false
+        type: boolean
+        default: true
+      reset_ports_fork:
+        description: "Rewind the macports fork's default branch past our commits"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  TAP_REPO: nickawilliams/homebrew-tap
+  PORT_REPO: nickawilliams/fork-macports-ports
+  PUBLISH_FORMULA_PREFIX: 'publish(formula): bosun'
+  PUBLISH_PORT_PREFIX: 'bosun:'
+
+jobs:
+  reset-main:
+    runs-on: ubuntu-latest
+    outputs:
+      previous_main: ${{ steps.snapshot.outputs.previous_main }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate reset target
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${{ inputs.reset_to }}^{commit}" 2>/dev/null; then
+            echo "::error::reset_to='${{ inputs.reset_to }}' is not a valid commit in this repo"
+            exit 1
+          fi
+          echo "Reset target: $(git rev-parse "${{ inputs.reset_to }}")"
+      - name: Snapshot current main
+        id: snapshot
+        run: |
+          set -euo pipefail
+          previous=$(git rev-parse origin/main)
+          echo "previous_main=${previous}" >> "$GITHUB_OUTPUT"
+          echo "main was at ${previous}"
+      - name: Delete releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pattern='${{ inputs.tags_pattern }}'
+          mapfile -t releases < <(gh release list --limit 1000 --json tagName --jq '.[].tagName')
+          for tag in "${releases[@]}"; do
+            case "${tag}" in
+              ${pattern})
+                echo "Deleting release ${tag}"
+                gh release delete "${tag}" --yes --cleanup-tag || echo "::warning::failed to delete release ${tag}"
+                ;;
+            esac
+          done
+      - name: Delete remote tags
+        run: |
+          set -euo pipefail
+          pattern='${{ inputs.tags_pattern }}'
+          mapfile -t tags < <(git ls-remote --tags origin | awk '{print $2}' | sed 's,refs/tags/,,' | sed 's,\^{},,' | sort -u)
+          for tag in "${tags[@]}"; do
+            case "${tag}" in
+              ${pattern})
+                echo "Deleting remote tag ${tag}"
+                git push origin ":refs/tags/${tag}" || echo "::warning::failed to delete tag ${tag}"
+                ;;
+            esac
+          done
+      - name: Import GPG
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Configure Git
+        run: |
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+          git config user.signingkey "${{ steps.import_gpg.outputs.keyid }}"
+          git config user.name "${{ vars.GIT_USER_NAME }}"
+          git config user.email "${{ vars.GIT_USER_EMAIL }}"
+      - name: Reset main
+        run: |
+          set -euo pipefail
+          git checkout main
+          git reset --hard "${{ inputs.reset_to }}"
+          git push --force-with-lease=main:${{ steps.snapshot.outputs.previous_main }} origin HEAD:main
+          echo "main reset to ${{ inputs.reset_to }}"
+
+  reset-tap:
+    if: ${{ inputs.reset_tap }}
+    needs: reset-main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Import GPG
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Rewind homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
+          GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
+          SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
+        run: |
+          set -euo pipefail
+          tap_dir="$(mktemp -d)"
+          trap 'rm -rf "${tap_dir}"' EXIT
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" "${tap_dir}"
+          cd "${tap_dir}"
+
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+          git config user.signingkey "${SIGNING_KEY}"
+          git config user.name "${GIT_USER_NAME}"
+          git config user.email "${GIT_USER_EMAIL}"
+
+          default_branch=$(git symbolic-ref --short HEAD)
+          previous=$(git rev-parse HEAD)
+
+          # Walk backwards from HEAD until we find the first commit that wasn't
+          # made by us and wasn't a publish(formula): bosun ... commit.
+          target=$(git log --pretty=format:'%H%x09%an%x09%s' "${default_branch}" | \
+            awk -F'\t' -v me="${GIT_USER_NAME}" -v prefix="${PUBLISH_FORMULA_PREFIX}" '
+              $2 != me && index($3, prefix) != 1 { print $1; exit }
+            ')
+
+          if [[ -z "${target}" ]]; then
+            echo "::warning::could not find a non-bosun commit to rewind to; leaving ${TAP_REPO} alone"
+            exit 0
+          fi
+
+          if [[ "${target}" == "${previous}" ]]; then
+            echo "${TAP_REPO}/${default_branch} already past our commits (HEAD=${previous})"
+            exit 0
+          fi
+
+          echo "Rewinding ${TAP_REPO}/${default_branch} from ${previous} to ${target}"
+          git reset --hard "${target}"
+          git push --force-with-lease="${default_branch}:${previous}" origin "HEAD:${default_branch}"
+          echo "${TAP_REPO}/${default_branch} rewound to ${target}"
+
+  reset-ports-fork:
+    if: ${{ inputs.reset_ports_fork }}
+    needs: reset-main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Import GPG
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Check for open upstream PRs
+        env:
+          GH_TOKEN: ${{ secrets.MACPORTS_PORT_TOKEN }}
+        run: |
+          set -euo pipefail
+          upstream=$(gh repo view "${PORT_REPO}" --json parent --jq 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end')
+          if [[ -z "${upstream}" ]]; then
+            echo "::warning::${PORT_REPO} has no upstream parent; skipping upstream PR check"
+            exit 0
+          fi
+          fork_owner="${PORT_REPO%%/*}"
+          open=$(gh pr list --repo "${upstream}" --state open --json url,headRefName,headRepositoryOwner --jq \
+            '[.[] | select(.headRepositoryOwner.login == "'"${fork_owner}"'")]')
+          count=$(echo "${open}" | jq 'length')
+          if [[ "${count}" != "0" ]]; then
+            echo "::warning::${count} open PR(s) from ${PORT_REPO} to ${upstream} — never touching upstream PRs:"
+            echo "${open}" | jq -r '.[] | "  \(.url) (head: \(.headRefName))"'
+          fi
+      - name: Rewind macports fork
+        env:
+          GH_TOKEN: ${{ secrets.MACPORTS_PORT_TOKEN }}
+          GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
+          GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
+          SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
+        run: |
+          set -euo pipefail
+          port_dir="$(mktemp -d)"
+          trap 'rm -rf "${port_dir}"' EXIT
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${PORT_REPO}.git" "${port_dir}"
+          cd "${port_dir}"
+
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+          git config user.signingkey "${SIGNING_KEY}"
+          git config user.name "${GIT_USER_NAME}"
+          git config user.email "${GIT_USER_EMAIL}"
+
+          default_branch=$(git symbolic-ref --short HEAD)
+          previous=$(git rev-parse HEAD)
+
+          target=$(git log --pretty=format:'%H%x09%an%x09%s' "${default_branch}" | \
+            awk -F'\t' -v me="${GIT_USER_NAME}" -v prefix="${PUBLISH_PORT_PREFIX}" '
+              $2 != me && index($3, prefix) != 1 { print $1; exit }
+            ')
+
+          if [[ -z "${target}" ]]; then
+            echo "::warning::could not find a non-bosun commit to rewind to; leaving ${PORT_REPO} alone"
+            exit 0
+          fi
+
+          if [[ "${target}" == "${previous}" ]]; then
+            echo "${PORT_REPO}/${default_branch} already past our commits (HEAD=${previous})"
+            exit 0
+          fi
+
+          echo "Rewinding ${PORT_REPO}/${default_branch} from ${previous} to ${target}"
+          git reset --hard "${target}"
+          git push --force-with-lease="${default_branch}:${previous}" origin "HEAD:${default_branch}"
+          echo "${PORT_REPO}/${default_branch} rewound to ${target}"
+
+  summary:
+    needs: [reset-main, reset-tap, reset-ports-fork]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print summary
+        run: |
+          {
+            echo "## Reset summary"
+            echo ""
+            echo "- main: ${{ needs.reset-main.result }} (was ${{ needs.reset-main.outputs.previous_main }}, now ${{ inputs.reset_to }})"
+            echo "- homebrew tap (${TAP_REPO}): ${{ needs.reset-tap.result }}"
+            echo "- macports fork (${PORT_REPO}): ${{ needs.reset-ports-fork.result }}"
+            echo ""
+            echo "Tags/releases matching '${{ inputs.tags_pattern }}' deleted."
+          } >> "$GITHUB_STEP_SUMMARY"
