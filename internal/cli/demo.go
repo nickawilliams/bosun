@@ -55,10 +55,12 @@ func newDemoCmd() *cobra.Command {
 			}
 			demoSlot()
 
-			if err := demoContinue("Plan Apply", false); err != nil {
+			if err := demoContinue("Plan Card", false); err != nil {
 				return err
 			}
 			demoPlanApply()
+			demoPlanDryRun()
+			demoPlanNoWork()
 
 			return nil
 		},
@@ -406,12 +408,26 @@ func demoPlanApply() {
 	})
 }
 
+func demoPlanDryRun() {
+	// Dry-run: plan renders in proposed state without applying.
+	plan := buildDemoPlan()
+	pc := ui.NewPlanCard(plan)
+	pc.Print()
+	ui.Info("dry-run: plan shown without apply")
+}
+
+func demoPlanNoWork() {
+	// No-work: all items are no-change, plan finalizes as success.
+	plan := ui.NewPlan().
+		Add(ui.PlanNoChange, "branch", "repo", "api", "feature/ABC-123").
+		Add(ui.PlanNoChange, "branch", "repo", "web", "feature/ABC-123")
+	pc := ui.NewPlanCard(plan)
+	pc.SetState(ui.PlanSuccess)
+	pc.Print()
+}
+
 // --- Helpers ---
 
-// demoContinue shows a gate card between demo sections. The title
-// names the next batch of components; the body gives the user a
-// moment to review what just rendered. Returns ErrCancelled if the
-// user chooses Stop.
 // demoContinue shows a gate card between demo sections. The title
 // names the upcoming batch of components. When first is true, the
 // body invites the user to start; otherwise it gives them a moment
