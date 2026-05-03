@@ -23,14 +23,20 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 			ui.ApplyColorMode(viper.GetString("color_mode"))
-			// Machine-readable commands suppress timeline chrome.
-			if cmd.Annotations["output"] == "raw" ||
-				(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != "") {
-				ui.ApplyDisplayMode("compact")
+
+			// Determine output mode: raw when stdout isn't a TTY, or
+			// when the command explicitly declares raw output (annotation
+			// or --output flag).
+			raw := !ui.IsTerminal() ||
+				cmd.Annotations["output"] == "raw" ||
+				(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != "")
+
+			if raw {
+				ui.SetDefault(ui.NewRawReporter())
 			} else {
 				ui.ApplyDisplayMode(viper.GetString("display_mode"))
+				ui.BeginTimeline()
 			}
-			ui.BeginTimeline()
 			return nil
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {

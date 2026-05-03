@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -59,8 +60,13 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	}
 
 	// No confirmation gate: straight to apply.
-	if !opts.Confirm || isAutoApprove(cmd) || !isInteractive() {
+	if !opts.Confirm || isAutoApprove(cmd) {
 		return applyPlanCard(pc, actions)
+	}
+
+	// Confirmation required but can't prompt — require --yes.
+	if !isInteractive() {
+		return fmt.Errorf("confirmation required (pass --yes to approve, or --dry-run to preview)")
 	}
 
 	// Interactive confirmation gate: show the plan as a CardInput,
