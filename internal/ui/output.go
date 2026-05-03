@@ -19,10 +19,16 @@ var (
 // Success prints a success message with a check mark.
 func Success(msg string, args ...any) { defaultReporter.Success(msg, args...) }
 
-// Error prints an error message with an X mark to stderr.
+// Error prints an error message to stderr. In raw mode, outputs a
+// plain "error: ..." line without color or glyphs. In interactive
+// mode, uses the styled ✗ prefix.
 func Error(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
-	fmt.Fprintln(os.Stderr, errorStyle.Render(Palette.Cross)+" "+text)
+	if IsRaw() {
+		fmt.Fprintln(os.Stderr, "error: "+text)
+	} else {
+		fmt.Fprintln(os.Stderr, errorStyle.Render(Palette.Cross)+" "+text)
+	}
 }
 
 // Warning prints a warning message to stderr.
