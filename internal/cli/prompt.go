@@ -36,6 +36,11 @@ func forceInteractive(cmd *cobra.Command) bool {
 //
 // If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
+	// Raw mode: stdout is not a TTY, so BubbleTea can't render forms.
+	// Return an error rather than panicking.
+	if ui.IsRaw() {
+		return fmt.Errorf("interactive input required but stdout is not a terminal")
+	}
 	ui.FlushBreak()
 	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
