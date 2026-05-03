@@ -27,10 +27,16 @@ func main() {
 		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
 			if errors.Is(err, cli.ErrCancelled) {
 				ui.NewCard(ui.CardSkipped, "user cancelled").Print()
+			} else if ui.IsRaw() {
+				// Errors must reach stderr even in raw mode where
+				// Reporter methods are suppressed.
+				ui.Error(err.Error())
 			} else {
 				ui.Fail(err.Error())
 			}
-			ui.EndTimeline()
+			if !ui.IsRaw() {
+				ui.EndTimeline()
+			}
 		}),
 	}
 
