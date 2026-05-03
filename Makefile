@@ -11,6 +11,15 @@ PKG_MAINTAINER_EMAIL := $(shell yq -r '.maintainer.email' $(PROJECT_YAML))
 
 SRC := $(shell find . -name '*.go')
 
+TAP_REPO ?= nickawilliams/homebrew-tap
+TAP_FORMULA_PATH := Formula/bosun.rb
+TAP_FORMULA := packaging/homebrew/bosun.rb
+
+PORT_REPO ?= nickawilliams/fork-macports-ports
+PORT_PULLREQUEST ?= false
+PORTFILE_PATH := devel/bosun/Portfile
+PORTFILE := packaging/macports/Portfile
+
 OUT_DIR := .out
 BUILD_BIN := $(OUT_DIR)/build/$(BINARY)
 
@@ -75,7 +84,8 @@ OMZ_PLUGIN_DEST := $(OMZ_PLUGIN_DIR)/bosun.plugin.zsh
 		uninstall/completions/bash uninstall/completions/fish uninstall/completions/oh-my-zsh \
 		uninstall/man \
 		deps changelog releasenotes version version/bump_type version/github_actions \
-		release/commit release/tag test bench lint format prep watch help vars _print-var
+		release/commit release/tag test bench lint format prep watch help vars _print-var \
+		publish/homebrew publish/macports
 
 ## Build all artifacts
 all: build
@@ -110,6 +120,14 @@ release:
 	PKG_MAINTAINER_NAME="$(PKG_MAINTAINER_NAME)" \
 	PKG_MAINTAINER_EMAIL="$(PKG_MAINTAINER_EMAIL)" \
 		$(GO) tool goreleaser release --clean
+
+## Render and publish the MacPorts Portfile to the ports repository
+publish/macports:
+	@PORT_PULLREQUEST="$(PORT_PULLREQUEST)" ./scripts/publish_macports.sh "$(TAG)" "$(PORT_REPO)" "$(PORTFILE_PATH)" "$(PORTFILE)"
+
+## Render and publish the Homebrew formula to the tap repository
+publish/homebrew:
+	@./scripts/publish_homebrew.sh "$(TAG)" "$(TAP_REPO)" "$(TAP_FORMULA_PATH)" "$(TAP_FORMULA)"
 
 ## Install Go module and tooling dependencies
 deps:
@@ -166,27 +184,7 @@ version:
 
 ## Determine whether the upcoming version is a major/minor/patch bump
 version/bump_type:
-	@current=$$($(MAKE) --no-print-directory version); \
-	prev_tag=$$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo v0.0.0); \
-	clean_prev=$${prev_tag#v}; \
-	clean_curr=$${current#v}; \
-	prev_major=$$(printf '%s' "$$clean_prev" | cut -d. -f1); \
-	prev_minor=$$(printf '%s' "$$clean_prev" | cut -d. -f2); \
-	prev_patch=$$(printf '%s' "$$clean_prev" | cut -d. -f3); \
-	curr_major=$$(printf '%s' "$$clean_curr" | cut -d. -f1); \
-	curr_minor=$$(printf '%s' "$$clean_curr" | cut -d. -f2); \
-	curr_patch=$$(printf '%s' "$$clean_curr" | cut -d. -f3); \
-	prev_major=$${prev_major:-0}; prev_minor=$${prev_minor:-0}; prev_patch=$${prev_patch:-0}; \
-	curr_major=$${curr_major:-0}; curr_minor=$${curr_minor:-0}; curr_patch=$${curr_patch:-0}; \
-	bump=patch; \
-	if [ "$$curr_major" != "$$prev_major" ]; then \
-		bump=major; \
-	elif [ "$$curr_minor" != "$$prev_minor" ]; then \
-		bump=minor; \
-	elif [ "$$curr_patch" != "$$prev_patch" ]; then \
-		bump=patch; \
-	fi; \
-	echo "$$bump"
+	@./scripts/bump_type.sh
 
 version/github_actions:
 	@output_file="$$GITHUB_OUTPUT"; \
