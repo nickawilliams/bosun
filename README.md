@@ -1,5 +1,8 @@
 # Bosun
 
+[![Build Status][ci-image]][ci-url]
+[![Code Coverage][coverage-image]][coverage-url]
+
 A CLI tool for automating repeated SDLC tasks across issue trackers, version
 control, CI/CD, and notification systems. Named for the ship's officer who
 directs the crew and signals state changes.
@@ -121,3 +124,8 @@ the type is just what category of action it is? For example:
 = adopt    environment "foo-bar"
 = retain   environment "foo-bar"
 ```
+
+[ci-image]: https://img.shields.io/github/actions/workflow/status/nickawilliams/bosun/release.yaml?logo=GitHub&logoColor=white
+[ci-url]: https://github.com/nickawilliams/bosun/actions/workflows/release.yaml
+[coverage-image]: https://img.shields.io/codecov/c/github/nickawilliams/bosun?logo=codecov&logoColor=white
+[coverage-url]: https://codecov.io/gh/nickawilliams/bosun
