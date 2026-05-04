@@ -5,9 +5,6 @@ on:
     branches: [main]
 
   workflow_call:
-    secrets:
-      CODECOV_TOKEN:
-        required: false
 
 env:
   CARGO_HOME: ${{ github.workspace }}/.cache/cargo
@@ -96,27 +93,11 @@ jobs:
         run: go mod download
       - name: Test
         run: make test && make test/completions
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-out
-          path: ./.out/coverage/coverage.out
-          if-no-files-found: error
-
-  coverage:
-    needs: test
-    if: ${{ vars.VERIFY_COVERAGE == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Download coverage artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-out
-          path: ./.out/coverage
       - name: Coverage
+        if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           name: bosun
           token: ${{ secrets.CODECOV_TOKEN }}
