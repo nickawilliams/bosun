@@ -33,14 +33,14 @@ variable "codecov_token" {
   default     = null
 }
 
-variable "homebrew_tap_token" {
+variable "homebrew_token" {
   description = "GitHub token with write access to the homebrew tap repository"
   type        = string
   sensitive   = true
   default     = null
 }
 
-variable "macports_port_token" {
+variable "macports_token" {
   description = "GitHub token with write access to the macports fork repository"
   type        = string
   sensitive   = true
@@ -60,22 +60,22 @@ variable "git_user_name" {
 variable "git_user_email" {
   description = "Git author email for release commits"
   type        = string
-  default     = "ci@nickawilliams"
+  default     = "ci@nickawilliams.com"
 }
 
-variable "tap_repo" {
+variable "homebrew_repo" {
   description = "Homebrew tap repository (owner/name)"
   type        = string
   default     = "nickawilliams/homebrew-tap"
 }
 
-variable "port_repo" {
+variable "macports_repo" {
   description = "MacPorts fork repository (owner/name)"
   type        = string
   default     = "nickawilliams/fork-macports-ports"
 }
 
-variable "port_pullrequest" {
+variable "macports_pullrequest" {
   description = "Whether macports publish opens a PR to upstream (true/false)"
   type        = string
   default     = "false"

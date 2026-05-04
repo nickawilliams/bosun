@@ -15,10 +15,14 @@ resource "github_repository" "bosun" {
   has_projects    = false
   has_discussions = false
 
-  allow_merge_commit     = true
-  allow_squash_merge     = true
-  allow_rebase_merge     = true
-  delete_branch_on_merge = true
+  allow_merge_commit          = true
+  merge_commit_title          = "PR_TITLE"
+  merge_commit_message        = "PR_BODY"
+  allow_squash_merge          = true
+  squash_merge_commit_title   = "PR_TITLE"
+  squash_merge_commit_message = "PR_BODY"
+  allow_rebase_merge          = true
+  delete_branch_on_merge      = true
 
   security_and_analysis {
     secret_scanning {
@@ -73,18 +77,18 @@ resource "github_actions_secret" "codecov_token" {
   value       = var.codecov_token
 }
 
-resource "github_actions_secret" "homebrew_tap_token" {
-  count       = var.homebrew_tap_token != null ? 1 : 0
+resource "github_actions_secret" "homebrew_token" {
+  count       = var.homebrew_token != null ? 1 : 0
   repository  = github_repository.bosun.name
-  secret_name = "HOMEBREW_TAP_TOKEN"
-  value       = var.homebrew_tap_token
+  secret_name = "HOMEBREW_TOKEN"
+  value       = var.homebrew_token
 }
 
-resource "github_actions_secret" "macports_port_token" {
-  count       = var.macports_port_token != null ? 1 : 0
+resource "github_actions_secret" "macports_token" {
+  count       = var.macports_token != null ? 1 : 0
   repository  = github_repository.bosun.name
-  secret_name = "MACPORTS_PORT_TOKEN"
-  value       = var.macports_port_token
+  secret_name = "MACPORTS_TOKEN"
+  value       = var.macports_token
 }
 
 # ============================================================================
@@ -103,22 +107,22 @@ resource "github_actions_variable" "git_user_email" {
   value         = var.git_user_email
 }
 
-resource "github_actions_variable" "tap_repo" {
+resource "github_actions_variable" "homebrew_repo" {
   repository    = github_repository.bosun.name
-  variable_name = "TAP_REPO"
-  value         = var.tap_repo
+  variable_name = "HOMEBREW_REPO"
+  value         = var.homebrew_repo
 }
 
-resource "github_actions_variable" "port_repo" {
+resource "github_actions_variable" "macports_repo" {
   repository    = github_repository.bosun.name
-  variable_name = "PORT_REPO"
-  value         = var.port_repo
+  variable_name = "MACPORTS_REPO"
+  value         = var.macports_repo
 }
 
-resource "github_actions_variable" "port_pullrequest" {
+resource "github_actions_variable" "macports_pullrequest" {
   repository    = github_repository.bosun.name
-  variable_name = "PORT_PULLREQUEST"
-  value         = var.port_pullrequest
+  variable_name = "MACPORTS_PULLREQUEST"
+  value         = var.macports_pullrequest
 }
 
 resource "github_actions_variable" "publish_enabled" {

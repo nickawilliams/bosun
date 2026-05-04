@@ -7,6 +7,7 @@ tmp_dir = ".out/air"
 cmd = "make build"
 entrypoint = ["/usr/bin/true"]
 include_ext = ["go", "toml", "yaml", "txt"]
+exclude_dir = ["terraform", ".out", ".cache", ".git"]
 
 [log]
 time = true
