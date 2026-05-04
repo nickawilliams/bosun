@@ -103,5 +103,5 @@ jobs:
         with:
           name: bosun
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./.out/coverage/coverage.out
+          files: ./.out/coverage/coverage.out
           fail_ci_if_error: true
