@@ -26,8 +26,8 @@ jobs:
     if: ${{ vars.PUBLISH_ENABLED == 'true' }}
     runs-on: macos-latest
     env:
-      PORT_REPO: ${{ vars.PORT_REPO }}
-      PORT_PULLREQUEST: ${{ vars.PORT_PULLREQUEST }}
+      MACPORTS_REPO: ${{ vars.MACPORTS_REPO }}
+      MACPORTS_PULLREQUEST: ${{ vars.MACPORTS_PULLREQUEST }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,14 +77,14 @@ jobs:
       - name: Publish
         env:
           TAG: ${{ steps.release.outputs.tag }}
-          GITHUB_TOKEN: ${{ secrets.MACPORTS_PORT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MACPORTS_TOKEN }}
         run: make publish/macports
 
   homebrew:
     if: ${{ vars.PUBLISH_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     env:
-      TAP_REPO: ${{ vars.TAP_REPO }}
+      HOMEBREW_REPO: ${{ vars.HOMEBREW_REPO }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -129,5 +129,5 @@ jobs:
       - name: Publish
         env:
           TAG: ${{ steps.release.outputs.tag }}
-          GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
         run: make publish/homebrew

@@ -10,7 +10,7 @@ usage() {
 Usage: scripts/publish_macports.sh <tag> <port_repo> <portfile_path> <rendered_portfile_path>
 Environment:
   GITHUB_TOKEN      Token with write access to the ports repository (required).
-  PORT_PULLREQUEST  Set to "true" to create a PR to the upstream repository.
+  MACPORTS_PULLREQUEST  Set to "true" to create a PR to the upstream repository.
 USAGE
 }
 
@@ -139,8 +139,8 @@ if command -v port >/dev/null 2>&1; then
   sudo port -N uninstall "${port_name}" || true
   restore_sources_conf
 
-elif [[ "${PORT_PULLREQUEST:-false}" == "true" ]]; then
-  echo "ERROR: port command not found but PORT_PULLREQUEST=true requires verification" >&2
+elif [[ "${MACPORTS_PULLREQUEST:-false}" == "true" ]]; then
+  echo "ERROR: port command not found but MACPORTS_PULLREQUEST=true requires verification" >&2
   echo "ERROR: Install MacPorts to enable linting and testing" >&2
   exit 1
 else
@@ -157,7 +157,7 @@ else
 fi
 
 # Create PR to upstream repo if enabled
-if [[ "${PORT_PULLREQUEST:-false}" == "true" ]]; then
+if [[ "${MACPORTS_PULLREQUEST:-false}" == "true" ]]; then
   echo "INFO: Querying upstream repo for ${PORT_REPO}..."
   upstream_repo=$(gh repo view "${PORT_REPO}" --json parent --jq 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end')
   if [[ -z "${upstream_repo}" ]]; then

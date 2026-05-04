@@ -27,8 +27,8 @@ permissions:
   contents: write
 
 env:
-  TAP_REPO: ${{ vars.TAP_REPO }}
-  PORT_REPO: ${{ vars.PORT_REPO }}
+  HOMEBREW_REPO: ${{ vars.HOMEBREW_REPO }}
+  MACPORTS_REPO: ${{ vars.MACPORTS_REPO }}
 
 jobs:
   reset-main:
@@ -167,7 +167,7 @@ jobs:
 
       - name: Revert homebrew tap commit
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
           GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
           GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
           SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
@@ -177,7 +177,7 @@ jobs:
           tap_dir="$(mktemp -d)"
           trap 'rm -rf "${tap_dir}"' EXIT
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" "${tap_dir}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${HOMEBREW_REPO}.git" "${tap_dir}"
           cd "${tap_dir}"
 
           git config commit.gpgsign true
@@ -200,15 +200,15 @@ jobs:
           target=$(git rev-parse "${commit}~1")
 
           if [[ "${target}" == "${previous}" ]]; then
-            echo "${TAP_REPO}/${default_branch} is already at the right state"
+            echo "${HOMEBREW_REPO}/${default_branch} is already at the right state"
             exit 0
           fi
 
-          echo "Reverting ${TAP_REPO}/${default_branch} from ${previous} to ${target}"
+          echo "Reverting ${HOMEBREW_REPO}/${default_branch} from ${previous} to ${target}"
           echo "  (removing commit ${commit}: publish(formula): bosun ${TAG})"
           git reset --hard "${target}"
           git push --force-with-lease="${default_branch}:${previous}" origin "HEAD:${default_branch}"
-          echo "${TAP_REPO}/${default_branch} reverted to ${target}"
+          echo "${HOMEBREW_REPO}/${default_branch} reverted to ${target}"
 
   reset-ports-fork:
     if: ${{ inputs.reset_ports_fork }}
@@ -225,26 +225,26 @@ jobs:
 
       - name: Check for open upstream PRs
         env:
-          GH_TOKEN: ${{ secrets.MACPORTS_PORT_TOKEN }}
+          GH_TOKEN: ${{ secrets.MACPORTS_TOKEN }}
         run: |
           set -euo pipefail
-          upstream=$(gh repo view "${PORT_REPO}" --json parent --jq 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end')
+          upstream=$(gh repo view "${MACPORTS_REPO}" --json parent --jq 'if .parent then "\(.parent.owner.login)/\(.parent.name)" else empty end')
           if [[ -z "${upstream}" ]]; then
-            echo "::warning::${PORT_REPO} has no upstream parent; skipping upstream PR check"
+            echo "::warning::${MACPORTS_REPO} has no upstream parent; skipping upstream PR check"
             exit 0
           fi
-          fork_owner="${PORT_REPO%%/*}"
+          fork_owner="${MACPORTS_REPO%%/*}"
           open=$(gh pr list --repo "${upstream}" --state open --json url,headRefName,headRepositoryOwner --jq \
             '[.[] | select(.headRepositoryOwner.login == "'"${fork_owner}"'")]')
           count=$(echo "${open}" | jq 'length')
           if [[ "${count}" != "0" ]]; then
-            echo "::warning::${count} open PR(s) from ${PORT_REPO} to ${upstream} — never touching upstream PRs:"
+            echo "::warning::${count} open PR(s) from ${MACPORTS_REPO} to ${upstream} — never touching upstream PRs:"
             echo "${open}" | jq -r '.[] | "  \(.url) (head: \(.headRefName))"'
           fi
 
       - name: Revert macports fork commit
         env:
-          GH_TOKEN: ${{ secrets.MACPORTS_PORT_TOKEN }}
+          GH_TOKEN: ${{ secrets.MACPORTS_TOKEN }}
           GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
           GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
           SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
@@ -254,7 +254,7 @@ jobs:
           port_dir="$(mktemp -d)"
           trap 'rm -rf "${port_dir}"' EXIT
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${PORT_REPO}.git" "${port_dir}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${MACPORTS_REPO}.git" "${port_dir}"
           cd "${port_dir}"
 
           git config commit.gpgsign true
@@ -280,16 +280,16 @@ jobs:
           target=$(git rev-parse "${commit}~1")
 
           if [[ "${target}" == "${previous}" ]]; then
-            echo "${PORT_REPO}/${default_branch} is already at the right state"
+            echo "${MACPORTS_REPO}/${default_branch} is already at the right state"
             exit 0
           fi
 
           commit_msg=$(git log --format='%s' -1 "${commit}")
-          echo "Reverting ${PORT_REPO}/${default_branch} from ${previous} to ${target}"
+          echo "Reverting ${MACPORTS_REPO}/${default_branch} from ${previous} to ${target}"
           echo "  (removing commit ${commit}: ${commit_msg})"
           git reset --hard "${target}"
           git push --force-with-lease="${default_branch}:${previous}" origin "HEAD:${default_branch}"
-          echo "${PORT_REPO}/${default_branch} reverted to ${target}"
+          echo "${MACPORTS_REPO}/${default_branch} reverted to ${target}"
 
   summary:
     needs: [reset-main, reset-tap, reset-ports-fork]
@@ -302,6 +302,6 @@ jobs:
             echo "## Reset summary for ${{ needs.reset-main.outputs.tag }}"
             echo ""
             echo "- main: ${{ needs.reset-main.result }} (was ${{ needs.reset-main.outputs.previous_main }}, now ${{ needs.reset-main.outputs.reset_to }})"
-            echo "- homebrew tap (${TAP_REPO}): ${{ needs.reset-tap.result }}"
-            echo "- macports fork (${PORT_REPO}): ${{ needs.reset-ports-fork.result }}"
+            echo "- homebrew tap (${HOMEBREW_REPO}): ${{ needs.reset-tap.result }}"
+            echo "- macports fork (${MACPORTS_REPO}): ${{ needs.reset-ports-fork.result }}"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -47,14 +47,14 @@ export CARGO_HOME ?= $(CURDIR)/.cache/cargo
 # Publishing
 # ============================================================================
 
-TAP_REPO ?= nickawilliams/homebrew-tap
-TAP_FORMULA_PATH := Formula/bosun.rb
-TAP_FORMULA := packaging/homebrew/bosun.rb
+HOMEBREW_REPO ?= nickawilliams/homebrew-tap
+HOMEBREW_FORMULA_PATH := Formula/bosun.rb
+HOMEBREW_FORMULA := packaging/homebrew/bosun.rb
 
-PORT_REPO ?= nickawilliams/fork-macports-ports
-PORT_PULLREQUEST ?= false
-PORTFILE_PATH := devel/bosun/Portfile
-PORTFILE := packaging/macports/Portfile
+MACPORTS_REPO ?= nickawilliams/fork-macports-ports
+MACPORTS_PULLREQUEST ?= false
+MACPORTS_PORTFILE_PATH := devel/bosun/Portfile
+MACPORTS_PORTFILE := packaging/macports/Portfile
 
 # ============================================================================
 # Install Paths
@@ -487,11 +487,11 @@ release:
 
 ## Render and publish the Homebrew formula to the tap repository
 publish/homebrew:
-	@./scripts/publish_homebrew.sh "$(TAG)" "$(TAP_REPO)" "$(TAP_FORMULA_PATH)" "$(TAP_FORMULA)"
+	@./scripts/publish_homebrew.sh "$(TAG)" "$(HOMEBREW_REPO)" "$(HOMEBREW_FORMULA_PATH)" "$(HOMEBREW_FORMULA)"
 
 ## Render and publish the MacPorts Portfile to the ports repository
 publish/macports:
-	@PORT_PULLREQUEST="$(PORT_PULLREQUEST)" ./scripts/publish_macports.sh "$(TAG)" "$(PORT_REPO)" "$(PORTFILE_PATH)" "$(PORTFILE)"
+	@MACPORTS_PULLREQUEST="$(MACPORTS_PULLREQUEST)" ./scripts/publish_macports.sh "$(TAG)" "$(MACPORTS_REPO)" "$(MACPORTS_PORTFILE_PATH)" "$(MACPORTS_PORTFILE)"
 
 # ============================================================================
 # Test (Completions)
