@@ -35,6 +35,8 @@ jobs:
           echo "${{ env.CARGO_HOME }}/bin" >> "$GITHUB_PATH"
       - name: Dependencies
         run: make deps
+      - name: Fetch base branch
+        run: git fetch origin main
       - name: Lint
         run: make lint LINT_NEW_FROM_REV=origin/main
 
