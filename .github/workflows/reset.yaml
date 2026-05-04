@@ -27,8 +27,8 @@ permissions:
   contents: write
 
 env:
-  TAP_REPO: nickawilliams/homebrew-tap
-  PORT_REPO: nickawilliams/fork-macports-ports
+  TAP_REPO: ${{ vars.TAP_REPO }}
+  PORT_REPO: ${{ vars.PORT_REPO }}
 
 jobs:
   reset-main:

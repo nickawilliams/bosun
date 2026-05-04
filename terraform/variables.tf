@@ -63,6 +63,12 @@ variable "git_user_email" {
   default     = "ci@nickawilliams"
 }
 
+variable "tap_repo" {
+  description = "Homebrew tap repository (owner/name)"
+  type        = string
+  default     = "nickawilliams/homebrew-tap"
+}
+
 variable "port_repo" {
   description = "MacPorts fork repository (owner/name)"
   type        = string

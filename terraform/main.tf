@@ -103,6 +103,12 @@ resource "github_actions_variable" "git_user_email" {
   value         = var.git_user_email
 }
 
+resource "github_actions_variable" "tap_repo" {
+  repository    = github_repository.bosun.name
+  variable_name = "TAP_REPO"
+  value         = var.tap_repo
+}
+
 resource "github_actions_variable" "port_repo" {
   repository    = github_repository.bosun.name
   variable_name = "PORT_REPO"
