@@ -45,7 +45,7 @@ func initTestRepositoryWithRemote(t *testing.T) string {
 		dir  string
 		args []string
 	}{
-		{base, []string{"git", "init", "--bare", bare}},
+		{base, []string{"git", "init", "--bare", "--initial-branch=main", bare}},
 		{base, []string{"git", "clone", bare, repository}},
 		{repository, []string{"git", "config", "user.email", "test@test.com"}},
 		{repository, []string{"git", "config", "user.name", "Test"}},
