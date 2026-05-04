@@ -34,14 +34,14 @@ variable "codecov_token" {
 }
 
 variable "homebrew_tap_token" {
-  description = "GitHub token with write access to nickawilliams/homebrew-tap"
+  description = "GitHub token with write access to the homebrew tap repository"
   type        = string
   sensitive   = true
   default     = null
 }
 
 variable "macports_port_token" {
-  description = "GitHub token with write access to nickawilliams/fork-macports-ports"
+  description = "GitHub token with write access to the macports fork repository"
   type        = string
   sensitive   = true
   default     = null
@@ -54,13 +54,13 @@ variable "macports_port_token" {
 variable "git_user_name" {
   description = "Git author name for release commits"
   type        = string
-  default     = "github-actions[bot]"
+  default     = "CI Bot"
 }
 
 variable "git_user_email" {
   description = "Git author email for release commits"
   type        = string
-  default     = "41898282+github-actions[bot]@users.noreply.github.com"
+  default     = "ci@nickawilliams"
 }
 
 variable "port_repo" {
