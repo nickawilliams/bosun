@@ -22,15 +22,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Extract issue number from branch name (<issue>-<slug>)
-          if [[ ! "${BRANCH}" =~ ^([0-9]+)- ]]; then
-            echo "Branch '${BRANCH}' does not follow <issue>-<slug> convention; skipping"
-            exit 0
-          fi
-          issue="${BASH_REMATCH[1]}"
-
-          # --- Title prefix ---
-          prefix="pr(#${issue}): "
+          # --- Title prefix (uses PR number) ---
+          prefix="pr(#${PR_NUMBER}): "
           if [[ "${PR_TITLE}" == "${prefix}"* ]]; then
             echo "Title already has prefix: ${PR_TITLE}"
           else
@@ -39,7 +32,14 @@ jobs:
             gh pr edit "${PR_NUMBER}" --repo "${{ github.repository }}" --title "${new_title}"
           fi
 
-          # --- Closing reference (only on open) ---
+          # --- Closing reference (uses issue number from branch) ---
+          # Extract issue number from branch name (<issue>-<slug>)
+          if [[ ! "${BRANCH}" =~ ^([0-9]+)- ]]; then
+            echo "Branch '${BRANCH}' does not follow <issue>-<slug> convention; skipping body injection"
+            exit 0
+          fi
+          issue="${BASH_REMATCH[1]}"
+
           if [[ "${EVENT_ACTION}" != "opened" ]]; then
             exit 0
           fi
