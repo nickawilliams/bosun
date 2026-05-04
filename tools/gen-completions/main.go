@@ -40,10 +40,12 @@ func main() {
 			log.Fatalf("unable to create %s: %v", path, err)
 		}
 		if err := s.write(f); err != nil {
-			f.Close()
+			_ = f.Close()
 			log.Fatalf("unable to generate %s completion: %v", s.dir, err)
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			log.Fatalf("unable to close %s: %v", path, err)
+		}
 	}
 
 	fmt.Printf("wrote completions to %s\n", outDir)

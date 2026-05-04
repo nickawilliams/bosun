@@ -39,81 +39,82 @@ func WriteManPage(w io.Writer, cmd *cobra.Command, opts ManPageOptions) error {
 		opts.Manual = "User Commands"
 	}
 
+	ew := &errWriter{w: w}
 	name := cmd.Name()
 
-	fmt.Fprintln(w, ".nh")
-	fmt.Fprintf(w, ".TH %q %q %q %q %q\n",
+	ew.println(".nh")
+	ew.printf(".TH %q %q %q %q %q\n",
 		strings.ToUpper(name), opts.Section, opts.Date, opts.Source, opts.Manual)
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH NAME")
-	fmt.Fprintf(w, "%s \\- %s\n", troffEscape(name), troffEscape(cmd.Short))
+	ew.println("")
+	ew.println(".SH NAME")
+	ew.printf("%s \\- %s\n", troffEscape(name), troffEscape(cmd.Short))
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH SYNOPSIS")
-	fmt.Fprintf(w, "\\fB%s\\fP [\\fIflags\\fP] [\\fIcommand\\fP]\n", troffEscape(name))
+	ew.println("")
+	ew.println(".SH SYNOPSIS")
+	ew.printf("\\fB%s\\fP [\\fIflags\\fP] [\\fIcommand\\fP]\n", troffEscape(name))
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH DESCRIPTION")
+	ew.println("")
+	ew.println(".SH DESCRIPTION")
 	desc := cmd.Long
 	if desc == "" {
 		desc = cmd.Short
 	}
-	fmt.Fprintln(w, troffEscape(desc))
+	ew.println(troffEscape(desc))
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH OPTIONS")
+	ew.println("")
+	ew.println(".SH OPTIONS")
 	seen := map[string]bool{}
 	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 		if flag.Hidden || seen[flag.Name] {
 			return
 		}
 		seen[flag.Name] = true
-		writeManOption(w, flag)
+		writeManOption(ew, flag)
 	})
 	cmd.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
 		if flag.Hidden || seen[flag.Name] {
 			return
 		}
 		seen[flag.Name] = true
-		writeManOption(w, flag)
+		writeManOption(ew, flag)
 	})
-	fmt.Fprintln(w, ".TP")
-	fmt.Fprintln(w, "\\fB\\-h\\fP, \\fB\\-\\-help\\fP")
-	fmt.Fprintln(w, "Display help and exit.")
-	fmt.Fprintln(w, ".TP")
-	fmt.Fprintln(w, "\\fB\\-v\\fP, \\fB\\-\\-version\\fP")
-	fmt.Fprintln(w, "Display version and exit.")
+	ew.println(".TP")
+	ew.println("\\fB\\-h\\fP, \\fB\\-\\-help\\fP")
+	ew.println("Display help and exit.")
+	ew.println(".TP")
+	ew.println("\\fB\\-v\\fP, \\fB\\-\\-version\\fP")
+	ew.println("Display version and exit.")
 
 	subs := visibleSubcommands(cmd)
 	if len(subs) > 0 {
-		fmt.Fprintln(w, "")
-		fmt.Fprintln(w, ".SH COMMANDS")
+		ew.println("")
+		ew.println(".SH COMMANDS")
 		for _, sub := range subs {
-			fmt.Fprintln(w, ".TP")
-			fmt.Fprintf(w, "\\fB%s\\fP\n", troffEscape(sub.Name()))
+			ew.println(".TP")
+			ew.printf("\\fB%s\\fP\n", troffEscape(sub.Name()))
 			short := sub.Short
 			if short == "" {
 				short = "(no description)"
 			}
-			fmt.Fprintln(w, troffEscape(short))
+			ew.println(troffEscape(short))
 		}
 	}
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH EXIT STATUS")
-	fmt.Fprintln(w, ".TP")
-	fmt.Fprintln(w, "0")
-	fmt.Fprintln(w, "Success.")
-	fmt.Fprintln(w, ".TP")
-	fmt.Fprintln(w, "1")
-	fmt.Fprintln(w, "An error occurred.")
+	ew.println("")
+	ew.println(".SH EXIT STATUS")
+	ew.println(".TP")
+	ew.println("0")
+	ew.println("Success.")
+	ew.println(".TP")
+	ew.println("1")
+	ew.println("An error occurred.")
 
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, ".SH SEE ALSO")
-	fmt.Fprintln(w, "\\fBbash\\fP(1), \\fBzsh\\fP(1), \\fBfish\\fP(1)")
+	ew.println("")
+	ew.println(".SH SEE ALSO")
+	ew.println("\\fBbash\\fP(1), \\fBzsh\\fP(1), \\fBfish\\fP(1)")
 
-	return nil
+	return ew.err
 }
 
 func visibleSubcommands(cmd *cobra.Command) []*cobra.Command {
@@ -127,8 +128,8 @@ func visibleSubcommands(cmd *cobra.Command) []*cobra.Command {
 	return subs
 }
 
-func writeManOption(w io.Writer, flag *pflag.Flag) {
-	fmt.Fprintln(w, ".TP")
+func writeManOption(ew *errWriter, flag *pflag.Flag) {
+	ew.println(".TP")
 
 	var sig strings.Builder
 	if flag.Shorthand != "" && flag.ShorthandDeprecated == "" {
@@ -138,14 +139,33 @@ func writeManOption(w io.Writer, flag *pflag.Flag) {
 	if flag.Value.Type() != "bool" {
 		fmt.Fprintf(&sig, "=\\fI%s\\fP", strings.ToUpper(flag.Name))
 	}
-	fmt.Fprintln(w, sig.String())
+	ew.println(sig.String())
 
 	usage := flag.Usage
 	def := flag.DefValue
 	if def != "" && def != "false" && def != "0" && def != `""` {
-		fmt.Fprintf(w, "%s (default: %s).\n", capitalizeFirst(usage), def)
+		ew.printf("%s (default: %s).\n", capitalizeFirst(usage), def)
 	} else {
-		fmt.Fprintln(w, capitalizeFirst(usage)+".")
+		ew.println(capitalizeFirst(usage) + ".")
+	}
+}
+
+// errWriter accumulates the first write error so callers don't need to check
+// every fmt.Fprint* call individually.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (ew *errWriter) printf(format string, args ...any) {
+	if ew.err == nil {
+		_, ew.err = fmt.Fprintf(ew.w, format, args...)
+	}
+}
+
+func (ew *errWriter) println(args ...any) {
+	if ew.err == nil {
+		_, ew.err = fmt.Fprintln(ew.w, args...)
 	}
 }
 

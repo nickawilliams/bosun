@@ -27,10 +27,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("unable to create man page file: %v", err)
 	}
-	defer f.Close()
 
 	if err := generate.WriteManPage(f, root, generate.ManPageOptions{}); err != nil {
+		_ = f.Close()
 		log.Fatalf("unable to render man page: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		log.Fatalf("unable to close man page file: %v", err)
 	}
 
 	fmt.Printf("wrote man page to %s\n", outPath)
