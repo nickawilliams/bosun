@@ -36,7 +36,7 @@ jobs:
       - name: Dependencies
         run: make deps
       - name: Lint
-        run: make lint
+        run: make lint LINT_NEW_FROM_REV=origin/main
 
   build:
     needs: lint

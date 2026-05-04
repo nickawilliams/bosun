@@ -174,7 +174,7 @@ bench:
 ## Run golangci-lint
 lint:
 	@echo "Running golangci-lint..."
-	@$(GO) tool golangci-lint run
+	@$(GO) tool golangci-lint run $(if $(LINT_NEW_FROM_REV),--new-from-rev=$(LINT_NEW_FROM_REV))
 
 ## Format all Go files
 format:
