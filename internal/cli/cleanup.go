@@ -128,7 +128,7 @@ func newCleanupCmd() *cobra.Command {
 				if err != nil || len(entries) > 0 {
 					break
 				}
-				os.Remove(dir)
+				_ = os.Remove(dir)
 			}
 
 			return nil

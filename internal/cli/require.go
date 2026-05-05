@@ -165,7 +165,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		if val == "" {
 			return fmt.Errorf("%s is required", ck.Label)
 		}
-		os.Setenv(ck.EnvVar, val)
+		_ = os.Setenv(ck.EnvVar, val)
 		viper.Set(fk, val)
 		ui.Saved(ck.Label, "(set for this session)")
 		return nil

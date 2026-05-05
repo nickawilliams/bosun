@@ -8,9 +8,7 @@ import (
 )
 
 var (
-	successStyle = lipgloss.NewStyle().Foreground(Palette.Success)
 	errorStyle   = lipgloss.NewStyle().Foreground(Palette.Error)
-	warningStyle = lipgloss.NewStyle().Foreground(Palette.Warning)
 	mutedStyle   = lipgloss.NewStyle().Foreground(Palette.Muted)
 	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
 	boldStyle    = lipgloss.NewStyle().Bold(true)

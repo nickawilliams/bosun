@@ -16,10 +16,10 @@ func TestNotify(t *testing.T) {
 	var postedBlocks bool
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		switch r.URL.Path {
 		case "/conversations.list":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"channels": []map[string]any{
 					{"id": "C123", "name": "bb-prs"},
@@ -31,7 +31,7 @@ func TestNotify(t *testing.T) {
 			if r.FormValue("blocks") != "" {
 				postedBlocks = true
 			}
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok":      true,
 				"channel": "C123",
 				"ts":      "1234567890.123456",
@@ -81,10 +81,10 @@ func TestNotify(t *testing.T) {
 
 func TestNotifyChannelNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		switch r.URL.Path {
 		case "/conversations.list":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok":       true,
 				"channels": []map[string]any{},
 			})
@@ -110,17 +110,17 @@ func TestNotifyChannelNotFound(t *testing.T) {
 
 func TestFindThread(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		switch r.URL.Path {
 		case "/conversations.list":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"channels": []map[string]any{
 					{"id": "C123", "name": "bb-prs"},
 				},
 			})
 		case "/conversations.history":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"messages": []map[string]any{
 					{"text": "unrelated message", "ts": "1111111111.111111"},
@@ -150,17 +150,17 @@ func TestFindThread(t *testing.T) {
 
 func TestFindThreadNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		switch r.URL.Path {
 		case "/conversations.list":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"channels": []map[string]any{
 					{"id": "C123", "name": "bb-prs"},
 				},
 			})
 		case "/conversations.history":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"messages": []map[string]any{
 					{"text": "unrelated message", "ts": "1111111111.111111"},
@@ -191,12 +191,12 @@ func TestReplyToThread(t *testing.T) {
 	var postedChannel, postedThreadTS string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		switch r.URL.Path {
 		case "/chat.postMessage":
 			postedChannel = r.FormValue("channel")
 			postedThreadTS = r.FormValue("thread_ts")
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok":      true,
 				"channel": "C123",
 				"ts":      "3333333333.333333",

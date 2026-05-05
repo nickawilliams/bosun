@@ -99,20 +99,6 @@ func promptConfirm(label string, defaultVal bool) (bool, error) {
 	return confirmed, nil
 }
 
-// promptSecret prompts for a sensitive value with masked input.
-// Returns empty string in non-interactive mode.
-func promptSecret(label string) string {
-	if !isInteractive() {
-		return ""
-	}
-
-	var value string
-	if err := runForm(huh.NewInput().Title(label).EchoMode(huh.EchoModePassword).Value(&value)); err != nil {
-		return ""
-	}
-	return value
-}
-
 // promptValue displays a prompt with a default value.
 // Returns the entered value and any error (including ErrCancelled on ctrl+c).
 func promptValue(label, defaultVal string) (string, error) {

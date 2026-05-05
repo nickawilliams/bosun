@@ -52,7 +52,7 @@ func (a *Adapter) TriggerWorkflow(ctx context.Context, req cicd.TriggerRequest) 
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -83,7 +83,7 @@ func (a *Adapter) doRequest(ctx context.Context, method, path string, body any) 
 	}
 
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("github actions API error (HTTP %d): %s", resp.StatusCode, respBody)
 	}

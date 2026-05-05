@@ -218,14 +218,9 @@ func ApplyColorMode(mode string) {
 // rebuildStyles refreshes every package-level style var that captured
 // palette values at init time. Called by ApplyColorMode.
 func rebuildStyles() {
-	// output.go
-	successStyle = lipgloss.NewStyle().Foreground(Palette.Success)
 	errorStyle = lipgloss.NewStyle().Foreground(Palette.Error)
-	warningStyle = lipgloss.NewStyle().Foreground(Palette.Warning)
 	mutedStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
 	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
-
-
 }
 
 // BosunTheme implements huh.Theme for use with huh forms.

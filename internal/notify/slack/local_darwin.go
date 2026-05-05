@@ -27,7 +27,7 @@ func slackLevelDBPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("Slack LevelDB not found (checked %s)", strings.Join(paths, ", "))
+	return "", fmt.Errorf("slack LevelDB not found (checked %s)", strings.Join(paths, ", "))
 }
 
 func slackCookiesPath() (string, error) {
@@ -47,7 +47,7 @@ func slackCookiesPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("Slack Cookies database not found (checked %s)", strings.Join(paths, ", "))
+	return "", fmt.Errorf("slack Cookies database not found (checked %s)", strings.Join(paths, ", "))
 }
 
 func decryptionKey() ([]byte, error) {

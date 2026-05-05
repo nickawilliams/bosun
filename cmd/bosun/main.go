@@ -11,10 +11,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 )
 
-var (
-	version = "dev"
-	commit  = "none"
-)
+var version = "dev"
 
 func main() {
 	ui.AppVersion = version
@@ -33,7 +30,7 @@ func main() {
 				return
 			}
 			if ui.IsRaw() {
-				ui.Error(err.Error())
+				ui.Error("%s", err.Error())
 			} else {
 				ui.Fail(err.Error())
 				ui.EndTimeline()

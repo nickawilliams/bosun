@@ -110,7 +110,7 @@ func TestDeleteBranch(t *testing.T) {
 	a := New()
 	ctx := context.Background()
 
-	a.CreateBranchFromHead(ctx, repository, "to-delete")
+	_ = a.CreateBranchFromHead(ctx, repository, "to-delete")
 	if err := a.DeleteBranch(ctx, repository, "to-delete"); err != nil {
 		t.Fatalf("DeleteBranch() error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestIsDirty(t *testing.T) {
 	}
 
 	// Create an untracked file.
-	os.WriteFile(filepath.Join(repository, "dirty.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(repository, "dirty.txt"), []byte("x"), 0o644)
 
 	dirty, err = a.IsDirty(ctx, repository)
 	if err != nil {
@@ -193,10 +193,10 @@ func TestChangedFiles(t *testing.T) {
 	}
 
 	// Create a feature branch, add a file, commit.
-	run(ctx, repo, "checkout", "-b", "feature/test")
-	os.WriteFile(filepath.Join(repo, "new.txt"), []byte("hello"), 0o644)
-	run(ctx, repo, "add", "new.txt")
-	run(ctx, repo, "commit", "-m", "add new.txt")
+	_ = run(ctx, repo, "checkout", "-b", "feature/test")
+	_ = os.WriteFile(filepath.Join(repo, "new.txt"), []byte("hello"), 0o644)
+	_ = run(ctx, repo, "add", "new.txt")
+	_ = run(ctx, repo, "commit", "-m", "add new.txt")
 
 	files, err = a.ChangedFiles(ctx, repo)
 	if err != nil {
@@ -207,10 +207,10 @@ func TestChangedFiles(t *testing.T) {
 	}
 
 	// Add a file in a subdirectory.
-	os.MkdirAll(filepath.Join(repo, "cmd", "api"), 0o755)
-	os.WriteFile(filepath.Join(repo, "cmd", "api", "main.go"), []byte("package main"), 0o644)
-	run(ctx, repo, "add", "cmd/api/main.go")
-	run(ctx, repo, "commit", "-m", "add cmd/api/main.go")
+	_ = os.MkdirAll(filepath.Join(repo, "cmd", "api"), 0o755)
+	_ = os.WriteFile(filepath.Join(repo, "cmd", "api", "main.go"), []byte("package main"), 0o644)
+	_ = run(ctx, repo, "add", "cmd/api/main.go")
+	_ = run(ctx, repo, "commit", "-m", "add cmd/api/main.go")
 
 	files, err = a.ChangedFiles(ctx, repo)
 	if err != nil {
@@ -226,7 +226,7 @@ func TestWorktree(t *testing.T) {
 	a := New()
 	ctx := context.Background()
 
-	a.CreateBranchFromHead(ctx, repository, "wt-branch")
+	_ = a.CreateBranchFromHead(ctx, repository, "wt-branch")
 
 	wtPath := filepath.Join(t.TempDir(), "worktree")
 	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {

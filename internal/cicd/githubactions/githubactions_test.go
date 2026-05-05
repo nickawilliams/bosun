@@ -18,7 +18,7 @@ func TestTriggerWorkflow(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -54,7 +54,7 @@ func TestTriggerWorkflowEmptyInputs(t *testing.T) {
 	var gotBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -85,7 +85,7 @@ func TestTriggerWorkflowAuthHeader(t *testing.T) {
 
 	a := NewWithClient(server.Client(), server.URL, "mytoken123")
 
-	a.TriggerWorkflow(context.Background(), cicd.TriggerRequest{
+	_ = a.TriggerWorkflow(context.Background(), cicd.TriggerRequest{
 		Owner: "org", Repository: "repo", Workflow: "deploy.yml", Ref: "main",
 	})
 
@@ -97,7 +97,7 @@ func TestTriggerWorkflowAuthHeader(t *testing.T) {
 func TestTriggerWorkflowAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"message":"Not Found"}`))
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 	}))
 	defer server.Close()
 
