@@ -9,15 +9,28 @@ variable "github_token" {
   default     = null
 }
 
-variable "github_organization" {
+variable "github_owner" {
   description = "GitHub user or organization that owns the repository"
   type        = string
   default     = "nickawilliams"
 }
 
+variable "github_bot" {
+  description = "GitHub username of the CI bot account (added as repo admin for release pushes)"
+  type        = string
+  default     = "nickawilliams-bot"
+}
+
 # ============================================================================
 # Secrets (optional — only managed when provided)
 # ============================================================================
+
+variable "github_bot_token" {
+  description = "PAT for the CI bot account (used for authenticated pushes to protected branches)"
+  type        = string
+  sensitive   = true
+  default     = null
+}
 
 variable "gpg_private_key" {
   description = "GPG private key for release commit and tag signing"

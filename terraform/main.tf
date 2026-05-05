@@ -39,6 +39,16 @@ resource "github_repository_vulnerability_alerts" "bosun" {
 }
 
 # ============================================================================
+# CI Bot
+# ============================================================================
+
+resource "github_repository_collaborator" "ci_bot" {
+  repository = github_repository.bosun.name
+  username   = var.github_bot
+  permission = "admin"
+}
+
+# ============================================================================
 # Branch Protection
 # ============================================================================
 
@@ -62,6 +72,13 @@ resource "github_branch_protection" "main" {
 # ============================================================================
 # Actions Secrets
 # ============================================================================
+
+resource "github_actions_secret" "github_bot_token" {
+  count       = var.github_bot_token != null ? 1 : 0
+  repository  = github_repository.bosun.name
+  secret_name = "BOT_TOKEN"
+  value       = var.github_bot_token
+}
 
 resource "github_actions_secret" "gpg_private_key" {
   count       = var.gpg_private_key != null ? 1 : 0
