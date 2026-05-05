@@ -28,8 +28,8 @@ if [ -z "$notes" ]; then
   exit 0
 fi
 
-first_line=$(printf '%s\n' "$notes" | head -n1)
-rest=$(printf '%s\n' "$notes" | tail -n +2)
+first_line="${notes%%$'\n'*}"
+rest="${notes#*$'\n'}"
 
 if printf '%s' "$first_line" | grep -q '^## '; then
   first_line='## Release Notes'
