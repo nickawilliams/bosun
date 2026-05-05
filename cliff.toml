@@ -103,7 +103,7 @@ commit_parsers = [
   { message = "^refactor", group = "Improvements" },
   { message = "^perf", group = "Improvements" },
   { message = "^fix", group = "Fixes" },
-  { message = "^(build|chore|test|docs|iac|ci|style)", skip = true },
+  { message = "^(build|chore|test|docs|iac|ci|style|release|pr)", skip = true },
 ]
 protect_breaking_commits = true
 filter_commits = true
