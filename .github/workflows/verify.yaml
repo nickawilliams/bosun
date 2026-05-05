@@ -1,0 +1,107 @@
+name: Verify
+
+on:
+  pull_request:
+    branches: [main]
+
+  workflow_call:
+
+env:
+  CARGO_HOME: ${{ github.workspace }}/.cache/cargo
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache - Cargo Binaries
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/bin
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('cliff.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache - Update PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> "$GITHUB_PATH"
+      - name: Dependencies
+        run: make deps
+      - name: Fetch base branch
+        run: git fetch origin main
+      - name: Lint
+        run: make lint LINT_NEW_FROM_REV=origin/main
+
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh fish
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Dependencies
+        run: go mod download
+      - name: Build
+        run: make build
+
+  bench:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Dependencies
+        run: go mod download
+      - name: Bench
+        run: make bench
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh fish
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Dependencies
+        run: go mod download
+      - name: Test
+        run: make test && make test/completions
+      - name: Coverage
+        if: ${{ env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v6
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          name: bosun
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./.out/coverage/coverage.out
+          fail_ci_if_error: true

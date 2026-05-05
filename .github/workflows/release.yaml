@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_HOME: ${{ github.workspace }}/.cache/cargo
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: ${{ !startsWith(github.event.head_commit.message, 'release(') && !startsWith(github.event.head_commit.message, 'release:') }}
+    uses: ./.github/workflows/verify.yaml
+    secrets: inherit
+
+  generate:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      next_version: ${{ steps.version.outputs.next_version }}
+      bump_type: ${{ steps.version.outputs.bump_type }}
+      skip: ${{ steps.check_version.outputs.skip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache - Cargo Binaries
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/bin
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('cliff.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache - Update PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> "$GITHUB_PATH"
+      - name: Dependencies
+        run: make deps
+      - name: Version
+        id: version
+        shell: bash
+        run: make version/github_actions
+      - name: Check Version Exists
+        id: check_version
+        run: |
+          next_version="${{ steps.version.outputs.next_version }}"
+          if git rev-parse "${next_version}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version ${next_version} already exists, skipping release"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Changelog
+        if: steps.check_version.outputs.skip != 'true'
+        run: make changelog CHANGELOG_VERSION="${{ steps.version.outputs.next_version }}"
+      - name: Manpage
+        if: steps.check_version.outputs.skip != 'true'
+        run: make man
+      - name: Upload Release Artifacts
+        if: steps.check_version.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-artifacts
+          path: |
+            CHANGELOG.md
+            contrib/man/bosun.1
+
+  tag:
+    needs: generate
+    if: needs.generate.outputs.skip != 'true'
+    outputs:
+      release_version: ${{ steps.commit_release.outputs.release_version }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: ./
+      - name: Import GPG
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Configure Git
+        run: |
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+          git config user.signingkey "${{ steps.import_gpg.outputs.keyid }}"
+          git config user.name "${{ vars.GIT_USER_NAME }}"
+          git config user.email "${{ vars.GIT_USER_EMAIL }}"
+      - name: Commit Release
+        id: commit_release
+        env:
+          RELEASE_VERSION: ${{ needs.generate.outputs.next_version }}
+          RELEASE_BUMP_TYPE: ${{ needs.generate.outputs.bump_type }}
+          RELEASE_GIT_SIGNINGKEY: ${{ steps.import_gpg.outputs.keyid }}
+        run: |
+          set -euo pipefail
+          make release/commit
+          if [ -f .out/release_committed ]; then
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "release_version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+            rm -f .out/release_committed
+          else
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Tag Release
+        if: steps.commit_release.outputs.committed == 'true'
+        env:
+          RELEASE_VERSION: ${{ needs.generate.outputs.next_version }}
+        run: make release/tag
+      - name: Push Release
+        if: steps.commit_release.outputs.committed == 'true'
+        run: |
+          set -euo pipefail
+          version="${{ needs.generate.outputs.next_version }}"
+          git push origin HEAD:main
+          git push origin "$version"
+
+  release:
+    needs: tag
+    if: ${{ needs.tag.outputs.release_version != '' }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.tag.outputs.release_version }}
+      - name: Environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache - Cargo Binaries
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/bin
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('cliff.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cache - Update PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> "$GITHUB_PATH"
+      - name: Dependencies
+        run: make deps
+      - name: Release
+        run: make release
+
+  publish:
+    needs: [tag, release]
+    if: ${{ needs.tag.outputs.release_version != '' }}
+    uses: ./.github/workflows/publish.yaml
+    with:
+      release_tag: ${{ needs.tag.outputs.release_version }}
+    secrets: inherit
