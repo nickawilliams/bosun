@@ -91,6 +91,13 @@ conventional_commits = true
 filter_unconventional = true
 require_conventional = true
 split_commits = false
+commit_preprocessors = [
+  { pattern = "\\(cli\\)", replace = "(CLI)" },
+  { pattern = "\\(ci\\)", replace = "(CI)" },
+  { pattern = "\\(cicd\\)", replace = "(CI/CD)" },
+  { pattern = "\\(ui\\)", replace = "(UI)" },
+  { pattern = "\\(vcs\\)", replace = "(VCS)" },
+]
 commit_parsers = [
   { message = "^feat", group = "New Features" },
   { message = "^refactor", group = "Improvements" },
