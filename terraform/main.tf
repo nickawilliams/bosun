@@ -66,7 +66,8 @@ resource "github_branch_protection" "main" {
     ]
   }
 
-  enforce_admins = false
+  allows_force_pushes = true
+  enforce_admins      = false
 }
 
 # ============================================================================
