@@ -138,13 +138,14 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 			rootCard(cmd, name).Print()
 
-			if isDryRun(cmd) {
-				ui.DryRun("would create workspace")
-				ui.Details("", ui.NewFields(
-					"Repositories", fmt.Sprintf("%v", repositoryNames),
-					"From HEAD", fmt.Sprintf("%v", fromHead),
-				))
-				return nil
+			repositories, err := argsToWorkspaceRepositories(repositoryNames)
+			if err != nil {
+				return err
+			}
+
+			plan := ui.NewPlan()
+			for _, r := range repositories {
+				plan.Add(ui.PlanCreate, "worktree", "repo", r.Name, name)
 			}
 
 			mgr, err := newWorkspaceManager()
@@ -152,13 +153,13 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				return err
 			}
 
-			repositories, err := argsToWorkspaceRepositories(repositoryNames)
-			if err != nil {
-				return err
-			}
+			actions := []PlanAction{func() error {
+				return mgr.Create(cmd.Context(), name, repositories, fromHead)
+			}}
 
-			return ui.RunCard("creating workspace", func() error {
-				return mgr.Create(context.Background(), name, repositories, fromHead)
+			return runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: false,
+				Apply:   !isDryRun(cmd),
 			})
 		},
 	}
@@ -200,18 +201,23 @@ func newWorkspaceAddCmd() *cobra.Command {
 				}
 			}
 
-			if isDryRun(cmd) {
-				ui.DryRun("would add repositories: %v", repositoryNames)
-				return nil
-			}
-
 			repositories, err := argsToWorkspaceRepositories(repositoryNames)
 			if err != nil {
 				return err
 			}
 
-			return ui.RunCard("adding repositories", func() error {
+			plan := ui.NewPlan()
+			for _, r := range repositories {
+				plan.Add(ui.PlanCreate, "worktree", "repo", r.Name, name)
+			}
+
+			actions := []PlanAction{func() error {
 				return mgr.Add(ctx, name, repositories, fromHead)
+			}}
+
+			return runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: false,
+				Apply:   !isDryRun(cmd),
 			})
 		},
 	}
@@ -284,12 +290,10 @@ func newWorkspaceRmCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 			yes, _ := cmd.Flags().GetBool("yes")
 
-			if isDryRun(cmd) {
-				ui.DryRun("would remove workspace (force: %v)", force)
-				return nil
-			}
-
-			if !yes {
+			// Pre-Plan confirmation (separate from the Plan Card gate).
+			// Dry-run skips this — the user just wants to see what
+			// would happen, not commit to removing.
+			if !isDryRun(cmd) && !yes {
 				if !isInteractive() {
 					return fmt.Errorf("refusing to remove workspace %q non-interactively (pass --yes to confirm)", name)
 				}
@@ -313,6 +317,11 @@ func newWorkspaceRmCmd() *cobra.Command {
 				return err
 			}
 
+			plan := ui.NewPlan()
+			for _, r := range repositories {
+				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+			}
+
 			// If we're standing inside the workspace we're about to delete,
 			// move the process out so it doesn't operate from a directory
 			// that's about to disappear, and we can guide the user back.
@@ -327,8 +336,13 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 
 			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
-			if err := ui.RunCard("removing workspace", func() error {
-				return mgr.Remove(context.Background(), name, wsRepos, force)
+			actions := []PlanAction{func() error {
+				return mgr.Remove(cmd.Context(), name, wsRepos, force)
+			}}
+
+			if err := runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: false,
+				Apply:   !isDryRun(cmd),
 			}); err != nil {
 				return err
 			}

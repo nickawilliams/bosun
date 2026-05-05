@@ -11,10 +11,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 )
 
-var (
-	version = "dev"
-	commit  = "none"
-)
+var version = "dev"
 
 func main() {
 	ui.AppVersion = version
@@ -27,10 +24,18 @@ func main() {
 		fang.WithErrorHandler(func(_ io.Writer, _ fang.Styles, err error) {
 			if errors.Is(err, cli.ErrCancelled) {
 				ui.NewCard(ui.CardSkipped, "user cancelled").Print()
+				if !ui.IsRaw() {
+					ui.EndTimeline()
+				}
+				return
+			}
+			if ui.IsRaw() {
+				ui.Error("%s", err.Error())
 			} else {
 				ui.Fail(err.Error())
+				ui.EndTimeline()
 			}
-			ui.EndTimeline()
+			os.Exit(1)
 		}),
 	}
 

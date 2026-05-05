@@ -3,6 +3,9 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // cardReporter is the default Reporter implementation. It renders
@@ -98,9 +101,75 @@ func (r *cardReporter) Task(title string, fn func() error) error {
 	return RunCard(title, fn)
 }
 
-// Details emits a CardInfo with key-value pairs as body. An empty
-// heading produces a bare KV block without a card title.
+// Group renders a Timeline Card with children via a single BubbleTea
+// program that animates both parent and child spinners simultaneously.
+// The callback runs in a goroutine; its Reporter emissions become
+// messages that the BubbleTea model renders in real-time. After the
+// callback returns, BubbleTea exits and the final static render is
+// printed.
+func (r *cardReporter) Group(title string, fn func(g Reporter)) {
+	indentLevel := 0
+	msgCh := make(chan groupMsg, 256)
+
+	g := &group{
+		outer:  r,
+		title:  title,
+		indent: indentLevel + 1,
+		msgCh:  msgCh,
+	}
+
+	go func() {
+		start := time.Now()
+		fn(g)
+		holdSpinner(start)
+		msgCh <- groupDoneMsg{}
+	}()
+
+	fmt.Print(comfyPrefix())
+
+	model := newGroupModel(title, indentLevel, msgCh)
+	p := tea.NewProgram(model)
+	final, err := p.Run()
+
+	if err != nil {
+		// Non-interactive fallback: drain messages and print directly.
+		drainGroupFallback(title, indentLevel, g, msgCh)
+		comfyBreak = true
+		return
+	}
+
+	// BubbleTea's final View() rendered the finalized group content
+	// in place (root finalized in groupDoneMsg handler), so the
+	// output is already on screen. No reprint needed.
+	_ = final
+	comfyBreak = true
+}
+
+// drainGroupFallback handles the case where BubbleTea can't run
+// (non-interactive terminal). It waits for the callback to finish
+// and prints all accumulated children statically.
+func drainGroupFallback(title string, indent int, g *group, msgCh <-chan groupMsg) {
+	// Callback is already running in a goroutine; drain its messages.
+	for msg := range msgCh {
+		switch msg := msg.(type) {
+		case groupChildMsg:
+			fmt.Print(msg.rendered)
+		case groupTaskDoneMsg:
+			fmt.Print(msg.rendered)
+		case groupDoneMsg:
+			finalState := g.aggregate()
+			fmt.Print(NewCard(finalState, title).Indent(indent).Render())
+			return
+		}
+	}
+}
+
+// Details emits a Data Card (no status glyph) with key-value pairs
+// as body. Empty bodies are suppressed entirely per the spec.
 func (r *cardReporter) Details(heading string, fields Fields) {
+	if len(fields) == 0 {
+		return
+	}
 	pairs := make([]string, 0, len(fields)*2)
 	for _, f := range fields {
 		pairs = append(pairs, f.Key, f.Value)
@@ -108,10 +177,6 @@ func (r *cardReporter) Details(heading string, fields Fields) {
 	if heading == "" {
 		heading = "Details"
 	}
-	NewCard(CardInfo, heading).KV(pairs...).Print()
+	NewCard(CardData, heading).KV(pairs...).Print()
 }
 
-// Table returns a new table builder.
-func (r *cardReporter) Table(columns ...Column) *Table {
-	return NewTable(columns...)
-}

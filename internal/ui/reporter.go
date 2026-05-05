@@ -55,15 +55,21 @@ type Reporter interface {
 	// finalizes as success or failure. Returns fn's error.
 	Task(title string, fn func() error) error
 
+	// --- Grouped output ---
+
+	// Group renders a Timeline Card with children. The parent header
+	// shows pending while fn runs; emissions on the inner Reporter
+	// appear indented under the parent in real-time. When fn returns,
+	// the parent finalizes to a state aggregated from its children
+	// (failure dominates; all-skipped → skipped; success+skipped →
+	// success; info doesn't propagate).
+	Group(title string, fn func(g Reporter))
+
 	// --- Structured output ---
 
-	// Details renders a block of key-value pairs. Use an empty
-	// heading for a bare KV block (matching legacy ui.NewKV).
+	// Details renders a Data Card: a heading with key-value body,
+	// no status glyph. Empty fields are suppressed entirely.
 	Details(heading string, fields Fields)
-
-	// Table returns a table builder. The caller adds rows and
-	// calls Render.
-	Table(columns ...Column) *Table
 }
 
 // Fields is an ordered list of key-value pairs. Ordered so that
@@ -108,6 +114,14 @@ var defaultReporter Reporter = newCardReporter()
 
 // Default returns the package-level default Reporter.
 func Default() Reporter { return defaultReporter }
+
+// IsRaw reports whether the default Reporter is a raw (non-rendering)
+// variant. Used by Card.Print and other direct-output functions to
+// suppress timeline rendering in raw mode.
+func IsRaw() bool {
+	_, ok := defaultReporter.(*rawReporter)
+	return ok
+}
 
 // SetDefault replaces the default reporter. Intended for tests and
 // for eventual --output flags. Not thread-safe; set before any

@@ -57,7 +57,8 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Pre-flight: resolve repos, branches, remotes ---
 
-			g := git.New()
+			gitClient := git.New()
+			r := ui.Default()
 
 			type repoContext struct {
 				repo     Repository
@@ -67,24 +68,27 @@ func newReviewCmd() *cobra.Command {
 			}
 			var resolved []repoContext
 
-			for _, r := range repositories {
-				branch, err := g.GetCurrentBranch(ctx, r.Path)
-				if err != nil {
-					ui.Fail(fmt.Sprintf("%s: cannot determine branch: %v", r.Name, err))
-					continue
-				}
+			r.Group("resolve repository identities", func(g ui.Reporter) {
+				for _, repo := range repositories {
+					branch, err := gitClient.GetCurrentBranch(ctx, repo.Path)
+					if err != nil {
+						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
+						continue
+					}
 
-				identity, err := gh.ParseRemote(ctx, r.Path)
-				if err != nil {
-					ui.Fail(fmt.Sprintf("%s: %v", r.Name, err))
-					continue
-				}
+					identity, err := gh.ParseRemote(ctx, repo.Path)
+					if err != nil {
+						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
+						continue
+					}
 
-				resolved = append(resolved, repoContext{
-					repo: r, branch: branch,
-					owner: identity.Owner, repoName: identity.Name,
-				})
-			}
+					resolved = append(resolved, repoContext{
+						repo: repo, branch: branch,
+						owner: identity.Owner, repoName: identity.Name,
+					})
+					g.Selected(repo.Name, fmt.Sprintf("%s → %s/%s", branch, identity.Owner, identity.Name))
+				}
+			})
 
 			// Use first repo's identity for API calls (list endpoints).
 			var apiOwner, apiRepo string
@@ -228,7 +232,7 @@ func newReviewCmd() *cobra.Command {
 			var needsPush []unpushedRepo
 
 			for _, rc := range resolved {
-				n, err := g.UnpushedCommits(ctx, rc.repo.Path, rc.branch)
+				n, err := gitClient.UnpushedCommits(ctx, rc.repo.Path, rc.branch)
 				if err != nil {
 					ui.Fail(fmt.Sprintf("%s: %v", rc.repo.Name, err))
 					continue
@@ -279,7 +283,7 @@ func newReviewCmd() *cobra.Command {
 
 				for _, up := range needsPush {
 					if err := slot.Run(fmt.Sprintf("pushing %s", up.rc.repo.Name), func() error {
-						return g.Push(ctx, up.rc.repo.Path, up.rc.branch)
+						return gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch)
 					}); err != nil {
 						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
 					}

@@ -87,7 +87,7 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 	if err != nil {
 		return code.PullRequest{}, fmt.Errorf("creating PR: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Number  int    `json:"number"`
@@ -115,7 +115,7 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 	if err != nil {
 		return code.PullRequest{}, fmt.Errorf("fetching PR for branch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var results []struct {
 		Number   int     `json:"number"`
@@ -161,7 +161,7 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	if err != nil {
 		return code.Release{}, fmt.Errorf("creating release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		TagName string `json:"tag_name"`
@@ -185,7 +185,7 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 	if err != nil {
 		return "", fmt.Errorf("fetching tags: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var tags []struct {
 		Name string `json:"name"`
@@ -217,10 +217,10 @@ func (a *Adapter) ListBranches(ctx context.Context, owner, repository string) ([
 			Name string `json:"name"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("parsing branches response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, r := range page {
 			names = append(names, r.Name)
@@ -246,10 +246,10 @@ func (a *Adapter) ListCollaborators(ctx context.Context, owner, repository strin
 			Login string `json:"login"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("parsing collaborators response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, r := range page {
 			logins = append(logins, r.Login)
@@ -275,10 +275,10 @@ func (a *Adapter) ListTeams(ctx context.Context, owner string) ([]string, error)
 			Slug string `json:"slug"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("parsing teams response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, r := range page {
 			slugs = append(slugs, r.Slug)
@@ -303,7 +303,7 @@ func (a *Adapter) RequestReviewers(ctx context.Context, owner, repo string, numb
 	if err != nil {
 		return fmt.Errorf("requesting reviewers: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -314,7 +314,7 @@ func (a *Adapter) AddAssignees(ctx context.Context, owner, repo string, number i
 	if err != nil {
 		return fmt.Errorf("adding assignees: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -323,7 +323,7 @@ func (a *Adapter) GetAuthenticatedUser(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getting authenticated user: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var result struct {
 		Login string `json:"login"`
 	}
@@ -361,7 +361,7 @@ func (a *Adapter) doRequest(ctx context.Context, method, path string, body any) 
 	}
 
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("github API error (HTTP %d): %s", resp.StatusCode, respBody)
 	}

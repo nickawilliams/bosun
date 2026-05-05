@@ -284,7 +284,7 @@ func cleanEmptyParents(stopAt, child string) {
 		if err != nil || len(entries) > 0 {
 			break
 		}
-		os.Remove(dir)
+		_ = os.Remove(dir)
 		dir = filepath.Dir(dir)
 	}
 }

@@ -94,5 +94,5 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 		applyFns[i] = func() error { return a.Apply(ctx) }
 	}
 
-	return runPlanCard(cmd, plan, applyFns)
+	return runPlanCard(cmd, plan, applyFns, DefaultPlanOpts(cmd))
 }

@@ -17,7 +17,7 @@ func TestCreateIssue(t *testing.T) {
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/rest/api/3/issue":
 			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			fields := body["fields"].(map[string]any)
 
 			if fields["summary"] != "Test issue" {
@@ -29,10 +29,10 @@ func TestCreateIssue(t *testing.T) {
 			}
 
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"key": "PROJ-42"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"key": "PROJ-42"})
 
 		case r.Method == "GET" && r.URL.Path == "/rest/api/3/issue/PROJ-42":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"key": "PROJ-42",
 				"fields": map[string]any{
 					"summary":   "Test issue",
@@ -67,7 +67,7 @@ func TestCreateIssue(t *testing.T) {
 
 func TestGetIssue(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"key": "PROJ-123",
 			"fields": map[string]any{
 				"summary":   "Add widget",
@@ -99,17 +99,17 @@ func TestSetStatus(t *testing.T) {
 	var transitionPosted string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "GET":
-			json.NewEncoder(w).Encode(map[string]any{
+		switch r.Method {
+		case "GET":
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"transitions": []map[string]any{
 					{"id": "11", "to": map[string]string{"name": "In Progress"}},
 					{"id": "21", "to": map[string]string{"name": "Review"}},
 				},
 			})
-		case r.Method == "POST":
+		case "POST":
 			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			transition := body["transition"].(map[string]any)
 			transitionPosted = transition["id"].(string)
 			w.WriteHeader(http.StatusNoContent)
@@ -132,7 +132,7 @@ func TestSetStatusCaseInsensitive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"transitions": []map[string]any{
 					{"id": "11", "to": map[string]string{"name": "In Progress"}},
 				},
@@ -153,7 +153,7 @@ func TestSetStatusCaseInsensitive(t *testing.T) {
 
 func TestSetStatusTransitionNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"transitions": []map[string]any{
 				{"id": "11", "to": map[string]string{"name": "In Progress"}},
 			},
@@ -177,7 +177,7 @@ func TestAuthHeader(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"key":    "PROJ-1",
 			"fields": map[string]any{
 				"summary":   "x",
@@ -189,7 +189,7 @@ func TestAuthHeader(t *testing.T) {
 	defer server.Close()
 
 	a := NewWithClient(server.Client(), server.URL, "user@example.com", "mytoken")
-	a.GetIssue(context.Background(), "PROJ-1")
+	_, _ = a.GetIssue(context.Background(), "PROJ-1")
 
 	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte("user@example.com:mytoken"))
 	if gotAuth != expected {
@@ -210,7 +210,7 @@ func TestListIssues(t *testing.T) {
 			t.Errorf("jql = %q, want to contain assignee clause", jql)
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"issues": []map[string]any{
 				{
 					"key": "PROJ-10",
@@ -270,7 +270,7 @@ func TestListIssuesWithFilters(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotJQL = r.URL.Query().Get("jql")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"issues":     []map[string]any{},
 			"total":      0,
 			"maxResults": 50,
@@ -281,7 +281,7 @@ func TestListIssuesWithFilters(t *testing.T) {
 
 	a := NewWithClient(server.Client(), server.URL, "test@test.com", "token")
 
-	a.ListIssues(context.Background(), issue.ListQuery{
+	_, _ = a.ListIssues(context.Background(), issue.ListQuery{
 		AssignedToMe:  true,
 		Statuses:      []string{"Ready", "In Progress"},
 		Project:       "PROJ",
@@ -307,7 +307,7 @@ func TestListIssuesWithFilters(t *testing.T) {
 
 func TestListIssuesEmpty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"issues":     []map[string]any{},
 			"total":      0,
 			"maxResults": 50,
@@ -399,7 +399,7 @@ func TestBoardColumns(t *testing.T) {
 		if r.URL.Path != "/rest/agile/1.0/board/53/configuration" {
 			t.Errorf("path = %s, want /rest/agile/1.0/board/53/configuration", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"columnConfig": map[string]any{
 				"columns": []map[string]any{
 					{
@@ -470,7 +470,7 @@ func TestListBoards(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.RequestURI()
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"values": []map[string]any{
 				{"id": 53, "name": "Bridge Builders", "type": "scrum"},
 				{"id": 12, "name": "Kanban Board", "type": "kanban"},
@@ -508,7 +508,7 @@ func TestListBoardsNoProject(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.RequestURI()
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"values": []map[string]any{},
 			"isLast": true,
 		})
@@ -516,7 +516,7 @@ func TestListBoardsNoProject(t *testing.T) {
 	defer server.Close()
 
 	a := NewWithClient(server.Client(), server.URL, "test@test.com", "token")
-	a.ListBoards(context.Background(), "")
+	_, _ = a.ListBoards(context.Background(), "")
 
 	if strings.Contains(gotPath, "projectKeyOrId") {
 		t.Errorf("path = %q, should not contain projectKeyOrId when empty", gotPath)
@@ -526,7 +526,7 @@ func TestListBoardsNoProject(t *testing.T) {
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"errorMessages":["Issue Does Not Exist"]}`))
+		_, _ = w.Write([]byte(`{"errorMessages":["Issue Does Not Exist"]}`))
 	}))
 	defer server.Close()
 

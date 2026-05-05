@@ -21,21 +21,47 @@ func newDemoCmd() *cobra.Command {
 			headerAnnotationTitle: "UI components",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			demoCards(cmd)
-			demoTree()
-			ui.ClearBreak()
-			fmt.Println()
-			demoPlanCardStates()
-			demoFormStatic()
-
-			if interactive {
-				demoSpinners()
-				if err := demoForms(); err != nil {
-					return err
-				}
-				demoSlot()
-				demoPlanApply()
+			if !interactive {
+				demoCards(cmd)
+				demoTree()
+				demoGroupsStatic()
+				ui.ClearBreak()
+				fmt.Println()
+				demoPlanCardStates()
+				demoFormStatic()
+				return nil
 			}
+
+			rootCard(cmd, "interactive walkthrough").Print()
+
+			if err := demoContinue("Spinners", true); err != nil {
+				return err
+			}
+			demoSpinners()
+
+			if err := demoContinue("Groups", false); err != nil {
+				return err
+			}
+			demoGroups()
+
+			if err := demoContinue("Forms", false); err != nil {
+				return err
+			}
+			if err := demoForms(); err != nil {
+				return err
+			}
+
+			if err := demoContinue("Slot", false); err != nil {
+				return err
+			}
+			demoSlot()
+
+			if err := demoContinue("Plan Card", false); err != nil {
+				return err
+			}
+			demoPlanApply(cmd)
+			demoPlanDryRun(cmd)
+			demoPlanNoWork(cmd)
 
 			return nil
 		},
@@ -79,6 +105,16 @@ func demoCards(cmd *cobra.Command) {
 			"Another Key", "another value",
 		).
 		Print()
+
+	// Data Card — structured state snapshot, no status glyph.
+	// The heading uses an OSC 8 hyperlink so "EX-1234" is clickable
+	// in supporting terminals (iTerm2, Terminal.app, Windows Terminal).
+	issueURL := "https://jira.example.com/browse/EX-1234"
+	ui.Details("issue \x1b]8;;"+issueURL+"\x1b\\EX-1234\x1b]8;;\x1b\\", ui.NewFields(
+		"Title", "Add login page",
+		"Status", "In Progress",
+		"URL", issueURL,
+	))
 
 	// Card states — one bare card per state.
 	ui.NewCard(ui.CardPending, "pending").Print()
@@ -125,6 +161,20 @@ func demoPlanCardStates() {
 	f.Init()
 	fmt.Print(f.View())
 	fmt.Print("\n\n")
+}
+
+func demoGroupsStatic() {
+	r := ui.Default()
+
+	r.Group("group: mixed outcomes with nesting", func(g ui.Reporter) {
+		g.Complete("passed check")
+		g.Skip("skipped: not configured")
+		g.Group("inner group", func(inner ui.Reporter) {
+			inner.Complete("inner child a")
+			inner.Fail("inner child b: connection refused")
+		})
+		g.Complete("continued after failure")
+	})
 }
 
 func demoTree() {
@@ -187,6 +237,14 @@ func demoFormStatic() {
 // --- Interactive sections (gated by --interactive) ---
 
 func demoSpinners() {
+	// Fast operation — exercises the spinner timing floor. Without it,
+	// BubbleTea v2 escape sequences leak into stdout when the program
+	// quits before its terminal-mode queries round-trip.
+	_ = ui.RunCard("spinner: fast (timing floor)", func() error {
+		time.Sleep(5 * time.Millisecond)
+		return nil
+	})
+
 	_ = ui.RunCard("spinner: success", func() error {
 		time.Sleep(1500 * time.Millisecond)
 		return nil
@@ -195,6 +253,72 @@ func demoSpinners() {
 	_ = ui.RunCard("spinner: failure", func() error {
 		time.Sleep(1200 * time.Millisecond)
 		return errors.New("permission denied")
+	})
+}
+
+func demoGroups() {
+	r := ui.Default()
+
+	// Stagger delay between children so humans can track each step
+	// appearing. 300ms is in the "noticeable but short" range per
+	// UI animation research (100ms = instant, 200-400ms = short
+	// transition, 1000ms = attention-holding).
+	const step = 300 * time.Millisecond
+
+	// Flat group, all succeed.
+	r.Group("group: all succeed", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("first child")
+		time.Sleep(step)
+		g.Complete("second child")
+		time.Sleep(step)
+		g.Complete("third child")
+	})
+
+	// Mixed outcomes — failure dominates aggregation.
+	r.Group("group: mixed outcomes (failure dominates)", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("succeeded")
+		time.Sleep(step)
+		g.Skip("skipped (precondition unmet)")
+		time.Sleep(step)
+		g.Fail("failed: permission denied")
+		time.Sleep(step)
+		g.Complete("ran anyway")
+	})
+
+	// All skipped — parent finalizes as skipped.
+	r.Group("group: all skipped", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Skip("not configured")
+		time.Sleep(step)
+		g.Skip("not configured")
+	})
+
+	// Group with a Task child — exercises spinner indented under parent.
+	r.Group("group: with spinner child", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("pre-flight check")
+		_ = g.Task("running async work", func() error {
+			time.Sleep(800 * time.Millisecond)
+			return nil
+		})
+		time.Sleep(step)
+		g.Complete("post-flight check")
+	})
+
+	// Nested groups — child is itself a group.
+	r.Group("group: nested", func(g ui.Reporter) {
+		time.Sleep(step)
+		g.Complete("outer first")
+		g.Group("inner group", func(inner ui.Reporter) {
+			time.Sleep(step)
+			inner.Complete("inner child a")
+			time.Sleep(step)
+			inner.Complete("inner child b")
+		})
+		time.Sleep(step)
+		g.Complete("outer last")
 	})
 }
 
@@ -241,7 +365,7 @@ func demoForms() error {
 		issuePriority string
 	)
 	createTitle := "form: multi-field"
-	rewind = ui.NewCard(ui.CardInput, createTitle).
+	rewind = ui.NewCard(ui.CardInput, createTitle).Tight().
 		PrintRewindable()
 	if err := runForm(
 		huh.NewInput().
@@ -297,19 +421,68 @@ func demoSlot() {
 		Print()
 }
 
-func demoPlanApply() {
+func demoPlanApply(cmd *cobra.Command) {
+	// Full lifecycle: proposed → confirmation gate → apply → success.
 	plan := buildDemoPlan()
-	pc := ui.NewPlanCard(plan)
-
-	_ = pc.RunApply([]func() error{
+	actions := []PlanAction{
 		func() error { time.Sleep(400 * time.Millisecond); return nil },
 		func() error { time.Sleep(300 * time.Millisecond); return nil },
 		func() error { time.Sleep(500 * time.Millisecond); return nil },
 		func() error { time.Sleep(200 * time.Millisecond); return nil },
-	})
+	}
+	_ = runPlanCard(cmd, plan, actions, PlanOpts{Confirm: true, Apply: true})
+}
+
+func demoPlanDryRun(cmd *cobra.Command) {
+	// Dry-run: plan renders in proposed state without applying.
+	ui.Info("dry-run mode (apply disabled)")
+	plan := buildDemoPlan()
+	_ = runPlanCard(cmd, plan, nil, PlanOpts{Confirm: false, Apply: false})
+}
+
+func demoPlanNoWork(cmd *cobra.Command) {
+	// No-work: all items are no-change, plan finalizes as success.
+	ui.Info("no-work branch (all items unchanged)")
+	plan := ui.NewPlan().
+		Add(ui.PlanNoChange, "branch", "repo", "api", "feature/ABC-123").
+		Add(ui.PlanNoChange, "branch", "repo", "web", "feature/ABC-123")
+	_ = runPlanCard(cmd, plan, nil, PlanOpts{Confirm: true, Apply: true})
 }
 
 // --- Helpers ---
+
+// demoContinue shows a gate card between demo sections. The title
+// names the upcoming batch of components. When first is true, the
+// body invites the user to start; otherwise it gives them a moment
+// to review what just rendered. After the user chooses Continue, the
+// card stays on screen (rewound to its title only) as a section
+// heading for the output that follows.
+func demoContinue(title string, first bool) error {
+	body := "Review the output above, then continue when ready."
+	if first {
+		body = "Each section pauses so you can review at your own pace."
+	}
+
+	confirmed := true
+	rewind := ui.NewCard(ui.CardInput, title).
+		Muted(body).
+		Tight().PrintRewindable()
+	if err := runForm(
+		newConfirm().
+			Affirmative("Continue").
+			Negative("Stop").
+			Value(&confirmed),
+	); err != nil {
+		return err
+	}
+	rewind()
+	if !confirmed {
+		return ErrCancelled
+	}
+	// Re-print the title as a section heading (no body, no form).
+	ui.NewCard(ui.CardInfo, title).Print()
+	return nil
+}
 
 func defaultStr(s, fallback string) string {
 	if s == "" {

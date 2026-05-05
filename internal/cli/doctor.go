@@ -20,7 +20,6 @@ import (
 type healthCheck struct {
 	Name     string
 	Required bool // fail vs warn on error
-	Spinner  bool // show spinner during check (for network calls)
 	Check    func(ctx context.Context) (string, error)
 }
 
@@ -28,9 +27,6 @@ type healthCheck struct {
 // is absent (not an error). The doctor renders this as a warning (!)
 // rather than a failure (✗).
 var errNotConfigured = fmt.Errorf("(not configured)")
-
-// checkProvider returns one or more health checks for a service area.
-type checkProvider func() []healthCheck
 
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -41,41 +37,33 @@ func newDoctorCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
-
-			providers := []checkProvider{
-				environmentChecks,
-				projectChecks,
-				issueTrackerChecks,
-				codeHostChecks,
-				notificationChecks,
-				cicdChecks,
-			}
-
-			var checks []healthCheck
-			for _, p := range providers {
-				checks = append(checks, p()...)
-			}
+			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			passed, warned, failed := 0, 0, 0
-			for _, hc := range checks {
-				var detail string
-				var checkErr error
+			// Groups mirror MODEL.md phases: environment, project,
+			// integrations, CI/CD. Each check runs inline; the
+			// group's parent spinner provides activity feedback.
+			groups := []struct {
+				label  string
+				checks []healthCheck
+			}{
+				{"environment", environmentChecks()},
+				{"project", projectChecks()},
+				{"integrations", append(append(
+					issueTrackerChecks(), codeHostChecks()...), notificationChecks()...)},
+				{"CI/CD", cicdChecks()},
+			}
 
-				if hc.Spinner {
-					// Spinner checks (network calls) get a spinner.
-					_ = ui.RunCardReplace(hc.Name, func() error {
-						detail, checkErr = hc.Check(ctx)
-						return nil // never fail the spinner
-					}, func() *ui.Card {
-						return renderCheckCard(hc, detail, checkErr, &passed, &warned, &failed)
-					})
-				} else {
-					detail, checkErr = hc.Check(ctx)
-					renderCheckCard(hc, detail, checkErr, &passed, &warned, &failed).Print()
-				}
+			passed, warned, failed := 0, 0, 0
+			for _, dg := range groups {
+				r.Group(dg.label, func(g ui.Reporter) {
+					for _, hc := range dg.checks {
+						detail, checkErr := hc.Check(ctx)
+						emitCheckResult(g, hc, detail, checkErr, &passed, &warned, &failed)
+					}
+				})
 			}
 
 			// Summary.
@@ -86,7 +74,7 @@ func newDoctorCmd() *cobra.Command {
 			if failed > 0 {
 				parts = append(parts, fmt.Sprintf("%d failed", failed))
 			}
-			ui.Info("%s", strings.Join(parts, ", "))
+			r.Info("%s", strings.Join(parts, ", "))
 
 			return nil
 		},
@@ -95,30 +83,35 @@ func newDoctorCmd() *cobra.Command {
 
 // --- Providers ---
 
-// renderCheckCard builds the result card for a health check.
-func renderCheckCard(hc healthCheck, detail string, checkErr error, passed, warned, failed *int) *ui.Card {
+// emitCheckResult routes a health check outcome through the group
+// Reporter. Detail formatting matches the spec's inline style
+// (e.g. "tracker: authenticated as nick", "code host: auth failed").
+func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, passed, warned, failed *int) {
 	if checkErr != nil {
+		label := fmt.Sprintf("%s: %s", hc.Name, checkErr.Error())
 		if errors.Is(checkErr, errNotConfigured) {
 			*warned++
-			return ui.NewCard(ui.CardSkipped, hc.Name).Subtitle(checkErr.Error())
+			g.Skip(label)
+			return
 		}
 		if hc.Required {
 			*failed++
 		} else {
 			*warned++
 		}
-		return ui.NewCard(ui.CardFailed, hc.Name).Subtitle(checkErr.Error())
+		g.Fail(label)
+		return
 	}
 	*passed++
-	card := ui.NewCard(ui.CardSuccess, hc.Name)
-	if detail != "" {
-		if strings.Contains(detail, "\n") {
-			card.Muted(strings.Split(detail, "\n")...)
-		} else {
-			card.Subtitle(detail)
-		}
+	if detail == "" {
+		g.Complete(hc.Name)
+		return
 	}
-	return card
+	if strings.Contains(detail, "\n") {
+		g.CompleteDetail(hc.Name, strings.Split(detail, "\n"))
+	} else {
+		g.Selected(hc.Name, detail)
+	}
 }
 
 func environmentChecks() []healthCheck {
@@ -139,21 +132,21 @@ func projectChecks() []healthCheck {
 
 func issueTrackerChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "issue tracker", Spinner: true, Check: checkIssueTracker},
+		{Name: "issue tracker", Check: checkIssueTracker},
 	}
 }
 
 func codeHostChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "code host", Spinner: true, Check: checkCodeHost},
+		{Name: "code host", Check: checkCodeHost},
 	}
 }
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
 		{Name: "notification config", Check: checkNotificationConfig},
-		{Name: "notification auth", Spinner: true, Check: checkNotificationAuth},
-		{Name: "notification channels", Spinner: true, Check: checkNotificationChannels},
+		{Name: "notification auth", Check: checkNotificationAuth},
+		{Name: "notification channels", Check: checkNotificationChannels},
 	}
 }
 
@@ -397,7 +390,7 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 func cicdChecks() []healthCheck {
 	return []healthCheck{
 		{Name: "CI/CD config", Check: checkCICDConfig},
-		{Name: "CI/CD auth", Spinner: true, Check: checkCICDAuth},
+		{Name: "CI/CD auth", Check: checkCICDAuth},
 	}
 }
 

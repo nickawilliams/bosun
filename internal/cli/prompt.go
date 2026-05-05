@@ -36,6 +36,11 @@ func forceInteractive(cmd *cobra.Command) bool {
 //
 // If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
+	// Raw mode: stdout is not a TTY, so BubbleTea can't render forms.
+	// Return an error rather than panicking.
+	if ui.IsRaw() {
+		return fmt.Errorf("interactive input required but stdout is not a terminal")
+	}
 	ui.FlushBreak()
 	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
@@ -92,20 +97,6 @@ func promptConfirm(label string, defaultVal bool) (bool, error) {
 		return defaultVal, err
 	}
 	return confirmed, nil
-}
-
-// promptSecret prompts for a sensitive value with masked input.
-// Returns empty string in non-interactive mode.
-func promptSecret(label string) string {
-	if !isInteractive() {
-		return ""
-	}
-
-	var value string
-	if err := runForm(huh.NewInput().Title(label).EchoMode(huh.EchoModePassword).Value(&value)); err != nil {
-		return ""
-	}
-	return value
 }
 
 // promptValue displays a prompt with a default value.

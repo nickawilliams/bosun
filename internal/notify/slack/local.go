@@ -76,7 +76,7 @@ func readToken(dbPath, workspace string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opening LevelDB: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	iter := db.NewIterator(nil, nil)
 	defer iter.Release()
@@ -180,7 +180,7 @@ func readCookie(cookiesPath string, key []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opening Cookies database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Try plain value first (some Chromium versions store it unencrypted).
 	var plainValue string
@@ -335,7 +335,7 @@ func copyLevelDB(src string) (string, func(), error) {
 		return "", nil, fmt.Errorf("creating temp directory: %w", err)
 	}
 
-	cleanup := func() { os.RemoveAll(tmpDir) }
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
 
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -365,13 +365,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, in)
 	return err

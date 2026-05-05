@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -34,6 +35,7 @@ const (
 	CardInfo
 	CardInput
 	CardRoot
+	CardData // structured state snapshot, no status glyph
 )
 
 const (
@@ -87,6 +89,7 @@ type Card struct {
 	subtitle string
 	body     []cardBody
 	tight    bool // suppress comfy spacing (e.g. single-field prompts)
+	indent   int  // additional left-margin depth (1 = +4 spaces); used by Group children
 }
 
 type cardBodyKind int
@@ -116,6 +119,13 @@ func NewCard(state CardState, title string) *Card {
 // below without a visual gap.
 func (c *Card) Tight() *Card {
 	c.tight = true
+	return c
+}
+
+// Indent shifts the card's rendering right by n*4 spaces. Used by
+// Group to nest children under a parent's spine.
+func (c *Card) Indent(n int) *Card {
+	c.indent = n
 	return c
 }
 
@@ -179,8 +189,11 @@ func (c *Card) Render() string {
 	return c.renderWithGlyph(c.glyph())
 }
 
-// Print writes the card to stdout.
+// Print writes the card to stdout. Suppressed in raw mode.
 func (c *Card) Print() {
+	if IsRaw() {
+		return
+	}
 	fmt.Print(comfyPrefix() + c.Render())
 	if !c.tight {
 		comfyBreak = true
@@ -190,13 +203,11 @@ func (c *Card) Print() {
 // PrintRewindable writes the card to stdout and returns a function
 // that, when called, erases the card by moving the cursor back to
 // its first row and clearing from there to the end of the screen.
-// Useful for transient "live" cards (e.g., an active prompt) that
-// should be replaced with a terminal-state card after an interactive
-// operation completes. Note: this only works reliably when huh/
-// BubbleTea cleans up its own output on normal exit. For ctrl+c
-// interrupts, callers should skip the rewind and append output
-// below the interrupted form instead.
+// Suppressed in raw mode (returns a no-op rewind).
 func (c *Card) PrintRewindable() func() {
+	if IsRaw() {
+		return func() {}
+	}
 	prev := comfyBreak
 	rendered := comfyPrefix() + c.Render()
 	fmt.Print(rendered)
@@ -216,6 +227,29 @@ func (c *Card) PrintRewindable() func() {
 // renderWithGlyph renders the card with a custom leading glyph.
 // Used by the spinner to animate the state indicator in place.
 func (c *Card) renderWithGlyph(glyph string) string {
+	out := c.renderInner(glyph)
+	if c.indent <= 0 {
+		return out
+	}
+	// Build an indent prefix that continues the parent's timeline
+	// spine at each nesting level: " │  " per level. This keeps
+	// the vertical connector visible through nested children
+	// instead of leaving a blank gap.
+	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	var prefix string
+	for range c.indent {
+		prefix += " " + connStyle.Render("│") + "  "
+	}
+	trimmed := strings.TrimSuffix(out, "\n")
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// renderInner is the indent-agnostic render path.
+func (c *Card) renderInner(glyph string) string {
 	var b strings.Builder
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary).Transform(titleCase)
 	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
@@ -372,6 +406,8 @@ func (c *Card) glyph() string {
 		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
 	case CardRoot:
 		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
+	case CardData:
+		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphInfo)
 	}
 	return " "
 }
@@ -465,11 +501,12 @@ func wrapForTimeline(s string) []string {
 // --- Running card with animated spinner glyph ---
 
 type cardSpinnerModel struct {
-	spinner  spinner.Model
-	card     *Card
-	done     bool
-	err      error
-	resultCh <-chan error
+	spinner     spinner.Model
+	card        *Card
+	done        bool
+	err         error
+	resultCh    <-chan error
+	successCard func() *Card // optional: if set, render this instead of card on success
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {
@@ -491,6 +528,15 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDoneMsg:
 		m.done = true
 		m.err = msg.err
+		// Set the card's final state so View() renders the finalized
+		// card as BubbleTea's last frame, avoiding a clear-then-reprint
+		// flash.
+		if m.err != nil {
+			m.card.state = CardFailed
+			m.card.Subtitle(m.err.Error())
+		} else {
+			m.card.state = CardSuccess
+		}
 		return m, tea.Quit
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -508,7 +554,12 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m cardSpinnerModel) View() tea.View {
 	if m.done {
-		return tea.NewView("")
+		// Render the finalized card so BubbleTea's last frame
+		// replaces the spinner in place without a visible gap.
+		if m.err == nil && m.successCard != nil {
+			return tea.NewView(m.successCard().Render())
+		}
+		return tea.NewView(m.card.Render())
 	}
 	return tea.NewView(m.card.renderWithGlyph(m.spinner.View()))
 }
@@ -523,11 +574,26 @@ func (m cardSpinnerModel) waitForResult() tea.Cmd {
 // animated spinner in the glyph position while fn runs, and prints
 // the finalized card in success or failed state when fn returns.
 func RunCard(title string, fn func() error) error {
-	card := NewCard(CardRunning, title)
+	return runCardWith(NewCard(CardRunning, title), fn)
+}
+
+// runCardWith is the inner implementation of RunCard that takes a
+// pre-built card so callers can configure indent / tight before the
+// spinner runs. The card's state is mutated to its final value
+// before printing.
+func runCardWith(card *Card, fn func() error) error {
+	// Raw mode: run synchronously without BubbleTea to avoid
+	// terminal-mode-query escape leaks on non-TTY stdout.
+	if IsRaw() {
+		return fn()
+	}
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	// Emit comfy connector before the spinner starts — BubbleTea's
@@ -549,32 +615,40 @@ func RunCard(title string, fn func() error) error {
 		return taskErr
 	}
 
+	// BubbleTea's final View() already rendered the finalized card
+	// in place (state set in Update's taskDoneMsg handler), so the
+	// output is on screen. No reprint needed — just propagate the
+	// comfy break state and return.
 	m := model.(cardSpinnerModel)
-	if m.err != nil {
-		card.state = CardFailed
-		card.Subtitle(m.err.Error())
-		card.Print()
-		return m.err
+	if !card.tight {
+		comfyBreak = true
 	}
-	card.state = CardSuccess
-	card.Print()
-	return nil
+	return m.err
 }
 
 // RunCardReplace works like RunCard but on success, prints a replacement
 // card (returned by successCard) instead of the original card in success
 // state. On failure, prints the original card in failed state as usual.
 func RunCardReplace(title string, fn func() error, successCard func() *Card) error {
+	if IsRaw() {
+		return fn()
+	}
+
 	card := NewCard(CardRunning, title)
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	fmt.Print(comfyPrefix())
 
-	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
+	sm := newCardSpinnerModel(card, resultCh)
+	sm.successCard = successCard
+	p := tea.NewProgram(sm)
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback.
@@ -589,15 +663,11 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 		return taskErr
 	}
 
+	// BubbleTea's final View() already rendered the finalized card
+	// (or replacement card on success) in place.
 	m := model.(cardSpinnerModel)
-	if m.err != nil {
-		card.state = CardFailed
-		card.Subtitle(m.err.Error())
-		card.Print()
-		return m.err
-	}
-	successCard().Print()
-	return nil
+	comfyBreak = true
+	return m.err
 }
 
 // RunCardRewindable works like RunCard but on success, prints the
@@ -606,11 +676,19 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 // the success card, restoring the terminal to its pre-call state.
 // On failure the card is printed normally and a nil rewind is returned.
 func RunCardRewindable(title string, fn func() error) (func(), error) {
+	if IsRaw() {
+		err := fn()
+		return func() {}, err
+	}
+
 	card := NewCard(CardRunning, title)
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- fn()
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
 	}()
 
 	prevComfy := comfyBreak
@@ -629,15 +707,14 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 	}
 
 	if taskErr != nil {
-		card.state = CardFailed
-		card.Subtitle(taskErr.Error())
-		card.Print()
+		// BubbleTea's final View() already rendered the failed card.
 		return nil, taskErr
 	}
 
-	card.state = CardSuccess
-	rendered := comfyPrefix() + card.Render()
-	fmt.Print(rendered)
+	// BubbleTea's final View() rendered the success card in place.
+	// Compute total lines (prefix printed before BubbleTea + the
+	// card BubbleTea rendered) so the rewind function can erase it.
+	rendered := card.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
 	if !card.tight {
 		comfyBreak = true
@@ -665,29 +742,4 @@ func titleCase(s string) string {
 		}
 	}
 	return strings.Join(words, " ")
-}
-
-// renderBreadcrumbTitle renders a breadcrumb title (segments joined
-// by " › ") with the first segment in Secondary and the rest in
-// Primary. Non-breadcrumb titles render entirely in Primary.
-func renderBreadcrumbTitle(title string) string {
-	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	secondaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
-	sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-
-	segments := strings.Split(title, " › ")
-	if len(segments) <= 1 {
-		return primaryStyle.Render(titleCase(title))
-	}
-
-	styled := make([]string, len(segments))
-	for i, seg := range segments {
-		tc := titleCase(seg)
-		if i == 0 {
-			styled[i] = secondaryStyle.Render(tc)
-		} else {
-			styled[i] = primaryStyle.Render(tc)
-		}
-	}
-	return strings.Join(styled, sepStyle.Render(" › "))
 }

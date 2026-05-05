@@ -17,15 +17,15 @@ func TestCreatePR(t *testing.T) {
 		switch {
 		case r.Method == "GET" && strings.Contains(r.URL.Path, "/pulls"):
 			// No existing PR.
-			json.NewEncoder(w).Encode([]any{})
+			_ = json.NewEncoder(w).Encode([]any{})
 		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pulls"):
 			var body map[string]string
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body["title"] != "[PROJ-1] Test" {
 				t.Errorf("title = %q, want %q", body["title"], "[PROJ-1] Test")
 			}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"number":   42,
 				"title":    body["title"],
 				"html_url": "https://github.com/org/repo/pull/42",
@@ -59,10 +59,10 @@ func TestCreatePRIdempotent(t *testing.T) {
 	postCalled := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "GET":
+		switch r.Method {
+		case "GET":
 			// Existing PR found.
-			json.NewEncoder(w).Encode([]map[string]any{
+			_ = json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"number":    99,
 					"title":     "Existing",
@@ -71,10 +71,10 @@ func TestCreatePRIdempotent(t *testing.T) {
 					"merged_at": nil,
 				},
 			})
-		case r.Method == "POST":
+		case "POST":
 			postCalled = true
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]any{})
+			_ = json.NewEncoder(w).Encode(map[string]any{})
 		}
 	}))
 	defer server.Close()
@@ -97,7 +97,7 @@ func TestCreatePRIdempotent(t *testing.T) {
 
 func TestGetPRForBranch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]any{
+		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
 				"number":    5,
 				"title":     "My PR",
@@ -126,7 +126,7 @@ func TestGetPRForBranch(t *testing.T) {
 func TestGetPRForBranchMerged(t *testing.T) {
 	merged := "2024-01-01T00:00:00Z"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]any{
+		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
 				"number":    10,
 				"title":     "Merged PR",
@@ -151,7 +151,7 @@ func TestGetPRForBranchMerged(t *testing.T) {
 
 func TestGetPRForBranchNone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]any{})
+		_ = json.NewEncoder(w).Encode([]any{})
 	}))
 	defer server.Close()
 
@@ -169,12 +169,12 @@ func TestGetPRForBranchNone(t *testing.T) {
 func TestCreateRelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["tag_name"] != "v1.2.4" {
 			t.Errorf("tag_name = %v, want v1.2.4", body["tag_name"])
 		}
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": "v1.2.4",
 			"html_url": "https://github.com/org/repo/releases/tag/v1.2.4",
 		})
@@ -200,7 +200,7 @@ func TestCreateRelease(t *testing.T) {
 
 func TestGetLatestTag(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]string{
+		_ = json.NewEncoder(w).Encode([]map[string]string{
 			{"name": "release-2024"},
 			{"name": "v1.5.2"},
 			{"name": "v1.5.1"},
@@ -221,7 +221,7 @@ func TestGetLatestTag(t *testing.T) {
 
 func TestGetLatestTagEmpty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]any{})
+		_ = json.NewEncoder(w).Encode([]any{})
 	}))
 	defer server.Close()
 
@@ -238,7 +238,7 @@ func TestGetLatestTagEmpty(t *testing.T) {
 
 func TestListBranches(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]string{
+		_ = json.NewEncoder(w).Encode([]map[string]string{
 			{"name": "main"},
 			{"name": "develop"},
 			{"name": "feature/login"},
@@ -267,12 +267,12 @@ func TestListBranchesPaginated(t *testing.T) {
 				`<%s/repositories/123/branches?per_page=2&page=2>; rel="next"`,
 				"http://"+r.Host,
 			))
-			json.NewEncoder(w).Encode([]map[string]string{
+			_ = json.NewEncoder(w).Encode([]map[string]string{
 				{"name": "alpha"},
 				{"name": "beta"},
 			})
 		case 2:
-			json.NewEncoder(w).Encode([]map[string]string{
+			_ = json.NewEncoder(w).Encode([]map[string]string{
 				{"name": "main"},
 			})
 		default:
@@ -299,7 +299,7 @@ func TestListCollaborators(t *testing.T) {
 		if r.URL.Path != "/repos/org/repo/collaborators" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]map[string]string{
+		_ = json.NewEncoder(w).Encode([]map[string]string{
 			{"login": "alice"},
 			{"login": "bob"},
 		})
@@ -321,7 +321,7 @@ func TestListTeams(t *testing.T) {
 		if r.URL.Path != "/orgs/myorg/teams" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]map[string]string{
+		_ = json.NewEncoder(w).Encode([]map[string]string{
 			{"slug": "backend"},
 			{"slug": "frontend"},
 		})
@@ -345,8 +345,8 @@ func TestRequestReviewers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotMethod = r.Method
-		json.NewDecoder(r.Body).Decode(&gotBody)
-		json.NewEncoder(w).Encode(map[string]any{})
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}))
 	defer server.Close()
 
@@ -376,8 +376,8 @@ func TestAddAssignees(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotMethod = r.Method
-		json.NewDecoder(r.Body).Decode(&gotBody)
-		json.NewEncoder(w).Encode(map[string]any{})
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
 	}))
 	defer server.Close()
 
@@ -402,7 +402,7 @@ func TestGetAuthenticatedUser(t *testing.T) {
 		if r.URL.Path != "/user" {
 			t.Errorf("path = %q, want /user", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
 	}))
 	defer server.Close()
 
@@ -420,12 +420,12 @@ func TestAuthHeader(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		json.NewEncoder(w).Encode([]any{})
+		_ = json.NewEncoder(w).Encode([]any{})
 	}))
 	defer server.Close()
 
 	a := NewWithClient(server.Client(), server.URL, "mytoken123")
-	a.GetLatestTag(context.Background(), "org", "repo")
+	_, _ = a.GetLatestTag(context.Background(), "org", "repo")
 
 	if gotAuth != "Bearer mytoken123" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer mytoken123")
@@ -435,7 +435,7 @@ func TestAuthHeader(t *testing.T) {
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"message":"Not Found"}`))
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 	}))
 	defer server.Close()
 

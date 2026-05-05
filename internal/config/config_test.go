@@ -24,8 +24,8 @@ func TestFindProjectRoot(t *testing.T) {
 		}
 
 		origDir, _ := os.Getwd()
-		t.Cleanup(func() { os.Chdir(origDir) })
-		os.Chdir(nested)
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
+		_ = os.Chdir(nested)
 
 		got := FindProjectRoot()
 		if got != dir {
@@ -37,8 +37,8 @@ func TestFindProjectRoot(t *testing.T) {
 		dir := t.TempDir()
 
 		origDir, _ := os.Getwd()
-		t.Cleanup(func() { os.Chdir(origDir) })
-		os.Chdir(dir)
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
+		_ = os.Chdir(dir)
 
 		got := FindProjectRoot()
 		if got != "" {
@@ -52,8 +52,8 @@ func TestLoad(t *testing.T) {
 		dir := t.TempDir()
 
 		origDir, _ := os.Getwd()
-		t.Cleanup(func() { os.Chdir(origDir) })
-		os.Chdir(dir)
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
+		_ = os.Chdir(dir)
 
 		if err := Load(); err != nil {
 			t.Errorf("Load() returned error: %v", err)
@@ -73,8 +73,8 @@ func TestLoad(t *testing.T) {
 		}
 
 		origDir, _ := os.Getwd()
-		t.Cleanup(func() { os.Chdir(origDir) })
-		os.Chdir(dir)
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
+		_ = os.Chdir(dir)
 
 		if err := Load(); err != nil {
 			t.Errorf("Load() returned error: %v", err)

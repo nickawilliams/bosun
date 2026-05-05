@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/issue"
@@ -24,7 +23,7 @@ func TestResolveIssue(t *testing.T) {
 	t.Run("from flag", func(t *testing.T) {
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{"--issue", "PROJ-123"})
-		cmd.Execute()
+		_ = cmd.Execute()
 
 		got, err := resolveIssue(cmd)
 		if err != nil {
@@ -38,7 +37,7 @@ func TestResolveIssue(t *testing.T) {
 	t.Run("from short flag", func(t *testing.T) {
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{"-i", "PROJ-456"})
-		cmd.Execute()
+		_ = cmd.Execute()
 
 		got, err := resolveIssue(cmd)
 		if err != nil {
@@ -54,15 +53,14 @@ func TestResolveIssue(t *testing.T) {
 		viper.SetEnvPrefix("BOSUN")
 		viper.AutomaticEnv()
 
-		os.Setenv("BOSUN_ISSUE", "PROJ-789")
+		t.Setenv("BOSUN_ISSUE", "PROJ-789")
 		t.Cleanup(func() {
-			os.Unsetenv("BOSUN_ISSUE")
 			viper.Reset()
 		})
 
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{})
-		cmd.Execute()
+		_ = cmd.Execute()
 
 		got, err := resolveIssue(cmd)
 		if err != nil {
@@ -74,12 +72,11 @@ func TestResolveIssue(t *testing.T) {
 	})
 
 	t.Run("flag takes precedence over env", func(t *testing.T) {
-		os.Setenv("BOSUN_ISSUE", "PROJ-ENV")
-		t.Cleanup(func() { os.Unsetenv("BOSUN_ISSUE") })
+		t.Setenv("BOSUN_ISSUE", "PROJ-ENV")
 
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{"--issue", "PROJ-FLAG"})
-		cmd.Execute()
+		_ = cmd.Execute()
 
 		got, err := resolveIssue(cmd)
 		if err != nil {
@@ -91,11 +88,11 @@ func TestResolveIssue(t *testing.T) {
 	})
 
 	t.Run("error when not specified", func(t *testing.T) {
-		os.Unsetenv("BOSUN_ISSUE")
+		t.Setenv("BOSUN_ISSUE", "")
 
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{})
-		cmd.Execute()
+		_ = cmd.Execute()
 
 		_, err := resolveIssue(cmd)
 		if err == nil {

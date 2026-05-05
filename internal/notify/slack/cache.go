@@ -89,7 +89,7 @@ func saveCache(c apiCache) {
 		Threads:  make(map[string]cacheEntry[notify.ThreadRef]),
 	}
 	if data, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(data, &existing)
+		_ = json.Unmarshal(data, &existing)
 	}
 
 	now := time.Now()
@@ -120,6 +120,6 @@ func saveCache(c apiCache) {
 		return
 	}
 
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, data, 0o644)
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, data, 0o644)
 }

@@ -56,7 +56,7 @@ func (a *Adapter) CreateIssue(ctx context.Context, req issue.CreateRequest) (iss
 	if err != nil {
 		return issue.Issue{}, fmt.Errorf("creating issue: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var created struct {
 		Key string `json:"key"`
@@ -74,7 +74,7 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	if err != nil {
 		return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Key    string `json:"key"`
@@ -104,7 +104,7 @@ func (a *Adapter) SetStatus(ctx context.Context, issueKey, statusName string) er
 	if err != nil {
 		return fmt.Errorf("getting transitions for %s: %w", issueKey, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Transitions []struct {
@@ -144,7 +144,7 @@ func (a *Adapter) SetStatus(ctx context.Context, issueKey, statusName string) er
 	if err != nil {
 		return fmt.Errorf("transitioning %s to %q: %w", issueKey, statusName, err)
 	}
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 
 	return nil
 }
@@ -164,7 +164,7 @@ func (a *Adapter) ListIssues(ctx context.Context, query issue.ListQuery) ([]issu
 	if err != nil {
 		return nil, fmt.Errorf("searching issues: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Issues []struct {
@@ -207,7 +207,7 @@ func (a *Adapter) ListBoards(ctx context.Context, project string) ([]issue.Board
 	if err != nil {
 		return nil, fmt.Errorf("listing boards: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Values []struct {
@@ -241,7 +241,7 @@ func (a *Adapter) BoardColumns(ctx context.Context, boardID string) ([]issue.Boa
 	if err != nil {
 		return nil, fmt.Errorf("getting board configuration: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		ColumnConfig struct {
@@ -283,7 +283,7 @@ func (a *Adapter) GetProperty(ctx context.Context, issueKey string) (json.RawMes
 		}
 		return nil, fmt.Errorf("getting property for %s: %w", issueKey, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Value json.RawMessage `json:"value"`
@@ -300,7 +300,7 @@ func (a *Adapter) SetProperty(ctx context.Context, issueKey string, value any) e
 	if err != nil {
 		return fmt.Errorf("setting property for %s: %w", issueKey, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -314,7 +314,7 @@ func (a *Adapter) DeleteProperty(ctx context.Context, issueKey string) error {
 		}
 		return fmt.Errorf("deleting property for %s: %w", issueKey, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -372,7 +372,7 @@ func (a *Adapter) doRequest(ctx context.Context, method, path string, body any) 
 	}
 
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("jira API error (HTTP %d): %s", resp.StatusCode, body)
 	}

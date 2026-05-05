@@ -335,39 +335,6 @@ func buildStatusIndex() map[string]int {
 	return idx
 }
 
-// validateStageTransition checks the issue's current status against the
-// expected status for a lifecycle command. If the status is unexpected, warns
-// and prompts for confirmation. In non-interactive mode, logs a warning and
-// proceeds.
-func validateStageTransition(ctx context.Context, tracker issue.Tracker, issueKey, expectedStatusKey string) error {
-	current, err := tracker.GetIssue(ctx, issueKey)
-	if err != nil {
-		return fmt.Errorf("checking issue status: %w", err)
-	}
-
-	expectedStatus, err := resolveStatus(expectedStatusKey)
-	if err != nil {
-		return err
-	}
-
-	if !strings.EqualFold(current.Status, expectedStatus) {
-		ui.Skip(fmt.Sprintf("issue %s is in %q, expected %q", issueKey, current.Status, expectedStatus))
-		if isInteractive() {
-			confirmed, err := promptConfirm("Proceed anyway?", false)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				return fmt.Errorf("aborted: unexpected issue status")
-			}
-		} else {
-			ui.Skip("proceeding (non-interactive mode)")
-		}
-	}
-
-	return nil
-}
-
 // newCodeHost creates a code.Host from current config. Resolution order:
 // 1. github.token from viper (config file or BOSUN_GITHUB_TOKEN env)
 // 2. gh auth token (GitHub CLI)
@@ -786,29 +753,6 @@ func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget
 	}
 
 	return targets, nil
-}
-
-// resolveServiceNames maps active workspace repositories to their service
-// names using the top-level services: config. Repos not listed in the config
-// default to using the repo name as the service name.
-//
-// Config shapes:
-//   - String → single service name (e.g., services.legacy-ui: "frontend")
-//   - List   → multiple service names (e.g., services.extracker: ["api", "worker"])
-//   - Map    → service names with path prefixes (e.g., services.extracker: {api: ["cmd/api/"]})
-//   - Absent → repo name used as-is
-func resolveServiceNames(ctx context.Context) ([]string, error) {
-	repos, err := resolveActiveRepositories(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var services []string
-	for _, r := range repos {
-		services = append(services, resolveRepoServiceNames(r.Name)...)
-	}
-
-	return services, nil
 }
 
 // resolveRepoServiceNames returns the service names configured for a single

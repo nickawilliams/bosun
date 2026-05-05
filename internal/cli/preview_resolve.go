@@ -125,7 +125,7 @@ func httpProbe(ctx context.Context, url string) (bool, error) {
 		if err != nil {
 			return 0, err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return resp.StatusCode, nil
 	}
 

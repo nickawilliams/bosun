@@ -142,7 +142,7 @@ func resolveConfigPath(global bool) (string, error) {
 func setConfigValue(path, key, value string) error {
 	v := viper.New()
 	v.SetConfigFile(path)
-	v.ReadInConfig() // ignore error — file may not exist yet
+	_ = v.ReadInConfig() // ignore error — file may not exist yet
 
 	v.Set(key, value)
 	return v.WriteConfigAs(path)
@@ -152,7 +152,7 @@ func setConfigValue(path, key, value string) error {
 func setConfigMap(path, key string, values map[string]string) error {
 	v := viper.New()
 	v.SetConfigFile(path)
-	v.ReadInConfig()
+	_ = v.ReadInConfig()
 
 	v.Set(key, values)
 	return v.WriteConfigAs(path)
@@ -162,7 +162,7 @@ func setConfigMap(path, key string, values map[string]string) error {
 func setConfigListValue(path, key string, values []string) error {
 	v := viper.New()
 	v.SetConfigFile(path)
-	v.ReadInConfig()
+	_ = v.ReadInConfig()
 
 	v.Set(key, values)
 	return v.WriteConfigAs(path)
