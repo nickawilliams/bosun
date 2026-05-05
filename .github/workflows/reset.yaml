@@ -10,8 +10,9 @@ on:
     inputs:
       version:
         description: "Release tag to reset (e.g. v1.2.3) or 'latest'"
-        required: true
+        required: false
         type: string
+        default: 'latest'
       reset_tap:
         description: "Revert the homebrew tap commit for this version"
         required: false
@@ -31,7 +32,7 @@ env:
   MACPORTS_REPO: ${{ vars.MACPORTS_REPO }}
 
 jobs:
-  reset-main:
+  main:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
@@ -151,9 +152,9 @@ jobs:
           git push --force-with-lease="main:${previous}" origin HEAD:main
           echo "main reset to ${reset_to}"
 
-  reset-tap:
+  homebrew:
     if: ${{ inputs.reset_tap }}
-    needs: reset-main
+    needs: main
     runs-on: ubuntu-latest
     steps:
       - name: Import GPG
@@ -170,7 +171,7 @@ jobs:
           GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
           GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
           SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
-          TAG: ${{ needs.reset-main.outputs.tag }}
+          TAG: ${{ needs.main.outputs.tag }}
         run: |
           set -euo pipefail
           tap_dir="$(mktemp -d)"
@@ -209,9 +210,9 @@ jobs:
           git push --force-with-lease="${default_branch}:${previous}" origin "HEAD:${default_branch}"
           echo "${HOMEBREW_REPO}/${default_branch} reverted to ${target}"
 
-  reset-ports-fork:
+  macports:
     if: ${{ inputs.reset_ports_fork }}
-    needs: reset-main
+    needs: main
     runs-on: ubuntu-latest
     steps:
       - name: Import GPG
@@ -247,7 +248,7 @@ jobs:
           GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
           GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
           SIGNING_KEY: ${{ steps.import_gpg.outputs.keyid }}
-          VERSION_NO_V: ${{ needs.reset-main.outputs.version_no_v }}
+          VERSION_NO_V: ${{ needs.main.outputs.version_no_v }}
         run: |
           set -euo pipefail
           port_dir="$(mktemp -d)"
@@ -291,16 +292,16 @@ jobs:
           echo "${MACPORTS_REPO}/${default_branch} reverted to ${target}"
 
   summary:
-    needs: [reset-main, reset-tap, reset-ports-fork]
+    needs: [main, homebrew, macports]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Print summary
         run: |
           {
-            echo "## Reset summary for ${{ needs.reset-main.outputs.tag }}"
+            echo "## Reset summary for ${{ needs.main.outputs.tag }}"
             echo ""
-            echo "- main: ${{ needs.reset-main.result }} (was ${{ needs.reset-main.outputs.previous_main }}, now ${{ needs.reset-main.outputs.reset_to }})"
-            echo "- homebrew tap (${HOMEBREW_REPO}): ${{ needs.reset-tap.result }}"
-            echo "- macports fork (${MACPORTS_REPO}): ${{ needs.reset-ports-fork.result }}"
+            echo "- main: ${{ needs.main.result }} (was ${{ needs.main.outputs.previous_main }}, now ${{ needs.main.outputs.reset_to }})"
+            echo "- homebrew tap (${HOMEBREW_REPO}): ${{ needs.homebrew.result }}"
+            echo "- macports fork (${MACPORTS_REPO}): ${{ needs.macports.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
