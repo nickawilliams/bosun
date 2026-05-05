@@ -64,67 +64,6 @@ bosun doctor
 bosun init [--quick] [--yes]
 ```
 
----
-
-✓ = working
-✘ = broken
-~ = not yet implemented
-
-| Command      |     | Outside                |     | Project Root                       |     | Workspace                          |     | Repo                               |
-| ------------ | :-: | ---------------------- | :-: | ---------------------------------- | :-: | ---------------------------------- | :-: | ---------------------------------- |
-| `.`          |  ✓  | show help              |  ✓  | show help                          |  ✓  | show help                          |  ✓  | show help                          |
-|              |     |                        |     |                                    |     |                                    |     |                                    |
-| `config`     |  ✓  | show `<global>` config |  ✓  | show `<global> + <project>` config |  ✓  | show `<global> + <project>` config |  ✓  | show `<global> + <project>` config |
-| `doctor`     |  ✘  | show `<global>` health |  ✓  | show `<project>` health            |     | show `<project>` health            |     | show `<project>` health            |
-| `init`       |  ✓  | create `<project>`     |  ✓  | upsert `<project>`                 |     | `<error>`                          |     | `<error>`                          |
-| `status`     |  ✘  | show `<error>`         |  ✘  | show `<project>` status            |  ✓  | show `<workspace>` status          |     | show `<repo>` status               |
-| `workspace`  |     |                        |     |                                    |     |                                    |     |                                    |
-| `help`       |     |                        |     |                                    |     |                                    |     |                                    |
-| `completion` |     |                        |     |                                    |     |                                    |     |                                    |
-|              |     |                        |     |                                    |     |                                    |     |                                    |
-| `create`     |     |                        |     |                                    |     |                                    |     |                                    |
-| `start`      |     |                        |     |                                    |     |                                    |     |                                    |
-| `review`     |     |                        |     |                                    |     |                                    |     |                                    |
-| `preview`    |     |                        |     |                                    |     |                                    |     |                                    |
-| `prerelease` |     |                        |     |                                    |     |                                    |     |                                    |
-| `release`    |     |                        |     |                                    |     |                                    |     |                                    |
-| `cleanup`    |     |                        |     |                                    |     |                                    |     |                                    |
-
----
-
-| `container.type` | `container.name` | `resource.type` | `resource.name` | `action.type` | `action.name` |                                                                            |
-| ---------------- | ---------------- | --------------- | --------------- | ------------- | ------------- | -------------------------------------------------------------------------- |
-| repo             | foo              | branch          | bar             | +             | create        | create branch "bar" in repo "foo"                                          |
-| repo             | foo              | worktree        | foo-bar         | +             | create        | create worktree "foo-bar" in repo "foo"                                    |
-| issue            | ABC-123          | status          | In-Progress     | ~             | create        | update status "In-Progress" for issue "ABC-123"                            |
-| ???              | ???              | environment     | quirky-quail    | +             | create        | create environment "quirky-quail" from pull-request(s) "[one, two, three]" |
-|                  |                  | environment     | quirky-quail    | +             | deploy        | deploy environment "quirky-quail"                                          |
-|                  |                  | environment     | quirky-quail    | -             | teardown      | teardown environment "quirky-quail"                                        |
-| channel          | #bb-prs          | message         | `<message>`     | +             | notify        | notify message "<message>" in channel "#bb-prs"                            |
-| channel          | #bb-prs          | message         | `<message>`     | ~             | notify        | notify message "<message>" in channel "#bb-prs"                            |
-
-```
-  + create    issue         "ABC-123"
-  ~ update    status        "In-Progress"       for issue "ABC-123"
-  + create    branch        "some/branch-name"  in repo "org/repo"
-  + create    pull-request  [known after apply] in repo "org/repo"
-  + deploy    namespace     "foo-bar"           in environment "preview"
-  - teardown  namespace     "foo-bar"           in environment "preview"
-  ~ adopt     namespace     "foo-bar"           in environment "preview"
-  =           namespace     "foo-bar"           in environment "preview"
-```
-
-Appreciating the push-back, please keep doing so if you if it makes sense. But for the action type/name, what if the name is just the domain-specific word for some action, and
-the type is just what category of action it is? For example:
-
-```
-+ deploy   environment "foo-bar"
-- teardown environment "foo-bar"
-~ redeploy environment "foo-bar"
-= adopt    environment "foo-bar"
-= retain   environment "foo-bar"
-```
-
 [ci-image]: https://img.shields.io/github/actions/workflow/status/nickawilliams/bosun/release.yaml?logo=GitHub&logoColor=white
 [ci-url]: https://github.com/nickawilliams/bosun/actions/workflows/release.yaml
 [coverage-image]: https://img.shields.io/codecov/c/github/nickawilliams/bosun?logo=codecov&logoColor=white
