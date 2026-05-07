@@ -18,6 +18,7 @@ type palette struct {
 	Primary   color.Color // Titles, headings
 	Secondary color.Color // Breadcrumb root, secondary headings
 	Accent    color.Color // Selectors, prompts, interactive elements
+	Info     color.Color // Informational, non-actionable signals
 	Success  color.Color // Confirmations, selected items
 	Error    color.Color // Errors, validation failures
 	Warning  color.Color // Caution, dry-run indicators
@@ -128,6 +129,28 @@ func EndTimeline() {
 	}
 }
 
+// Divider prints a muted horizontal rule between cards while
+// preserving the timeline spine. The line is indented to align
+// with card body content (under the spine + 2-space gap), so the
+// │ connector remains visible and continuous through the section
+// break. Suppressed in raw mode.
+func Divider() {
+	if IsRaw() {
+		return
+	}
+	// Emit any pending comfy connector first so the divider has a
+	// blank │ row above it in comfy mode.
+	fmt.Print(comfyPrefix())
+
+	style := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	width := max(TermWidth()-2, 10)
+	fmt.Println(" " + style.Render("├"+strings.Repeat("─", width)))
+
+	// Trigger a │ row above the next card so the divider has
+	// breathing room beneath it too.
+	comfyBreak = true
+}
+
 // comfyPrefix returns (and clears) a pending connector-line prefix
 // for comfy-mode breathing room between timeline cards.
 func comfyPrefix() string {
@@ -145,6 +168,7 @@ func defaultPalette() palette {
 		Primary:   lipgloss.Color("#7571F9"), // Indigo
 		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
 		Accent:    lipgloss.Color("#F780E2"), // Fuchsia
+		Info:     lipgloss.Color("#5DA9F8"), // Sky blue
 		Success:  lipgloss.Color("#02BF87"), // Green
 		Error:    lipgloss.Color("#ED567A"), // Red
 		Warning:  lipgloss.Color("#FFA500"), // Orange
@@ -168,6 +192,7 @@ func ansiPalette() palette {
 		Primary:   lipgloss.BrightBlue,
 		Secondary: lipgloss.Blue,
 		Accent:    lipgloss.BrightMagenta,
+		Info:     lipgloss.Cyan,
 		Success:  lipgloss.Green,
 		Error:    lipgloss.Red,
 		Warning:  lipgloss.Yellow,
@@ -185,7 +210,7 @@ func ansiPalette() palette {
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
 	return palette{
-		Primary: nc, Secondary: nc, Accent: nc, Success: nc, Error: nc, Warning: nc,
+		Primary: nc, Secondary: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 

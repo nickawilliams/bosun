@@ -83,13 +83,14 @@ var asciiLogo = func() []string {
 // lines are drawn with a muted connector so a run of cards reads as
 // a single vertical timeline.
 type Card struct {
-	state    CardState
-	title    string
-	value    string // Rendered after title as-is (no title-casing), muted style.
-	subtitle string
-	body     []cardBody
-	tight    bool // suppress comfy spacing (e.g. single-field prompts)
-	indent   int  // additional left-margin depth (1 = +4 spaces); used by Group children
+	state         CardState
+	title         string
+	value         string // Rendered after title as-is (no title-casing), muted style.
+	subtitle      string
+	body          []cardBody
+	tight         bool // suppress comfy spacing (e.g. single-field prompts)
+	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
+	preserveTitle bool // skip the default titleCase transform on the title
 }
 
 type cardBodyKind int
@@ -100,13 +101,23 @@ const (
 	cardBodyKV
 	cardBodyStdout
 	cardBodyStderr
-	cardBodyRaw // pre-styled lines, no additional formatting
+	cardBodyRaw  // pre-styled lines, no additional formatting
+	cardBodyItem // glyph + content rows, indented under the title
 )
 
 type cardBody struct {
 	kind  cardBodyKind
 	lines []string
 	pairs [][2]string // used by cardBodyKV
+	items []cardItem  // used by cardBodyItem
+}
+
+// cardItem is one glyph+content row in a card body. Both fields
+// are pre-styled (may contain ANSI escapes); the renderer adds no
+// further styling, only spacing.
+type cardItem struct {
+	glyph   string
+	content string
 }
 
 // NewCard creates a card with the given state and title.
@@ -126,6 +137,14 @@ func (c *Card) Tight() *Card {
 // Group to nest children under a parent's spine.
 func (c *Card) Indent(n int) *Card {
 	c.indent = n
+	return c
+}
+
+// PreserveCase suppresses the default title-case transform on the
+// card title. Use for identifier-like titles (repo names, paths,
+// URLs) where the input casing is meaningful.
+func (c *Card) PreserveCase() *Card {
+	c.preserveTitle = true
 	return c
 }
 
@@ -169,6 +188,26 @@ func (c *Card) KV(pairs ...string) *Card {
 // Use when lines contain embedded ANSI codes that must be preserved.
 func (c *Card) Raw(lines ...string) *Card {
 	c.body = append(c.body, cardBody{kind: cardBodyRaw, lines: lines})
+	return c
+}
+
+// Item appends a glyph+content row to the body. The row renders
+// at the standard body indent (│ at col 2, glyph at col 5, content
+// at col 8) — same visual depth as the card title's "glyph + 2sp +
+// content" format, just one connector level deeper. Use for body
+// rows that carry their own per-row state glyph (status repo
+// rows, plan items, etc.). Both arguments are pre-styled.
+//
+// Calling Item multiple times accumulates rows in the order given.
+func (c *Card) Item(glyph, content string) *Card {
+	if n := len(c.body); n > 0 && c.body[n-1].kind == cardBodyItem {
+		c.body[n-1].items = append(c.body[n-1].items, cardItem{glyph, content})
+		return c
+	}
+	c.body = append(c.body, cardBody{
+		kind:  cardBodyItem,
+		items: []cardItem{{glyph, content}},
+	})
 	return c
 }
 
@@ -251,7 +290,10 @@ func (c *Card) renderWithGlyph(glyph string) string {
 // renderInner is the indent-agnostic render path.
 func (c *Card) renderInner(glyph string) string {
 	var b strings.Builder
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary).Transform(titleCase)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	if !c.preserveTitle {
+		titleStyle = titleStyle.Transform(titleCase)
+	}
 	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	const pad = " "
 	conn := pad + c.renderConnector() + "  "
@@ -444,6 +486,12 @@ func renderCardBody(b cardBody) []string {
 		return out
 	case cardBodyRaw:
 		return b.lines
+	case cardBodyItem:
+		out := make([]string, len(b.items))
+		for i, item := range b.items {
+			out[i] = item.glyph + "  " + item.content
+		}
+		return out
 	case cardBodyKV:
 		maxKey := 0
 		for _, p := range b.pairs {
