@@ -175,7 +175,14 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 			return fmt.Errorf("removing worktree for %s: %w", s.Name, err)
 		}
 
-		if err := m.vcs.DeleteBranch(ctx, srcPath, name); err != nil {
+		// Delete the branch the worktree was actually on, which may
+		// differ from the workspace name if a user manually checked
+		// out a different branch in this worktree. Skip when the
+		// branch couldn't be determined to avoid a bogus delete.
+		if s.Branch == "" || s.Branch == "(unknown)" {
+			continue
+		}
+		if err := m.vcs.DeleteBranch(ctx, srcPath, s.Branch); err != nil {
 			return fmt.Errorf("deleting branch in %s: %w", s.Name, err)
 		}
 	}
