@@ -6,17 +6,17 @@ import (
 	"testing"
 )
 
-func TestPlanCard_Prefix(t *testing.T) {
+func TestPlanCard_TitleWord(t *testing.T) {
 	tests := []struct {
 		state PlanCardState
 		want  string
 	}{
-		{PlanProposed, "Pending:"},
-		{PlanApplying, "Applying:"},
-		{PlanSuccess, "Success:"},
-		{PlanPartial, "Partial:"},
-		{PlanFailure, "Failure:"},
-		{PlanCancelled, "Cancelled:"},
+		{PlanProposed, "Pending"},
+		{PlanApplying, "Applying"},
+		{PlanSuccess, "Success"},
+		{PlanPartial, "Partial"},
+		{PlanFailure, "Failure"},
+		{PlanCancelled, "Cancelled"},
 	}
 
 	for _, tt := range tests {
@@ -24,19 +24,19 @@ func TestPlanCard_Prefix(t *testing.T) {
 			plan := NewPlan().Add(PlanCreate, "deploy", "repo", "api", "")
 			pc := NewPlanCard(plan)
 			pc.SetState(tt.state)
-			if got := pc.prefix(); got != tt.want {
-				t.Errorf("prefix() = %q, want %q", got, tt.want)
+			if got := pc.titleWord(); got != tt.want {
+				t.Errorf("titleWord() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 
-	// Unknown state falls through to default "Pending:".
+	// Unknown state falls through to default "Pending".
 	t.Run("unknown state defaults to Pending", func(t *testing.T) {
 		plan := NewPlan().Add(PlanCreate, "deploy", "repo", "api", "")
 		pc := NewPlanCard(plan)
 		pc.SetState(PlanCardState(99))
-		if got := pc.prefix(); got != "Pending:" {
-			t.Errorf("prefix() for unknown state = %q, want %q", got, "Pending:")
+		if got := pc.titleWord(); got != "Pending" {
+			t.Errorf("titleWord() for unknown state = %q, want %q", got, "Pending")
 		}
 	})
 }

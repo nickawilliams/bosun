@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -25,8 +26,7 @@ func newDemoCmd() *cobra.Command {
 				demoCards(cmd)
 				demoTree()
 				demoGroupsStatic()
-				ui.ClearBreak()
-				fmt.Println()
+				demoItemCard()
 				demoPlanCardStates()
 				demoFormStatic()
 				return nil
@@ -180,6 +180,24 @@ func demoGroupsStatic() {
 		})
 		g.Complete("continued after failure")
 	})
+}
+
+// demoItemCard renders a Card whose body uses the shared Card.Item
+// primitive — colored per-row glyph + content. Placed between the
+// group demo and the plan demo so the three card families can be
+// compared side-by-side for layout alignment.
+func demoItemCard() {
+	success := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	info := lipgloss.NewStyle().Foreground(ui.Palette.Info).Render("↑")
+	warning := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("↓")
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("◦")
+
+	ui.NewCard(ui.CardData, "card with items").
+		Item(success, "first row · all good").
+		Item(info, "second row · ahead 2").
+		Item(warning, "third row · behind 1").
+		Item(muted, "fourth row · pending").
+		Print()
 }
 
 func demoTree() {

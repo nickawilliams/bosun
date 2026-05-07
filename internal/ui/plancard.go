@@ -78,45 +78,39 @@ func (pc *PlanCard) PrintRewindable() func() {
 	}
 }
 
-// renderWithGlyph renders the card with a custom glyph string (used by
-// the BubbleTea spinner model to inject animated frames).
+// renderWithGlyph renders the card with a custom glyph string (used
+// by the BubbleTea spinner model to inject animated frames). Builds
+// a Card with one Item per plan row so PlanCard renders through the
+// same primitive as status repo cards and Plan.Render().
 func (pc *PlanCard) renderWithGlyph(glyph string) string {
-	var b strings.Builder
-
-	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-
-	// Title line: glyph + prefix + summary
-	prefix := pc.prefix()
-	summary := pc.summary()
-	fmt.Fprintf(&b, " %s  %s %s\n", glyph, headingStyle.Render(prefix), summary)
-
-	// Diff items.
-	for _, line := range pc.plan.RenderItemLines() {
-		fmt.Fprintf(&b, " %s  %s\n", connStyle.Render("│"), line)
+	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
+	widths := pc.plan.columnWidths()
+	for _, item := range pc.plan.items {
+		g, content := planItemParts(item, widths)
+		card.Item(g, content)
 	}
-
-
-	return b.String()
+	return card.renderWithGlyph(glyph)
 }
 
-// prefix returns the title prefix for the current state.
-func (pc *PlanCard) prefix() string {
+// titleWord returns the title word for the current state. The
+// trailing colon is added by Card's titleStyle when a value is set,
+// so it isn't included here.
+func (pc *PlanCard) titleWord() string {
 	switch pc.state {
 	case PlanProposed:
-		return "Pending:"
+		return "Pending"
 	case PlanApplying:
-		return "Applying:"
+		return "Applying"
 	case PlanSuccess:
-		return "Success:"
+		return "Success"
 	case PlanPartial:
-		return "Partial:"
+		return "Partial"
 	case PlanFailure:
-		return "Failure:"
+		return "Failure"
 	case PlanCancelled:
-		return "Cancelled:"
+		return "Cancelled"
 	}
-	return "Pending:"
+	return "Pending"
 }
 
 // summary returns the appropriately-tensed count string for the current state.
