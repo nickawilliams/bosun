@@ -63,6 +63,25 @@ func newCleanupCmd() *cobra.Command {
 				}
 			}
 
+			// Capture each worktree's actual current branch up-front,
+			// before any RemoveWorktree action runs (which would
+			// invalidate the worktree path). This handles the case
+			// where a worktree has been manually checked out to a
+			// branch other than the issue/workspace name.
+			actualBranch := make(map[string]string, len(repositories))
+			for _, r := range repositories {
+				wtPath := filepath.Join(wsRoot, branchName, r.Name)
+				if _, err := os.Stat(wtPath); err != nil {
+					actualBranch[r.Name] = branchName
+					continue
+				}
+				if b, err := g.GetCurrentBranch(ctx, wtPath); err == nil && b != "" {
+					actualBranch[r.Name] = b
+				} else {
+					actualBranch[r.Name] = branchName
+				}
+			}
+
 			// --- Plan + Apply ---
 			var actions []Action
 
@@ -91,6 +110,7 @@ func newCleanupCmd() *cobra.Command {
 			for _, r := range repositories {
 				repoPath := r.Path
 				repoName := r.Name
+				branch := actualBranch[repoName]
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
@@ -98,18 +118,18 @@ func newCleanupCmd() *cobra.Command {
 					Type:   "repo",
 					Name:   repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
-						exists, err := g.BranchExists(ctx, repoPath, branchName)
+						exists, err := g.BranchExists(ctx, repoPath, branch)
 						if err != nil {
 							return 0, "", err
 						}
-						detail := fmt.Sprintf("%s (local + remote)", branchName)
+						detail := fmt.Sprintf("%s (local + remote)", branch)
 						if !exists {
 							return ActionCompleted, detail, nil
 						}
 						return ActionNeeded, detail, nil
 					},
 					Apply: func(ctx context.Context) error {
-						return g.DeleteBranch(ctx, repoPath, branchName)
+						return g.DeleteBranch(ctx, repoPath, branch)
 					},
 				})
 			}
