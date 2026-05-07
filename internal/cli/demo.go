@@ -116,6 +116,11 @@ func demoCards(cmd *cobra.Command) {
 		"URL", issueURL,
 	))
 
+	// Heading with inline value — renders "Title: value" with the title
+	// in the standard bold/primary heading style and the value muted, on
+	// the same line.
+	ui.NewCard(ui.CardSuccess, "preview").Value("feature/login-page").Print()
+
 	// Card states — one bare card per state.
 	ui.NewCard(ui.CardPending, "pending").Print()
 	ui.NewCard(ui.CardSuccess, "success").Print()
