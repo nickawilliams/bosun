@@ -205,3 +205,111 @@ Application: bosun
 
 4. **Lifecycle ordering follows the SDLC**: create, start, review,
    preview, prerelease, release, cleanup.
+
+## Heading & breadcrumb structure
+
+Every command run opens with a heading whose visible breadcrumb
+follows a single shape:
+
+```
+[command path] › [primary entity]
+```
+
+Rendered as a single Card.Root by the UI layer (see
+`internal/ui/README.md`). The bosun ASCII logo replaces the
+implicit "Bosun" root segment, so the breadcrumb starts at the
+command level.
+
+### Command path
+
+One or more segments describing *what command this is*. Single
+segment for most commands; mode-qualified when the command's
+behavior depends on context.
+
+- **Single-mode commands** use just the command title. Examples:
+  `Start`, `Review`, `Cleanup`, `Doctor`.
+- **Multi-mode commands** prefix with the mode. The status command
+  is the canonical example — its scope changes by where it's run:
+  - In a workspace: `Workspace Status`
+  - In a project but not a workspace: `Project Status`
+  - In a single repository: `Repo Status`
+  - Outside any of the above: `Status`
+- **Subcommand commands** stack their parent + child. Examples:
+  `Workspace › Create`, `Config › Show`.
+
+The rule for adding a mode qualifier: include it only when the
+*effective behavior* of the command depends on context. If
+`status` always rendered the same view, the qualifier would be
+noise. Because it shows different data per mode, the qualifier
+disambiguates.
+
+### Primary entity
+
+The terminal segment names *what this run is acting on* — the noun
+the user holds in their head. Different from "the literal CLI
+argument" or "the auto-derived workspace name."
+
+| Command | Primary entity |
+| ------- | -------------- |
+| `start`, `review`, `cleanup`, `prerelease`, `release` | issue ID |
+| `status` (workspace mode) | issue ID |
+| `status` (project mode) | project name |
+| `status` (repo mode) | repo name |
+| `workspace create`, `workspace add`, `workspace rm` | workspace name (= issue ID by convention) |
+| `config get`, `config set`, `config show` (with key) | config key |
+| `doctor`, `init`, `config show` (no key) | none |
+
+Rule of thumb: when the user describes their work to a colleague,
+what noun do they use? That noun is the primary entity. For
+issue-centric commands, the issue ID is what's remembered, even
+when bosun also has a derived workspace name embedded in branch
+strings.
+
+### Implementation
+
+- Static path is set via the `headerAnnotationTitle` annotation
+  (see `header.go` and `commandBreadcrumb`). Multi-segment paths
+  embed `›` directly in the annotation string, e.g.
+  `"Workspace › Create"`.
+- Mode-dependent paths: the command body chooses the title at
+  runtime based on context detection (workspace / project / repo).
+- The primary entity is contributed by the **first non-root card
+  emitted after the heading**, via the UI layer's "squish"
+  mechanism. The card's title becomes the breadcrumb's terminal
+  segment. See `internal/ui/squish.go`.
+- The terminal-segment color defaults to the breadcrumb's
+  primary indigo. Commands that want to mark it as data (a
+  domain identifier rather than a command segment) opt in via
+  `Card.AbsorbedTitleColor(ui.Palette.Success)` — green is the
+  current convention for data tinting.
+- Commands with no primary entity emit no absorbed card after the
+  heading; the breadcrumb stays as just the command path.
+
+### Color conventions
+
+| Segment kind | Color |
+| ------------ | ----- |
+| Command-path segments | bold, `Palette.Primary` (indigo) |
+| Separator (`›`) | bold, `Palette.Recessed` |
+| Primary entity (data) | bold, `Palette.Success` (green) when explicitly tinted; otherwise primary |
+| Absorbed state glyph | the absorbed card's state color (✓ success / ✗ error / spinner = primary) — suppressed via `Card.HideAbsorbedGlyph` when the entity is purely informational |
+
+### Examples
+
+```
+[Bosun logo box]
+[breadcrumb closing line:]
+ │  Start › EX-30434 ─────────────────────────╯
+```
+
+```
+ │  Workspace Status › feature/EX-30434_... ──╯
+```
+
+```
+ │  Workspace › Create › EX-30434 ────────────╯
+```
+
+```
+ │  Doctor ───────────────────────────────────╯
+```

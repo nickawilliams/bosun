@@ -43,6 +43,33 @@ invocation.
   `Bosun > Workspace > Create`. Built from the cobra command
   hierarchy by `cli/header.go`.
 - **Hidden commands** (`demo`, `captain`) get the same heading style.
+- **Breadcrumb structure** (what segments are included, what the
+  terminal segment represents, when modes get qualified) is
+  defined in `internal/cli/README.md` — see "Heading & breadcrumb
+  structure". The UI layer renders whatever the cli layer
+  declares.
+
+#### Absorption ("squish")
+
+The first non-root card emitted after a Heading is "absorbed" —
+its title is appended to the heading's breadcrumb as the terminal
+segment. Subtitle/body content renders below the box.
+
+- **State glyph** of the absorbed card prefixes its segment by
+  default (e.g. ✓ for `CardSuccess`); suppress with
+  `Card.HideAbsorbedGlyph()` when the segment is purely
+  informational data.
+- **Title color** is `Palette.Primary` by default; override with
+  `Card.AbsorbedTitleColor(c)` to mark the segment as a data
+  identifier (convention: `Palette.Success` / green).
+- **`RunCard` family** absorbs too: the spinner animates in the
+  segment position during the task, then resolves to the success
+  card's title + glyph (or a ✓ on the running title if no
+  replacement card was provided).
+- **Inert override**: emit a card with no title and no body to
+  consume the squish slot without modifying the breadcrumb.
+
+See `internal/ui/squish.go` for the state machine.
 
 ### Timeline Card
 
