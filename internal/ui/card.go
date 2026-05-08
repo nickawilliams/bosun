@@ -679,22 +679,31 @@ func (m cardSpinnerModel) waitForResult() tea.Cmd {
 // squishedSpinnerModel renders a previously-printed root card with
 // an extended breadcrumb whose final segment is the running task's
 // title, prefixed by an animated spinner. On result, the spinner
-// frame is replaced with a success or failure glyph.
+// frame is replaced with a success or failure glyph; if a success
+// card builder is set, its title + glyph replace the running
+// title and its subtitle/body render below the root box.
 type squishedSpinnerModel struct {
-	spinner  spinner.Model
-	root     *Card  // copy of the original root card (title is its base breadcrumb)
-	title    string // task title appended as the final breadcrumb segment
-	done     bool
-	err      error
-	resultCh <-chan error
+	spinner     spinner.Model
+	root        *Card        // copy of the original root card (title is its base breadcrumb)
+	title       string       // running task title appended as the final breadcrumb segment
+	successCard func() *Card // optional: builds the replacement card on success
+	done        bool
+	err         error
+	resultCh    <-chan error
 }
 
-func newSquishedSpinnerModel(root *Card, title string, resultCh <-chan error) squishedSpinnerModel {
+func newSquishedSpinnerModel(root *Card, title string, successCard func() *Card, resultCh <-chan error) squishedSpinnerModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(Palette.Primary)),
 	)
-	return squishedSpinnerModel{spinner: s, root: root, title: title, resultCh: resultCh}
+	return squishedSpinnerModel{
+		spinner:     s,
+		root:        root,
+		title:       title,
+		successCard: successCard,
+		resultCh:    resultCh,
+	}
 }
 
 func (m squishedSpinnerModel) Init() tea.Cmd {
@@ -722,17 +731,19 @@ func (m squishedSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m squishedSpinnerModel) View() tea.View {
+	if m.done {
+		// Final frame: same render path used by the non-interactive
+		// fallback so success-card replacement and body content stay
+		// consistent across paths.
+		return tea.NewView(squishedFinalRender(m.root, m.title, m.successCard, m.err))
+	}
 	extended := *m.root
 	if extended.title == "" {
 		extended.title = m.title
 	} else {
 		extended.title = m.root.title + " › " + m.title
 	}
-	if m.done {
-		extended.absorbedGlyph = squishedFinalGlyph(m.err)
-	} else {
-		extended.absorbedGlyph = m.spinner.View()
-	}
+	extended.absorbedGlyph = m.spinner.View()
 	return tea.NewView(extended.Render())
 }
 
@@ -752,10 +763,15 @@ func RunCard(title string, fn func() error) error {
 // runSquishedCard is the squish-mode counterpart to runCardWith.
 // It runs fn while animating a spinner glyph in the LAST segment
 // of the previously-printed root card's breadcrumb (with the
-// passed card's title appended). On success/failure the spinner
-// frame is replaced with the corresponding state glyph. The
-// extended root remains on screen permanently after return.
-func runSquishedCard(card *Card, fn func() error) error {
+// passed card's title appended). On success, if successCard is
+// non-nil, its title and glyph replace the running title in the
+// breadcrumb (and its subtitle/body render below). On failure the
+// spinner frame is replaced with the failed glyph and the running
+// title stays in the breadcrumb.
+//
+// successCard may be nil — in that case the running title remains
+// in the breadcrumb with a ✓ glyph on success.
+func runSquishedCard(card *Card, fn func() error, successCard func() *Card) error {
 	if IsRaw() {
 		return fn()
 	}
@@ -778,16 +794,13 @@ func runSquishedCard(card *Card, fn func() error) error {
 		fmt.Printf("\x1b[%dF\x1b[J", rootLines)
 	}
 
-	p := tea.NewProgram(newSquishedSpinnerModel(root, card.title, resultCh))
+	p := tea.NewProgram(newSquishedSpinnerModel(root, card.title, successCard, resultCh))
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for the task and print a
 		// finalized extended root.
 		taskErr := <-resultCh
-		extended := *root
-		extended.title = root.title + " › " + card.title
-		extended.absorbedGlyph = squishedFinalGlyph(taskErr)
-		fmt.Print(extended.Render())
+		fmt.Print(squishedFinalRender(root, card.title, successCard, taskErr))
 		comfyBreak = true
 		return taskErr
 	}
@@ -795,6 +808,26 @@ func runSquishedCard(card *Card, fn func() error) error {
 	m := model.(squishedSpinnerModel)
 	comfyBreak = true
 	return m.err
+}
+
+// squishedFinalRender produces the static "after-task" render of a
+// squished root card — used by the bubbletea final frame and by
+// the non-interactive fallback path. On success with a successCard
+// builder, the breadcrumb shows the replacement's title + glyph
+// and the replacement's subtitle/body render below the box.
+func squishedFinalRender(root *Card, runningTitle string, successCard func() *Card, err error) string {
+	extended := *root
+	var bodyOut string
+	if err == nil && successCard != nil {
+		repl := successCard()
+		extended.title = root.title + " › " + repl.title
+		extended.absorbedGlyph = repl.glyph()
+		bodyOut = repl.renderBodyAndSubtitle()
+	} else {
+		extended.title = root.title + " › " + runningTitle
+		extended.absorbedGlyph = squishedFinalGlyph(err)
+	}
+	return extended.Render() + bodyOut
 }
 
 // squishedFinalGlyph picks the styled glyph for a completed
@@ -817,7 +850,7 @@ func runCardWith(card *Card, fn func() error) error {
 		return fn()
 	}
 	if squishPending {
-		return runSquishedCard(card, fn)
+		return runSquishedCard(card, fn, nil)
 	}
 
 	resultCh := make(chan error, 1)
@@ -866,12 +899,10 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 		return fn()
 	}
 	if squishPending {
-		// Squish-mode swallows the replacement: the operation lives
-		// in the breadcrumb permanently with its action title; the
-		// caller's success card never gets shown. Fine for typical
-		// uses where successCard would have been visually
-		// equivalent anyway.
-		return runSquishedCard(NewCard(CardRunning, title), fn)
+		// Squish-mode honors the replacement: on success, the
+		// successCard's title + glyph take the breadcrumb's last
+		// segment, and its subtitle/body render below the root box.
+		return runSquishedCard(NewCard(CardRunning, title), fn, successCard)
 	}
 
 	card := NewCard(CardRunning, title)
@@ -925,7 +956,7 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 		// permanently — there's nothing to "rewind" to a prior
 		// state. Return a no-op rewind so callers using this for
 		// transient overlay rendering degrade gracefully.
-		err := runSquishedCard(NewCard(CardRunning, title), fn)
+		err := runSquishedCard(NewCard(CardRunning, title), fn, nil)
 		return func() {}, err
 	}
 
