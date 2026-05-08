@@ -98,9 +98,9 @@ type Card struct {
 	// frame) before the absorbed segment's title without the
 	// breadcrumb's own styling overwriting its color.
 	absorbedGlyph         string
-	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the title with no leading glyph
-	absorbedTitleColor    color.Color // optional override; applied to the trailing dataSegmentCount segments of the breadcrumb
-	dataSegmentCount      int         // number of breadcrumb segments at the END that are data (vs command path); incremented per absorption
+	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the most-recent data segment with no leading glyph
+	absorbedTitleColor    color.Color // optional override; applied to all dataSegments
+	dataSegments          []string    // breadcrumb data segments inserted between the implicit "bosun" root and the command-path tail (option 2 layout)
 }
 
 type cardBodyKind int
@@ -401,27 +401,32 @@ func (c *Card) renderInner(glyph string) string {
 		}
 
 		// Bottom: breadcrumb closes the right side with ╯.
-		segments := strings.Split(c.title, " › ")
-		if len(segments) > 1 {
+		// Layout: <data segments> › <command-path tail>. The implicit
+		// "bosun" root is dropped (the logo above stands in for it),
+		// data segments come next (in green when absorbedTitleColor
+		// is set), then the command-path segments.
+		titleSegs := strings.Split(c.title, " › ")
+		var commandTail []string
+		if len(titleSegs) > 1 {
+			commandTail = titleSegs[1:]
+		}
+		visible := append([]string{}, c.dataSegments...)
+		visible = append(visible, commandTail...)
+		if len(visible) > 0 {
 			primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
 			sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-			styledSegs := make([]string, len(segments)-1)
-			lastIdx := len(segments) - 2
-			// firstDataIdx is the index (within segments[1:]) of the
-			// first data segment — the trailing dataSegmentCount
-			// segments take absorbedTitleColor when set.
-			firstDataIdx := lastIdx + 1 - c.dataSegmentCount
-			for i, seg := range segments[1:] {
+			styledSegs := make([]string, len(visible))
+			dataLen := len(c.dataSegments)
+			// The absorbed glyph (if any) prefixes the most recently
+			// absorbed data segment — i.e., the LAST data segment.
+			lastDataIdx := dataLen - 1
+			for i, seg := range visible {
 				style := primaryStyle
-				if i >= firstDataIdx && c.absorbedTitleColor != nil {
+				if i < dataLen && c.absorbedTitleColor != nil {
 					style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
 				}
 				styled := style.Render(titleCase(seg))
-				// Inject absorbedGlyph in front of the last segment.
-				// Glyph is pre-styled with its own color and ends in
-				// a reset; the following style render
-				// re-establishes bold+color for the title text.
-				if i == lastIdx && c.absorbedGlyph != "" {
+				if i == lastDataIdx && c.absorbedGlyph != "" {
 					styled = c.absorbedGlyph + " " + styled
 				}
 				styledSegs[i] = styled
@@ -770,11 +775,7 @@ func (m squishedSpinnerModel) View() tea.View {
 		return tea.NewView(squishedFinalRender(m.root, m.title, m.successCard, m.err))
 	}
 	extended := *m.root
-	if extended.title == "" {
-		extended.title = m.title
-	} else {
-		extended.title = m.root.title + " › " + m.title
-	}
+	extended.dataSegments = append(append([]string{}, m.root.dataSegments...), m.title)
 	extended.absorbedGlyph = m.spinner.View()
 	return tea.NewView(extended.Render())
 }
@@ -850,20 +851,21 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 func squishedFinalRender(root *Card, runningTitle string, successCard func() *Card, err error) string {
 	extended := *root
 	var bodyOut string
+	base := append([]string{}, root.dataSegments...)
 	if err == nil && successCard != nil {
 		repl := successCard()
-		extended.title = root.title + " › " + repl.title
+		extended.dataSegments = append(base, repl.title)
 		if !repl.suppressAbsorbedGlyph {
 			extended.absorbedGlyph = repl.glyph()
+		} else {
+			extended.absorbedGlyph = ""
 		}
 		if repl.absorbedTitleColor != nil {
 			extended.absorbedTitleColor = repl.absorbedTitleColor
 		}
-		extended.dataSegmentCount = root.dataSegmentCount + 1
 		bodyOut = repl.renderBodyAndSubtitle()
 	} else {
-		extended.dataSegmentCount = root.dataSegmentCount + 1
-		extended.title = root.title + " › " + runningTitle
+		extended.dataSegments = append(base, runningTitle)
 		extended.absorbedGlyph = squishedFinalGlyph(err)
 	}
 	return extended.Render() + bodyOut

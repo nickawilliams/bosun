@@ -69,23 +69,21 @@ func squishConsume(c *Card) {
 		fmt.Printf("\x1b[%dF\x1b[J", lines)
 	}
 
-	// Build extended title: "<root title> › <child title>". The
-	// child's state glyph rides on the extended root via
-	// absorbedGlyph so its color survives the breadcrumb's
-	// primaryStyle wrap.
+	// Build extended root with the child's title appended as a new
+	// data segment. The renderer assembles the visible breadcrumb
+	// as <data segments> › <command-path tail>; data segments take
+	// the absorbedTitleColor when set, and the most recently
+	// absorbed segment carries the absorbedGlyph (if any).
 	extended := *root
-	if extended.title == "" {
-		extended.title = c.title
-	} else {
-		extended.title = extended.title + " › " + c.title
-	}
+	extended.dataSegments = append(append([]string{}, root.dataSegments...), c.title)
 	if g := c.glyph(); g != "" && !c.suppressAbsorbedGlyph {
 		extended.absorbedGlyph = g
+	} else if c.suppressAbsorbedGlyph {
+		extended.absorbedGlyph = ""
 	}
 	if c.absorbedTitleColor != nil {
 		extended.absorbedTitleColor = c.absorbedTitleColor
 	}
-	extended.dataSegmentCount = root.dataSegmentCount + 1
 
 	// Re-render the extended root.
 	rendered := extended.Render()
