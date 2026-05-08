@@ -79,7 +79,7 @@ func squishConsume(c *Card) {
 	} else {
 		extended.title = extended.title + " › " + c.title
 	}
-	if g := c.glyph(); g != "" {
+	if g := c.glyph(); g != "" && !c.suppressAbsorbedGlyph {
 		extended.absorbedGlyph = g
 	}
 

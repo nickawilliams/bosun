@@ -96,7 +96,8 @@ type Card struct {
 	// the squish path to put a state glyph (or animated spinner
 	// frame) before the absorbed segment's title without the
 	// breadcrumb's own styling overwriting its color.
-	absorbedGlyph string
+	absorbedGlyph         string
+	suppressAbsorbedGlyph bool // when true, breadcrumb absorption renders the title with no leading glyph
 }
 
 type cardBodyKind int
@@ -151,6 +152,16 @@ func (c *Card) Indent(n int) *Card {
 // URLs) where the input casing is meaningful.
 func (c *Card) PreserveCase() *Card {
 	c.preserveTitle = true
+	return c
+}
+
+// HideAbsorbedGlyph suppresses the leading state glyph when this
+// card is squished into a parent root card's breadcrumb. The
+// breadcrumb segment renders only the card's title, with no
+// glyph or color marker before it. Use when the absorbed segment
+// is purely informational and the state glyph would add noise.
+func (c *Card) HideAbsorbedGlyph() *Card {
+	c.suppressAbsorbedGlyph = true
 	return c
 }
 
@@ -821,7 +832,9 @@ func squishedFinalRender(root *Card, runningTitle string, successCard func() *Ca
 	if err == nil && successCard != nil {
 		repl := successCard()
 		extended.title = root.title + " › " + repl.title
-		extended.absorbedGlyph = repl.glyph()
+		if !repl.suppressAbsorbedGlyph {
+			extended.absorbedGlyph = repl.glyph()
+		}
 		bodyOut = repl.renderBodyAndSubtitle()
 	} else {
 		extended.title = root.title + " › " + runningTitle
