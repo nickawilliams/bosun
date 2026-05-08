@@ -239,35 +239,67 @@ command is operating on. The breadcrumb's *shape* (which data
 segments are present, in what order) directly conveys what the
 command is doing — no mode qualifier on the command name needed.
 
-The hierarchy is: **issue/workspace › repo**. Project is
-auto-detected and never appears in the breadcrumb (the user knows
-what project they're in by virtue of where they invoked bosun).
-If support for multi-project flows is ever added, project would
-become an optional leading data segment.
+The hierarchy is: **project › issue/workspace › repo**.
+
+- **Project** is auto-detected from the current directory. It's
+  included for any command that acts within a project context.
+- **Issue / workspace** appears when the command is acting on a
+  specific issue (via `--issue` or auto-detected from CWD inside
+  a workspace). For workspace commands the issue ID is the
+  identifier; the workspace name itself lives in the body.
+- **Repo** appears when the command's scope narrows to a single
+  repository within the project or workspace.
+
+Meta commands (`help`) and tool-info commands run outside any
+project context skip project entirely.
 
 #### Status command shape (canonical multi-mode example)
 
 | Mode | Breadcrumb |
 | ---- | ---------- |
-| Project (no workspace, no specific repo) | `Status` |
-| Repo (in a single-repo project, not a workspace) | `Status › extracker` |
-| Workspace (issue-centric) | `Status › EX-30434` |
-| Workspace + repo (workspace, focused on one repo) | `Status › EX-30434 › extracker` |
+| Project (no workspace, no specific repo) | `Status › Clearstory` |
+| Repo (single-repo project, not a workspace) | `Status › Clearstory › extracker` |
+| Workspace (issue-centric) | `Status › Clearstory › EX-30434` |
+| Workspace + repo focus | `Status › Clearstory › EX-30434 › extracker` |
+| Outside any project | `Status` |
 
 #### Other commands
 
-Most lifecycle commands act on an issue and produce
-`[command] › <issue ID>`:
-
 | Command | Breadcrumb |
 | ------- | ---------- |
-| `bosun start --issue EX-30434` | `Start › EX-30434` |
-| `bosun review` | `Review › EX-30434` |
-| `bosun cleanup` | `Cleanup › EX-30434` |
-| `bosun workspace create EX-30434` | `Workspace › Create › EX-30434` |
-| `bosun config show` (no key) | `Config › Show` |
-| `bosun config get foo.bar` | `Config › Get › foo.bar` |
-| `bosun doctor` | `Doctor` |
+| `bosun start --issue EX-30434` | `Start › Clearstory › EX-30434` |
+| `bosun review` (in workspace) | `Review › Clearstory › EX-30434` |
+| `bosun cleanup` | `Cleanup › Clearstory › EX-30434` |
+| `bosun preview` | `Preview › Clearstory › EX-30434` |
+| `bosun prerelease` | `Prerelease › Clearstory › EX-30434` |
+| `bosun release` | `Release › Clearstory › EX-30434` |
+| `bosun create` (no issue yet) | `Create › Clearstory` |
+| `bosun workspace create EX-30434` | `Workspace › Create › Clearstory › EX-30434` |
+| `bosun workspace add EX-30434 my-api` | `Workspace › Add › Clearstory › EX-30434 › my-api` |
+| `bosun workspace rm EX-30434` | `Workspace › Delete › Clearstory › EX-30434` |
+| `bosun config show` | `Config › Show › Clearstory` |
+| `bosun config check` | `Config › Check › Clearstory` |
+| `bosun config set foo.bar baz` | `Config › Set › Clearstory › foo.bar` |
+| `bosun config unset foo.bar` | `Config › Unset › Clearstory › foo.bar` |
+| `bosun config get foo.bar` | (raw output — no breadcrumb) |
+| `bosun init` | `Initialize › Clearstory` |
+| `bosun doctor` (in project) | `System Check › Clearstory` |
+| `bosun doctor` (outside project) | `System Check` |
+| `bosun help` | `Help` |
+| `bosun help start` | `Help › Start` |
+| `bosun help workspace create` | `Help › Workspace › Create` |
+
+Notes:
+
+- **`workspace status` is removed** — the root `bosun status`
+  with workspace mode (`Status › Clearstory › EX-30434`) covers
+  the same view; having two paths to the same output is
+  redundant.
+- **Doctor results** render below the heading as normal timeline
+  content, not as breadcrumb segments.
+- **Config get / set / unset** with a key argument include the
+  key as a trailing data segment when the command has a heading.
+  `config get` is raw-output and skips the heading entirely.
 
 ### Color conventions
 
@@ -300,21 +332,25 @@ Most lifecycle commands act on an issue and produce
 ```
 [Bosun logo box]
 [breadcrumb closing line:]
- │  Start › EX-30434 ─────────────────────────╯
+ │  Start › Clearstory › EX-30434 ────────────╯
 ```
 
 ```
- │  Status › EX-30434 ────────────────────────╯
+ │  Status › Clearstory › EX-30434 ───────────╯
 ```
 
 ```
- │  Status › EX-30434 › extracker ────────────╯
+ │  Status › Clearstory › EX-30434 › extracker ╯
 ```
 
 ```
- │  Workspace › Create › EX-30434 ────────────╯
+ │  Workspace › Create › Clearstory › EX-30434 ╯
 ```
 
 ```
- │  Doctor ───────────────────────────────────╯
+ │  System Check ─────────────────────────────╯
+```
+
+```
+ │  Help › Workspace › Create ────────────────╯
 ```
