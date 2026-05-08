@@ -769,10 +769,12 @@ func (m squishedSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m squishedSpinnerModel) View() tea.View {
 	if m.done {
-		// Final frame: same render path used by the non-interactive
-		// fallback so success-card replacement and body content stay
-		// consistent across paths.
-		return tea.NewView(squishedFinalRender(m.root, m.title, m.successCard, m.err))
+		// Final frame: same breadcrumb assembly used by the
+		// non-interactive fallback so the spinner→final transition
+		// stays a constant line count. Body content prints after
+		// the program exits — see runSquishedCard.
+		extended, _ := squishedFinalExtended(m.root, m.title, m.successCard, m.err)
+		return tea.NewView(extended.Render())
 	}
 	extended := *m.root
 	extended.dataSegments = append(append([]string{}, m.root.dataSegments...), m.title)
@@ -831,14 +833,23 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for the task and print a
-		// finalized extended root.
+		// finalized extended root + body.
 		taskErr := <-resultCh
-		fmt.Print(squishedFinalRender(root, card.title, successCard, taskErr))
+		extended, body := squishedFinalExtended(root, card.title, successCard, taskErr)
+		fmt.Print(extended.Render() + body)
 		comfyBreak = true
 		return taskErr
 	}
 
+	// Bubbletea rendered the extended root with the resolved
+	// breadcrumb in place; now print the body content separately
+	// so its line count doesn't have to fit inside the program's
+	// constant-line-count frame.
 	m := model.(squishedSpinnerModel)
+	_, body := squishedFinalExtended(root, card.title, successCard, m.err)
+	if body != "" {
+		fmt.Print(body)
+	}
 	comfyBreak = true
 	return m.err
 }
@@ -848,9 +859,13 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 // the non-interactive fallback path. On success with a successCard
 // builder, the breadcrumb shows the replacement's title + glyph
 // and the replacement's subtitle/body render below the box.
-func squishedFinalRender(root *Card, runningTitle string, successCard func() *Card, err error) string {
-	extended := *root
-	var bodyOut string
+// squishedFinalExtended builds the post-task extended root card
+// (breadcrumb only — no body). The body is printed separately by
+// the caller after the bubbletea program exits, so the program's
+// per-frame line count stays constant during the spinner→final
+// transition.
+func squishedFinalExtended(root *Card, runningTitle string, successCard func() *Card, err error) (extended Card, body string) {
+	extended = *root
 	base := append([]string{}, root.dataSegments...)
 	if err == nil && successCard != nil {
 		repl := successCard()
@@ -863,12 +878,12 @@ func squishedFinalRender(root *Card, runningTitle string, successCard func() *Ca
 		if repl.absorbedTitleColor != nil {
 			extended.absorbedTitleColor = repl.absorbedTitleColor
 		}
-		bodyOut = repl.renderBodyAndSubtitle()
+		body = repl.renderBodyAndSubtitle()
 	} else {
 		extended.dataSegments = append(base, runningTitle)
 		extended.absorbedGlyph = squishedFinalGlyph(err)
 	}
-	return extended.Render() + bodyOut
+	return extended, body
 }
 
 // squishedFinalGlyph picks the styled glyph for a completed
