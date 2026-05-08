@@ -229,14 +229,27 @@ func (c *Card) Render() string {
 }
 
 // Print writes the card to stdout. Suppressed in raw mode.
+//
+// Root-card absorption: if a CardRoot was just printed, the next
+// non-root Card.Print "squishes" — its title is appended to the
+// root's breadcrumb (separated by " › ") and any body content is
+// rendered below the (re-rendered) root box. A title-less and
+// body-less card consumes the squish slot without modifying the
+// root, providing an opt-out by emitting an inert card.
 func (c *Card) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(comfyPrefix() + c.Render())
+	if squishPending && c.state != CardRoot {
+		squishConsume(c)
+		return
+	}
+	rendered := c.Render()
+	fmt.Print(comfyPrefix() + rendered)
 	if !c.tight {
 		comfyBreak = true
 	}
+	rememberRootForSquish(c, rendered)
 }
 
 // PrintRewindable writes the card to stdout and returns a function
@@ -426,6 +439,33 @@ func (c *Card) renderInner(glyph string) string {
 		}
 	}
 
+	return b.String()
+}
+
+// renderBodyAndSubtitle returns just the subtitle + body portion
+// of the card (no title row, no glyph). Used by squish-mode
+// rendering, which prints the absorbed card's title in the parent
+// breadcrumb but still wants its body content below.
+func (c *Card) renderBodyAndSubtitle() string {
+	if c.subtitle == "" && len(c.body) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	const pad = " "
+	conn := pad + c.renderConnector() + "  "
+	if c.subtitle != "" {
+		for _, line := range wrapForTimeline(c.subtitle) {
+			fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
+		}
+	}
+	for _, body := range c.body {
+		for _, line := range renderCardBody(body) {
+			for _, wrapped := range wrapForTimeline(line) {
+				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
+			}
+		}
+	}
 	return b.String()
 }
 
