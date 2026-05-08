@@ -212,13 +212,13 @@ Every command run opens with a heading whose visible breadcrumb
 follows this shape:
 
 ```
-[command path] (› [data segment])*
+[data segments] › [command path]
 ```
 
-Rendered as a single Card.Root by the UI layer (see
+That is: location first ("where am I"), then action ("what am I
+doing"). Rendered as a single Card.Root by the UI layer (see
 `internal/ui/README.md`). The bosun ASCII logo replaces the
-implicit "Bosun" root segment, so the breadcrumb starts at the
-command level.
+implicit "Bosun" root segment.
 
 ### Command path
 
@@ -257,33 +257,33 @@ project context skip project entirely.
 
 | Mode | Breadcrumb |
 | ---- | ---------- |
-| Project (no workspace, no specific repo) | `Status › Clearstory` |
-| Repo (single-repo project, not a workspace) | `Status › Clearstory › extracker` |
-| Workspace (issue-centric) | `Status › Clearstory › EX-30434` |
-| Workspace + repo focus | `Status › Clearstory › EX-30434 › extracker` |
+| Project (no workspace, no specific repo) | `Clearstory › Status` |
+| Repo (single-repo project, not a workspace) | `Clearstory › extracker › Status` |
+| Workspace (issue-centric) | `Clearstory › EX-30434 › Status` |
+| Workspace + repo focus | `Clearstory › EX-30434 › extracker › Status` |
 | Outside any project | `Status` |
 
 #### Other commands
 
 | Command | Breadcrumb |
 | ------- | ---------- |
-| `bosun start --issue EX-30434` | `Start › Clearstory › EX-30434` |
-| `bosun review` (in workspace) | `Review › Clearstory › EX-30434` |
-| `bosun cleanup` | `Cleanup › Clearstory › EX-30434` |
-| `bosun preview` | `Preview › Clearstory › EX-30434` |
-| `bosun prerelease` | `Prerelease › Clearstory › EX-30434` |
-| `bosun release` | `Release › Clearstory › EX-30434` |
-| `bosun create` (no issue yet) | `Create › Clearstory` |
-| `bosun workspace create EX-30434` | `Workspace › Create › Clearstory › EX-30434` |
-| `bosun workspace add EX-30434 my-api` | `Workspace › Add › Clearstory › EX-30434 › my-api` |
-| `bosun workspace rm EX-30434` | `Workspace › Delete › Clearstory › EX-30434` |
-| `bosun config show` | `Config › Show › Clearstory` |
-| `bosun config check` | `Config › Check › Clearstory` |
-| `bosun config set foo.bar baz` | `Config › Set › Clearstory › foo.bar` |
-| `bosun config unset foo.bar` | `Config › Unset › Clearstory › foo.bar` |
+| `bosun start --issue EX-30434` | `Clearstory › EX-30434 › Start` |
+| `bosun review` (in workspace) | `Clearstory › EX-30434 › Review` |
+| `bosun cleanup` | `Clearstory › EX-30434 › Cleanup` |
+| `bosun preview` | `Clearstory › EX-30434 › Preview` |
+| `bosun prerelease` | `Clearstory › EX-30434 › Prerelease` |
+| `bosun release` | `Clearstory › EX-30434 › Release` |
+| `bosun create` (no issue yet) | `Clearstory › Create` |
+| `bosun workspace create EX-30434` | `Clearstory › EX-30434 › Workspace › Create` |
+| `bosun workspace add EX-30434 my-api` | `Clearstory › EX-30434 › my-api › Workspace › Add` |
+| `bosun workspace rm EX-30434` | `Clearstory › EX-30434 › Workspace › Delete` |
+| `bosun config show` | `Clearstory › Config › Show` |
+| `bosun config check` | `Clearstory › Config › Check` |
+| `bosun config set foo.bar baz` | `Clearstory › foo.bar › Config › Set` |
+| `bosun config unset foo.bar` | `Clearstory › foo.bar › Config › Unset` |
 | `bosun config get foo.bar` | (raw output — no breadcrumb) |
-| `bosun init` | `Initialize › Clearstory` |
-| `bosun doctor` (in project) | `System Check › Clearstory` |
+| `bosun init` | `Clearstory › Initialize` |
+| `bosun doctor` (in project) | `Clearstory › System Check` |
 | `bosun doctor` (outside project) | `System Check` |
 | `bosun help` | `Help` |
 | `bosun help start` | `Help › Start` |
@@ -332,19 +332,19 @@ Notes:
 ```
 [Bosun logo box]
 [breadcrumb closing line:]
- │  Start › Clearstory › EX-30434 ────────────╯
+ │  Clearstory › EX-30434 › Start ────────────╯
 ```
 
 ```
- │  Status › Clearstory › EX-30434 ───────────╯
+ │  Clearstory › EX-30434 › Status ───────────╯
 ```
 
 ```
- │  Status › Clearstory › EX-30434 › extracker ╯
+ │  Clearstory › EX-30434 › extracker › Status ╯
 ```
 
 ```
- │  Workspace › Create › Clearstory › EX-30434 ╯
+ │  Clearstory › EX-30434 › Workspace › Create ╯
 ```
 
 ```
