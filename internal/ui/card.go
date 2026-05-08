@@ -99,7 +99,8 @@ type Card struct {
 	// breadcrumb's own styling overwriting its color.
 	absorbedGlyph         string
 	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the title with no leading glyph
-	absorbedTitleColor    color.Color // optional override for the absorbed segment's title color (default: Palette.Primary)
+	absorbedTitleColor    color.Color // optional override; applied to the trailing dataSegmentCount segments of the breadcrumb
+	dataSegmentCount      int         // number of breadcrumb segments at the END that are data (vs command path); incremented per absorption
 }
 
 type cardBodyKind int
@@ -406,12 +407,13 @@ func (c *Card) renderInner(glyph string) string {
 			sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
 			styledSegs := make([]string, len(segments)-1)
 			lastIdx := len(segments) - 2
+			// firstDataIdx is the index (within segments[1:]) of the
+			// first data segment — the trailing dataSegmentCount
+			// segments take absorbedTitleColor when set.
+			firstDataIdx := lastIdx + 1 - c.dataSegmentCount
 			for i, seg := range segments[1:] {
 				style := primaryStyle
-				// Allow the absorbed segment to use a different
-				// color when explicitly overridden — e.g., a data
-				// identifier instead of a command name.
-				if i == lastIdx && c.absorbedTitleColor != nil {
+				if i >= firstDataIdx && c.absorbedTitleColor != nil {
 					style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
 				}
 				styled := style.Render(titleCase(seg))
@@ -857,8 +859,10 @@ func squishedFinalRender(root *Card, runningTitle string, successCard func() *Ca
 		if repl.absorbedTitleColor != nil {
 			extended.absorbedTitleColor = repl.absorbedTitleColor
 		}
+		extended.dataSegmentCount = root.dataSegmentCount + 1
 		bodyOut = repl.renderBodyAndSubtitle()
 	} else {
+		extended.dataSegmentCount = root.dataSegmentCount + 1
 		extended.title = root.title + " › " + runningTitle
 		extended.absorbedGlyph = squishedFinalGlyph(err)
 	}

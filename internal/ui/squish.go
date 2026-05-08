@@ -85,6 +85,7 @@ func squishConsume(c *Card) {
 	if c.absorbedTitleColor != nil {
 		extended.absorbedTitleColor = c.absorbedTitleColor
 	}
+	extended.dataSegmentCount = root.dataSegmentCount + 1
 
 	// Re-render the extended root.
 	rendered := extended.Render()
