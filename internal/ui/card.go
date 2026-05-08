@@ -3,6 +3,7 @@ package ui
 import (
 	_ "embed"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 	"unicode"
@@ -97,7 +98,8 @@ type Card struct {
 	// frame) before the absorbed segment's title without the
 	// breadcrumb's own styling overwriting its color.
 	absorbedGlyph         string
-	suppressAbsorbedGlyph bool // when true, breadcrumb absorption renders the title with no leading glyph
+	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the title with no leading glyph
+	absorbedTitleColor    color.Color // optional override for the absorbed segment's title color (default: Palette.Primary)
 }
 
 type cardBodyKind int
@@ -162,6 +164,16 @@ func (c *Card) PreserveCase() *Card {
 // is purely informational and the state glyph would add noise.
 func (c *Card) HideAbsorbedGlyph() *Card {
 	c.suppressAbsorbedGlyph = true
+	return c
+}
+
+// AbsorbedTitleColor overrides the foreground color used for this
+// card's title when it absorbs into a parent root card's
+// breadcrumb. Default is Palette.Primary; pass a different color
+// to mark the absorbed segment as a distinct kind of content
+// (e.g., a data identifier rather than a command name).
+func (c *Card) AbsorbedTitleColor(col color.Color) *Card {
+	c.absorbedTitleColor = col
 	return c
 }
 
@@ -395,11 +407,18 @@ func (c *Card) renderInner(glyph string) string {
 			styledSegs := make([]string, len(segments)-1)
 			lastIdx := len(segments) - 2
 			for i, seg := range segments[1:] {
-				styled := primaryStyle.Render(titleCase(seg))
+				style := primaryStyle
+				// Allow the absorbed segment to use a different
+				// color when explicitly overridden — e.g., a data
+				// identifier instead of a command name.
+				if i == lastIdx && c.absorbedTitleColor != nil {
+					style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
+				}
+				styled := style.Render(titleCase(seg))
 				// Inject absorbedGlyph in front of the last segment.
 				// Glyph is pre-styled with its own color and ends in
-				// a reset; the following primaryStyle render
-				// re-establishes bold+primary for the title text.
+				// a reset; the following style render
+				// re-establishes bold+color for the title text.
 				if i == lastIdx && c.absorbedGlyph != "" {
 					styled = c.absorbedGlyph + " " + styled
 				}
@@ -834,6 +853,9 @@ func squishedFinalRender(root *Card, runningTitle string, successCard func() *Ca
 		extended.title = root.title + " › " + repl.title
 		if !repl.suppressAbsorbedGlyph {
 			extended.absorbedGlyph = repl.glyph()
+		}
+		if repl.absorbedTitleColor != nil {
+			extended.absorbedTitleColor = repl.absorbedTitleColor
 		}
 		bodyOut = repl.renderBodyAndSubtitle()
 	} else {

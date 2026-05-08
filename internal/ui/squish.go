@@ -82,6 +82,9 @@ func squishConsume(c *Card) {
 	if g := c.glyph(); g != "" && !c.suppressAbsorbedGlyph {
 		extended.absorbedGlyph = g
 	}
+	if c.absorbedTitleColor != nil {
+		extended.absorbedTitleColor = c.absorbedTitleColor
+	}
 
 	// Re-render the extended root.
 	rendered := extended.Render()
