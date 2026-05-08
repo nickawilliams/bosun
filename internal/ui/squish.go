@@ -54,10 +54,10 @@ func rememberRootForSquish(c *Card, rendered string) {
 // pending. Cards with content extend the breadcrumb; inert cards
 // consume the slot as a noop.
 func squishConsume(c *Card) {
-	defer clearSquish()
-
 	if !cardAbsorbs(c) {
 		// Inert card — don't modify the root, don't render anything.
+		// Drop the squish slot so the next card prints normally.
+		clearSquish()
 		return
 	}
 
@@ -89,27 +89,27 @@ func squishConsume(c *Card) {
 	rendered := extended.Render()
 	fmt.Print(rendered)
 
-	// Snapshot the new root so chained absorption (a second non-root
-	// card after this one) can extend further still.
-	snapshot := extended
-	squishCurrent = squishState{
-		root:      &snapshot,
-		lineCount: strings.Count(rendered, "\n"),
-	}
-	squishPending = true
-
 	// Render the child's body (subtitle + body kinds) below the
 	// extended root — same layout used by Card.renderInner for the
 	// non-title portion of any card.
 	bodyOut := c.renderBodyAndSubtitle()
 	if bodyOut != "" {
 		fmt.Print(bodyOut)
-		// Body content invalidates further chained absorption — the
-		// next card prints normally.
+		// Body content closes the chain — the next card prints
+		// normally below the extended root.
 		clearSquish()
 		comfyBreak = true
 		return
 	}
+
+	// Body-less child: keep the slot armed so the next non-root
+	// card chains another absorption onto the (now extended) root.
+	snapshot := extended
+	squishCurrent = squishState{
+		root:      &snapshot,
+		lineCount: strings.Count(rendered, "\n"),
+	}
+	squishPending = true
 
 	if !c.tight {
 		comfyBreak = true
