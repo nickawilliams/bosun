@@ -192,11 +192,11 @@ func (c *Card) Raw(lines ...string) *Card {
 }
 
 // Item appends a glyph+content row to the body. The row renders
-// at the standard body indent (│ at col 2, glyph at col 5, content
-// at col 8) — same visual depth as the card title's "glyph + 2sp +
-// content" format, just one connector level deeper. Use for body
-// rows that carry their own per-row state glyph (status repo
-// rows, plan items, etc.). Both arguments are pre-styled.
+// with │ at col 2, glyph at col 6, content at col 9 — aligning
+// with Group child glyphs (which sit one column right of the
+// parent's │ + 2-space gap). Use for body rows that carry their
+// own per-row state glyph (status repo rows, plan items, etc.).
+// Both arguments are pre-styled.
 //
 // Calling Item multiple times accumulates rows in the order given.
 func (c *Card) Item(glyph, content string) *Card {
@@ -487,9 +487,12 @@ func renderCardBody(b cardBody) []string {
 	case cardBodyRaw:
 		return b.lines
 	case cardBodyItem:
+		// One leading space so the glyph lands at col 6, aligning
+		// with Group child glyphs (which sit one column right of
+		// the parent's │ + 2-space gap).
 		out := make([]string, len(b.items))
 		for i, item := range b.items {
-			out[i] = item.glyph + "  " + item.content
+			out[i] = " " + item.glyph + "  " + item.content
 		}
 		return out
 	case cardBodyKV:
