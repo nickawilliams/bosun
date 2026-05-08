@@ -70,15 +70,17 @@ func squishConsume(c *Card) {
 	}
 
 	// Build extended title: "<root title> › <child title>". The
-	// child's state glyph is omitted here — RunCard absorption
-	// (see runcard.go) handles the spinner glyph specially with
-	// state-aware coloring; static absorption just contributes
-	// the title text.
+	// child's state glyph rides on the extended root via
+	// absorbedGlyph so its color survives the breadcrumb's
+	// primaryStyle wrap.
 	extended := *root
 	if extended.title == "" {
 		extended.title = c.title
 	} else {
 		extended.title = extended.title + " › " + c.title
+	}
+	if g := c.glyph(); g != "" {
+		extended.absorbedGlyph = g
 	}
 
 	// Re-render the extended root.
