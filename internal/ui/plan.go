@@ -100,9 +100,11 @@ func (p *Plan) PrintRewindable() func() {
 
 // RenderItems returns the formatted action lines as a single string
 // (newline-joined, no trailing newline) without heading or timeline
-// spine. Each line is "<glyph>  <content>". Suitable for embedding
-// as Title content in a huh form (the form's own border/padding
-// supplies the column-2 spine), or anywhere else that wants raw rows.
+// spine. Each line is " <glyph>  <content>" with a leading space so
+// glyphs land at the same column as Card.Item rows when the form's
+// own border/padding supplies the column-2 spine. Suitable for
+// embedding as Title content in a huh form, or anywhere else that
+// wants raw rows.
 func (p *Plan) RenderItems() string {
 	if len(p.items) == 0 {
 		return ""
@@ -111,7 +113,7 @@ func (p *Plan) RenderItems() string {
 	widths := p.columnWidths()
 	var b strings.Builder
 	for _, item := range p.items {
-		fmt.Fprintf(&b, "%s\n", renderPlanRow(item, widths))
+		fmt.Fprintf(&b, " %s\n", renderPlanRow(item, widths))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
