@@ -209,10 +209,10 @@ Application: bosun
 ## Heading & breadcrumb structure
 
 Every command run opens with a heading whose visible breadcrumb
-follows a single shape:
+follows this shape:
 
 ```
-[command path] › [primary entity]
+[command path] (› [data segment])*
 ```
 
 Rendered as a single Card.Root by the UI layer (see
@@ -222,68 +222,52 @@ command level.
 
 ### Command path
 
-One or more segments describing *what command this is*. Single
-segment for most commands; mode-qualified when the command's
-behavior depends on context.
+One or more segments describing *what command this is*. Always
+just the command name (or the full subcommand chain) — never
+mode-qualified, because the data segments below disambiguate the
+mode visually.
 
-- **Single-mode commands** use just the command title. Examples:
-  `Start`, `Review`, `Cleanup`, `Doctor`.
-- **Multi-mode commands** prefix with the mode. The status command
-  is the canonical example — its scope changes by where it's run:
-  - In a workspace: `Workspace Status`
-  - In a project but not a workspace: `Project Status`
-  - In a single repository: `Repo Status`
-  - Outside any of the above: `Status`
-- **Subcommand commands** stack their parent + child. Examples:
+- **Top-level commands**: a single segment. Examples: `Start`,
+  `Review`, `Cleanup`, `Status`, `Doctor`, `Init`.
+- **Subcommand commands**: parent + child. Examples:
   `Workspace › Create`, `Config › Show`.
 
-The rule for adding a mode qualifier: include it only when the
-*effective behavior* of the command depends on context. If
-`status` always rendered the same view, the qualifier would be
-noise. Because it shows different data per mode, the qualifier
-disambiguates.
+### Data segments
 
-### Primary entity
+Zero or more segments after the command path naming the data the
+command is operating on. The breadcrumb's *shape* (which data
+segments are present, in what order) directly conveys what the
+command is doing — no mode qualifier on the command name needed.
 
-The terminal segment names *what this run is acting on* — the noun
-the user holds in their head. Different from "the literal CLI
-argument" or "the auto-derived workspace name."
+The hierarchy is: **issue/workspace › repo**. Project is
+auto-detected and never appears in the breadcrumb (the user knows
+what project they're in by virtue of where they invoked bosun).
+If support for multi-project flows is ever added, project would
+become an optional leading data segment.
 
-| Command | Primary entity |
-| ------- | -------------- |
-| `start`, `review`, `cleanup`, `prerelease`, `release` | issue ID |
-| `status` (workspace mode) | issue ID |
-| `status` (project mode) | project name |
-| `status` (repo mode) | repo name |
-| `workspace create`, `workspace add`, `workspace rm` | workspace name (= issue ID by convention) |
-| `config get`, `config set`, `config show` (with key) | config key |
-| `doctor`, `init`, `config show` (no key) | none |
+#### Status command shape (canonical multi-mode example)
 
-Rule of thumb: when the user describes their work to a colleague,
-what noun do they use? That noun is the primary entity. For
-issue-centric commands, the issue ID is what's remembered, even
-when bosun also has a derived workspace name embedded in branch
-strings.
+| Mode | Breadcrumb |
+| ---- | ---------- |
+| Project (no workspace, no specific repo) | `Status` |
+| Repo (in a single-repo project, not a workspace) | `Status › extracker` |
+| Workspace (issue-centric) | `Status › EX-30434` |
+| Workspace + repo (workspace, focused on one repo) | `Status › EX-30434 › extracker` |
 
-### Implementation
+#### Other commands
 
-- Static path is set via the `headerAnnotationTitle` annotation
-  (see `header.go` and `commandBreadcrumb`). Multi-segment paths
-  embed `›` directly in the annotation string, e.g.
-  `"Workspace › Create"`.
-- Mode-dependent paths: the command body chooses the title at
-  runtime based on context detection (workspace / project / repo).
-- The primary entity is contributed by the **first non-root card
-  emitted after the heading**, via the UI layer's "squish"
-  mechanism. The card's title becomes the breadcrumb's terminal
-  segment. See `internal/ui/squish.go`.
-- The terminal-segment color defaults to the breadcrumb's
-  primary indigo. Commands that want to mark it as data (a
-  domain identifier rather than a command segment) opt in via
-  `Card.AbsorbedTitleColor(ui.Palette.Success)` — green is the
-  current convention for data tinting.
-- Commands with no primary entity emit no absorbed card after the
-  heading; the breadcrumb stays as just the command path.
+Most lifecycle commands act on an issue and produce
+`[command] › <issue ID>`:
+
+| Command | Breadcrumb |
+| ------- | ---------- |
+| `bosun start --issue EX-30434` | `Start › EX-30434` |
+| `bosun review` | `Review › EX-30434` |
+| `bosun cleanup` | `Cleanup › EX-30434` |
+| `bosun workspace create EX-30434` | `Workspace › Create › EX-30434` |
+| `bosun config show` (no key) | `Config › Show` |
+| `bosun config get foo.bar` | `Config › Get › foo.bar` |
+| `bosun doctor` | `Doctor` |
 
 ### Color conventions
 
@@ -291,8 +275,25 @@ strings.
 | ------------ | ----- |
 | Command-path segments | bold, `Palette.Primary` (indigo) |
 | Separator (`›`) | bold, `Palette.Recessed` |
-| Primary entity (data) | bold, `Palette.Success` (green) when explicitly tinted; otherwise primary |
-| Absorbed state glyph | the absorbed card's state color (✓ success / ✗ error / spinner = primary) — suppressed via `Card.HideAbsorbedGlyph` when the entity is purely informational |
+| Data segments | bold, `Palette.Success` (green) when tinted via `Card.AbsorbedTitleColor` — green is the convention for data identifiers |
+| Absorbed state glyph | the absorbed card's state color (✓ success / ✗ error / spinner = primary) — suppressed via `Card.HideAbsorbedGlyph` when the data segment is purely informational |
+
+### Implementation
+
+- Command-path segments come from the `headerAnnotationTitle`
+  annotation (see `header.go` and `commandBreadcrumb`). Multi-
+  segment subcommand paths embed `›` directly in the annotation,
+  e.g. `"Workspace › Create"`.
+- Data segments are contributed by **non-root cards emitted after
+  the heading**, via the UI layer's "squish" mechanism. The first
+  card's title becomes the next data segment in the breadcrumb;
+  the card's body content renders below the box. See
+  `internal/ui/squish.go`.
+- Cards that contribute a data segment typically opt in to
+  `Card.AbsorbedTitleColor(ui.Palette.Success)` and
+  `Card.HideAbsorbedGlyph()` — green text, no leading glyph.
+- Commands with no data segments emit no absorbed card after the
+  heading; the breadcrumb stays as just the command path.
 
 ### Examples
 
@@ -303,7 +304,11 @@ strings.
 ```
 
 ```
- │  Workspace Status › feature/EX-30434_... ──╯
+ │  Status › EX-30434 ────────────────────────╯
+```
+
+```
+ │  Status › EX-30434 › extracker ────────────╯
 ```
 
 ```
