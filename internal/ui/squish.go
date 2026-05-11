@@ -15,9 +15,16 @@ import (
 // "what we're doing" card always lives in the breadcrumb without
 // requiring a special API.
 //
-// A card with no title and no body consumes the squish slot without
-// modifying the root — emit an inert card to opt out of absorption
-// for the following card.
+// By default, absorption ends after a single segment — a body-less
+// absorbed card stops the chain so the next card prints normally.
+// Multi-segment breadcrumbs (e.g., `bosun › Foo › Bar › Baz`) are
+// opt-in via Card.ChainAbsorption(): a body-less absorbed card
+// marked with that method keeps the squish chain armed so the
+// next non-root card absorbs as another segment.
+//
+// A card with no title and no body is inert — it consumes the
+// squish slot without modifying the root (use to opt out of
+// absorption for the following card when ChainAbsorption was set).
 
 // squishState captures the most recent root-card print so the next
 // non-root print can re-render it with an extended breadcrumb.
@@ -102,14 +109,20 @@ func squishConsume(c *Card) {
 		return
 	}
 
-	// Body-less child: keep the slot armed so the next non-root
-	// card chains another absorption onto the (now extended) root.
-	snapshot := extended
-	squishCurrent = squishState{
-		root:      &snapshot,
-		lineCount: strings.Count(rendered, "\n"),
+	// Body-less child: chain only when the card explicitly opts in
+	// (Card.ChainAbsorption). Default is single-segment absorption,
+	// so accidentally body-less cards don't silently steal the next
+	// card's slot.
+	if c.chainAbsorption {
+		snapshot := extended
+		squishCurrent = squishState{
+			root:      &snapshot,
+			lineCount: strings.Count(rendered, "\n"),
+		}
+		squishPending = true
+	} else {
+		clearSquish()
 	}
-	squishPending = true
 
 	if !c.tight {
 		comfyBreak = true

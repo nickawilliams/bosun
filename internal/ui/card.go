@@ -101,6 +101,7 @@ type Card struct {
 	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the most-recent data segment with no leading glyph
 	absorbedTitleColor    color.Color // optional override; applied to all dataSegments
 	dataSegments          []string    // breadcrumb data segments inserted between the implicit "bosun" root and the command-path tail (option 2 layout)
+	chainAbsorption       bool        // when true and absorbed body-less, the squish chain stays armed so the next card also absorbs as another data segment
 }
 
 type cardBodyKind int
@@ -175,6 +176,20 @@ func (c *Card) HideAbsorbedGlyph() *Card {
 // (e.g., a data identifier rather than a command name).
 func (c *Card) AbsorbedTitleColor(col color.Color) *Card {
 	c.absorbedTitleColor = col
+	return c
+}
+
+// ChainAbsorption marks this card as a chain-absorption participant.
+// When the card absorbs into a breadcrumb as body-less, the squish
+// chain stays armed so the next card also absorbs as another data
+// segment. Use to compose multi-segment breadcrumbs (e.g.,
+// `bosun › Foo › Bar › Baz`) from a sequence of standalone cards.
+//
+// Default behavior for a body-less absorbed card is to absorb once
+// and stop — so accidentally body-less cards don't silently steal
+// the next card's slot. Opt in explicitly when chaining is desired.
+func (c *Card) ChainAbsorption() *Card {
+	c.chainAbsorption = true
 	return c
 }
 
