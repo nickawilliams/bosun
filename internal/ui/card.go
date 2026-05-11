@@ -17,10 +17,17 @@ import (
 // CardState represents the lifecycle state of a card.
 //
 // Semantic guide for command output:
-//   - CardSuccess — operation completed successfully
+//   - CardSuccess — operation completed successfully (terminal good)
+//   - CardReady   — operation is complete pending a user action (e.g.,
+//     a PR is mergeable but not yet merged)
 //   - CardFailed  — operation was attempted and returned an error
 //   - CardSkipped — operation was not attempted (missing config, optional
-//     dependency unavailable, precondition unmet)
+//     dependency unavailable, precondition unmet). Also doubles as
+//     the "blocked" state in aggregate status output — the glyph
+//     and color (▲ warning) read the same way regardless of whether
+//     the cause is "didn't run" or "needs you to act."
+//   - CardWaiting — operation is in progress and the ball is not in
+//     the user's court (CI running, PR under review, draft sitting)
 //   - CardInfo    — informational display, not an operation result
 //   - CardInput   — interactive prompt (use with PrintRewindable)
 //   - CardRoot    — command header (timeline anchor)
@@ -36,17 +43,21 @@ const (
 	CardInfo
 	CardInput
 	CardRoot
-	CardData // structured state snapshot, no status glyph
+	CardData    // structured state snapshot, no status glyph
+	CardReady   // ● — terminal good pending a user action
+	CardWaiting // ⧗ — in progress, not on the user
 )
 
 const (
 	cardConnector    = "│"
 	cardGlyphPending = "◦"
 	cardGlyphSuccess = "✓"
-	cardGlyphSkipped = "!"
+	cardGlyphSkipped = "▲" // !▲
 	cardGlyphFailed  = "✗"
 	cardGlyphInfo    = "●"
 	cardGlyphInput   = "?"
+	cardGlyphReady   = "●" // *●◆
+	cardGlyphWaiting = "⧗" // ~⧗●◆
 	// CardRoot uses the top-left rounded corner box-drawing
 	// character in the connector color so the root visually
 	// anchors the timeline: the corner turns into the vertical
@@ -557,6 +568,10 @@ func (c *Card) glyph() string {
 		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
 	case CardData:
 		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphInfo)
+	case CardReady:
+		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphReady)
+	case CardWaiting:
+		return lipgloss.NewStyle().Foreground(Palette.Info).Render(cardGlyphWaiting)
 	}
 	return " "
 }
