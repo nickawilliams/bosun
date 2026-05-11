@@ -123,7 +123,11 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		Body     string  `json:"body"`
 		HTMLURL  string  `json:"html_url"`
 		State    string  `json:"state"`
+		Draft    bool    `json:"draft"`
 		MergedAt *string `json:"merged_at"`
+		Head     struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
 		return code.PullRequest{}, fmt.Errorf("parsing PR list response: %w", err)
@@ -133,19 +137,201 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		return code.PullRequest{}, nil
 	}
 
-	pr := results[0]
-	state := pr.State
-	if pr.MergedAt != nil {
+	raw := results[0]
+	state := raw.State
+	if raw.MergedAt != nil {
 		state = "merged"
+	} else if raw.State == "open" && raw.Draft {
+		state = "draft"
 	}
 
-	return code.PullRequest{
-		Number: pr.Number,
-		Title:  pr.Title,
-		Body:   pr.Body,
-		URL:    pr.HTMLURL,
-		State:  state,
-	}, nil
+	pr := code.PullRequest{
+		Number:  raw.Number,
+		Title:   raw.Title,
+		Body:    raw.Body,
+		URL:     raw.HTMLURL,
+		State:   state,
+		HeadSHA: raw.Head.SHA,
+	}
+
+	// Only enrich open PRs (including drafts) — for terminal states
+	// (merged / closed) the additional fields don't carry useful
+	// signal and the extra fetches would be wasted.
+	if state == "open" || state == "draft" {
+		mergeable, err := a.fetchMergeableState(ctx, owner, repository, raw.Number)
+		if err != nil {
+			return pr, fmt.Errorf("fetching PR mergeable state: %w", err)
+		}
+		pr.MergeableState = mergeable
+
+		review, err := a.fetchReviewDecision(ctx, owner, repository, raw.Number)
+		if err != nil {
+			return pr, fmt.Errorf("fetching PR review decision: %w", err)
+		}
+		pr.Review = review
+	}
+
+	return pr, nil
+}
+
+// fetchMergeableState makes a single-PR detail call to read the
+// `mergeable_state` field, which is not present in the list-PR
+// response. Returned values match GitHub's documented set:
+// "clean" | "dirty" | "unstable" | "blocked" | "behind" | "draft" |
+// "unknown".
+func (a *Adapter) fetchMergeableState(ctx context.Context, owner, repository string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repository, number)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var detail struct {
+		MergeableState string `json:"mergeable_state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return "", fmt.Errorf("parsing PR detail: %w", err)
+	}
+	return detail.MergeableState, nil
+}
+
+// fetchReviewDecision aggregates per-user reviews into a single
+// review-decision value. Mirrors GitHub GraphQL's reviewDecision
+// (which REST doesn't expose directly): any change request beats
+// any approval; approval from anyone beats no decision; otherwise
+// "awaiting" if reviews were requested but not yet completed; ""
+// if no reviewers were involved at all.
+//
+// REST's reviews endpoint returns the full review history; we keep
+// only the latest review per user (later reviews supersede earlier
+// ones from the same person).
+func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repository, number)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var reviews []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		State       string `json:"state"`         // "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"
+		SubmittedAt string `json:"submitted_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&reviews); err != nil {
+		return "", fmt.Errorf("parsing reviews: %w", err)
+	}
+
+	// Latest non-COMMENTED/PENDING review per user wins.
+	latest := map[string]string{}
+	for _, r := range reviews {
+		// Skip COMMENTED and PENDING — they don't carry a decision.
+		if r.State != "APPROVED" && r.State != "CHANGES_REQUESTED" && r.State != "DISMISSED" {
+			continue
+		}
+		latest[r.User.Login] = r.State
+	}
+
+	approved, changesRequested := false, false
+	for _, state := range latest {
+		switch state {
+		case "APPROVED":
+			approved = true
+		case "CHANGES_REQUESTED":
+			changesRequested = true
+		}
+	}
+
+	switch {
+	case changesRequested:
+		return "changes_requested", nil
+	case approved:
+		return "approved", nil
+	}
+
+	// No decisive reviews — check if any reviewers were requested
+	// (which would map to "awaiting"). The reviews endpoint doesn't
+	// surface this; the PR detail's requested_reviewers does.
+	requested, err := a.hasRequestedReviewers(ctx, owner, repository, number)
+	if err != nil {
+		return "", err
+	}
+	if requested {
+		return "awaiting", nil
+	}
+	return "", nil
+}
+
+// hasRequestedReviewers returns true if the PR has any pending
+// review requests (users or teams who haven't submitted a review).
+func (a *Adapter) hasRequestedReviewers(ctx context.Context, owner, repository string, number int) (bool, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repository, number)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var requested struct {
+		Users []struct{} `json:"users"`
+		Teams []struct{} `json:"teams"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&requested); err != nil {
+		return false, fmt.Errorf("parsing requested reviewers: %w", err)
+	}
+	return len(requested.Users) > 0 || len(requested.Teams) > 0, nil
+}
+
+// GetChecks returns the aggregate check-runs status for a commit ref.
+// Walks all check runs for the ref (multi-suite, multi-run model is
+// flat-listed by this endpoint) and folds them into the 4-state
+// CheckRollup.
+func (a *Adapter) GetChecks(ctx context.Context, owner, repository, ref string) (code.CheckRollup, error) {
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repository, ref)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return code.CheckRollup{}, fmt.Errorf("fetching check runs: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		CheckRuns []struct {
+			Status     string `json:"status"`     // "queued" | "in_progress" | "completed"
+			Conclusion string `json:"conclusion"` // "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" — set when status==completed
+		} `json:"check_runs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return code.CheckRollup{}, fmt.Errorf("parsing check runs: %w", err)
+	}
+
+	rollup := code.CheckRollup{}
+	for _, cr := range result.CheckRuns {
+		if cr.Status != "completed" {
+			rollup.Running++
+			continue
+		}
+		switch cr.Conclusion {
+		case "failure", "timed_out", "cancelled", "action_required":
+			rollup.Failing++
+		default: // success / neutral / skipped
+			rollup.Passing++
+		}
+	}
+
+	switch {
+	case rollup.Passing+rollup.Failing+rollup.Running == 0:
+		rollup.State = "none"
+	case rollup.Failing > 0:
+		rollup.State = "failing"
+	case rollup.Running > 0:
+		rollup.State = "running"
+	default:
+		rollup.State = "passing"
+	}
+	return rollup, nil
 }
 
 func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseRequest) (code.Release, error) {
