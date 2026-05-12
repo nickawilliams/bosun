@@ -67,9 +67,8 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// Root card — project + issue absorb into the breadcrumb.
 	ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
 
-	projectName := strings.TrimSpace(viper.GetString("project.name"))
-	if projectName != "" {
-		ui.NewCard(ui.CardInfo, projectName).
+	if name := projectDisplayName(); name != "" {
+		ui.NewCard(ui.CardInfo, name).
 			HideAbsorbedGlyph().
 			AbsorbedTitleColor(ui.Palette.Success).
 			ChainAbsorption().
@@ -297,6 +296,21 @@ func renderWorkspaceSummary(states []repoState) {
 		PreserveCase().
 		GlyphColor(ui.Palette.Muted).
 		Print()
+}
+
+// projectDisplayName returns the project's display name for the
+// breadcrumb. Prefers an explicit `project.name` config value when
+// set; falls back to the basename of the project root directory
+// (matches how a developer would refer to it conversationally).
+// Returns empty string when not in a project.
+func projectDisplayName() string {
+	if name := strings.TrimSpace(viper.GetString("project.name")); name != "" {
+		return name
+	}
+	if root := config.FindProjectRoot(); root != "" {
+		return filepath.Base(root)
+	}
+	return ""
 }
 
 // workspaceFilesystemPath returns the absolute filesystem path for a
