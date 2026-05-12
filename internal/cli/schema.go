@@ -140,6 +140,13 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "cicd", Label: "provider", Options: []string{"github_actions"}},
 		},
 	},
+	"preview": {
+		Label: "preview environments",
+
+		Keys: []ConfigKey{
+			{Key: "preview", Label: "provider", Options: []string{"cicd"}, Default: "cicd"},
+		},
+	},
 	"github_actions": {
 		Label: "GitHub Actions",
 

@@ -18,6 +18,8 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue/jira"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/notify/slack"
+	"github.com/nickawilliams/bosun/internal/preview"
+	previewcicd "github.com/nickawilliams/bosun/internal/preview/cicd"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
@@ -642,6 +644,58 @@ func newCICD() (cicd.CICD, error) {
 	default:
 		return nil, fmt.Errorf("unsupported CI/CD provider: %q", provider)
 	}
+}
+
+// newPreviewProvider creates a preview.Provider from current config.
+// The pipeline and tracker are optional — if either is unavailable, the
+// returned provider still supports the read paths (Get, Inspect) and
+// gracefully reports ErrNoPipeline / nothing-to-write on the write paths.
+func newPreviewProvider() (preview.Provider, error) {
+	providerName := viper.GetString("preview")
+	if providerName == "" {
+		providerName = "cicd"
+	}
+	if providerName != "cicd" {
+		return nil, fmt.Errorf("unsupported preview provider: %q", providerName)
+	}
+
+	// Pipeline and tracker are best-effort: degraded availability is
+	// surfaced at the call site (Create returns ErrNoPipeline; Adopt
+	// returns nil when tracker is missing) — same shape as the legacy
+	// command's pipelineErr handling.
+	pipeline, _ := newCICD()
+	tracker, _ := newIssueTracker()
+
+	const stage = "preview"
+	var urlTmpl *template.Template
+	if pattern := viper.GetString("github_actions.workflows." + stage + ".url_template"); pattern != "" {
+		urlTmpl, _ = template.New("stage-url").Parse(pattern)
+	}
+
+	return previewcicd.New(previewcicd.Options{
+		Pipeline:    pipeline,
+		Tracker:     tracker,
+		Stage:       stage,
+		URLTemplate: urlTmpl,
+		Targets: func(ctx context.Context, subStage string) ([]previewcicd.Target, error) {
+			raw, err := resolveWorkflowTargets(ctx, subStage)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]previewcicd.Target, len(raw))
+			for i, t := range raw {
+				out[i] = previewcicd.Target{
+					Owner:    t.Owner,
+					Repo:     t.Repo,
+					Workflow: t.Workflow,
+					Label:    t.Label,
+				}
+			}
+			return out, nil
+		},
+		InputName: stageInputName,
+		OnInfo:    ui.Complete,
+	}), nil
 }
 
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
