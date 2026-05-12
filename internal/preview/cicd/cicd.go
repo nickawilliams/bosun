@@ -36,7 +36,13 @@ type Options struct {
 	URLTemplate *template.Template
 	Targets     func(ctx context.Context, subStage string) ([]Target, error)
 	InputName   func(subStage, concept string) string
-	OnInfo      func(string) // optional sink for incidental events
+
+	// OnInfo is an optional sink for incidental events. Called with
+	// an action phrase (e.g., "cleared stale metadata") and a value
+	// (e.g., the env name) as separate strings, so consumers can
+	// render them with mixed formatting — typically title-cased
+	// action + raw-cased muted value.
+	OnInfo func(action, value string)
 }
 
 // ErrNoPipeline is returned by Create and Destroy when no CI/CD
@@ -98,7 +104,7 @@ func (p *provider) Get(ctx context.Context, issueKey string) (preview.Environmen
 		// silently dropping the stale entry, then report empty.
 		if p.opts.Tracker != nil {
 			if cerr := p.opts.Tracker.DeleteProperty(ctx, issueKey); cerr == nil {
-				p.info(fmt.Sprintf("cleared stale metadata: %s", name))
+				p.info("cleared stale metadata", name)
 			}
 		}
 		return preview.Environment{}, preview.ErrNoEnvironment
@@ -286,8 +292,8 @@ func (p *provider) renderURL(name string) string {
 	return buf.String()
 }
 
-func (p *provider) info(msg string) {
+func (p *provider) info(action, value string) {
 	if p.opts.OnInfo != nil {
-		p.opts.OnInfo(msg)
+		p.opts.OnInfo(action, value)
 	}
 }

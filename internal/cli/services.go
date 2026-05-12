@@ -673,11 +673,15 @@ func newCICD() (cicd.CICD, error) {
 }
 
 // newPreviewProvider creates a preview.Provider with the default
-// OnInfo callback (incidental events surface immediately via ui.Complete).
-// Suitable for commands where side-effect notifications can fire inline
-// with other output (e.g., the preview command itself).
+// OnInfo callback that renders incidental events inline as a success
+// card with a title (the action, title-cased by default) and a muted
+// raw-cased value. Suitable for commands where side-effect notifications
+// can fire immediately alongside other output (e.g., the preview command
+// itself).
 func newPreviewProvider() (preview.Provider, error) {
-	return newPreviewProviderWithInfo(ui.Complete)
+	return newPreviewProviderWithInfo(func(action, value string) {
+		ui.NewCard(ui.CardSuccess, action).Value(value).Print()
+	})
 }
 
 // newPreviewProviderWithInfo creates a preview.Provider with a custom
@@ -690,7 +694,7 @@ func newPreviewProvider() (preview.Provider, error) {
 // the returned provider still supports the read paths (Get, Inspect)
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
-func newPreviewProviderWithInfo(onInfo func(string)) (preview.Provider, error) {
+func newPreviewProviderWithInfo(onInfo func(action, value string)) (preview.Provider, error) {
 	providerName := viper.GetString("preview")
 	if providerName == "" {
 		providerName = "cicd"

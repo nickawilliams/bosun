@@ -163,7 +163,9 @@ func (b *providerBuilder) build(t *testing.T) preview.Provider {
 	}
 	if b.info != nil {
 		info := b.info
-		opts.OnInfo = func(msg string) { *info = append(*info, msg) }
+		opts.OnInfo = func(action, value string) {
+			*info = append(*info, action+": "+value)
+		}
 	}
 	return New(opts)
 }

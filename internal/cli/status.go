@@ -94,10 +94,10 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 			detail       issuepkg.Issue
 			previewEnv   preview.Environment
 			previewErr   error
-			infoMessages []string
+			infoMessages []previewInfoEvent
 		)
-		previewProvider, _ := newPreviewProviderWithInfo(func(msg string) {
-			infoMessages = append(infoMessages, msg)
+		previewProvider, _ := newPreviewProviderWithInfo(func(action, value string) {
+			infoMessages = append(infoMessages, previewInfoEvent{action: action, value: value})
 		})
 		_ = ui.RunCardReplace("", func() error {
 			var wg sync.WaitGroup
@@ -124,7 +124,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 		// Drain captured events into the timeline now that the card
 		// has printed.
 		for _, msg := range infoMessages {
-			ui.Complete(msg)
+			ui.NewCard(ui.CardSuccess, msg.action).Value(msg.value).Print()
 		}
 	}
 
@@ -266,9 +266,10 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 		buildProjectWorkspaceCard(ws).Print()
 		// Emit any incidental events captured during this workspace's
 		// fetch (e.g., stale-metadata cleanup) after the card so the
-		// timeline reads card → notice → next card.
+		// timeline reads card → notice → next card. Card style with
+		// title + value keeps action heading-cased and value raw.
 		for _, msg := range ws.infoMessages {
-			ui.Complete(msg)
+			ui.NewCard(ui.CardSuccess, msg.action).Value(msg.value).Print()
 		}
 	}
 
@@ -296,7 +297,15 @@ type workspaceState struct {
 	// workspace's fetch. Buffered here so the command can render
 	// them after the workspace's card prints rather than letting
 	// them race with the loading spinner.
-	infoMessages []string
+	infoMessages []previewInfoEvent
+}
+
+// previewInfoEvent carries a preview-provider incidental event for
+// deferred rendering. Split into action + value so the card render
+// can title-case the action and keep the value raw-cased and muted.
+type previewInfoEvent struct {
+	action string
+	value  string
 }
 
 type workspaceRepoCounts struct {
@@ -338,8 +347,8 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 	// workspace's buffer (no shared state with other goroutines, since
 	// each fetch has its own ws value).
 	if ws.issueKey != "" {
-		if provider, err := newPreviewProviderWithInfo(func(msg string) {
-			ws.infoMessages = append(ws.infoMessages, msg)
+		if provider, err := newPreviewProviderWithInfo(func(action, value string) {
+			ws.infoMessages = append(ws.infoMessages, previewInfoEvent{action: action, value: value})
 		}); err == nil && provider != nil {
 			ws.previewEnv, ws.previewErr = provider.Get(ctx, ws.issueKey)
 		}
