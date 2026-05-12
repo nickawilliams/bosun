@@ -15,7 +15,9 @@ func newTestCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addIssueFlag(cmd)
+	// Mirror the persistent --issue flag on root for tests that
+	// don't construct the full command tree.
+	cmd.Flags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
 	return cmd
 }
 

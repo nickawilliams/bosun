@@ -15,11 +15,19 @@ const headerAnnotationTitle = "title"
 
 // rootCard returns a CardRoot card to open a command's output. The
 // title is built as a breadcrumb from the command hierarchy (e.g.,
-// "Bosun › Config › Show"). Any context strings are joined and shown
-// as the subtitle — this is the right place for runtime values like
-// an issue key or workspace name.
+// "Bosun › Config › Show"). When a project context is resolvable
+// (via --project flag, env, config, or CWD detection), its name is
+// inserted as a data segment between "bosun" and the command path,
+// rendering as `bosun › <project> › Config › Show`.
+//
+// Any context strings are joined and shown as the subtitle — this is
+// the right place for ephemeral runtime values that aren't part of
+// the hierarchy (e.g., a config key being read).
 func rootCard(cmd *cobra.Command, context ...string) *ui.Card {
 	card := ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd))
+	if project := resolveProject(cmd); project != "" {
+		card.Breadcrumb(project).AbsorbedTitleColor(ui.Palette.Success)
+	}
 	if len(context) > 0 {
 		card.Subtitle(strings.Join(context, " · "))
 	}

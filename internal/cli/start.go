@@ -200,7 +200,6 @@ func newStartCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().String("slug", "", "custom slug for branch name")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")

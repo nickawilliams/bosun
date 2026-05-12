@@ -60,7 +60,6 @@ func newStatusCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	return cmd
 }
 
@@ -68,16 +67,10 @@ func newStatusCmd() *cobra.Command {
 // header card with KV body, then one card per repo with body rows
 // (Branch / Checks / PR), then a summary recap.
 func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.Manager, wsName string) error {
-	// Root card — project + issue absorb into the breadcrumb.
-	ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
-
-	if name := projectDisplayName(); name != "" {
-		ui.NewCard(ui.CardInfo, name).
-			HideAbsorbedGlyph().
-			AbsorbedTitleColor(ui.Palette.Success).
-			ChainAbsorption().
-			Print()
-	}
+	// Root card — rootCard auto-includes the project segment via
+	// resolveProject. The issue segment is added async by the issue
+	// card's RunCardReplace absorption below.
+	rootCard(cmd).Print()
 
 	// Enumerate repos first — cheap local call, needed up front so the
 	// issue card's Updated row can show the workspace's last-activity
@@ -204,27 +197,21 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 	// Enumerate workspaces (cheap — local filesystem walk).
 	wsNames, err := mgr.List()
 	if err != nil {
-		ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
+		rootCard(cmd).Print()
 		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
 		return nil
 	}
 
-	// Print root card. Project name is absorbed as a breadcrumb data
-	// segment by the project header card below; ChainAbsorption arms
-	// the next card (the loading-spinner success card) to also absorb,
-	// so during loading the spinner shows chained after the project
-	// name and disappears when the success card replaces with empty
-	// title (and the project Repos body renders below).
-	ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
+	// Print root card. rootCard auto-includes the project segment via
+	// resolveProject, so the breadcrumb renders complete on first
+	// paint. The next non-root card (the loading-spinner success card
+	// from RunCardReplace below) absorbs into the breadcrumb via the
+	// standard squish mechanism — its empty title means the spinner
+	// disappears cleanly when the fetch completes, and its body
+	// (Repos KV) renders below the root.
+	rootCard(cmd).Print()
 
 	repos := projectRepos()
-	if name := projectDisplayName(); name != "" {
-		ui.NewCard(ui.CardInfo, name).
-			HideAbsorbedGlyph().
-			AbsorbedTitleColor(ui.Palette.Success).
-			ChainAbsorption().
-			Print()
-	}
 
 	// Parallel fetch of all workspaces during a single overall
 	// spinner. Empty success-card title means no new breadcrumb
@@ -760,21 +747,6 @@ func renderWorkspaceSummary(states []repoState) {
 		PreserveCase().
 		GlyphColor(ui.Palette.Muted).
 		Print()
-}
-
-// projectDisplayName returns the project's display name for the
-// breadcrumb. Prefers an explicit `project.name` config value when
-// set; falls back to the basename of the project root directory
-// (matches how a developer would refer to it conversationally).
-// Returns empty string when not in a project.
-func projectDisplayName() string {
-	if name := strings.TrimSpace(viper.GetString("project.name")); name != "" {
-		return name
-	}
-	if root := config.FindProjectRoot(); root != "" {
-		return filepath.Base(root)
-	}
-	return ""
 }
 
 // workspaceFilesystemPath returns the absolute filesystem path for a

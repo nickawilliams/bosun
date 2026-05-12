@@ -240,6 +240,23 @@ func (c *Card) ChainAbsorption() *Card {
 	return c
 }
 
+// Breadcrumb appends a data segment to this card's breadcrumb. Use
+// when the segment value is known synchronously at card construction
+// — the segment renders inline with the title on first paint, no
+// absorption / re-render dance required. Compose with
+// AbsorbedTitleColor to tint all data segments.
+//
+// Compare to ChainAbsorption: that mechanism handles segments
+// discovered asynchronously (e.g., an issue key resolved after a
+// tracker fetch); this method handles segments known up front.
+func (c *Card) Breadcrumb(s string) *Card {
+	if s == "" {
+		return c
+	}
+	c.dataSegments = append(c.dataSegments, s)
+	return c
+}
+
 // Value sets an inline value rendered after the title, separated by a colon.
 // The value is not title-cased and uses muted non-bold style.
 func (c *Card) Value(s string) *Card {

@@ -155,7 +155,6 @@ func newCleanupCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
 	return cmd
 }

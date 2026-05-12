@@ -50,6 +50,14 @@ func NewRootCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
 	cmd.PersistentFlags().Bool("interactive", false, "prompt for configurable values")
 
+	// Global context flags. Persistent here so every command shares
+	// the resolution chain (flag → env → config → CWD detection)
+	// without per-command boilerplate. rootCard() uses resolveProject
+	// to bake the project segment into the breadcrumb; resolveIssue
+	// is consumed by commands that need an issue context.
+	cmd.PersistentFlags().String("project", "", "project name (overrides CWD detection)")
+	cmd.PersistentFlags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
+
 	cmd.AddGroup(
 		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},
 	)

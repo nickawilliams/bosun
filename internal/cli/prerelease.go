@@ -190,7 +190,6 @@ func newPrereleaseCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().String("bump", "patch", "version bump level (patch|minor|major)")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd
