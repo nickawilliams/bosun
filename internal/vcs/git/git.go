@@ -156,6 +156,48 @@ func (a *Adapter) UnpushedCommits(ctx context.Context, repositoryPath, branchNam
 	return n, nil
 }
 
+// GetBranchSync returns the ahead/behind state of branchName relative
+// to its remote tracking branch. When no remote counterpart exists
+// (never pushed), reports HasRemote=false with Ahead = commits ahead
+// of the project's default branch.
+func (a *Adapter) GetBranchSync(ctx context.Context, repositoryPath, branchName string) (vcs.BranchSync, error) {
+	// `git rev-list --left-right --count A...B` returns "leftCount\trightCount"
+	// — commits unique to A (left) and unique to B (right).
+	out, err := output(ctx, repositoryPath, "rev-list", "--left-right", "--count", "origin/"+branchName+"..."+branchName)
+	if err == nil {
+		left, right, ok := strings.Cut(strings.TrimSpace(out), "\t")
+		if !ok {
+			return vcs.BranchSync{}, fmt.Errorf("parsing rev-list count: unexpected format %q", out)
+		}
+		behind, perr := strconv.Atoi(left)
+		if perr != nil {
+			return vcs.BranchSync{}, fmt.Errorf("parsing behind count: %w", perr)
+		}
+		ahead, perr := strconv.Atoi(right)
+		if perr != nil {
+			return vcs.BranchSync{}, fmt.Errorf("parsing ahead count: %w", perr)
+		}
+		return vcs.BranchSync{HasRemote: true, Ahead: ahead, Behind: behind}, nil
+	}
+
+	// No remote tracking branch — count commits ahead of the default
+	// branch instead. This is the "unpushed" case.
+	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
+	if err != nil {
+		return vcs.BranchSync{}, fmt.Errorf("getting default branch: %w", err)
+	}
+	out, err = output(ctx, repositoryPath, "rev-list", "--count", defaultBranch+".."+branchName)
+	if err != nil {
+		// Branch may not exist locally either — return zero-state.
+		return vcs.BranchSync{}, nil
+	}
+	ahead, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return vcs.BranchSync{}, fmt.Errorf("parsing commit count: %w", err)
+	}
+	return vcs.BranchSync{HasRemote: false, Ahead: ahead}, nil
+}
+
 func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error) {
 	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
 	if err != nil {
