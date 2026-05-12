@@ -15,15 +15,22 @@ import (
 
 // statusKVWidth is the column width used to pad row labels in repo
 // card body rows so the dot separator aligns. Sized for the widest
-// label ("Branch" / "Checks" — 6 chars; "PR" pads to 6).
-const statusKVWidth = 6
+// label currently in use: "Preview" (7 chars). Others — "Status",
+// "Branch", "Checks", "Repos", "PR" — pad to the same width.
+const statusKVWidth = 7
 
 // statusRowKV composes a body row's content as
 // "<padded muted key> · <value>", mirroring Card.KV's default
-// styling so plan-style rows align on the dot separator.
+// styling so plan-style rows align on the dot separator. Labels
+// wider than statusKVWidth render without padding (so the dot
+// shifts right) rather than panicking on negative repeat count.
 func statusRowKV(key, value string) string {
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	padded := key + strings.Repeat(" ", statusKVWidth-lipgloss.Width(key))
+	pad := statusKVWidth - lipgloss.Width(key)
+	if pad < 0 {
+		pad = 0
+	}
+	padded := key + strings.Repeat(" ", pad)
 	return muted.Render(padded) + " " + muted.Render(ui.Palette.Dot) + " " + value
 }
 
