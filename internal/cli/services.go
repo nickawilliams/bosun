@@ -18,6 +18,8 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue/jira"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/notify/slack"
+	"github.com/nickawilliams/bosun/internal/preview"
+	previewcicd "github.com/nickawilliams/bosun/internal/preview/cicd"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
@@ -644,6 +646,62 @@ func newCICD() (cicd.CICD, error) {
 	}
 }
 
+// newPreviewProvider creates a preview.Provider from current config.
+// The pipeline and tracker are optional — if either is unavailable, the
+// returned provider still supports the read paths (Get, Inspect) and
+// gracefully reports ErrNoPipeline / nothing-to-write on the write paths.
+func newPreviewProvider() (preview.Provider, error) {
+	providerName := viper.GetString("preview")
+	if providerName == "" {
+		providerName = "cicd"
+	}
+	if providerName != "cicd" {
+		return nil, fmt.Errorf("unsupported preview provider: %q", providerName)
+	}
+
+	// Pipeline and tracker are best-effort: degraded availability is
+	// surfaced at the call site (Create returns ErrNoPipeline; Adopt
+	// returns nil when tracker is missing) — same shape as the legacy
+	// command's pipelineErr handling.
+	pipeline, _ := newCICD()
+	tracker, _ := newIssueTracker()
+
+	const stage = "preview"
+	var urlTmpl *template.Template
+	if pattern := viper.GetString("github_actions.workflows." + stage + ".url_template"); pattern != "" {
+		parsed, err := template.New("stage-url").Parse(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("preview url_template: %w", err)
+		}
+		urlTmpl = parsed
+	}
+
+	return previewcicd.New(previewcicd.Options{
+		Pipeline:    pipeline,
+		Tracker:     tracker,
+		Stage:       stage,
+		URLTemplate: urlTmpl,
+		Targets: func(ctx context.Context, subStage string) ([]previewcicd.Target, error) {
+			raw, err := resolveWorkflowTargets(ctx, subStage)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]previewcicd.Target, len(raw))
+			for i, t := range raw {
+				out[i] = previewcicd.Target{
+					Owner:    t.Owner,
+					Repo:     t.Repo,
+					Workflow: t.Workflow,
+					Label:    t.Label,
+				}
+			}
+			return out, nil
+		},
+		InputName: stageInputName,
+		OnInfo:    ui.Complete,
+	}), nil
+}
+
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
 type WorkflowTarget struct {
 	Owner    string // GitHub owner (e.g., "ExtrackerInc").
@@ -794,6 +852,49 @@ func resolveRepoServiceNames(repoName string) []string {
 // Config path: github_actions.workflows.<stage>.inputs.<concept>
 func stageInputName(stage, concept string) string {
 	return viper.GetString("github_actions.workflows." + stage + ".inputs." + concept)
+}
+
+// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
+// Reads input parameter names from the stage's config
+// (github_actions.workflows.<stage>.inputs.*). Used by the release
+// command; the preview command builds inputs inside its adapter.
+func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, stage, issue string) (map[string]string, error) {
+	inputs := make(map[string]string)
+
+	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
+		inputs[issueKey] = issue
+	}
+
+	inputName := stageInputName(stage, "services")
+	if inputName == "" {
+		return inputs, nil
+	}
+
+	// --service flag overrides auto-detection.
+	flagServices, _ := cmd.Flags().GetStringSlice("service")
+	if len(flagServices) > 0 {
+		inputs[inputName] = strings.Join(flagServices, ",")
+		return inputs, nil
+	}
+
+	// Change-based detection: diff branches, filter to affected services.
+	g := git.New()
+	results, err := resolveAffectedServices(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+
+	printAffectedSummary(results)
+
+	var affected []string
+	for _, r := range results {
+		affected = append(affected, r.Services...)
+	}
+	if len(affected) > 0 {
+		inputs[inputName] = strings.Join(affected, ",")
+	}
+
+	return inputs, nil
 }
 
 // stageURLTemplate holds the data available when rendering a stage URL.

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,19 +79,18 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			// --- Preview environment ---
-			if tracker != nil {
-				if raw, err := tracker.GetProperty(ctx, issue); err == nil && raw != nil {
-					var props struct {
-						PreviewName string `json:"preview_name"`
+			if provider, err := newPreviewProvider(); err == nil {
+				// Errors are intentionally ignored: status renders
+				// whatever the provider can give us. On an indeterminate
+				// probe the adapter still returns Name + URL, so we
+				// surface the binding even when the env is unreachable.
+				env, _ := provider.Get(ctx, issue)
+				if env.Name != "" {
+					value := env.Name
+					if env.URL != "" {
+						value += "\n" + env.URL
 					}
-					if json.Unmarshal(raw, &props) == nil && props.PreviewName != "" {
-						previewURL := renderStageURL("preview", props.PreviewName)
-						value := props.PreviewName
-						if previewURL != "" {
-							value += "\n" + previewURL
-						}
-						ui.Details("preview", ui.Fields{{Key: "environment", Value: value}})
-					}
+					ui.Details("preview", ui.Fields{{Key: "environment", Value: value}})
 				}
 			}
 

@@ -2,17 +2,12 @@ package cli
 
 import (
 	"context"
-	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"regexp"
 	"strings"
-	"time"
 
 	"charm.land/huh/v2"
-	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -41,149 +36,6 @@ type previewResolution struct {
 	// alive (forced redeploy or no url_template fallback). Drives the
 	// PlanModify op for the deploy action.
 	isRedeploy bool
-}
-
-// previewNameRe approximates k8s subdomain rules: lowercase letter start,
-// lowercase alphanumerics or hyphens, alphanumeric end, max 63 chars.
-var previewNameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-func validatePreviewName(name string) error {
-	if name == "" {
-		return errors.New("name is empty")
-	}
-	if !previewNameRe.MatchString(name) {
-		return fmt.Errorf("invalid name %q: must be lowercase letters, digits, and hyphens; start with a letter, end alphanumeric, max 63 chars", name)
-	}
-	return nil
-}
-
-// fetchExistingPreviewName reads the preview_name property from the issue
-// tracker. Returns "" for any non-success path — a missing property, nil
-// tracker, or unexpected JSON shape are all "no stored name."
-func fetchExistingPreviewName(ctx context.Context, tracker issue.Tracker, issueKey string) string {
-	if tracker == nil {
-		return ""
-	}
-	raw, err := tracker.GetProperty(ctx, issueKey)
-	if err != nil || raw == nil {
-		return ""
-	}
-	var props struct {
-		PreviewName string `json:"preview_name"`
-	}
-	if err := json.Unmarshal(raw, &props); err != nil {
-		return ""
-	}
-	return props.PreviewName
-}
-
-// probeOutcome captures the result of an environment existence check.
-// probeUnknown means we couldn't probe at all (no url_template configured)
-// — callers should fall back to "trust stored name" behavior.
-type probeOutcome int
-
-const (
-	probeUnknown probeOutcome = iota
-	probeAlive
-	probeDead
-)
-
-// classifyProbeStatus maps an HTTP status code to (alive, definitive). 5xx is
-// indefinite (caller should retry); 404 is a definitive miss; anything else
-// 2xx-4xx is alive (auth-gated envs return 401/403 and we treat that as a
-// signal that the host is reachable).
-func classifyProbeStatus(status int) (alive, definitive bool) {
-	switch {
-	case status == http.StatusNotFound:
-		return false, true
-	case status >= 500 && status < 600:
-		return false, false
-	case status >= 200 && status < 500:
-		return true, true
-	default:
-		return false, false
-	}
-}
-
-// httpProbe sends a HEAD (falling back to GET on 405) and classifies the
-// response. One retry on transient errors; returns an error after retries
-// are exhausted.
-func httpProbe(ctx context.Context, url string) (bool, error) {
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	do := func(method string) (int, error) {
-		rc, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		req, err := http.NewRequestWithContext(rc, method, url, nil)
-		if err != nil {
-			return 0, err
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return 0, err
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode, nil
-	}
-
-	attempt := func() (alive, definitive bool, err error) {
-		status, err := do(http.MethodHead)
-		if err != nil {
-			return false, false, err
-		}
-		if status == http.StatusMethodNotAllowed {
-			status, err = do(http.MethodGet)
-			if err != nil {
-				return false, false, err
-			}
-		}
-		alive, definitive = classifyProbeStatus(status)
-		return alive, definitive, nil
-	}
-
-	var lastErr error
-	for range 2 {
-		alive, definitive, err := attempt()
-		if err == nil && definitive {
-			return alive, nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-	}
-	if lastErr == nil {
-		lastErr = errors.New("indeterminate response after retry")
-	}
-	return false, lastErr
-}
-
-// probePreviewName probes the URL for the given name. Returns probeUnknown
-// when name is empty or the stage has no url_template configured (no probe
-// possible). Honors --force on probe failure: returns probeDead with the
-// probed URL as forceFallbackURL so the caller can print a notice after the
-// surrounding spinner closes.
-func probePreviewName(ctx context.Context, stage, name string, force bool) (outcome probeOutcome, forceFallbackURL string, err error) {
-	if name == "" {
-		return probeUnknown, "", nil
-	}
-	url := renderStageURL(stage, name)
-	if url == "" {
-		return probeUnknown, "", nil
-	}
-	alive, perr := httpProbe(ctx, url)
-	if perr != nil {
-		if force {
-			return probeDead, url, nil
-		}
-		return 0, "", fmt.Errorf("verifying %s: %w", url, perr)
-	}
-	if alive {
-		return probeAlive, "", nil
-	}
-	return probeDead, "", nil
 }
 
 // adoptChoice represents the user's decision when an env conflict is detected.
@@ -229,10 +81,10 @@ func promptAdopt(name string) (adoptChoice, string, error) {
 }
 
 // resolvePreview implements the --name × stored-metadata resolution matrix.
-// Performs HTTP probes, immediately deletes stale metadata, prompts for
-// conflicts, and returns a previewResolution describing what should happen
-// in the action plan.
-func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Tracker, issueKey, stage string, force bool) (previewResolution, error) {
+// Probes both names via the provider, applies --force fallback semantics on
+// indeterminate probes, prompts for conflicts, and returns a
+// previewResolution describing what should happen in the action plan.
+func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Provider, issueKey, stage string, force bool) (previewResolution, error) {
 	flagName, _ := cmd.Flags().GetString("name")
 	flagName = strings.TrimSpace(flagName)
 
@@ -245,28 +97,48 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 		}
 	}
 
-	metaName := strings.TrimSpace(fetchExistingPreviewName(ctx, tracker, issueKey))
-
 	// Run resolution work inside one spinner so the user always gets
 	// feedback during the HTTP probes (up to ~6s combined). Probes run
-	// sequentially; force-fallback notices and stale-metadata cleanup
-	// print after the spinner closes to avoid interleaving with the
-	// spinner's TUI output. The spinner shows even when both names are
-	// empty (Row 1) — the work is near-instant in that case but the
-	// initial card frame keeps feedback consistent across all paths.
+	// sequentially; force-fallback notices print after the spinner
+	// closes to avoid interleaving with the spinner's TUI output. The
+	// spinner shows even when both names are empty (Row 1) — the work is
+	// near-instant in that case but the initial card frame keeps
+	// feedback consistent across all paths.
 	var (
-		metaProbe, flagProbe probeOutcome
-		metaForceURL         string
-		flagForceURL         string
+		metaEnv, flagEnv           preview.Environment
+		metaForceURL, flagForceURL string
 	)
 	rewind, probeErr := ui.RunCardRewindable("resolving preview", func() error {
-		var e error
-		metaProbe, metaForceURL, e = probePreviewName(ctx, stage, metaName, force)
-		if e != nil {
-			return e
+		env, err := provider.Get(ctx, issueKey)
+		if err != nil {
+			switch {
+			case errors.Is(err, preview.ErrNoEnvironment):
+				// fall through with empty metaEnv
+			case force && isProbeError(err):
+				metaForceURL = probeURL(err)
+			default:
+				return err
+			}
+		} else {
+			metaEnv = env
 		}
-		flagProbe, flagForceURL, e = probePreviewName(ctx, stage, flagName, force)
-		return e
+
+		if flagName != "" {
+			env, err := provider.Inspect(ctx, flagName)
+			if err != nil {
+				switch {
+				case errors.Is(err, preview.ErrNoEnvironment):
+					// fall through with empty flagEnv
+				case force && isProbeError(err):
+					flagForceURL = probeURL(err)
+				default:
+					return err
+				}
+			} else {
+				flagEnv = env
+			}
+		}
+		return nil
 	})
 	if probeErr != nil {
 		return previewResolution{}, probeErr
@@ -282,19 +154,10 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", flagForceURL))
 	}
 
-	// Stale metadata cleanup happens immediately during resolution. Trade-
-	// off documented in the plan: a false-negative probe wipes the name
-	// pointer, but recovery is trivial (re-run with --name + adopt) and
-	// the env itself keeps running.
-	if metaProbe == probeDead && metaName != "" && tracker != nil {
-		if derr := tracker.DeleteProperty(ctx, issueKey); derr != nil {
-			ui.Fail(fmt.Sprintf("couldn't clear stale metadata: %v", derr))
-		} else {
-			ui.Complete(fmt.Sprintf("cleared stale metadata: %s", metaName))
-		}
-		metaName = ""
-		metaProbe = probeUnknown
-	}
+	metaName := metaEnv.Name
+	metaAlive := metaEnv.Probed && metaEnv.Alive
+	metaUnprobable := metaName != "" && !metaEnv.Probed
+	flagAlive := flagEnv.Probed && flagEnv.Alive
 
 	res := previewResolution{}
 
@@ -315,12 +178,12 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 	case flagName != "" && metaName == "":
 		// Row 2: set / unset.
 		res.previewName = flagName
-		if flagProbe == probeAlive {
+		if flagAlive {
 			if force {
 				res.deployName = flagName
 				res.isRedeploy = true
 			} else {
-				return handleConflict(cmd, ctx, tracker, issueKey, stage, force, flagName)
+				return handleConflict(cmd, ctx, provider, issueKey, stage, force, flagName)
 			}
 		} else {
 			res.deployName = flagName
@@ -329,8 +192,8 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 	case flagName == "" && metaName != "":
 		// Row 3: unset / set.
 		res.previewName = metaName
-		switch metaProbe {
-		case probeAlive:
+		switch {
+		case metaAlive:
 			if force {
 				res.deployName = metaName
 				res.isRedeploy = true
@@ -339,7 +202,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 				// nothing to claim, just verify and render a no-op line.
 				res.isCurrent = true
 			}
-		case probeUnknown:
+		case metaUnprobable:
 			// No url_template — preserve today's behavior (redeploy with
 			// stored name, treat as modify).
 			res.deployName = metaName
@@ -349,8 +212,8 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 	case flagName != "" && metaName != "" && flagName == metaName:
 		// Row 4: set / set / same.
 		res.previewName = flagName
-		switch metaProbe {
-		case probeAlive:
+		switch {
+		case metaAlive:
 			if force {
 				res.deployName = flagName
 				res.isRedeploy = true
@@ -358,7 +221,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 				// Same name as metadata, alive — already current.
 				res.isCurrent = true
 			}
-		case probeUnknown:
+		case metaUnprobable:
 			res.deployName = flagName
 			res.isRedeploy = true
 		}
@@ -366,15 +229,15 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 	case flagName != "" && metaName != "" && flagName != metaName:
 		// Row 5: set / set / different.
 		res.previewName = flagName
-		if metaProbe == probeAlive {
+		if metaAlive {
 			res.teardownName = metaName
 		}
-		if flagProbe == probeAlive {
+		if flagAlive {
 			if force {
 				res.deployName = flagName
 				res.isRedeploy = true
 			} else {
-				conflict, err := handleConflict(cmd, ctx, tracker, issueKey, stage, force, flagName)
+				conflict, err := handleConflict(cmd, ctx, provider, issueKey, stage, force, flagName)
 				if err != nil {
 					return previewResolution{}, err
 				}
@@ -400,7 +263,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 // prompt cancels.
 func enforceValidName(name string) (string, error) {
 	for {
-		if err := validatePreviewName(name); err == nil {
+		if err := preview.ValidateName(name); err == nil {
 			return name, nil
 		} else {
 			ui.Fail(err.Error())
@@ -422,7 +285,7 @@ func enforceValidName(name string) (string, error) {
 // handleConflict runs the adopt prompt for an existing-env conflict on the
 // given name. On chooseAnother, recurses through resolvePreview with the new
 // name set on the cobra command. Returns ErrCancelled if the user cancels.
-func handleConflict(cmd *cobra.Command, ctx context.Context, tracker issue.Tracker, issueKey, stage string, force bool, name string) (previewResolution, error) {
+func handleConflict(cmd *cobra.Command, ctx context.Context, provider preview.Provider, issueKey, stage string, force bool, name string) (previewResolution, error) {
 	choice, newName, err := promptAdopt(name)
 	if err != nil {
 		return previewResolution{}, err
@@ -438,7 +301,23 @@ func handleConflict(cmd *cobra.Command, ctx context.Context, tracker issue.Track
 		if err := cmd.Flags().Set("name", newName); err != nil {
 			return previewResolution{}, err
 		}
-		return resolvePreview(cmd, ctx, tracker, issueKey, stage, force)
+		return resolvePreview(cmd, ctx, provider, issueKey, stage, force)
 	}
 	return previewResolution{}, ErrCancelled
+}
+
+// isProbeError reports whether err wraps a preview.ProbeError.
+func isProbeError(err error) bool {
+	var pe *preview.ProbeError
+	return errors.As(err, &pe)
+}
+
+// probeURL extracts the URL from a preview.ProbeError, or returns empty
+// if err is not a ProbeError.
+func probeURL(err error) string {
+	var pe *preview.ProbeError
+	if errors.As(err, &pe) {
+		return pe.URL
+	}
+	return ""
 }
