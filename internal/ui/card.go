@@ -568,8 +568,9 @@ func (c *Card) renderInner(glyph string) string {
 		fmt.Fprintf(&b, "%s\n", conn)
 	}
 
+	kvWidth := maxKVKeyWidth(c.body)
 	for _, body := range c.body {
-		for _, line := range renderCardBody(body) {
+		for _, line := range renderCardBody(body, kvWidth) {
 			for _, wrapped := range wrapForTimeline(line) {
 				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
 			}
@@ -605,8 +606,9 @@ func (c *Card) renderBodyAndSubtitle() string {
 			fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
 		}
 	}
+	kvWidth := maxKVKeyWidth(c.body)
 	for _, body := range c.body {
-		for _, line := range renderCardBody(body) {
+		for _, line := range renderCardBody(body, kvWidth) {
 			for _, wrapped := range wrapForTimeline(line) {
 				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
 			}
@@ -659,7 +661,27 @@ func (c *Card) renderConnector() string {
 	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
 }
 
-func renderCardBody(b cardBody) []string {
+// maxKVKeyWidth returns the widest KV key across all cardBodyKV
+// entries in body. Used to share dot-column alignment across multiple
+// KV blocks separated by Text spacers — without this, each KV call
+// computes its own width independently and dots land at different
+// columns across visual sections.
+func maxKVKeyWidth(body []cardBody) int {
+	max := 0
+	for _, b := range body {
+		if b.kind != cardBodyKV {
+			continue
+		}
+		for _, p := range b.pairs {
+			if len(p[0]) > max {
+				max = len(p[0])
+			}
+		}
+	}
+	return max
+}
+
+func renderCardBody(b cardBody, kvKeyWidth int) []string {
 	normalStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
 	mutedStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	errorStyle := lipgloss.NewStyle().Foreground(Palette.Error)
@@ -730,7 +752,11 @@ func renderCardBody(b cardBody) []string {
 		}
 		return out
 	case cardBodyKV:
-		maxKey := 0
+		// Use the shared width when it's wider than this block's own
+		// max so dots line up across KV blocks separated by spacers.
+		// Falls back to local max when no shared width was computed
+		// (kvKeyWidth == 0).
+		maxKey := kvKeyWidth
 		for _, p := range b.pairs {
 			if len(p[0]) > maxKey {
 				maxKey = len(p[0])
