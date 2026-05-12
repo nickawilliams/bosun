@@ -943,10 +943,15 @@ func RunCard(title string, fn func() error) error {
 // loading where a card shows just a title with spinner during the
 // fetch, then "settles" into the rich resolved card on completion.
 //
+// The running card preserves the title's case (skips the default
+// title-case transform) since its typical use is identifier-titled
+// cards (repo names, issue IDs, hostnames) where the input casing
+// is meaningful.
+//
 // On failure, behaves like RunCard — the running card is finalized
 // with the failure glyph and the error becomes its subtitle.
 func RunCardThen(title string, fn func() error, successCard func() *Card) error {
-	return runCardWithFinalizer(NewCard(CardRunning, title), fn, successCard)
+	return runCardWithFinalizer(NewCard(CardRunning, title).PreserveCase(), fn, successCard)
 }
 
 // runSquishedCard is the squish-mode counterpart to runCardWith.
