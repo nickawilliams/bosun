@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
@@ -125,68 +127,102 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 
 // runStatusProject renders the project-scope output — project
 // header card with KV body (Repos columnar list), then one card
-// per workspace with body rows (Status / Preview / Updated / Repos
-// rollup), then a summary recap.
+// per workspace (sorted by lifecycle position) with body rows for
+// Status and the Repos rollup, then a summary recap.
+//
+// Loading strategy diverges from workspace scope: project uses a
+// single overall spinner during a parallel fetch of all workspaces,
+// then renders cards in sorted order. Per-workspace sequential
+// spinners (the workspace-scope pattern) wouldn't allow lifecycle
+// sorting since rendering would happen in fetch order. The trade
+// is intentional — at project scope the user wants a sorted triage
+// overview more than progressive per-workspace disclosure.
 func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot string) error {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return err
 	}
 
-	// Print root card. Project name is absorbed as breadcrumb data
-	// segment by the project header card below.
+	// Enumerate workspaces (cheap — local filesystem walk).
+	wsNames, err := mgr.List()
+	if err != nil {
+		ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
+		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
+		return nil
+	}
+
+	// Print root card. Project name is absorbed as a breadcrumb data
+	// segment by the project header card below; ChainAbsorption arms
+	// the next card (the loading-spinner success card) to also absorb,
+	// so during loading the spinner shows chained after the project
+	// name and disappears when the success card replaces with empty
+	// title (and the project Repos body renders below).
 	ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
 
-	// Project header — project name absorbs into breadcrumb. KV body
-	// (Repos columnar list) closes the squish chain so workspace
-	// cards print standalone.
 	repos := projectRepos()
 	if name := projectDisplayName(); name != "" {
-		card := ui.NewCard(ui.CardInfo, name).
+		ui.NewCard(ui.CardInfo, name).
 			HideAbsorbedGlyph().
-			AbsorbedTitleColor(ui.Palette.Success)
+			AbsorbedTitleColor(ui.Palette.Success).
+			ChainAbsorption().
+			Print()
+	}
+
+	// Parallel fetch of all workspaces during a single overall
+	// spinner. Empty success-card title means no new breadcrumb
+	// segment; success-card body carries the project's Repos KV.
+	results := make([]workspaceState, len(wsNames))
+	tracker, _ := newIssueTracker()
+	host, _ := newCodeHost()
+	g := git.New()
+	if len(wsNames) > 0 {
+		_ = ui.RunCardReplace("", func() error {
+			var wg sync.WaitGroup
+			for i, name := range wsNames {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, name)
+				}()
+			}
+			wg.Wait()
+			return nil
+		}, func() *ui.Card {
+			card := ui.NewCard(ui.CardSuccess, "").HideAbsorbedGlyph()
+			if len(repos) > 0 {
+				reposLines := projectRepoColumns(repos, ui.TermWidth()-12, 2, 4)
+				card.KV("Repos", strings.Join(reposLines, "\n"))
+			}
+			return card
+		})
+	} else {
+		// No workspaces — still need the project header rendered.
+		card := ui.NewCard(ui.CardSuccess, "").HideAbsorbedGlyph()
 		if len(repos) > 0 {
 			reposLines := projectRepoColumns(repos, ui.TermWidth()-12, 2, 4)
 			card.KV("Repos", strings.Join(reposLines, "\n"))
 		}
 		card.Print()
-	}
-
-	// Enumerate workspaces.
-	wsNames, err := mgr.List()
-	if err != nil {
-		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
-		return nil
-	}
-	if len(wsNames) == 0 {
 		ui.Skip("no workspaces found in project")
 		return nil
 	}
 
-	// Per-workspace fetch + render. Tracker + host fetch in the
-	// loading goroutine; finalizer builds the resolved card.
-	tracker, _ := newIssueTracker()
-	host, _ := newCodeHost()
-	g := git.New()
-	resolved := make([]workspaceState, 0, len(wsNames))
-	for _, wsName := range wsNames {
-		var ws workspaceState
-		ws.name = wsName
-		_ = ui.RunCardThen(workspaceLoadingTitle(wsName), func() error {
-			ws = fetchWorkspaceState(ctx, mgr, g, host, tracker, wsName)
-			return nil
-		}, func() *ui.Card {
-			return buildProjectWorkspaceCard(ws)
-		})
-		resolved = append(resolved, ws)
+	// Sort by lifecycle position so the most actionable workspaces
+	// surface first. Tie-break by issue key for stable ordering.
+	sort.SliceStable(results, func(i, j int) bool {
+		oi := statusLifecycleOrder(results[i].issue.Status)
+		oj := statusLifecycleOrder(results[j].issue.Status)
+		if oi != oj {
+			return oi < oj
+		}
+		return results[i].issueKey < results[j].issueKey
+	})
+
+	for _, ws := range results {
+		buildProjectWorkspaceCard(ws).Print()
 	}
 
-	// TODO: lifecycle ordering. Currently workspaces render in the
-	// order List() returns them (filesystem walk order). Once issue
-	// statuses are populated we can sort by lifecycle position
-	// using statusLifecycleOrder.
-
-	renderProjectSummary(resolved)
+	renderProjectSummary(results)
 	_ = projectRoot
 	return nil
 }
@@ -411,19 +447,6 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
-// workspaceLoadingTitle returns the spinner-card title to show
-// during a workspace's loading phase. Uses the issue key when
-// extractable for a compact identifier; falls back to the full
-// workspace name.
-func workspaceLoadingTitle(wsName string) string {
-	if key := extractIssue(filepath.Base(wsName)); key != "" {
-		return key
-	}
-	if key := extractIssue(wsName); key != "" {
-		return key
-	}
-	return wsName
-}
 
 // buildWorkspaceIssueCard constructs the issue header card with KV
 // body (Type / bold-title, Status, Workspace branch). Used as the
