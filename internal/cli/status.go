@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
@@ -78,11 +79,28 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 			Print()
 	}
 
+	// Enumerate repos first — cheap local call, needed up front so the
+	// issue card's Updated row can show the workspace's last-activity
+	// timestamp (max commit time across repos) inside the same fetch.
+	statuses, err := mgr.Status(ctx, wsName)
+	if err != nil {
+		ui.Skip(fmt.Sprintf("workspace status: %v", err))
+		return nil
+	}
+	if len(statuses) == 0 {
+		ui.Skip("no repositories found in workspace " + wsName)
+		return nil
+	}
+
+	host, _ := newCodeHost()
+	g := git.New()
+
 	// Issue card — async fetch via RunCardReplace. Spinner shows
 	// chained after the project name; on completion the issue card
 	// (with KV body of facets) absorbs as the next data segment and
-	// renders below the breadcrumb. The preview-env binding is
-	// fetched in parallel so it lands inside the same spinner.
+	// renders below the breadcrumb. The preview-env binding and
+	// last-activity timestamp are fetched in parallel so they land
+	// inside the same spinner.
 	//
 	// Provider OnInfo events (stale-metadata cleanup, etc.) buffer
 	// here so they emit after the issue card prints, not racing with
@@ -94,6 +112,8 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 			detail       issuepkg.Issue
 			previewEnv   preview.Environment
 			previewErr   error
+			updatedAt    time.Time
+			updatedMu    sync.Mutex
 			infoMessages []previewInfoEvent
 		)
 		previewProvider, _ := newPreviewProviderWithInfo(func(action, value string) {
@@ -116,10 +136,28 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 					previewEnv, previewErr = previewProvider.Get(ctx, issueKey)
 				}()
 			}
+			// Fan out per-repo last-commit lookups in parallel — local
+			// git calls, cheap and concurrent-safe.
+			for _, s := range statuses {
+				s := s
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					t, err := g.LastCommitTime(ctx, s.Path, s.Branch)
+					if err != nil {
+						return
+					}
+					updatedMu.Lock()
+					if t.After(updatedAt) {
+						updatedAt = t
+					}
+					updatedMu.Unlock()
+				}()
+			}
 			wg.Wait()
 			return nil
 		}, func() *ui.Card {
-			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr)
+			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr, updatedAt)
 		})
 		// Drain captured events into the timeline now that the card
 		// has printed.
@@ -128,21 +166,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 		}
 	}
 
-	// Per-repo data: gather workspace status, then for each repo
-	// run a per-card spinner that fetches sync state + PR + checks
-	// and resolves into the full repo card.
-	statuses, err := mgr.Status(ctx, wsName)
-	if err != nil {
-		ui.Skip(fmt.Sprintf("workspace status: %v", err))
-		return nil
-	}
-	if len(statuses) == 0 {
-		ui.Skip("no repositories found in workspace " + wsName)
-		return nil
-	}
-
-	host, _ := newCodeHost()
-	g := git.New()
+	// Per-repo cards.
 	resolved := make([]repoState, 0, len(statuses))
 	for _, s := range statuses {
 		var rs repoState
@@ -292,6 +316,11 @@ type workspaceState struct {
 	previewEnv preview.Environment // preview-env binding (Name/URL/Alive/Probed)
 	previewErr error               // ErrNoEnvironment, ProbeError, or other
 
+	// updatedAt is the most recent commit time across the workspace's
+	// repos. Zero value when no repo lookup succeeded (workspace will
+	// render without an Updated row).
+	updatedAt time.Time
+
 	// infoMessages captures incidental events (e.g., "cleared stale
 	// metadata") emitted by the preview provider during this
 	// workspace's fetch. Buffered here so the command can render
@@ -364,6 +393,11 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 		rs := fetchRepoState(ctx, g, host, s)
 		ws.repos = append(ws.repos, rs)
 		ws.repoNames = append(ws.repoNames, s.Name)
+		// Take the most recent commit time across all repos as the
+		// workspace's last-activity signal.
+		if rs.lastCommit.After(ws.updatedAt) {
+			ws.updatedAt = rs.lastCommit
+		}
 		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr) {
 		case ui.CardSuccess:
 			ws.counts.done++
@@ -432,6 +466,12 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	// don't use preview envs.
 	if pg, pv := statusPreviewRow(ws.previewEnv, ws.previewErr); pg != "" {
 		card.Item(pg, statusRowKV("Preview", pv))
+	}
+
+	// Updated row — most recent commit across repos, bucketed into
+	// staleness levels. Skip when no timestamp was captured.
+	if ug, uv := statusUpdatedRow(ws.updatedAt); ug != "" {
+		card.Item(ug, statusRowKV("Updated", uv))
 	}
 
 	reposGlyph := statusStyledGlyph(statusStateGlyph(ws.rollup))
@@ -542,9 +582,9 @@ func projectRepos() []projectRepoEntry {
 
 
 // buildWorkspaceIssueCard constructs the issue header card with KV
-// body (Type / bold-title, Status, Preview, Workspace branch). Used
-// as the success-card finalizer for the issue fetch's RunCardReplace.
-func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error) *ui.Card {
+// body (Type / bold-title, Status, Preview, Updated, Workspace branch).
+// Used as the success-card finalizer for the issue fetch's RunCardReplace.
+func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
 	boldTitle := lipgloss.NewStyle().Bold(true).Render(detail.Title)
 
 	workspacePath := workspaceFilesystemPath(branch)
@@ -570,6 +610,7 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv pr
 			typeLabel, boldTitle,
 			"Status", detail.Status,
 			"Preview", statusPreviewValue(previewEnv, previewErr),
+			"Updated", statusUpdatedValue(updatedAt),
 			"Workspace", workspaceValue,
 		)
 }
@@ -581,6 +622,10 @@ type repoState struct {
 	sync   vcs.BranchSync
 	pr     code.PullRequest
 	checks code.CheckRollup
+
+	// lastCommit is the timestamp of the most recent commit on the
+	// repo's branch. Zero value when the lookup failed.
+	lastCommit time.Time
 
 	// branchURL / checksURL are the GitHub web URLs the row values
 	// link to. Empty when the repo's GitHub identity isn't known.
@@ -596,6 +641,10 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 
 	if sync, err := g.GetBranchSync(ctx, s.Path, s.Branch); err == nil {
 		rs.sync = sync
+	}
+
+	if t, err := g.LastCommitTime(ctx, s.Path, s.Branch); err == nil {
+		rs.lastCommit = t
 	}
 
 	if host == nil {

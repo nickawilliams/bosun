@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
@@ -457,6 +458,52 @@ func statusUpdatedGlyph(days int) (string, color.Color) {
 	default:
 		return "◦  ", ui.Palette.Muted
 	}
+}
+
+// humanizeAge formats a duration into a coarse "N unit ago" label
+// suitable for the Updated body row. Buckets: <1m → "just now",
+// <1h → "Nm ago", <1d → "Nh ago", <30d → "Nd ago", <365d →
+// "Nmo ago", else "Ny ago". Units are abbreviated to keep the row
+// narrow.
+func humanizeAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy ago", int(d.Hours()/(24*365)))
+	}
+}
+
+// statusUpdatedRow returns the (glyph, value) pair for a workspace
+// card's Updated row at project scope, or ("", "") to signal "skip"
+// when no timestamp was captured. Glyph encodes staleness bucket;
+// value is a humanized relative time.
+func statusUpdatedRow(t time.Time) (string, string) {
+	if t.IsZero() {
+		return "", ""
+	}
+	age := time.Since(t)
+	days := int(age.Hours() / 24)
+	glyph, c := statusUpdatedGlyph(days)
+	v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(humanizeAge(age))
+	return statusStyledGlyph(glyph, c), v
+}
+
+// statusUpdatedValue returns the value-only humanized age for KV-style
+// body rows (no glyph slot). Returns "(unknown)" muted when t is zero.
+func statusUpdatedValue(t time.Time) string {
+	if t.IsZero() {
+		return lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unknown)")
+	}
+	return lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(humanizeAge(time.Since(t)))
 }
 
 // projectRepoEntry is one repo in the project's Repos KV value.

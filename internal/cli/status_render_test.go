@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/preview"
@@ -328,6 +329,69 @@ func TestStatusUpdatedGlyph(t *testing.T) {
 				t.Errorf("glyph = %q, want %q", glyph, tc.wantGlyph)
 			}
 		})
+	}
+}
+
+func TestHumanizeAge(t *testing.T) {
+	cases := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{name: "< 1 minute", d: 30 * time.Second, want: "just now"},
+		{name: "minutes", d: 5 * time.Minute, want: "5m ago"},
+		{name: "hours", d: 3 * time.Hour, want: "3h ago"},
+		{name: "days", d: 2 * 24 * time.Hour, want: "2d ago"},
+		{name: "months", d: 60 * 24 * time.Hour, want: "2mo ago"},
+		{name: "years", d: 2 * 365 * 24 * time.Hour, want: "2y ago"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := humanizeAge(tc.d); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatusUpdatedRow(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name      string
+		t         time.Time
+		wantEmpty bool
+		wantGlyph string
+	}{
+		{name: "zero time → skip", t: time.Time{}, wantEmpty: true},
+		{name: "fresh (1h ago) → ◦", t: now.Add(-1 * time.Hour), wantGlyph: "◦  "},
+		{name: "stale (10d ago) → ▲", t: now.Add(-10 * 24 * time.Hour), wantGlyph: "▲  "},
+		{name: "very stale (60d ago) → ✗", t: now.Add(-60 * 24 * time.Hour), wantGlyph: "✗  "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, v := statusUpdatedRow(tc.t)
+			if tc.wantEmpty {
+				if g != "" || v != "" {
+					t.Errorf("expected empty row, got %q / %q", g, v)
+				}
+				return
+			}
+			if !strings.Contains(stripANSI(g), tc.wantGlyph) {
+				t.Errorf("glyph %q lacks %q", stripANSI(g), tc.wantGlyph)
+			}
+			if !strings.Contains(stripANSI(v), "ago") {
+				t.Errorf("value %q missing humanized age", stripANSI(v))
+			}
+		})
+	}
+}
+
+func TestStatusUpdatedValue(t *testing.T) {
+	if got := stripANSI(statusUpdatedValue(time.Time{})); !strings.Contains(got, "(unknown)") {
+		t.Errorf("zero time → got %q, want (unknown)", got)
+	}
+	if got := stripANSI(statusUpdatedValue(time.Now().Add(-2 * time.Hour))); !strings.Contains(got, "2h ago") {
+		t.Errorf("got %q, want 2h ago", got)
 	}
 }
 
