@@ -850,6 +850,49 @@ func stageInputName(stage, concept string) string {
 	return viper.GetString("github_actions.workflows." + stage + ".inputs." + concept)
 }
 
+// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
+// Reads input parameter names from the stage's config
+// (github_actions.workflows.<stage>.inputs.*). Used by the release
+// command; the preview command builds inputs inside its adapter.
+func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, stage, issue string) (map[string]string, error) {
+	inputs := make(map[string]string)
+
+	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
+		inputs[issueKey] = issue
+	}
+
+	inputName := stageInputName(stage, "services")
+	if inputName == "" {
+		return inputs, nil
+	}
+
+	// --service flag overrides auto-detection.
+	flagServices, _ := cmd.Flags().GetStringSlice("service")
+	if len(flagServices) > 0 {
+		inputs[inputName] = strings.Join(flagServices, ",")
+		return inputs, nil
+	}
+
+	// Change-based detection: diff branches, filter to affected services.
+	g := git.New()
+	results, err := resolveAffectedServices(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+
+	printAffectedSummary(results)
+
+	var affected []string
+	for _, r := range results {
+		affected = append(affected, r.Services...)
+	}
+	if len(affected) > 0 {
+		inputs[inputName] = strings.Join(affected, ",")
+	}
+
+	return inputs, nil
+}
+
 // stageURLTemplate holds the data available when rendering a stage URL.
 type stageURLTemplate struct {
 	Name string // Environment name (e.g., "brave-falcon").

@@ -2,15 +2,12 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
-	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
@@ -45,10 +42,23 @@ func newPreviewCmd() *cobra.Command {
 				}
 			}
 
+			provider, err := newPreviewProvider()
+			if err != nil {
+				return fmt.Errorf("preview provider: %w", err)
+			}
+
+			// Separate pipeline check drives whether the deploy/teardown
+			// actions are even built. The provider has its own pipeline
+			// reference internally; this is just the pre-plan gate.
+			_, pipelineErr := newCICD()
+			if pipelineErr != nil {
+				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
+			}
+
 			const stage = "preview"
 			force, _ := cmd.Flags().GetBool("force")
 
-			resolution, err := resolvePreview(cmd, ctx, tracker, issueKey, stage, force)
+			resolution, err := resolvePreview(cmd, ctx, provider, issueKey, stage, force)
 			if err != nil {
 				return err
 			}
@@ -62,14 +72,8 @@ func newPreviewCmd() *cobra.Command {
 			var actions []Action
 			var prData []repoPR
 
-			pipeline, pipelineErr := newCICD()
-			if pipelineErr != nil {
-				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
-			}
-
-			if resolution.teardownName != "" {
-				teardownActions := buildTeardownActions(ctx, pipeline, resolution.teardownName, issueKey)
-				actions = append(actions, teardownActions...)
+			if resolution.teardownName != "" && pipelineErr == nil {
+				actions = append(actions, buildTeardownAction(provider, resolution.teardownName, issueKey))
 			}
 
 			if resolution.isCurrent {
@@ -77,12 +81,13 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			if resolution.isAdopt {
-				actions = append(actions, adoptAction(tracker, issueKey, resolution.previewName))
+				actions = append(actions, adoptAction(provider, issueKey, resolution.previewName))
 			}
 
-			if resolution.deployName != "" && pipeline != nil {
-				deployActions, prs := buildDeployActions(cmd, ctx, pipeline, tracker, issueKey, resolution)
-				actions = append(actions, deployActions...)
+			if resolution.deployName != "" && pipelineErr == nil {
+				deployAction, prs := buildDeployAction(cmd, ctx, provider, issueKey, resolution)
+				actions = append(actions, deployAction)
+				actions = append(actions, prDetailActions(prs)...)
 				prData = prs
 			}
 
@@ -162,76 +167,30 @@ func newPreviewCmd() *cobra.Command {
 	return cmd
 }
 
-// buildTeardownActions returns the actions for tearing down a preview env by
-// name. When no preview.down workflow is configured, prints a one-line skip
-// notice and returns an empty slice — stale metadata is still cleaned up
-// during resolution, the env just doesn't get an explicit teardown trigger.
-func buildTeardownActions(ctx context.Context, pipeline cicd.CICD, name, issueKey string) []Action {
-	const stage = "preview.down"
-	if strings.TrimSpace(name) == "" {
-		ui.Fail("preview down: refusing to trigger without an env name")
-		return nil
+// buildTeardownAction returns a single rolled-up teardown action. The
+// adapter fans out the underlying workflow dispatches across all
+// configured targets.
+func buildTeardownAction(provider preview.Provider, name, issueKey string) Action {
+	return Action{
+		Op:     ui.PlanDestroy,
+		Action: "teardown",
+		Type:   "env",
+		Name:   name,
+		Assess: func(_ context.Context) (ActionState, string, error) {
+			return ActionNeeded, name, nil
+		},
+		Apply: func(ctx context.Context) error {
+			return provider.Destroy(ctx, issueKey, name)
+		},
 	}
-	targets, err := resolveWorkflowTargets(ctx, stage)
-	if err != nil || len(targets) == 0 {
-		ui.Skip("preview down: no workflow configured")
-		return nil
-	}
-	if pipeline == nil {
-		ui.Skip("preview down: CI/CD not available")
-		return nil
-	}
-
-	nameKey := stageInputName(stage, "name")
-	if nameKey == "" {
-		// Without a configured name input, the workflow would be invoked
-		// with no name — which many teardown workflows interpret as "clean
-		// everything." Refuse rather than risk it.
-		ui.Fail("preview down: github_actions.workflows.preview.down.inputs.name is not configured")
-		return nil
-	}
-	issueInputKey := stageInputName(stage, "issue")
-
-	actions := make([]Action, 0, len(targets))
-	for _, t := range targets {
-		target := t
-		actions = append(actions, Action{
-			Op:     ui.PlanDestroy,
-			Action: "teardown",
-			Type:   "repo",
-			Name:   target.Label,
-			Assess: func(_ context.Context) (ActionState, string, error) {
-				return ActionNeeded, name, nil
-			},
-			Apply: func(ctx context.Context) error {
-				if strings.TrimSpace(name) == "" {
-					return fmt.Errorf("preview down: refusing to trigger without an env name")
-				}
-				inputs := map[string]string{
-					nameKey: name,
-				}
-				if issueInputKey != "" {
-					inputs[issueInputKey] = issueKey
-				}
-				return pipeline.TriggerWorkflow(ctx, cicd.TriggerRequest{
-					Owner:      target.Owner,
-					Repository: target.Repo,
-					Workflow:   target.Workflow,
-					Ref:        "main",
-					Inputs:     inputs,
-				})
-			},
-		})
-	}
-	return actions
 }
 
-// adoptAction returns a no-op plan item that records the existing env in the
-// issue tracker without triggering a deploy. The action renders as
-// PlanNoChange but Apply still runs the metadata write so future invocations
-// see the same name. Used when the user is claiming an env that wasn't
-// previously tracked.
-func adoptAction(tracker issue.Tracker, issueKey, name string) Action {
+// adoptAction returns a no-op plan item that records the existing env in
+// the issue tracker without triggering a deploy. The action renders as
+// PlanNoChange but Apply still calls provider.Adopt so future
+// invocations see the same name. Used when the user is claiming an env
+// that wasn't previously tracked.
+func adoptAction(provider preview.Provider, issueKey, name string) Action {
 	return Action{
 		Op:     ui.PlanNoChange,
 		Action: "adopt",
@@ -241,12 +200,7 @@ func adoptAction(tracker issue.Tracker, issueKey, name string) Action {
 			return ActionNeeded, "reachable", nil
 		},
 		Apply: func(ctx context.Context) error {
-			if tracker == nil {
-				return nil
-			}
-			return tracker.SetProperty(ctx, issueKey, map[string]string{
-				"preview_name": name,
-			})
+			return provider.Adopt(ctx, issueKey, name)
 		},
 	}
 }
@@ -267,123 +221,81 @@ func currentAction(name string) Action {
 	}
 }
 
-// buildDeployActions returns the actions for triggering a preview deploy.
-// Returns the resolved PR data so callers can reuse it for notifications.
-func buildDeployActions(cmd *cobra.Command, ctx context.Context, pipeline cicd.CICD, tracker issue.Tracker, issueKey string, resolution previewResolution) ([]Action, []repoPR) {
-	const stage = "preview.up"
-	targets, err := resolveWorkflowTargets(ctx, stage)
-	if err != nil {
-		ui.Fail(fmt.Sprintf("preview up: %v", err))
-		return nil, nil
-	}
-	if len(targets) == 0 {
-		ui.Skip("preview up: no workflow configured")
-		return nil, nil
-	}
-	inputs, _ := buildWorkflowInputs(cmd, ctx, stage, issueKey)
-
-	if nameKey := stageInputName(stage, "name"); nameKey != "" {
-		inputs[nameKey] = resolution.deployName
-	}
-
-	g := git.New()
-	results, _ := resolveAffectedServices(ctx, g)
-	overridesJSON, prData, _ := buildImageOverrides(ctx, results)
-	if overridesJSON != "" {
-		inputs["image-overrides"] = overridesJSON
-	}
+// buildDeployAction returns a single rolled-up deploy action plus the
+// resolved PR data so callers can reuse it for notifications. The
+// adapter fans out the workflow dispatches across all configured
+// targets internally.
+func buildDeployAction(cmd *cobra.Command, ctx context.Context, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR) {
+	services, overrides, prData := resolvePreviewInputs(cmd, ctx)
 
 	deployOp := ui.PlanCreate
 	if resolution.isRedeploy {
 		deployOp = ui.PlanModify
 	}
 
-	var actions []Action
-	for _, t := range targets {
-		target := t
-		actions = append(actions, Action{
-			Op:     deployOp,
-			Action: "deploy",
-			Type:   "repo",
-			Name:   target.Label,
-			Assess: func(_ context.Context) (ActionState, string, error) {
-				return ActionNeeded, fmt.Sprintf("main → %s", target.Workflow), nil
-			},
-			Apply: func(ctx context.Context) error {
-				if err := pipeline.TriggerWorkflow(ctx, cicd.TriggerRequest{
-					Owner:      target.Owner,
-					Repository: target.Repo,
-					Workflow:   target.Workflow,
-					Ref:        "main",
-					Inputs:     inputs,
-				}); err != nil {
-					return err
-				}
-				if tracker != nil && resolution.previewName != "" {
-					_ = tracker.SetProperty(ctx, issueKey, map[string]string{
-						"preview_name": resolution.previewName,
-					})
-				}
-				return nil
-			},
-		})
-
-		for _, rp := range prData {
-			tag := fmt.Sprintf("pr-%d", rp.PR.Number)
-			actions = append(actions, Action{
-				Op:     ui.PlanDetail,
-				Action: "deploy",
-				Type:   "repo",
-				Name:   rp.RepoName,
-				Assess: func(_ context.Context) (ActionState, string, error) {
-					return ActionNeeded, tag, nil
-				},
+	return Action{
+		Op:     deployOp,
+		Action: "deploy",
+		Type:   "env",
+		Name:   resolution.previewName,
+		Assess: func(_ context.Context) (ActionState, string, error) {
+			return ActionNeeded, "preview env", nil
+		},
+		Apply: func(ctx context.Context) error {
+			_, err := provider.Create(ctx, preview.Claim{
+				IssueKey:  issueKey,
+				Name:      resolution.deployName,
+				Services:  services,
+				Overrides: overrides,
 			})
-		}
-	}
-	return actions, prData
+			return err
+		},
+	}, prData
 }
 
-// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
-// Reads input parameter names from the stage's config
-// (github_actions.workflows.<stage>.inputs.*).
-func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, stage, issue string) (map[string]string, error) {
-	inputs := make(map[string]string)
-
-	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
-		inputs[issueKey] = issue
+// prDetailActions renders one PlanDetail row per affected repo's PR
+// tag, surfacing the pr-N tag that will be deployed for each service.
+func prDetailActions(prs []repoPR) []Action {
+	out := make([]Action, 0, len(prs))
+	for _, rp := range prs {
+		rp := rp
+		tag := fmt.Sprintf("pr-%d", rp.PR.Number)
+		out = append(out, Action{
+			Op:     ui.PlanDetail,
+			Action: "deploy",
+			Type:   "repo",
+			Name:   rp.RepoName,
+			Assess: func(_ context.Context) (ActionState, string, error) {
+				return ActionNeeded, tag, nil
+			},
+		})
 	}
+	return out
+}
 
-	inputName := stageInputName(stage, "services")
-	if inputName == "" {
-		return inputs, nil
-	}
-
-	// --service flag overrides auto-detection.
+// resolvePreviewInputs computes the services list, image overrides, and
+// PR data for a deploy. Services come from --service when set, otherwise
+// from affected-service detection. Overrides always derive from affected
+// detection (PR lookups per repo). UI output (printAffectedSummary) fires
+// during plan build, matching today's flow.
+func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context) ([]string, map[string]string, []repoPR) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
-	if len(flagServices) > 0 {
-		inputs[inputName] = strings.Join(flagServices, ",")
-		return inputs, nil
-	}
 
-	// Change-based detection: diff branches, filter to affected services.
 	g := git.New()
-	results, err := resolveAffectedServices(ctx, g)
-	if err != nil {
-		return nil, err
+	results, _ := resolveAffectedServices(ctx, g)
+
+	var services []string
+	if len(flagServices) > 0 {
+		services = flagServices
+	} else {
+		printAffectedSummary(results)
+		for _, r := range results {
+			services = append(services, r.Services...)
+		}
 	}
 
-	printAffectedSummary(results)
-
-	var affected []string
-	for _, r := range results {
-		affected = append(affected, r.Services...)
-	}
-	if len(affected) > 0 {
-		inputs[inputName] = strings.Join(affected, ",")
-	}
-
-	return inputs, nil
+	overrides, prs, _ := buildImageOverrides(ctx, results)
+	return services, overrides, prs
 }
 
 // repoPR pairs a repository with its resolved pull request.
@@ -395,11 +307,11 @@ type repoPR struct {
 	PR       code.PullRequest
 }
 
-// buildImageOverrides constructs the image-overrides JSON input by looking up
-// the PR number for each affected repo's branch. Also returns the resolved
-// PR data for use in notifications. Format: {"service":"pr-123"}.
-func buildImageOverrides(ctx context.Context, results []AffectedResult) (string, []repoPR, error) {
-	// Collect repos that have affected services.
+// buildImageOverrides looks up the PR number for each affected repo's
+// branch and produces a service → "pr-N" override map plus the resolved
+// PR data for use in notifications. Returns nil map when no repos have
+// changes that resolve to PRs.
+func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[string]string, []repoPR, error) {
 	var reposWithChanges []AffectedResult
 	for _, r := range results {
 		if r.HasChanges && len(r.Services) > 0 {
@@ -407,12 +319,12 @@ func buildImageOverrides(ctx context.Context, results []AffectedResult) (string,
 		}
 	}
 	if len(reposWithChanges) == 0 {
-		return "", nil, nil
+		return nil, nil, nil
 	}
 
 	host, err := newCodeHost()
 	if err != nil {
-		return "", nil, fmt.Errorf("code host (needed for image overrides): %w", err)
+		return nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
 	}
 
 	overrides := make(map[string]string)
@@ -450,13 +362,8 @@ func buildImageOverrides(ctx context.Context, results []AffectedResult) (string,
 	}
 
 	if len(overrides) == 0 {
-		return "", prs, nil
+		return nil, prs, nil
 	}
-
-	b, err := json.Marshal(overrides)
-	if err != nil {
-		return "", prs, fmt.Errorf("marshaling image overrides: %w", err)
-	}
-	return string(b), prs, nil
+	return overrides, prs, nil
 }
 
