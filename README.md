@@ -64,6 +64,11 @@ bosun doctor
 bosun init [--quick] [--yes]
 ```
 
+## Related Tools and Alternatives
+
+- [`wtp` Worktree Plus](https://github.com/satococoa/wtp)
+- [Worktrunk](https://worktrunk.dev)
+
 [ci-image]: https://img.shields.io/github/actions/workflow/status/nickawilliams/bosun/release.yaml?logo=GitHub&logoColor=white
 [ci-url]: https://github.com/nickawilliams/bosun/actions/workflows/release.yaml
 [coverage-image]: https://img.shields.io/codecov/c/github/nickawilliams/bosun?logo=codecov&logoColor=white
