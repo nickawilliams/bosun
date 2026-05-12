@@ -123,16 +123,306 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	return nil
 }
 
-// runStatusProject is a stub for project-scope status. Implementation
-// follows in a later commit; for now print a placeholder.
+// runStatusProject renders the project-scope output — project
+// header card with KV body (Repos columnar list), then one card
+// per workspace with body rows (Status / Preview / Updated / Repos
+// rollup), then a summary recap.
 func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot string) error {
+	mgr, err := newWorkspaceManager()
+	if err != nil {
+		return err
+	}
+
+	// Print root card. Project name is absorbed as breadcrumb data
+	// segment by the project header card below.
 	ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd)).Print()
-	ui.NewCard(ui.CardInfo, "Project status not yet implemented").
-		Subtitle("Run from inside a workspace for workspace status, or wait for project-scope output to be wired up.").
-		Print()
-	_ = ctx
+
+	// Project header — project name absorbs into breadcrumb. KV body
+	// (Repos columnar list) closes the squish chain so workspace
+	// cards print standalone.
+	repos := projectRepos()
+	if name := projectDisplayName(); name != "" {
+		card := ui.NewCard(ui.CardInfo, name).
+			HideAbsorbedGlyph().
+			AbsorbedTitleColor(ui.Palette.Success)
+		if len(repos) > 0 {
+			reposLines := projectRepoColumns(repos, ui.TermWidth()-12, 2, 4)
+			card.KV("Repos", strings.Join(reposLines, "\n"))
+		}
+		card.Print()
+	}
+
+	// Enumerate workspaces.
+	wsNames, err := mgr.List()
+	if err != nil {
+		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
+		return nil
+	}
+	if len(wsNames) == 0 {
+		ui.Skip("no workspaces found in project")
+		return nil
+	}
+
+	// Per-workspace fetch + render. Tracker + host fetch in the
+	// loading goroutine; finalizer builds the resolved card.
+	tracker, _ := newIssueTracker()
+	host, _ := newCodeHost()
+	g := git.New()
+	resolved := make([]workspaceState, 0, len(wsNames))
+	for _, wsName := range wsNames {
+		var ws workspaceState
+		ws.name = wsName
+		_ = ui.RunCardThen(workspaceLoadingTitle(wsName), func() error {
+			ws = fetchWorkspaceState(ctx, mgr, g, host, tracker, wsName)
+			return nil
+		}, func() *ui.Card {
+			return buildProjectWorkspaceCard(ws)
+		})
+		resolved = append(resolved, ws)
+	}
+
+	// TODO: lifecycle ordering. Currently workspaces render in the
+	// order List() returns them (filesystem walk order). Once issue
+	// statuses are populated we can sort by lifecycle position
+	// using statusLifecycleOrder.
+
+	renderProjectSummary(resolved)
 	_ = projectRoot
 	return nil
+}
+
+// workspaceState bundles all the per-workspace data fetched during
+// project status loading.
+type workspaceState struct {
+	name      string             // workspace name (filesystem-relative path)
+	issueKey  string             // issue key extracted from workspace name
+	issueURL  string             // tracker URL for the issue
+	issue     issuepkg.Issue     // tracker-fetched details (Type, Title, Status)
+	repos     []repoState        // per-repo states (sync, pr, checks)
+	repoNames []string           // repo names parallel to repos slice
+	rollup    ui.CardState       // aggregate state across repos
+	counts    workspaceRepoCounts // per-bucket repo tally
+}
+
+type workspaceRepoCounts struct {
+	repos                                int
+	done, ready, blocked, pending, broken int
+}
+
+// fetchWorkspaceState gathers everything needed to render one
+// workspace card at project scope: its issue, its repos, the per-
+// repo state, and the aggregate rollup. Errors are swallowed —
+// partial fetch leaves fields zero so the row still renders.
+func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
+	ws := workspaceState{name: wsName}
+
+	// Issue key from workspace name (e.g., "feature/EX-30434_foo" →
+	// "EX-30434"). Try the trailing path segment first; fall back
+	// to the whole name.
+	ws.issueKey = extractIssue(filepath.Base(wsName))
+	if ws.issueKey == "" {
+		ws.issueKey = extractIssue(wsName)
+	}
+
+	// Tracker fetch. Skip silently if no tracker or no issue key.
+	if tracker != nil && ws.issueKey != "" {
+		if detail, err := tracker.GetIssue(ctx, ws.issueKey); err == nil {
+			ws.issue = detail
+			ws.issueURL = detail.URL
+		}
+	}
+
+	// Per-repo states for the rollup.
+	statuses, err := mgr.Status(ctx, wsName)
+	if err != nil {
+		return ws
+	}
+	ws.counts.repos = len(statuses)
+	for _, s := range statuses {
+		rs := fetchRepoState(ctx, g, host, s)
+		ws.repos = append(ws.repos, rs)
+		ws.repoNames = append(ws.repoNames, s.Name)
+		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr) {
+		case ui.CardSuccess:
+			ws.counts.done++
+		case ui.CardReady:
+			ws.counts.ready++
+		case ui.CardSkipped:
+			ws.counts.blocked++
+		case ui.CardWaiting:
+			ws.counts.pending++
+		case ui.CardFailed:
+			ws.counts.broken++
+		}
+	}
+
+	// Rollup state — highest-priority wins per the aggregation rule.
+	switch {
+	case ws.counts.broken > 0:
+		ws.rollup = ui.CardFailed
+	case ws.counts.blocked > 0:
+		ws.rollup = ui.CardSkipped
+	case ws.counts.pending > 0:
+		ws.rollup = ui.CardWaiting
+	case ws.counts.ready > 0:
+		ws.rollup = ui.CardReady
+	case ws.counts.done > 0:
+		ws.rollup = ui.CardSuccess
+	default:
+		ws.rollup = ui.CardWaiting
+	}
+	return ws
+}
+
+// buildProjectWorkspaceCard constructs the resolved workspace card
+// for project scope: title is the issue ID (linked), value is the
+// issue title (state-tinted), body rows are Status / Repos rollup
+// (Preview and Updated deferred — need data sources).
+func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
+	titleColor := statusCardStateColor(ws.rollup)
+
+	title := ws.issueKey
+	if title == "" {
+		title = ws.name
+	}
+	if ws.issueURL != "" {
+		title = osc8Link(ws.issueURL, title)
+	}
+
+	value := ws.issue.Title
+	if value == "" {
+		value = ws.name
+	}
+	styledTitle := lipgloss.NewStyle().Foreground(titleColor).Render(value)
+
+	card := ui.NewCard(ws.rollup, title).
+		PreserveCase().
+		TitleColor(titleColor).
+		Value(styledTitle)
+
+	if ws.issue.Status != "" {
+		statusGlyph := statusStyledGlyph(statusStatusGlyph(ws.issue.Status))
+		card.Item(statusGlyph, statusRowKV("Status", ws.issue.Status))
+	}
+
+	reposGlyph := statusStyledGlyph(statusStateGlyph(ws.rollup))
+	card.Item(reposGlyph, statusRowKV("Repos", workspaceRepoBreakdown(ws.counts)))
+
+	return card
+}
+
+// workspaceRepoBreakdown composes a colored single-line summary of
+// the workspace's repos. Same vocabulary and color story as the
+// project-level summary, just scoped to one workspace.
+func workspaceRepoBreakdown(c workspaceRepoCounts) string {
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
+	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
+	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
+
+	parts := []string{
+		muted.Render(fmt.Sprintf("%d repos", c.repos)),
+	}
+	if c.done > 0 {
+		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", c.done)))
+	}
+	if c.ready > 0 {
+		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", c.ready)))
+	}
+	if c.blocked > 0 {
+		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", c.blocked)))
+	}
+	if c.pending > 0 {
+		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", c.pending)))
+	}
+	if c.broken > 0 {
+		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", c.broken)))
+	}
+	return strings.Join(parts, muted.Render(", "))
+}
+
+// renderProjectSummary prints the muted recap card at the bottom of
+// project status — single-line tally of workspaces by their resolved
+// state.
+func renderProjectSummary(states []workspaceState) {
+	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
+	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
+	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	var done, ready, blocked, pending, broken int
+	for _, ws := range states {
+		switch ws.rollup {
+		case ui.CardSuccess:
+			done++
+		case ui.CardReady:
+			ready++
+		case ui.CardSkipped:
+			blocked++
+		case ui.CardWaiting:
+			pending++
+		case ui.CardFailed:
+			broken++
+		}
+	}
+
+	parts := []string{
+		mutedStyle.Render(fmt.Sprintf("%d workspaces", len(states))),
+	}
+	if done > 0 {
+		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
+	}
+	if ready > 0 {
+		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", ready)))
+	}
+	if blocked > 0 {
+		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", blocked)))
+	}
+	if pending > 0 {
+		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", pending)))
+	}
+	if broken > 0 {
+		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
+	}
+
+	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).
+		PreserveCase().
+		GlyphColor(ui.Palette.Muted).
+		Print()
+}
+
+// projectRepos returns the project's configured repositories with
+// GitHub URLs derived from each repo's origin remote when known.
+func projectRepos() []projectRepoEntry {
+	configured, err := resolveRepositories(nil)
+	if err != nil {
+		return nil
+	}
+	out := make([]projectRepoEntry, 0, len(configured))
+	for _, r := range configured {
+		entry := projectRepoEntry{name: r.Name}
+		if identity, err := gh.ParseRemote(context.Background(), r.Path); err == nil {
+			entry.url = fmt.Sprintf("https://github.com/%s/%s", identity.Owner, identity.Name)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// workspaceLoadingTitle returns the spinner-card title to show
+// during a workspace's loading phase. Uses the issue key when
+// extractable for a compact identifier; falls back to the full
+// workspace name.
+func workspaceLoadingTitle(wsName string) string {
+	if key := extractIssue(filepath.Base(wsName)); key != "" {
+		return key
+	}
+	if key := extractIssue(wsName); key != "" {
+		return key
+	}
+	return wsName
 }
 
 // buildWorkspaceIssueCard constructs the issue header card with KV

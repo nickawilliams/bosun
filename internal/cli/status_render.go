@@ -306,6 +306,148 @@ func checksSummary(rollup code.CheckRollup) string {
 	return strings.Join(parts, ", ")
 }
 
+// statusStateGlyph returns the 3-cell glyph token for a card-state,
+// matching the body-row glyph slot width used in workspace cards.
+// Used at project scope for the Repos rollup body row (its glyph
+// echoes the workspace's gutter state).
+func statusStateGlyph(state ui.CardState) (string, color.Color) {
+	switch state {
+	case ui.CardSuccess:
+		return "✓  ", ui.Palette.Success
+	case ui.CardReady:
+		return "●  ", ui.Palette.Success
+	case ui.CardSkipped:
+		return "▲  ", ui.Palette.Warning
+	case ui.CardWaiting:
+		return "⧗  ", ui.Palette.Info
+	case ui.CardFailed:
+		return "✗  ", ui.Palette.Error
+	}
+	return "◦  ", ui.Palette.Muted
+}
+
+// statusStatusGlyph maps a tracker workflow state (verbatim from the
+// tracker, e.g., "Ready for Release", "In Review") onto the 5-state
+// vocab for the Status body row. Mapping is approximate — trackers
+// have arbitrary workflows; this covers common Jira / Linear /
+// Shortcut shapes.
+func statusStatusGlyph(workflowState string) (string, color.Color) {
+	switch strings.ToLower(workflowState) {
+	case "done", "released", "closed", "resolved":
+		return "✓  ", ui.Palette.Success
+	case "ready for release", "ready to deploy", "ready":
+		return "●  ", ui.Palette.Success
+	case "blocked":
+		return "▲  ", ui.Palette.Warning
+	case "in progress", "in review", "in development", "to do", "backlog", "open":
+		return "⧗  ", ui.Palette.Info
+	}
+	return "⧗  ", ui.Palette.Info
+}
+
+// statusLifecycleOrder returns a sort key for a tracker workflow
+// state, ordering workspaces most-actionable first at project scope.
+// Lower number sorts earlier; unknown statuses fall to the end.
+func statusLifecycleOrder(workflowState string) int {
+	switch strings.ToLower(workflowState) {
+	case "ready for release", "ready to deploy", "ready":
+		return 0
+	case "in review":
+		return 1
+	case "blocked":
+		return 2
+	case "in progress", "in development":
+		return 3
+	case "to do", "open":
+		return 4
+	case "backlog":
+		return 5
+	case "done", "released", "closed", "resolved":
+		return 6
+	}
+	return 7
+}
+
+// statusUpdatedGlyph buckets a workspace's age-in-days into a
+// freshness glyph for the Updated body row. Fresh (<7 days) reads
+// as muted; stale (7-30 days) warns; very stale (>30 days) treats
+// as broken (cleanup candidate).
+func statusUpdatedGlyph(days int) (string, color.Color) {
+	switch {
+	case days >= 30:
+		return "✗  ", ui.Palette.Error
+	case days >= 7:
+		return "▲  ", ui.Palette.Warning
+	default:
+		return "◦  ", ui.Palette.Muted
+	}
+}
+
+// projectRepoEntry is one repo in the project's Repos KV value.
+type projectRepoEntry struct {
+	name string
+	url  string // optional GitHub repo URL for click-through
+}
+
+// projectRepoColumns lays out repo names into columns that fit
+// within `width` characters, with `gap` spaces between columns.
+// Column-major ordering (entries read down each column, then across)
+// — same as `ls` without `-l`. Prefers a vertical run of at least
+// minRows lines before expanding to multiple columns. Each cell is
+// NormalFg with OSC 8 link wrap when a URL is provided. Width
+// measurement uses plain names; OSC 8 link wraps after padding so
+// the click target is the text, not the trailing whitespace gap.
+func projectRepoColumns(repos []projectRepoEntry, width, gap, minRows int) []string {
+	if len(repos) == 0 {
+		return nil
+	}
+	maxW := 0
+	for _, r := range repos {
+		if w := lipgloss.Width(r.name); w > maxW {
+			maxW = w
+		}
+	}
+	cols := 1
+	if maxW+gap > 0 {
+		cols = (width + gap) / (maxW + gap)
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	maxColsByRows := (len(repos) + minRows - 1) / minRows
+	if cols > maxColsByRows {
+		cols = maxColsByRows
+	}
+	if cols > len(repos) {
+		cols = len(repos)
+	}
+	rows := (len(repos) + cols - 1) / cols
+	normalFg := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
+
+	out := make([]string, rows)
+	for r := 0; r < rows; r++ {
+		var parts []string
+		for c := 0; c < cols; c++ {
+			idx := c*rows + r // column-major
+			if idx >= len(repos) {
+				break
+			}
+			repo := repos[idx]
+			pad := maxW - lipgloss.Width(repo.name)
+			if pad < 0 {
+				pad = 0
+			}
+			linked := normalFg.Render(repo.name)
+			if repo.url != "" {
+				linked = osc8Link(repo.url, linked)
+			}
+			parts = append(parts, linked+strings.Repeat(" ", pad))
+		}
+		out[r] = strings.Join(parts, strings.Repeat(" ", gap))
+	}
+	return out
+}
+
 // osc8Link wraps text in OSC 8 escape sequences so terminals that
 // support hyperlinks render it as a clickable link to url. Terminals
 // that don't support OSC 8 ignore the escapes and show the bare text.
