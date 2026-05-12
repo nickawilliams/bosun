@@ -343,6 +343,27 @@ func TestInspect_Alive(t *testing.T) {
 	}
 }
 
+func TestInspect_Indeterminate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	p := newBuilder().withURLPattern(server.URL + "/{{.Name}}").build(t)
+	env, err := p.Inspect(context.Background(), "brave-falcon")
+
+	var pe *preview.ProbeError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v (%T), want *preview.ProbeError", err, err)
+	}
+	if env.Name != "brave-falcon" {
+		t.Errorf("Name = %q, want brave-falcon (data preserved on indeterminate)", env.Name)
+	}
+	if env.URL == "" {
+		t.Error("URL should be populated even on probe error")
+	}
+}
+
 func TestInspect_DeadDoesNotAutoClear(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

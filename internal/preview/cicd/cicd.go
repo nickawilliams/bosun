@@ -122,7 +122,10 @@ func (p *provider) Inspect(ctx context.Context, name string) (preview.Environmen
 	}
 	alive, perr := httpProbe(ctx, env.URL)
 	if perr != nil {
-		return preview.Environment{}, fmt.Errorf("probing %s: %w", env.URL, perr)
+		// Same contract as Get: surface name+URL alongside ProbeError so
+		// callers (resolvePreview's --force fallback) can detect the
+		// probe-error case via errors.As and report the URL.
+		return env, &preview.ProbeError{URL: env.URL, Err: perr}
 	}
 	env.Probed = true
 	env.Alive = alive
