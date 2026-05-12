@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
@@ -304,6 +306,96 @@ func checksSummary(rollup code.CheckRollup) string {
 		return "(none)"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// statusPreviewValue returns the value-only rendering of a preview
+// binding for KV-style body rows (no glyph slot). Always returns
+// something — "(none)" when no env, "(unverified)" suffix on
+// indeterminate probe, "(unavailable)" on other errors. Used at
+// workspace scope where the issue card body is KV-formatted and
+// state nuance must live inside the value text.
+func statusPreviewValue(env preview.Environment, err error) string {
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	normal := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
+
+	if errors.Is(err, preview.ErrNoEnvironment) {
+		return muted.Render("(none)")
+	}
+	var probeErr *preview.ProbeError
+	if errors.As(err, &probeErr) {
+		if env.Name == "" {
+			return muted.Render("(none)")
+		}
+		v := normal.Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		return v + " " + muted.Render("(unverified)")
+	}
+	if err != nil {
+		return muted.Render("(unavailable)")
+	}
+	if env.Name == "" {
+		return muted.Render("(none)")
+	}
+	v := normal.Render(env.Name)
+	if env.URL != "" {
+		v = osc8Link(env.URL, v)
+	}
+	return v
+}
+
+// statusPreviewRow returns the (glyph, value) pair for a workspace
+// card's Preview row, or ("", "") to signal "no row" (the caller
+// decides whether to skip vs render "(none)" based on scope).
+//
+// Render shapes:
+//   - alive (probed + alive)        → ✓ Success, name (linked to URL)
+//   - indeterminate (ProbeError)    → ? Muted, name (linked) + (unverified) muted suffix
+//   - unprobable (no URL template)  → ◦ Muted, name (no link)
+//   - bound but probed dead         → handled by adapter auto-clear; surfaces as no-env
+//   - no env bound (ErrNoEnvironment or any other error) → ("", "") signaling skip
+func statusPreviewRow(env preview.Environment, err error) (string, string) {
+	if errors.Is(err, preview.ErrNoEnvironment) {
+		return "", ""
+	}
+
+	var probeErr *preview.ProbeError
+	if errors.As(err, &probeErr) {
+		if env.Name == "" {
+			return "", ""
+		}
+		glyph := statusStyledGlyph("?  ", ui.Palette.Muted)
+		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unverified)")
+		return glyph, v
+	}
+
+	if err != nil || env.Name == "" {
+		return "", ""
+	}
+
+	switch {
+	case env.Probed && env.Alive:
+		glyph := statusStyledGlyph("✓  ", ui.Palette.Success)
+		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		return glyph, v
+	default:
+		// Unprobable (no URL template): show the name muted so the
+		// reader can see what's bound without implying it's verified.
+		glyph := statusStyledGlyph("◦  ", ui.Palette.Muted)
+		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		return glyph, v
+	}
 }
 
 // statusStateGlyph returns the 3-cell glyph token for a card-state,

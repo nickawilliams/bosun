@@ -14,6 +14,7 @@ import (
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -80,17 +81,38 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// Issue card — async fetch via RunCardReplace. Spinner shows
 	// chained after the project name; on completion the issue card
 	// (with KV body of facets) absorbs as the next data segment and
-	// renders below the breadcrumb.
+	// renders below the breadcrumb. The preview-env binding is
+	// fetched in parallel so it lands inside the same spinner.
 	tracker, _ := newIssueTracker()
+	previewProvider, _ := newPreviewProvider()
 	issueKey, _ := resolveIssue(cmd)
 	if tracker != nil && issueKey != "" {
-		var detail issuepkg.Issue
+		var (
+			detail     issuepkg.Issue
+			previewEnv preview.Environment
+			previewErr error
+		)
 		_ = ui.RunCardReplace("", func() error {
-			var e error
-			detail, e = tracker.GetIssue(ctx, issueKey)
-			return e
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				d, e := tracker.GetIssue(ctx, issueKey)
+				if e == nil {
+					detail = d
+				}
+			}()
+			if previewProvider != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					previewEnv, previewErr = previewProvider.Get(ctx, issueKey)
+				}()
+			}
+			wg.Wait()
+			return nil
 		}, func() *ui.Card {
-			return buildWorkspaceIssueCard(detail, wsName)
+			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr)
 		})
 	}
 
@@ -174,6 +196,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 	results := make([]workspaceState, len(wsNames))
 	tracker, _ := newIssueTracker()
 	host, _ := newCodeHost()
+	previewProvider, _ := newPreviewProvider()
 	g := git.New()
 	if len(wsNames) > 0 {
 		_ = ui.RunCardReplace("", func() error {
@@ -182,7 +205,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, name)
+					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, previewProvider, name)
 				}()
 			}
 			wg.Wait()
@@ -240,14 +263,16 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 // workspaceState bundles all the per-workspace data fetched during
 // project status loading.
 type workspaceState struct {
-	name      string             // workspace name (filesystem-relative path)
-	issueKey  string             // issue key extracted from workspace name
-	issueURL  string             // tracker URL for the issue
-	issue     issuepkg.Issue     // tracker-fetched details (Type, Title, Status)
-	repos     []repoState        // per-repo states (sync, pr, checks)
-	repoNames []string           // repo names parallel to repos slice
-	rollup    ui.CardState       // aggregate state across repos
-	counts    workspaceRepoCounts // per-bucket repo tally
+	name       string              // workspace name (filesystem-relative path)
+	issueKey   string              // issue key extracted from workspace name
+	issueURL   string              // tracker URL for the issue
+	issue      issuepkg.Issue      // tracker-fetched details (Type, Title, Status)
+	repos      []repoState         // per-repo states (sync, pr, checks)
+	repoNames  []string            // repo names parallel to repos slice
+	rollup     ui.CardState        // aggregate state across repos
+	counts     workspaceRepoCounts // per-bucket repo tally
+	previewEnv preview.Environment // preview-env binding (Name/URL/Alive/Probed)
+	previewErr error               // ErrNoEnvironment, ProbeError, or other
 }
 
 type workspaceRepoCounts struct {
@@ -259,7 +284,7 @@ type workspaceRepoCounts struct {
 // workspace card at project scope: its issue, its repos, the per-
 // repo state, and the aggregate rollup. Errors are swallowed —
 // partial fetch leaves fields zero so the row still renders.
-func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
+func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, previewProvider preview.Provider, wsName string) workspaceState {
 	ws := workspaceState{name: wsName}
 
 	// Issue key from workspace name (e.g., "feature/EX-30434_foo" →
@@ -276,6 +301,12 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 			ws.issue = detail
 			ws.issueURL = detail.URL
 		}
+	}
+
+	// Preview-env binding. ErrNoEnvironment is the empty-state signal;
+	// ProbeError carries a partial Environment we still want to render.
+	if previewProvider != nil && ws.issueKey != "" {
+		ws.previewEnv, ws.previewErr = previewProvider.Get(ctx, ws.issueKey)
 	}
 
 	// Per-repo states for the rollup.
@@ -349,6 +380,13 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	if ws.issue.Status != "" {
 		statusGlyph := statusStyledGlyph(lifecycleKeyGlyph(lifecycleKeyForStatus(ws.issue.Status)))
 		card.Item(statusGlyph, statusRowKV("Status", ws.issue.Status))
+	}
+
+	// Preview row — skip when no env bound. At project scope, cards
+	// are dense; "(none)" rows add visual noise for workspaces that
+	// don't use preview envs.
+	if pg, pv := statusPreviewRow(ws.previewEnv, ws.previewErr); pg != "" {
+		card.Item(pg, statusRowKV("Preview", pv))
 	}
 
 	reposGlyph := statusStyledGlyph(statusStateGlyph(ws.rollup))
@@ -459,9 +497,9 @@ func projectRepos() []projectRepoEntry {
 
 
 // buildWorkspaceIssueCard constructs the issue header card with KV
-// body (Type / bold-title, Status, Workspace branch). Used as the
-// success-card finalizer for the issue fetch's RunCardReplace.
-func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string) *ui.Card {
+// body (Type / bold-title, Status, Preview, Workspace branch). Used
+// as the success-card finalizer for the issue fetch's RunCardReplace.
+func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error) *ui.Card {
 	boldTitle := lipgloss.NewStyle().Bold(true).Render(detail.Title)
 
 	workspacePath := workspaceFilesystemPath(branch)
@@ -486,6 +524,7 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string) *ui.Card {
 		KV(
 			typeLabel, boldTitle,
 			"Status", detail.Status,
+			"Preview", statusPreviewValue(previewEnv, previewErr),
 			"Workspace", workspaceValue,
 		)
 }

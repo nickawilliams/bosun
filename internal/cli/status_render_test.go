@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
@@ -184,6 +186,68 @@ func TestChecksSummary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := checksSummary(tc.rollup); got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatusPreviewRow(t *testing.T) {
+	cases := []struct {
+		name       string
+		env        preview.Environment
+		err        error
+		wantGlyph  string
+		wantInVal  string // substring expected in the value, "" → expect empty result
+		wantEmpty  bool
+		wantSuffix string // optional substring expected at the suffix end (e.g., "(unverified)")
+	}{
+		{name: "no env bound → skip", err: preview.ErrNoEnvironment, wantEmpty: true},
+		{name: "other error with no name → skip", err: errors.New("boom"), wantEmpty: true},
+		{name: "alive → ✓ + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, wantGlyph: "✓  ", wantInVal: "brave-falcon"},
+		{name: "indeterminate with name → ?", env: preview.Environment{Name: "brave-falcon", URL: "https://x"}, err: &preview.ProbeError{URL: "https://x"}, wantGlyph: "?  ", wantInVal: "brave-falcon", wantSuffix: "(unverified)"},
+		{name: "unprobable (no URL template) → ◦", env: preview.Environment{Name: "brave-falcon"}, wantGlyph: "◦  ", wantInVal: "brave-falcon"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, v := statusPreviewRow(tc.env, tc.err)
+			if tc.wantEmpty {
+				if g != "" || v != "" {
+					t.Errorf("expected empty row, got glyph=%q value=%q", g, v)
+				}
+				return
+			}
+			if stripped := stripANSI(g); !strings.Contains(stripped, tc.wantGlyph) {
+				t.Errorf("glyph %q lacks %q", stripped, tc.wantGlyph)
+			}
+			if !strings.Contains(stripANSI(v), tc.wantInVal) {
+				t.Errorf("value %q lacks %q", stripANSI(v), tc.wantInVal)
+			}
+			if tc.wantSuffix != "" && !strings.Contains(stripANSI(v), tc.wantSuffix) {
+				t.Errorf("value %q lacks suffix %q", stripANSI(v), tc.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestStatusPreviewValue(t *testing.T) {
+	cases := []struct {
+		name string
+		env  preview.Environment
+		err  error
+		want string // substring expected in the rendered value
+	}{
+		{name: "no env bound", err: preview.ErrNoEnvironment, want: "(none)"},
+		{name: "other error", err: errors.New("boom"), want: "(unavailable)"},
+		{name: "indeterminate with name", env: preview.Environment{Name: "brave-falcon"}, err: &preview.ProbeError{URL: "https://x"}, want: "(unverified)"},
+		{name: "indeterminate empty name → none", err: &preview.ProbeError{URL: "https://x"}, want: "(none)"},
+		{name: "alive", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, want: "brave-falcon"},
+		{name: "unprobable", env: preview.Environment{Name: "brave-falcon"}, want: "brave-falcon"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripANSI(statusPreviewValue(tc.env, tc.err))
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("got %q, want substring %q", got, tc.want)
 			}
 		})
 	}
