@@ -83,15 +83,22 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// (with KV body of facets) absorbs as the next data segment and
 	// renders below the breadcrumb. The preview-env binding is
 	// fetched in parallel so it lands inside the same spinner.
+	//
+	// Provider OnInfo events (stale-metadata cleanup, etc.) buffer
+	// here so they emit after the issue card prints, not racing with
+	// the loading spinner.
 	tracker, _ := newIssueTracker()
-	previewProvider, _ := newPreviewProvider()
 	issueKey, _ := resolveIssue(cmd)
 	if tracker != nil && issueKey != "" {
 		var (
-			detail     issuepkg.Issue
-			previewEnv preview.Environment
-			previewErr error
+			detail       issuepkg.Issue
+			previewEnv   preview.Environment
+			previewErr   error
+			infoMessages []string
 		)
+		previewProvider, _ := newPreviewProviderWithInfo(func(msg string) {
+			infoMessages = append(infoMessages, msg)
+		})
 		_ = ui.RunCardReplace("", func() error {
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -114,6 +121,11 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 		}, func() *ui.Card {
 			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr)
 		})
+		// Drain captured events into the timeline now that the card
+		// has printed.
+		for _, msg := range infoMessages {
+			ui.Complete(msg)
+		}
 	}
 
 	// Per-repo data: gather workspace status, then for each repo
@@ -196,7 +208,6 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 	results := make([]workspaceState, len(wsNames))
 	tracker, _ := newIssueTracker()
 	host, _ := newCodeHost()
-	previewProvider, _ := newPreviewProvider()
 	g := git.New()
 	if len(wsNames) > 0 {
 		_ = ui.RunCardReplace("", func() error {
@@ -205,7 +216,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, previewProvider, name)
+					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, name)
 				}()
 			}
 			wg.Wait()
@@ -253,6 +264,12 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 
 	for _, ws := range results {
 		buildProjectWorkspaceCard(ws).Print()
+		// Emit any incidental events captured during this workspace's
+		// fetch (e.g., stale-metadata cleanup) after the card so the
+		// timeline reads card → notice → next card.
+		for _, msg := range ws.infoMessages {
+			ui.Complete(msg)
+		}
 	}
 
 	renderProjectSummary(results)
@@ -273,6 +290,13 @@ type workspaceState struct {
 	counts     workspaceRepoCounts // per-bucket repo tally
 	previewEnv preview.Environment // preview-env binding (Name/URL/Alive/Probed)
 	previewErr error               // ErrNoEnvironment, ProbeError, or other
+
+	// infoMessages captures incidental events (e.g., "cleared stale
+	// metadata") emitted by the preview provider during this
+	// workspace's fetch. Buffered here so the command can render
+	// them after the workspace's card prints rather than letting
+	// them race with the loading spinner.
+	infoMessages []string
 }
 
 type workspaceRepoCounts struct {
@@ -284,7 +308,12 @@ type workspaceRepoCounts struct {
 // workspace card at project scope: its issue, its repos, the per-
 // repo state, and the aggregate rollup. Errors are swallowed —
 // partial fetch leaves fields zero so the row still renders.
-func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, previewProvider preview.Provider, wsName string) workspaceState {
+//
+// The preview provider is constructed per workspace with an OnInfo
+// callback that captures incidental events (stale-metadata cleanup,
+// etc.) into ws.infoMessages, so the command can emit them after
+// the workspace's card prints instead of racing with the spinner.
+func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
 	ws := workspaceState{name: wsName}
 
 	// Issue key from workspace name (e.g., "feature/EX-30434_foo" →
@@ -305,8 +334,15 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 
 	// Preview-env binding. ErrNoEnvironment is the empty-state signal;
 	// ProbeError carries a partial Environment we still want to render.
-	if previewProvider != nil && ws.issueKey != "" {
-		ws.previewEnv, ws.previewErr = previewProvider.Get(ctx, ws.issueKey)
+	// Build a per-workspace provider whose OnInfo writes into this
+	// workspace's buffer (no shared state with other goroutines, since
+	// each fetch has its own ws value).
+	if ws.issueKey != "" {
+		if provider, err := newPreviewProviderWithInfo(func(msg string) {
+			ws.infoMessages = append(ws.infoMessages, msg)
+		}); err == nil && provider != nil {
+			ws.previewEnv, ws.previewErr = provider.Get(ctx, ws.issueKey)
+		}
 	}
 
 	// Per-repo states for the rollup.

@@ -672,11 +672,25 @@ func newCICD() (cicd.CICD, error) {
 	}
 }
 
-// newPreviewProvider creates a preview.Provider from current config.
-// The pipeline and tracker are optional — if either is unavailable, the
-// returned provider still supports the read paths (Get, Inspect) and
-// gracefully reports ErrNoPipeline / nothing-to-write on the write paths.
+// newPreviewProvider creates a preview.Provider with the default
+// OnInfo callback (incidental events surface immediately via ui.Complete).
+// Suitable for commands where side-effect notifications can fire inline
+// with other output (e.g., the preview command itself).
 func newPreviewProvider() (preview.Provider, error) {
+	return newPreviewProviderWithInfo(ui.Complete)
+}
+
+// newPreviewProviderWithInfo creates a preview.Provider with a custom
+// OnInfo sink — useful when callers want to buffer side-effect events
+// (e.g., the status command at project scope, which captures
+// per-workspace cleanup notices and prints them after the relevant
+// card so they don't race with the loading spinner).
+//
+// The pipeline and tracker are optional — if either is unavailable,
+// the returned provider still supports the read paths (Get, Inspect)
+// and gracefully reports ErrNoPipeline / nothing-to-write on the
+// write paths.
+func newPreviewProviderWithInfo(onInfo func(string)) (preview.Provider, error) {
 	providerName := viper.GetString("preview")
 	if providerName == "" {
 		providerName = "cicd"
@@ -685,10 +699,6 @@ func newPreviewProvider() (preview.Provider, error) {
 		return nil, fmt.Errorf("unsupported preview provider: %q", providerName)
 	}
 
-	// Pipeline and tracker are best-effort: degraded availability is
-	// surfaced at the call site (Create returns ErrNoPipeline; Adopt
-	// returns nil when tracker is missing) — same shape as the legacy
-	// command's pipelineErr handling.
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
@@ -724,7 +734,7 @@ func newPreviewProvider() (preview.Provider, error) {
 			return out, nil
 		},
 		InputName: stageInputName,
-		OnInfo:    ui.Complete,
+		OnInfo:    onInfo,
 	}), nil
 }
 
