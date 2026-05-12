@@ -581,9 +581,13 @@ func projectRepos() []projectRepoEntry {
 }
 
 
-// buildWorkspaceIssueCard constructs the issue header card with KV
-// body (Type / bold-title, Status, Preview, Updated, Workspace branch).
-// Used as the success-card finalizer for the issue fetch's RunCardReplace.
+// buildWorkspaceIssueCard constructs the issue header card with a
+// three-section KV body: (1) Type/title + Status — what kind of work
+// and where it is in the lifecycle; (2) Preview — the deployment
+// state; (3) Workspace + Updated — where the code lives and when it
+// was last touched. Sections are separated by blank lines for
+// breathing room. Used as the success-card finalizer for the issue
+// fetch's RunCardReplace.
 func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
 	boldTitle := lipgloss.NewStyle().Bold(true).Render(detail.Title)
 
@@ -609,9 +613,13 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv pr
 		KV(
 			typeLabel, boldTitle,
 			"Status", detail.Status,
-			"Preview", statusPreviewValue(previewEnv, previewErr),
-			"Updated", statusUpdatedValue(updatedAt),
+		).
+		Text("").
+		KV("Preview", statusPreviewValue(previewEnv, previewErr)).
+		Text("").
+		KV(
 			"Workspace", workspaceValue,
+			"Updated", statusUpdatedValue(updatedAt),
 		)
 }
 
