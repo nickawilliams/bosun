@@ -207,11 +207,21 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 		return nil
 	}
 
-	// Sort by lifecycle position so the most actionable workspaces
-	// surface first. Tie-break by issue key for stable ordering.
+	// Sort by lifecycle position using the canonical bosun lifecycle
+	// vocabulary (lifecycleStatusKeys + "done"). Statuses that don't
+	// resolve to a configured lifecycle stage sort after "done".
+	// Tie-break by issue key for stable ordering.
+	idx := buildStatusIndex()
+	end := len(idx) // unmapped statuses sort after the last known one
 	sort.SliceStable(results, func(i, j int) bool {
-		oi := statusLifecycleOrder(results[i].issue.Status)
-		oj := statusLifecycleOrder(results[j].issue.Status)
+		oi, ok := idx[strings.ToLower(results[i].issue.Status)]
+		if !ok {
+			oi = end
+		}
+		oj, ok := idx[strings.ToLower(results[j].issue.Status)]
+		if !ok {
+			oj = end
+		}
 		if oi != oj {
 			return oi < oj
 		}
@@ -337,7 +347,7 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 		Value(styledTitle)
 
 	if ws.issue.Status != "" {
-		statusGlyph := statusStyledGlyph(statusStatusGlyph(ws.issue.Status))
+		statusGlyph := statusStyledGlyph(lifecycleKeyGlyph(lifecycleKeyForStatus(ws.issue.Status)))
 		card.Item(statusGlyph, statusRowKV("Status", ws.issue.Status))
 	}
 

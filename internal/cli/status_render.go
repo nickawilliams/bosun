@@ -326,46 +326,23 @@ func statusStateGlyph(state ui.CardState) (string, color.Color) {
 	return "◦  ", ui.Palette.Muted
 }
 
-// statusStatusGlyph maps a tracker workflow state (verbatim from the
-// tracker, e.g., "Ready for Release", "In Review") onto the 5-state
-// vocab for the Status body row. Mapping is approximate — trackers
-// have arbitrary workflows; this covers common Jira / Linear /
-// Shortcut shapes.
-func statusStatusGlyph(workflowState string) (string, color.Color) {
-	switch strings.ToLower(workflowState) {
-	case "done", "released", "closed", "resolved":
+// lifecycleKeyGlyph maps a bosun lifecycle key (one of the keys in
+// lifecycleStatusKeys, plus "done") onto the 5-state vocab for the
+// Status body row. Keyed on the canonical bosun lifecycle vocab
+// rather than provider-specific workflow strings — callers do the
+// reverse-lookup via lifecycleKeyForStatus first, so user overrides
+// in the `statuses.*` config flow through naturally. Unknown keys
+// (including "" when the status isn't mapped) fall back to pending.
+func lifecycleKeyGlyph(key string) (string, color.Color) {
+	switch key {
+	case "done":
 		return "✓  ", ui.Palette.Success
-	case "ready for release", "ready to deploy", "ready":
+	case "ready_for_release":
 		return "●  ", ui.Palette.Success
 	case "blocked":
 		return "▲  ", ui.Palette.Warning
-	case "in progress", "in review", "in development", "to do", "backlog", "open":
-		return "⧗  ", ui.Palette.Info
 	}
 	return "⧗  ", ui.Palette.Info
-}
-
-// statusLifecycleOrder returns a sort key for a tracker workflow
-// state, ordering workspaces most-actionable first at project scope.
-// Lower number sorts earlier; unknown statuses fall to the end.
-func statusLifecycleOrder(workflowState string) int {
-	switch strings.ToLower(workflowState) {
-	case "ready for release", "ready to deploy", "ready":
-		return 0
-	case "in review":
-		return 1
-	case "blocked":
-		return 2
-	case "in progress", "in development":
-		return 3
-	case "to do", "open":
-		return 4
-	case "backlog":
-		return 5
-	case "done", "released", "closed", "resolved":
-		return 6
-	}
-	return 7
 }
 
 // statusUpdatedGlyph buckets a workspace's age-in-days into a

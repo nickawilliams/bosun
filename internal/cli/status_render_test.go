@@ -189,33 +189,58 @@ func TestChecksSummary(t *testing.T) {
 	}
 }
 
-func TestStatusLifecycleOrder(t *testing.T) {
+func TestLifecycleKeyForStatus(t *testing.T) {
+	// Reverse-lookup against schema defaults (no viper config set,
+	// so resolveStatus falls back to defaults from schema.go).
 	cases := []struct {
-		name     string
-		status   string
-		wantLess string // a status that should sort AFTER (i.e., higher number)
+		name   string
+		status string
+		want   string
 	}{
-		{status: "Ready for Release", wantLess: "In Review"},
-		{status: "In Review", wantLess: "Blocked"},
-		{status: "Blocked", wantLess: "In Progress"},
-		{status: "In Progress", wantLess: "To Do"},
-		{status: "To Do", wantLess: "Backlog"},
-		{status: "Backlog", wantLess: "Done"},
-		{status: "Done", wantLess: "FrobnicatedFoo"}, // unknown sorts last
+		{name: "Ready", status: "Ready", want: "ready"},
+		{name: "In Progress", status: "In Progress", want: "in_progress"},
+		{name: "Blocked", status: "Blocked", want: "blocked"},
+		{name: "Review", status: "Review", want: "review"},
+		{name: "Ready for Release", status: "Ready for Release", want: "ready_for_release"},
+		{name: "Acceptance", status: "Acceptance", want: "acceptance"},
+		{name: "Done", status: "Done", want: "done"},
+		{name: "case-insensitive", status: "READY FOR RELEASE", want: "ready_for_release"},
+		{name: "unmapped", status: "Frobnicated", want: ""},
+		{name: "empty", status: "", want: ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.status+" before "+tc.wantLess, func(t *testing.T) {
-			a := statusLifecycleOrder(tc.status)
-			b := statusLifecycleOrder(tc.wantLess)
-			if a >= b {
-				t.Errorf("%q (order %d) should sort before %q (order %d)", tc.status, a, tc.wantLess, b)
+		t.Run(tc.name, func(t *testing.T) {
+			if got := lifecycleKeyForStatus(tc.status); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}
+}
 
-	// Case-insensitive — "READY FOR RELEASE" should sort same as "Ready for Release".
-	if statusLifecycleOrder("READY FOR RELEASE") != statusLifecycleOrder("Ready for Release") {
-		t.Error("expected case-insensitive matching")
+func TestLifecycleKeyGlyph(t *testing.T) {
+	cases := []struct {
+		name      string
+		key       string
+		wantGlyph string
+	}{
+		{name: "done → ✓", key: "done", wantGlyph: "✓  "},
+		{name: "ready_for_release → ●", key: "ready_for_release", wantGlyph: "●  "},
+		{name: "blocked → ▲", key: "blocked", wantGlyph: "▲  "},
+		{name: "in_progress → ⧗", key: "in_progress", wantGlyph: "⧗  "},
+		{name: "review → ⧗", key: "review", wantGlyph: "⧗  "},
+		{name: "preview → ⧗", key: "preview", wantGlyph: "⧗  "},
+		{name: "ready → ⧗", key: "ready", wantGlyph: "⧗  "},
+		{name: "acceptance → ⧗", key: "acceptance", wantGlyph: "⧗  "},
+		{name: "unknown key → ⧗", key: "garbage", wantGlyph: "⧗  "},
+		{name: "empty key → ⧗", key: "", wantGlyph: "⧗  "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			glyph, _ := lifecycleKeyGlyph(tc.key)
+			if glyph != tc.wantGlyph {
+				t.Errorf("glyph = %q, want %q", glyph, tc.wantGlyph)
+			}
+		})
 	}
 }
 

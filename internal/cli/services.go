@@ -322,11 +322,12 @@ func resolveStatus(key string) (string, error) {
 }
 
 // buildStatusIndex returns a mapping from lowercase provider status
-// name to lifecycle sequence position. Unknown statuses are absent
-// from the map; callers should treat missing entries as sorting to
-// the end.
+// name to lifecycle sequence position. Includes "done" as the
+// terminal position after all lifecycleStatusKeys entries. Unknown
+// statuses are absent from the map; callers should treat missing
+// entries as sorting after "done".
 func buildStatusIndex() map[string]int {
-	idx := make(map[string]int, len(lifecycleStatusKeys))
+	idx := make(map[string]int, len(lifecycleStatusKeys)+1)
 	for i, key := range lifecycleStatusKeys {
 		name, err := resolveStatus(key)
 		if err != nil {
@@ -334,7 +335,32 @@ func buildStatusIndex() map[string]int {
 		}
 		idx[strings.ToLower(name)] = i
 	}
+	if name, err := resolveStatus("done"); err == nil {
+		idx[strings.ToLower(name)] = len(lifecycleStatusKeys)
+	}
 	return idx
+}
+
+// lifecycleKeyForStatus reverse-resolves a provider status name
+// (e.g., "Ready for Release") to the bosun lifecycle key (e.g.,
+// "ready_for_release") it's mapped from. Returns "" if the status
+// doesn't match any configured lifecycle stage. Comparison is
+// case-insensitive.
+func lifecycleKeyForStatus(status string) string {
+	if status == "" {
+		return ""
+	}
+	target := strings.ToLower(status)
+	for _, key := range append(append([]string{}, lifecycleStatusKeys...), "done") {
+		name, err := resolveStatus(key)
+		if err != nil {
+			continue
+		}
+		if strings.ToLower(name) == target {
+			return key
+		}
+	}
+	return ""
 }
 
 // newCodeHost creates a code.Host from current config. Resolution order:
