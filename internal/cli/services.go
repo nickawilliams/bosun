@@ -669,7 +669,11 @@ func newPreviewProvider() (preview.Provider, error) {
 	const stage = "preview"
 	var urlTmpl *template.Template
 	if pattern := viper.GetString("github_actions.workflows." + stage + ".url_template"); pattern != "" {
-		urlTmpl, _ = template.New("stage-url").Parse(pattern)
+		parsed, err := template.New("stage-url").Parse(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("preview url_template: %w", err)
+		}
+		urlTmpl = parsed
 	}
 
 	return previewcicd.New(previewcicd.Options{
