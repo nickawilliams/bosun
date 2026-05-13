@@ -1020,13 +1020,13 @@ func (m squishedSpinnerModel) View() tea.View {
 }
 
 // frameView selects the render to hand bubbletea: the breadcrumb-only
-// row in partial mode (sized exactly 1 visible line — the trailing
-// newline must be stripped because bubbletea owns the frame's trailing
-// newline; an extra one scrolls the cursor and reintroduces the gap)
-// or the full multi-line root render in fallback mode.
+// row in partial mode (1 visible line + trailing newline so bubbletea's
+// cursor positioning on exit lands at the start of the next line —
+// matching the existing full-render behavior where Render() also ends
+// with a newline) or the full multi-line root render in fallback mode.
 func (m squishedSpinnerModel) frameView(extended *Card) string {
 	if m.partial {
-		return strings.TrimRight(extended.RenderBreadcrumbLine(), "\n")
+		return extended.RenderBreadcrumbLine()
 	}
 	return extended.Render()
 }
@@ -1091,13 +1091,18 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 
 	// Fast path: when the breadcrumb is the LAST line of the root
 	// (current logo-mode and future compact mode both satisfy this),
-	// erase only that line and let bubbletea repaint just it. The
-	// logo box above stays static on screen — no startup-gap flash.
+	// position the cursor on the breadcrumb line WITHOUT clearing it
+	// and let bubbletea overwrite it in place. The breadcrumb width is
+	// fixed (filled to box-width with rule chars), so the new content
+	// covers the old cell-by-cell — no leftover chars. Skipping the
+	// pre-erase eliminates the bubbletea-startup gap that caused the
+	// 1-line flash even after partial-rewrite.
+	//
 	// Falls back to full erase + full repaint when the invariant
 	// doesn't hold (e.g., a future multi-line breadcrumb).
 	partial := root.BreadcrumbLineCount() == 1 && rootLines > 0
 	if partial {
-		fmt.Print("\x1b[1F\x1b[2K\r")
+		fmt.Print("\x1b[1F\r")
 	} else if rootLines > 0 {
 		fmt.Printf("\x1b[%dF\x1b[J", rootLines)
 	}

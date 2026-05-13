@@ -87,24 +87,22 @@ func squishConsume(c *Card) {
 		extended.absorbedTitleColor = c.absorbedTitleColor
 	}
 
-	// Always compute the full rendered output — the chain-absorption
-	// snapshot below records its line count, which must reflect the
-	// full root regardless of whether we used the partial fast path
-	// to print only the breadcrumb line.
-	rendered := extended.Render()
-
 	// Fast path: when the breadcrumb is the LAST line of the root,
-	// erase only that line and rewrite it in place. The logo box
-	// above stays untouched on screen — eliminates the visible
-	// erase-and-repaint flash. Falls back to full erase + full
-	// repaint when the invariant doesn't hold.
+	// rewrite it in place WITHOUT clearing first — the new content
+	// (always wider, since it gained a segment) covers the old line
+	// cell-by-cell. The breadcrumb width is fixed (rule chars fill to
+	// box-width), so old chars can't leak past the new content. Logo
+	// box above stays untouched on screen.
+	//
+	// Falls back to full erase + full repaint when the invariant
+	// doesn't hold (e.g., a future multi-line breadcrumb).
 	partial := root.BreadcrumbLineCount() == 1 && lines > 0
 	if partial {
-		fmt.Print("\x1b[1F\x1b[2K\r")
+		fmt.Print("\x1b[1F\r")
 		fmt.Print(extended.RenderBreadcrumbLine())
 	} else if lines > 0 {
 		fmt.Printf("\x1b[%dF\x1b[J", lines)
-		fmt.Print(rendered)
+		fmt.Print(extended.Render())
 	}
 
 	// Render the child's body (subtitle + body kinds) below the
@@ -126,9 +124,12 @@ func squishConsume(c *Card) {
 	// card's slot.
 	if c.chainAbsorption {
 		snapshot := extended
+		// lineCount is invariant under absorption: extending a root
+		// only changes the breadcrumb's content, not the box's line
+		// count, so we can reuse the original lines value.
 		squishCurrent = squishState{
 			root:      &snapshot,
-			lineCount: strings.Count(rendered, "\n"),
+			lineCount: lines,
 		}
 		squishPending = true
 	} else {
