@@ -9,8 +9,10 @@ import (
 
 const groupLifecycle = "lifecycle"
 
-// NewRootCmd creates the root bosun command.
-func NewRootCmd() *cobra.Command {
+// NewRootCmd creates the root bosun command. The version is propagated to
+// the UI layer so cards can render it in their breadcrumb.
+func NewRootCmd(version string) *cobra.Command {
+	ui.AppVersion = version
 	cobra.EnableCommandSorting = false
 
 	cmd := &cobra.Command{
