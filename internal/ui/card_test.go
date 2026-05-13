@@ -1,6 +1,11 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+)
 
 func TestTitleCase(t *testing.T) {
 	tests := []struct {
@@ -119,4 +124,75 @@ func TestWrapForTimeline(t *testing.T) {
 			t.Errorf("wrapForTimeline(\"\"): got %v, want [\"\"]", got)
 		}
 	})
+}
+
+// TestCard_BreadcrumbLineCount locks down the load-bearing invariant
+// for the partial-rewrite squish path: typical root cards must produce
+// a breadcrumb that occupies exactly one terminal line. If this ever
+// returns >1, the squish mechanism falls back to the full-erase path
+// (correct but reintroduces the visible flash).
+func TestCard_BreadcrumbLineCount(t *testing.T) {
+	cases := []struct {
+		name string
+		card *Card
+	}{
+		{name: "no segments", card: NewCard(CardRoot, "Bosun")},
+		{name: "command tail only", card: NewCard(CardRoot, "Bosun › Status")},
+		{
+			name: "command tail + data segment",
+			card: NewCard(CardRoot, "Bosun › Status").Breadcrumb("ProjectName"),
+		},
+		{
+			name: "command tail + multiple data segments",
+			card: NewCard(CardRoot, "Bosun › Status").
+				Breadcrumb("ProjectName").
+				Breadcrumb("PROJ-123"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.card.BreadcrumbLineCount(); got != 1 {
+				t.Errorf("BreadcrumbLineCount() = %d, want 1", got)
+			}
+		})
+	}
+
+	// Non-root cards should report 0 lines.
+	t.Run("non-root card", func(t *testing.T) {
+		if got := NewCard(CardSuccess, "Hello").BreadcrumbLineCount(); got != 0 {
+			t.Errorf("BreadcrumbLineCount() for non-root = %d, want 0", got)
+		}
+	})
+}
+
+// TestCard_RenderBreadcrumbLine_SingleLine asserts that the rendered
+// breadcrumb line, after stripping its trailing newline, is exactly one
+// visible line. Bubbletea's spinner frame in partial mode hands off
+// this string verbatim; an extra newline would push the cursor and
+// reintroduce the flash.
+func TestCard_RenderBreadcrumbLine_SingleLine(t *testing.T) {
+	card := NewCard(CardRoot, "Bosun › Status").
+		Breadcrumb("ProjectName").
+		AbsorbedTitleColor(Palette.Success)
+
+	line := card.RenderBreadcrumbLine()
+	if line == "" {
+		t.Fatal("RenderBreadcrumbLine returned empty for root card")
+	}
+	if !strings.HasSuffix(line, "\n") {
+		t.Errorf("expected trailing newline; got %q", line)
+	}
+	stripped := strings.TrimRight(line, "\n")
+	if got := lipgloss.Height(stripped); got != 1 {
+		t.Errorf("breadcrumb line height = %d, want 1; line=%q", got, stripped)
+	}
+}
+
+// TestCard_RenderBreadcrumbLine_NonRoot asserts the method only
+// returns content for root cards (the squish mechanism only ever
+// asks for breadcrumb lines from roots).
+func TestCard_RenderBreadcrumbLine_NonRoot(t *testing.T) {
+	if got := NewCard(CardSuccess, "Hello").RenderBreadcrumbLine(); got != "" {
+		t.Errorf("non-root RenderBreadcrumbLine = %q, want empty", got)
+	}
 }

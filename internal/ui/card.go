@@ -356,6 +356,112 @@ func (c *Card) Render() string {
 	return c.renderWithGlyph(c.glyph())
 }
 
+// RenderBreadcrumbLine returns just the breadcrumb-carrying row of
+// this root card's render. Empty for non-root cards. Used by the
+// squish mechanism to rewrite only the changed line instead of erasing
+// the whole root, regardless of the active root-header style.
+func (c *Card) RenderBreadcrumbLine() string {
+	if c.state != CardRoot {
+		return ""
+	}
+	return c.renderBreadcrumbRow()
+}
+
+// BreadcrumbLineCount returns how many terminal lines the breadcrumb
+// row occupies. Currently always 1 (no wrapping in the logo-mode
+// root, and a future compact root would also be a single line). The
+// squish path falls back to full-erase when this returns >1.
+func (c *Card) BreadcrumbLineCount() int {
+	s := c.renderBreadcrumbRow()
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n")
+}
+
+// renderBreadcrumbRow returns the single visible row that carries the
+// breadcrumb. In the current logo-mode root, that's the
+// "│  prefix breadcrumb postfix ───╯" bottom line. Includes its
+// trailing newline. Returns empty if c.state != CardRoot.
+//
+// This helper is the single source of truth for breadcrumb-line
+// rendering. Future header modes (e.g., a compact one-line root that
+// looks like "╭─ Bosun › Project › Status ──── v1.2.3 ") add their
+// branch here; nothing in the squish mechanism needs to change.
+func (c *Card) renderBreadcrumbRow() string {
+	if c.state != CardRoot {
+		return ""
+	}
+	const pad = " "
+	ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	boxInner := TermWidth() - 3
+	if boxInner < 10 {
+		boxInner = 10
+	}
+
+	// Layout: <data segments> › <command-path tail>. The implicit
+	// "bosun" root is dropped (the logo above stands in for it),
+	// data segments come next (in absorbedTitleColor when set), then
+	// the command-path segments.
+	titleSegs := strings.Split(c.title, " › ")
+	var commandTail []string
+	if len(titleSegs) > 1 {
+		commandTail = titleSegs[1:]
+	}
+	visible := append([]string{}, c.dataSegments...)
+	visible = append(visible, commandTail...)
+
+	if len(visible) == 0 {
+		return fmt.Sprintf("%s%s  %s\n", pad,
+			ruleStyle.Render("│"),
+			ruleStyle.Render(strings.Repeat("─", boxInner-2)+"╯"))
+	}
+
+	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
+	sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
+	styledSegs := make([]string, len(visible))
+	dataLen := len(c.dataSegments)
+	// The absorbed glyph (if any) prefixes the most recently absorbed
+	// data segment — i.e., the LAST data segment.
+	lastDataIdx := dataLen - 1
+	for i, seg := range visible {
+		style := primaryStyle
+		if i < dataLen && c.absorbedTitleColor != nil {
+			style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
+		}
+		styled := style.Render(titleCase(seg))
+		if i == lastDataIdx && c.absorbedGlyph != "" {
+			styled = c.absorbedGlyph + " " + styled
+		}
+		styledSegs[i] = styled
+	}
+	breadcrumb := strings.Join(styledSegs, sepStyle.Render(" › "))
+
+	prefix := ""
+	prefixWidth := 0
+	if BreadcrumbPrefix != "" {
+		prefix = ruleStyle.Render(BreadcrumbPrefix) + " "
+		prefixWidth = lipgloss.Width(prefix)
+	}
+	postfix := " "
+	postfixWidth := 1
+	if BreadcrumbPostfix != "" {
+		postfix = " " + ruleStyle.Render(BreadcrumbPostfix) + " "
+		postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
+	}
+
+	ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(breadcrumb) - postfixWidth
+	if ruleLen < 1 {
+		ruleLen = 1
+	}
+	return fmt.Sprintf("%s%s  %s%s%s%s\n", pad,
+		ruleStyle.Render("│"),
+		prefix,
+		breadcrumb,
+		postfix,
+		ruleStyle.Render(strings.Repeat("─", ruleLen)+"╯"))
+}
+
 // Print writes the card to stdout. Suppressed in raw mode.
 //
 // Root-card absorption: if a CardRoot was just printed, the next
@@ -503,67 +609,7 @@ func (c *Card) renderInner(glyph string) string {
 		}
 
 		// Bottom: breadcrumb closes the right side with ╯.
-		// Layout: <data segments> › <command-path tail>. The implicit
-		// "bosun" root is dropped (the logo above stands in for it),
-		// data segments come next (in green when absorbedTitleColor
-		// is set), then the command-path segments.
-		titleSegs := strings.Split(c.title, " › ")
-		var commandTail []string
-		if len(titleSegs) > 1 {
-			commandTail = titleSegs[1:]
-		}
-		visible := append([]string{}, c.dataSegments...)
-		visible = append(visible, commandTail...)
-		if len(visible) > 0 {
-			primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-			sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-			styledSegs := make([]string, len(visible))
-			dataLen := len(c.dataSegments)
-			// The absorbed glyph (if any) prefixes the most recently
-			// absorbed data segment — i.e., the LAST data segment.
-			lastDataIdx := dataLen - 1
-			for i, seg := range visible {
-				style := primaryStyle
-				if i < dataLen && c.absorbedTitleColor != nil {
-					style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
-				}
-				styled := style.Render(titleCase(seg))
-				if i == lastDataIdx && c.absorbedGlyph != "" {
-					styled = c.absorbedGlyph + " " + styled
-				}
-				styledSegs[i] = styled
-			}
-			breadcrumb := strings.Join(styledSegs, sepStyle.Render(" › "))
-
-			// Optional prefix/postfix glyphs around the breadcrumb.
-			prefix := ""
-			prefixWidth := 0
-			if BreadcrumbPrefix != "" {
-				prefix = ruleStyle.Render(BreadcrumbPrefix) + " "
-				prefixWidth = lipgloss.Width(prefix)
-			}
-			postfix := " "
-			postfixWidth := 1
-			if BreadcrumbPostfix != "" {
-				postfix = " " + ruleStyle.Render(BreadcrumbPostfix) + " "
-				postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
-			}
-
-			ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(breadcrumb) - postfixWidth
-			if ruleLen < 1 {
-				ruleLen = 1
-			}
-			fmt.Fprintf(&b, "%s%s  %s%s%s%s\n", pad,
-				ruleStyle.Render("│"),
-				prefix,
-				breadcrumb,
-				postfix,
-				ruleStyle.Render(strings.Repeat("─", ruleLen)+"╯"))
-		} else {
-			fmt.Fprintf(&b, "%s%s  %s\n", pad,
-				ruleStyle.Render("│"),
-				ruleStyle.Render(strings.Repeat("─", boxInner-2)+"╯"))
-		}
+		b.WriteString(c.renderBreadcrumbRow())
 	} else {
 		if c.value != "" {
 			valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
@@ -912,6 +958,12 @@ type squishedSpinnerModel struct {
 	done        bool
 	err         error
 	resultCh    <-chan error
+	// partial selects the breadcrumb-only render path. When true, View
+	// returns just the breadcrumb line (1 visible row) and the caller
+	// (runSquishedCard) erases only that one line beforehand — the
+	// logo box stays static on screen, eliminating the bubbletea
+	// startup gap that would otherwise flash.
+	partial bool
 }
 
 func newSquishedSpinnerModel(root *Card, title string, successCard func() *Card, resultCh <-chan error) squishedSpinnerModel {
@@ -959,12 +1011,24 @@ func (m squishedSpinnerModel) View() tea.View {
 		// stays a constant line count. Body content prints after
 		// the program exits — see runSquishedCard.
 		extended, _ := squishedFinalExtended(m.root, m.title, m.successCard, m.err)
-		return tea.NewView(extended.Render())
+		return tea.NewView(m.frameView(&extended))
 	}
 	extended := *m.root
 	extended.dataSegments = append(append([]string{}, m.root.dataSegments...), m.title)
 	extended.absorbedGlyph = m.spinner.View()
-	return tea.NewView(extended.Render())
+	return tea.NewView(m.frameView(&extended))
+}
+
+// frameView selects the render to hand bubbletea: the breadcrumb-only
+// row in partial mode (sized exactly 1 visible line — the trailing
+// newline must be stripped because bubbletea owns the frame's trailing
+// newline; an extra one scrolls the cursor and reintroduces the gap)
+// or the full multi-line root render in fallback mode.
+func (m squishedSpinnerModel) frameView(extended *Card) string {
+	if m.partial {
+		return strings.TrimRight(extended.RenderBreadcrumbLine(), "\n")
+	}
+	return extended.Render()
 }
 
 func (m squishedSpinnerModel) waitForResult() tea.Cmd {
@@ -1025,20 +1089,35 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 		resultCh <- err
 	}()
 
-	// Erase the previously-printed root card; bubbletea will paint
-	// the extended version starting at the same screen position.
-	if rootLines > 0 {
+	// Fast path: when the breadcrumb is the LAST line of the root
+	// (current logo-mode and future compact mode both satisfy this),
+	// erase only that line and let bubbletea repaint just it. The
+	// logo box above stays static on screen — no startup-gap flash.
+	// Falls back to full erase + full repaint when the invariant
+	// doesn't hold (e.g., a future multi-line breadcrumb).
+	partial := root.BreadcrumbLineCount() == 1 && rootLines > 0
+	if partial {
+		fmt.Print("\x1b[1F\x1b[2K\r")
+	} else if rootLines > 0 {
 		fmt.Printf("\x1b[%dF\x1b[J", rootLines)
 	}
 
-	p := tea.NewProgram(newSquishedSpinnerModel(root, card.title, successCard, resultCh))
-	model, err := p.Run()
+	model := newSquishedSpinnerModel(root, card.title, successCard, resultCh)
+	model.partial = partial
+	p := tea.NewProgram(model)
+	finalModel, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for the task and print a
-		// finalized extended root + body.
+		// finalized extended root + body. In partial mode only the
+		// breadcrumb line was erased, so we reprint just that line;
+		// in full-erase mode the entire root needs reprinting.
 		taskErr := <-resultCh
 		extended, body := squishedFinalExtended(root, card.title, successCard, taskErr)
-		fmt.Print(extended.Render() + body)
+		if partial {
+			fmt.Print(extended.RenderBreadcrumbLine() + body)
+		} else {
+			fmt.Print(extended.Render() + body)
+		}
 		comfyBreak = true
 		return taskErr
 	}
@@ -1047,7 +1126,7 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 	// breadcrumb in place; now print the body content separately
 	// so its line count doesn't have to fit inside the program's
 	// constant-line-count frame.
-	m := model.(squishedSpinnerModel)
+	m := finalModel.(squishedSpinnerModel)
 	_, body := squishedFinalExtended(root, card.title, successCard, m.err)
 	if body != "" {
 		fmt.Print(body)

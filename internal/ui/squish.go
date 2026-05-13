@@ -71,11 +71,6 @@ func squishConsume(c *Card) {
 	root := squishCurrent.root
 	lines := squishCurrent.lineCount
 
-	// Erase the previously-rendered root card.
-	if lines > 0 {
-		fmt.Printf("\x1b[%dF\x1b[J", lines)
-	}
-
 	// Build extended root with the child's title appended as a new
 	// data segment. The renderer assembles the visible breadcrumb
 	// as <data segments> › <command-path tail>; data segments take
@@ -92,9 +87,25 @@ func squishConsume(c *Card) {
 		extended.absorbedTitleColor = c.absorbedTitleColor
 	}
 
-	// Re-render the extended root.
+	// Always compute the full rendered output — the chain-absorption
+	// snapshot below records its line count, which must reflect the
+	// full root regardless of whether we used the partial fast path
+	// to print only the breadcrumb line.
 	rendered := extended.Render()
-	fmt.Print(rendered)
+
+	// Fast path: when the breadcrumb is the LAST line of the root,
+	// erase only that line and rewrite it in place. The logo box
+	// above stays untouched on screen — eliminates the visible
+	// erase-and-repaint flash. Falls back to full erase + full
+	// repaint when the invariant doesn't hold.
+	partial := root.BreadcrumbLineCount() == 1 && lines > 0
+	if partial {
+		fmt.Print("\x1b[1F\x1b[2K\r")
+		fmt.Print(extended.RenderBreadcrumbLine())
+	} else if lines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", lines)
+		fmt.Print(rendered)
+	}
 
 	// Render the child's body (subtitle + body kinds) below the
 	// extended root — same layout used by Card.renderInner for the
