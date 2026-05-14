@@ -593,21 +593,17 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv pr
 	}
 
 	// The issue key is already a hierarchy segment in the breadcrumb
-	// (added synchronously in runStatusWorkspace). The card's title
-	// becomes the human-readable issue title, which lands in the
-	// breadcrumb's trailing slot via the squish glue.
-	titleDisplay := detail.Title
-	if detail.URL != "" {
-		titleDisplay = osc8Link(detail.URL, detail.Title)
-	}
-
+	// (added synchronously in runStatusWorkspace). The card has no
+	// title — its content lives entirely in the body. The squish
+	// glue's trailing slot ends up empty (glyph suppressed via
+	// HideAbsorbedGlyph), so the breadcrumb stays clean.
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
 	}
 
-	return ui.NewCard(ui.CardSuccess, titleDisplay).
-		PreserveCase().
+	return ui.NewCard(ui.CardSuccess, "").
+		HideAbsorbedGlyph().
 		KV(
 			typeLabel, boldTitle,
 			"Status", detail.Status,
