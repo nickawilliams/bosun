@@ -105,17 +105,19 @@ type Card struct {
 	tight         bool // suppress comfy spacing (e.g. single-field prompts)
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
-	// absorbedGlyph, when non-empty, is a pre-styled glyph rendered
-	// in front of the LAST breadcrumb segment of a CardRoot. Used by
-	// the squish path to put a state glyph (or animated spinner
-	// frame) before the absorbed segment's title without the
-	// breadcrumb's own styling overwriting its color.
-	absorbedGlyph         string
-	suppressAbsorbedGlyph bool        // when true, breadcrumb absorption renders the most-recent data segment with no leading glyph
-	absorbedTitleColor    color.Color // optional override; applied to all dataSegments
-	dataSegments          []string    // breadcrumb data segments inserted between the implicit "bosun" root and the command-path tail (option 2 layout)
-	chainAbsorption       bool        // when true and absorbed body-less, the squish chain stays armed so the next card also absorbs as another data segment
-	tightBody             bool        // when true, renderBodyAndSubtitle skips the leading blank-connector line
+	tightBody     bool // when true, renderBodyAndSubtitle skips the leading blank-connector line
+
+	// suppressAbsorbedGlyph is read by the squish glue when this
+	// card becomes the source of a trailing-slot absorption: when
+	// true, the source's glyph is dropped from the trailing slot.
+	// Set via HideAbsorbedGlyph(). Has no effect on non-absorbed
+	// rendering of this card.
+	suppressAbsorbedGlyph bool
+
+	// breadcrumb is the root-header component. Non-nil only for
+	// CardRoot; lazy-initialized when any breadcrumb-related
+	// builder method is called. Owns segments + trailing slot.
+	breadcrumb *breadcrumb
 }
 
 type cardBodyKind int
@@ -216,44 +218,22 @@ func (c *Card) HideAbsorbedGlyph() *Card {
 	return c
 }
 
-// AbsorbedTitleColor overrides the foreground color used for this
-// card's title when it absorbs into a parent root card's
-// breadcrumb. Default is Palette.Primary; pass a different color
-// to mark the absorbed segment as a distinct kind of content
-// (e.g., a data identifier rather than a command name).
-func (c *Card) AbsorbedTitleColor(col color.Color) *Card {
-	c.absorbedTitleColor = col
-	return c
-}
-
-// ChainAbsorption marks this card as a chain-absorption participant.
-// When the card absorbs into a breadcrumb as body-less, the squish
-// chain stays armed so the next card also absorbs as another data
-// segment. Use to compose multi-segment breadcrumbs (e.g.,
-// `bosun › Foo › Bar › Baz`) from a sequence of standalone cards.
+// Breadcrumb appends a data segment to this card's breadcrumb.
+// Only meaningful for CardRoot; lazy-initializes the breadcrumb
+// component on first call. Use when the segment value is known
+// synchronously at card construction — the segment renders inline
+// with the title on first paint.
 //
-// Default behavior for a body-less absorbed card is to absorb once
-// and stop — so accidentally body-less cards don't silently steal
-// the next card's slot. Opt in explicitly when chaining is desired.
-func (c *Card) ChainAbsorption() *Card {
-	c.chainAbsorption = true
-	return c
-}
-
-// Breadcrumb appends a data segment to this card's breadcrumb. Use
-// when the segment value is known synchronously at card construction
-// — the segment renders inline with the title on first paint, no
-// absorption / re-render dance required. Compose with
-// AbsorbedTitleColor to tint all data segments.
-//
-// Compare to ChainAbsorption: that mechanism handles segments
-// discovered asynchronously (e.g., an issue key resolved after a
-// tracker fetch); this method handles segments known up front.
+// Empty strings are ignored. Style is fixed by the breadcrumb
+// component (data segments use Palette.Success).
 func (c *Card) Breadcrumb(s string) *Card {
 	if s == "" {
 		return c
 	}
-	c.dataSegments = append(c.dataSegments, s)
+	if c.breadcrumb == nil {
+		c.breadcrumb = &breadcrumb{}
+	}
+	c.breadcrumb.AddSegment(s)
 	return c
 }
 
@@ -358,8 +338,8 @@ func (c *Card) Render() string {
 
 // RenderBreadcrumbLine returns just the breadcrumb-carrying row of
 // this root card's render. Empty for non-root cards. Used by the
-// squish mechanism to rewrite only the changed line instead of erasing
-// the whole root, regardless of the active root-header style.
+// squish mechanism to rewrite only the changed line instead of
+// erasing the whole root, regardless of the active root-header style.
 func (c *Card) RenderBreadcrumbLine() string {
 	if c.state != CardRoot {
 		return ""
@@ -379,87 +359,27 @@ func (c *Card) BreadcrumbLineCount() int {
 	return strings.Count(s, "\n")
 }
 
-// renderBreadcrumbRow returns the single visible row that carries the
-// breadcrumb. In the current logo-mode root, that's the
-// "│  prefix breadcrumb postfix ───╯" bottom line. Includes its
-// trailing newline. Returns empty if c.state != CardRoot.
-//
-// This helper is the single source of truth for breadcrumb-line
-// rendering. Future header modes (e.g., a compact one-line root that
-// looks like "╭─ Bosun › Project › Status ──── v1.2.3 ") add their
-// branch here; nothing in the squish mechanism needs to change.
+// renderBreadcrumbRow delegates to the breadcrumb component. Lazy-
+// inits an empty breadcrumb if needed (so a root with no segments
+// still renders its closing rule).
 func (c *Card) renderBreadcrumbRow() string {
 	if c.state != CardRoot {
 		return ""
 	}
-	const pad = " "
-	ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	boxInner := TermWidth() - 3
 	if boxInner < 10 {
 		boxInner = 10
 	}
-
-	// Layout: <data segments> › <command-path tail>. The implicit
-	// "bosun" root is dropped (the logo above stands in for it),
-	// data segments come next (in absorbedTitleColor when set), then
-	// the command-path segments.
 	titleSegs := strings.Split(c.title, " › ")
 	var commandTail []string
 	if len(titleSegs) > 1 {
 		commandTail = titleSegs[1:]
 	}
-	visible := append([]string{}, c.dataSegments...)
-	visible = append(visible, commandTail...)
-
-	if len(visible) == 0 {
-		return fmt.Sprintf("%s%s  %s\n", pad,
-			ruleStyle.Render("│"),
-			ruleStyle.Render(strings.Repeat("─", boxInner-2)+"╯"))
+	bc := c.breadcrumb
+	if bc == nil {
+		bc = &breadcrumb{}
 	}
-
-	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-	styledSegs := make([]string, len(visible))
-	dataLen := len(c.dataSegments)
-	// The absorbed glyph (if any) prefixes the most recently absorbed
-	// data segment — i.e., the LAST data segment.
-	lastDataIdx := dataLen - 1
-	for i, seg := range visible {
-		style := primaryStyle
-		if i < dataLen && c.absorbedTitleColor != nil {
-			style = lipgloss.NewStyle().Bold(true).Foreground(c.absorbedTitleColor)
-		}
-		styled := style.Render(titleCase(seg))
-		if i == lastDataIdx && c.absorbedGlyph != "" {
-			styled = c.absorbedGlyph + " " + styled
-		}
-		styledSegs[i] = styled
-	}
-	breadcrumb := strings.Join(styledSegs, sepStyle.Render(" › "))
-
-	prefix := ""
-	prefixWidth := 0
-	if BreadcrumbPrefix != "" {
-		prefix = ruleStyle.Render(BreadcrumbPrefix) + " "
-		prefixWidth = lipgloss.Width(prefix)
-	}
-	postfix := " "
-	postfixWidth := 1
-	if BreadcrumbPostfix != "" {
-		postfix = " " + ruleStyle.Render(BreadcrumbPostfix) + " "
-		postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
-	}
-
-	ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(breadcrumb) - postfixWidth
-	if ruleLen < 1 {
-		ruleLen = 1
-	}
-	return fmt.Sprintf("%s%s  %s%s%s%s\n", pad,
-		ruleStyle.Render("│"),
-		prefix,
-		breadcrumb,
-		postfix,
-		ruleStyle.Render(strings.Repeat("─", ruleLen)+"╯"))
+	return bc.RenderRow(boxInner, commandTail)
 }
 
 // Print writes the card to stdout. Suppressed in raw mode.
@@ -1013,9 +933,12 @@ func (m squishedSpinnerModel) View() tea.View {
 		extended, _ := squishedFinalExtended(m.root, m.title, m.successCard, m.err)
 		return tea.NewView(m.frameView(&extended))
 	}
+	// Running phase: glyph + title go into the breadcrumb's trailing
+	// slot. Title may be empty (caller passed "" to RunCardReplace);
+	// glyph is always the spinner during this phase.
 	extended := *m.root
-	extended.dataSegments = append(append([]string{}, m.root.dataSegments...), m.title)
-	extended.absorbedGlyph = m.spinner.View()
+	extended.breadcrumb = m.root.breadcrumb.copy()
+	extended.breadcrumb.SetTrailing(m.title, m.spinner.View(), false)
 	return tea.NewView(m.frameView(&extended))
 }
 
@@ -1152,29 +1075,18 @@ func runSquishedCard(card *Card, fn func() error, successCard func() *Card) erro
 // transition.
 func squishedFinalExtended(root *Card, runningTitle string, successCard func() *Card, err error) (extended Card, body string) {
 	extended = *root
-	base := append([]string{}, root.dataSegments...)
+	extended.breadcrumb = root.breadcrumb.copy()
 	if err == nil && successCard != nil {
 		repl := successCard()
-		// Empty title = "no new breadcrumb segment, just render the
-		// body below." Used for transient loading patterns where the
-		// spinner replaces with body content (no further identity).
-		if repl.title != "" {
-			extended.dataSegments = append(base, repl.title)
-			if !repl.suppressAbsorbedGlyph {
-				extended.absorbedGlyph = repl.glyph()
-			} else {
-				extended.absorbedGlyph = ""
-			}
-		} else {
-			extended.absorbedGlyph = ""
-		}
-		if repl.absorbedTitleColor != nil {
-			extended.absorbedTitleColor = repl.absorbedTitleColor
-		}
+		// On success, the replacement card's title and glyph become
+		// the trailing slot. Empty title is fine (slot just shows
+		// glyph, or is empty if HideAbsorbedGlyph was set).
+		extended.breadcrumb.SetTrailing(repl.title, repl.glyph(), repl.suppressAbsorbedGlyph)
 		body = repl.renderBodyAndSubtitle()
 	} else {
-		extended.dataSegments = append(base, runningTitle)
-		extended.absorbedGlyph = squishedFinalGlyph(err)
+		// Failure (or no replacement): keep running title in trailing
+		// slot, swap glyph for the final ✓/✗ state.
+		extended.breadcrumb.SetTrailing(runningTitle, squishedFinalGlyph(err), false)
 	}
 	return extended, body
 }

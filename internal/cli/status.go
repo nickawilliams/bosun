@@ -67,10 +67,19 @@ func newStatusCmd() *cobra.Command {
 // header card with KV body, then one card per repo with body rows
 // (Branch / Checks / PR), then a summary recap.
 func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.Manager, wsName string) error {
-	// Root card — rootCard auto-includes the project segment via
-	// resolveProject. The issue segment is added async by the issue
-	// card's RunCardReplace absorption below.
-	rootCard(cmd).Print()
+	// Root card — rootCard auto-includes the project segment. We
+	// also resolve the issue key synchronously (from the workspace
+	// name / flag / env / branch) and add it as a hierarchy segment
+	// so the breadcrumb reads `Project › Issue › Workspace Status`
+	// from first paint. The issue card's TITLE (the human-readable
+	// issue title) lands later in the trailing slot via the squish
+	// glue when the async tracker fetch resolves.
+	root := rootCard(cmd)
+	issueKey, _ := resolveIssue(cmd)
+	if issueKey != "" {
+		root.Breadcrumb(issueKey)
+	}
+	root.Print()
 
 	// Enumerate repos first — cheap local call, needed up front so the
 	// issue card's Updated row can show the workspace's last-activity
@@ -99,7 +108,6 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// here so they emit after the issue card prints, not racing with
 	// the loading spinner.
 	tracker, _ := newIssueTracker()
-	issueKey, _ := resolveIssue(cmd)
 	if tracker != nil && issueKey != "" {
 		var (
 			detail       issuepkg.Issue
@@ -584,9 +592,13 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv pr
 		workspaceValue = osc8Link("file://"+workspacePath, branch)
 	}
 
-	idDisplay := detail.Key
+	// The issue key is already a hierarchy segment in the breadcrumb
+	// (added synchronously in runStatusWorkspace). The card's title
+	// becomes the human-readable issue title, which lands in the
+	// breadcrumb's trailing slot via the squish glue.
+	titleDisplay := detail.Title
 	if detail.URL != "" {
-		idDisplay = osc8Link(detail.URL, detail.Key)
+		titleDisplay = osc8Link(detail.URL, detail.Title)
 	}
 
 	typeLabel := detail.Type
@@ -594,9 +606,8 @@ func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv pr
 		typeLabel = "Issue"
 	}
 
-	return ui.NewCard(ui.CardSuccess, idDisplay).
-		HideAbsorbedGlyph().
-		AbsorbedTitleColor(ui.Palette.Success).
+	return ui.NewCard(ui.CardSuccess, titleDisplay).
+		PreserveCase().
 		KV(
 			typeLabel, boldTitle,
 			"Status", detail.Status,

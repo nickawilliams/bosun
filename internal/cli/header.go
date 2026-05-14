@@ -26,7 +26,7 @@ const headerAnnotationTitle = "title"
 func rootCard(cmd *cobra.Command, context ...string) *ui.Card {
 	card := ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd))
 	if project := resolveProject(cmd); project != "" {
-		card.Breadcrumb(project).AbsorbedTitleColor(ui.Palette.Success)
+		card.Breadcrumb(project)
 	}
 	if len(context) > 0 {
 		card.Subtitle(strings.Join(context, " · "))

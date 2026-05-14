@@ -71,21 +71,13 @@ func squishConsume(c *Card) {
 	root := squishCurrent.root
 	lines := squishCurrent.lineCount
 
-	// Build extended root with the child's title appended as a new
-	// data segment. The renderer assembles the visible breadcrumb
-	// as <data segments> › <command-path tail>; data segments take
-	// the absorbedTitleColor when set, and the most recently
-	// absorbed segment carries the absorbedGlyph (if any).
+	// Build extended root: the child's title and glyph land in the
+	// breadcrumb's trailing slot. The breadcrumb component owns its
+	// rendering; squish is the explicit glue that reads from the
+	// source card and writes into the destination breadcrumb's slot.
 	extended := *root
-	extended.dataSegments = append(append([]string{}, root.dataSegments...), c.title)
-	if g := c.glyph(); g != "" && !c.suppressAbsorbedGlyph {
-		extended.absorbedGlyph = g
-	} else if c.suppressAbsorbedGlyph {
-		extended.absorbedGlyph = ""
-	}
-	if c.absorbedTitleColor != nil {
-		extended.absorbedTitleColor = c.absorbedTitleColor
-	}
+	extended.breadcrumb = root.breadcrumb.copy()
+	extended.breadcrumb.SetTrailing(c.title, c.glyph(), c.suppressAbsorbedGlyph)
 
 	// Fast path: when the breadcrumb is the LAST line of the root,
 	// rewrite it in place WITHOUT clearing first — the new content
@@ -118,23 +110,11 @@ func squishConsume(c *Card) {
 		return
 	}
 
-	// Body-less child: chain only when the card explicitly opts in
-	// (Card.ChainAbsorption). Default is single-segment absorption,
-	// so accidentally body-less cards don't silently steal the next
-	// card's slot.
-	if c.chainAbsorption {
-		snapshot := extended
-		// lineCount is invariant under absorption: extending a root
-		// only changes the breadcrumb's content, not the box's line
-		// count, so we can reuse the original lines value.
-		squishCurrent = squishState{
-			root:      &snapshot,
-			lineCount: lines,
-		}
-		squishPending = true
-	} else {
-		clearSquish()
-	}
+	// Body-less child: drop the squish slot. (Chain-absorption was
+	// removed in the breadcrumb separation refactor — the trailing
+	// slot is the canonical home for an absorbed card's identity,
+	// so chained-segment absorption no longer applies.)
+	clearSquish()
 
 	if !c.tight {
 		comfyBreak = true
