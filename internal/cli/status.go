@@ -74,12 +74,8 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// from first paint. The issue card's TITLE (the human-readable
 	// issue title) lands later in the trailing slot via the squish
 	// glue when the async tracker fetch resolves.
-	root := rootCard(cmd)
 	issueKey, _ := resolveIssue(cmd)
-	if issueKey != "" {
-		root.Breadcrumb(issueKey)
-	}
-	root.Print()
+	rootCard(cmd).Breadcrumb(issueKey).Print()
 
 	// Enumerate repos first — cheap local call, needed up front so the
 	// issue card's Updated row can show the workspace's last-activity

@@ -24,11 +24,11 @@ func newReviewCmd() *cobra.Command {
 			headerAnnotationTitle: "code review",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rootCard(cmd).Print()
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			ctx := cmd.Context()
 			draft, _ := cmd.Flags().GetBool("draft")

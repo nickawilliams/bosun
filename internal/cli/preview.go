@@ -26,7 +26,7 @@ func newPreviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
+			rootCard(cmd).Breadcrumb(issueKey).Print()
 
 			ctx := cmd.Context()
 			tracker, _ := newIssueTracker()

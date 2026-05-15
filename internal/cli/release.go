@@ -21,7 +21,7 @@ func newReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			ctx := cmd.Context()
 
