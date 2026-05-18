@@ -16,7 +16,8 @@ import (
 type palette struct {
 	// Semantic colors.
 	Primary   color.Color // Titles, headings
-	Secondary color.Color // Breadcrumb root, secondary headings
+	Secondary color.Color // Secondary headings
+	Brand     color.Color // Application logo / app name
 	Accent    color.Color // Selectors, prompts, interactive elements
 	Info     color.Color // Informational, non-actionable signals
 	Success  color.Color // Confirmations, selected items
@@ -184,6 +185,7 @@ func defaultPalette() palette {
 	return palette{
 		Primary:   lipgloss.Color("#7571F9"), // Indigo
 		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
+		Brand:     lipgloss.Color("#9997CC"), // Desaturated indigo (logo / app name)
 		Accent:    lipgloss.Color("#F780E2"), // Fuchsia
 		Info:     lipgloss.Color("#5DA9F8"), // Sky blue
 		Success:  lipgloss.Color("#02BF87"), // Green
@@ -208,6 +210,7 @@ func ansiPalette() palette {
 	return palette{
 		Primary:   lipgloss.BrightBlue,
 		Secondary: lipgloss.Blue,
+		Brand:     lipgloss.Blue,
 		Accent:    lipgloss.BrightMagenta,
 		Info:     lipgloss.Cyan,
 		Success:  lipgloss.Green,
@@ -227,7 +230,7 @@ func ansiPalette() palette {
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
 	return palette{
-		Primary: nc, Secondary: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
+		Primary: nc, Secondary: nc, Brand: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 

@@ -494,7 +494,7 @@ func (c *Card) renderInner(glyph string) string {
 		} else {
 			// Logo mode: full ASCII art box with breadcrumb at bottom.
 			ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-			logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
+			logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand)
 
 			boxInner := TermWidth() - 3
 			if boxInner < 10 {

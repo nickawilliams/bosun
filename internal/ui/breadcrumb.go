@@ -30,6 +30,7 @@ var (
 	dataSegmentStyle   = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Success) }
 	commandTailStyle   = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary) }
 	trailingTitleStyle = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary) }
+	appNameStyle       = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand) }
 	separatorStyle     = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed) }
 	ruleStyle          = func() lipgloss.Style { return lipgloss.NewStyle().Foreground(Palette.Recessed) }
 )
@@ -188,9 +189,10 @@ func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) strin
 	// data segments use data style; command tail uses command style.
 	var styledSegs []string
 
-	// Root segment ("Bosun") — always present, uses command style.
+	// Root segment ("Bosun") — always present, uses the brand color
+	// to match the ASCII logo's color identity.
 	if len(commandPath) > 0 {
-		styledSegs = append(styledSegs, cmdStyle.Render(titleCase(commandPath[0])))
+		styledSegs = append(styledSegs, appNameStyle().Render(titleCase(commandPath[0])))
 	}
 
 	// Data segments (project, issue, etc.) — data style.
