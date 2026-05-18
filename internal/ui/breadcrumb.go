@@ -163,3 +163,77 @@ func (b *breadcrumb) RenderRow(boxInner int, commandTail []string) string {
 		postfix,
 		rule.Render(strings.Repeat("─", ruleLen)+"╯"))
 }
+
+// RenderCompactRow assembles a single-line compact header that
+// replaces the multi-line logo box. Includes "Bosun" as an explicit
+// first segment (since the logo art no longer stands in for it) and
+// the version string at the right. commandPath is the FULL set of
+// command segments (including the root "bosun" entry, unlike
+// RenderRow which expects it dropped).
+//
+// Visual layout:
+//
+//	╭─ Bosun › Project › EX-1234 › Status ──────── v0.1.0-dev
+//	   └ data ┘└ command path ──────┘ └ trailing ┘  └ version ┘
+func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) string {
+	const pad = " "
+	rule := ruleStyle()
+
+	dataStyle := dataSegmentStyle()
+	cmdStyle := commandTailStyle()
+	sep := separatorStyle()
+
+	// Build the full breadcrumb: "Bosun" root + data segments + command tail.
+	// The root segment (commandPath[0], typically "bosun") uses command style;
+	// data segments use data style; command tail uses command style.
+	var styledSegs []string
+
+	// Root segment ("Bosun") — always present, uses command style.
+	if len(commandPath) > 0 {
+		styledSegs = append(styledSegs, cmdStyle.Render(titleCase(commandPath[0])))
+	}
+
+	// Data segments (project, issue, etc.) — data style.
+	for _, seg := range b.segments {
+		styledSegs = append(styledSegs, dataStyle.Render(titleCase(seg)))
+	}
+
+	// Command tail (everything after the root) — command style.
+	if len(commandPath) > 1 {
+		for _, seg := range commandPath[1:] {
+			styledSegs = append(styledSegs, cmdStyle.Render(titleCase(seg)))
+		}
+	}
+
+	// Trailing slot (squished card title + glyph, if any).
+	if b.hasTrailing() {
+		var parts []string
+		if b.trailingGlyph != "" {
+			parts = append(parts, b.trailingGlyph)
+		}
+		if b.trailingTitle != "" {
+			parts = append(parts, trailingTitleStyle().Render(b.trailingTitle))
+		}
+		styledSegs = append(styledSegs, strings.Join(parts, " "))
+	}
+
+	crumb := strings.Join(styledSegs, sep.Render(" › "))
+
+	// Version at the right edge.
+	versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	version := versionStyle.Render(AppVersion)
+	versionWidth := lipgloss.Width(version)
+
+	// Layout: pad(1) + ╭─(2) + space(1) + crumb + space(1) + rule + space(1) + version
+	usedWidth := 1 + 2 + 1 + lipgloss.Width(crumb) + 1 + 1 + versionWidth
+	ruleLen := termWidth - usedWidth
+	if ruleLen < 1 {
+		ruleLen = 1
+	}
+
+	return fmt.Sprintf("%s%s %s %s %s\n", pad,
+		rule.Render("╭─"),
+		crumb,
+		rule.Render(strings.Repeat("─", ruleLen)),
+		version)
+}

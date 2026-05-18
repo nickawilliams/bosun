@@ -75,6 +75,23 @@ func IsComfy() bool {
 	return displayMode >= DisplayComfy
 }
 
+// headerMode controls whether the root card renders the full ASCII
+// logo box or a compact single-line header.
+var headerCompact bool
+
+// ApplyHeaderMode sets the header mode from a config string.
+// "compact" enables the single-line header; anything else (including
+// empty) uses the full logo box.
+func ApplyHeaderMode(mode string) {
+	headerCompact = strings.ToLower(strings.TrimSpace(mode)) == "compact"
+}
+
+// IsCompactHeader reports whether the root card should render as a
+// single-line breadcrumb header instead of the full logo box.
+func IsCompactHeader() bool {
+	return headerCompact
+}
+
 // displayPadding returns extra vertical whitespace to insert after a
 // non-timeline block (e.g. Panel) when the display mode calls for
 // breathing room.

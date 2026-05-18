@@ -176,6 +176,13 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "display_mode", Label: "display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
 		},
 	},
+	"header_mode": {
+		Label: "header mode",
+
+		Keys: []ConfigKey{
+			{Key: "header_mode", Label: "header mode", Options: []string{"logo", "compact"}, Default: "logo"},
+		},
+	},
 }
 
 // registerSource sets a Source function on a ConfigKey within a group.

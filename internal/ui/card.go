@@ -361,23 +361,29 @@ func (c *Card) BreadcrumbLineCount() int {
 
 // renderBreadcrumbRow delegates to the breadcrumb component. Lazy-
 // inits an empty breadcrumb if needed (so a root with no segments
-// still renders its closing rule).
+// still renders its closing rule). In compact header mode, renders
+// the single-line header including all command segments and the
+// version string. In logo mode, renders just the bottom row of the
+// logo box.
 func (c *Card) renderBreadcrumbRow() string {
 	if c.state != CardRoot {
 		return ""
+	}
+	bc := c.breadcrumb
+	if bc == nil {
+		bc = &breadcrumb{}
+	}
+	titleSegs := strings.Split(c.title, " › ")
+	if IsCompactHeader() {
+		return bc.RenderCompactRow(TermWidth(), titleSegs)
 	}
 	boxInner := TermWidth() - 3
 	if boxInner < 10 {
 		boxInner = 10
 	}
-	titleSegs := strings.Split(c.title, " › ")
 	var commandTail []string
 	if len(titleSegs) > 1 {
 		commandTail = titleSegs[1:]
-	}
-	bc := c.breadcrumb
-	if bc == nil {
-		bc = &breadcrumb{}
 	}
 	return bc.RenderRow(boxInner, commandTail)
 }
@@ -482,54 +488,56 @@ func (c *Card) renderInner(glyph string) string {
 	//  │
 	gap := "  "
 	if c.state == CardRoot {
-		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
+		if IsCompactHeader() {
+			// Compact mode: single-line header, no logo box.
+			b.WriteString(c.renderBreadcrumbRow())
+		} else {
+			// Logo mode: full ASCII art box with breadcrumb at bottom.
+			ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+			logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
 
-		// Box spans the full terminal width.
-		// Layout: pad(1) + border(1) + inner + border(1) = TermWidth()
-		boxInner := TermWidth() - 3
-		if boxInner < 10 {
-			boxInner = 10
-		}
-
-		// Top border — the glyph (╭) starts the box.
-		fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
-			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
-
-		// Logo lines: │  art ...padding... │
-		// The first line includes the version string right-aligned.
-		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		versionStr := versionStyle.Render(AppVersion)
-		versionWidth := lipgloss.Width(versionStr)
-		for i, line := range asciiLogo {
-			artWidth := lipgloss.Width(line)
-			if i == 0 {
-				// │  art  ...padding...  version  │
-				rightPad := boxInner - 2 - artWidth - versionWidth - 2
-				if rightPad < 1 {
-					rightPad = 1
-				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
-					ruleStyle.Render("│"),
-					logoStyle.Render(line),
-					strings.Repeat(" ", rightPad),
-					versionStr,
-					ruleStyle.Render("│"))
-			} else {
-				rightPad := boxInner - 2 - artWidth
-				if rightPad < 1 {
-					rightPad = 1
-				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
-					ruleStyle.Render("│"),
-					logoStyle.Render(line),
-					strings.Repeat(" ", rightPad),
-					ruleStyle.Render("│"))
+			boxInner := TermWidth() - 3
+			if boxInner < 10 {
+				boxInner = 10
 			}
-		}
 
-		// Bottom: breadcrumb closes the right side with ╯.
-		b.WriteString(c.renderBreadcrumbRow())
+			// Top border — the glyph (╭) starts the box.
+			fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
+				ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
+
+			// Logo lines: │  art ...padding... │
+			versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+			versionStr := versionStyle.Render(AppVersion)
+			versionWidth := lipgloss.Width(versionStr)
+			for i, line := range asciiLogo {
+				artWidth := lipgloss.Width(line)
+				if i == 0 {
+					rightPad := boxInner - 2 - artWidth - versionWidth - 2
+					if rightPad < 1 {
+						rightPad = 1
+					}
+					fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
+						ruleStyle.Render("│"),
+						logoStyle.Render(line),
+						strings.Repeat(" ", rightPad),
+						versionStr,
+						ruleStyle.Render("│"))
+				} else {
+					rightPad := boxInner - 2 - artWidth
+					if rightPad < 1 {
+						rightPad = 1
+					}
+					fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
+						ruleStyle.Render("│"),
+						logoStyle.Render(line),
+						strings.Repeat(" ", rightPad),
+						ruleStyle.Render("│"))
+				}
+			}
+
+			// Bottom: breadcrumb closes the right side with ╯.
+			b.WriteString(c.renderBreadcrumbRow())
+		}
 	} else {
 		if c.value != "" {
 			valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
