@@ -116,12 +116,13 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 // additional content (e.g., KV pairs) using the fetched detail.
 func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
 	var detail issue.Issue
-	err := ui.RunCardReplace("fetching issue", func() error {
+	err := ui.RunCardReplace("", func() error {
 		var e error
 		detail, e = tracker.GetIssue(ctx, issueKey)
 		return e
 	}, func() *ui.Card {
-		card := ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
+		card := ui.NewCard(ui.CardSuccess, "").
+			HideAbsorbedGlyph().
 			Subtitle(detail.Title)
 		if len(decorate) > 0 {
 			decorate[0](detail, card)
