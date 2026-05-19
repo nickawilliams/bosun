@@ -7,24 +7,21 @@ import (
 
 // Root-card breadcrumb absorption ("squishing").
 //
-// When a CardRoot is printed, the next non-root card emitted
-// gets absorbed: instead of printing as a separate timeline card,
-// its title is appended to the root's breadcrumb (separated by
-// " › ") and any body content is rendered below the re-rendered
-// root box. This lets call sites compose normally — the first
-// "what we're doing" card always lives in the breadcrumb without
-// requiring a special API.
+// When a CardRoot is printed, the next non-root card emitted gets
+// absorbed: its title and glyph are relocated to the root's
+// breadcrumb trailing slot, and any body content is rendered below
+// the root box. This lets lifecycle commands show async-fetched
+// content (like an issue card) as root-adjacent output without a
+// separate card in the timeline.
 //
-// By default, absorption ends after a single segment — a body-less
-// absorbed card stops the chain so the next card prints normally.
-// Multi-segment breadcrumbs (e.g., `bosun › Foo › Bar › Baz`) are
-// opt-in via Card.ChainAbsorption(): a body-less absorbed card
-// marked with that method keeps the squish chain armed so the
-// next non-root card absorbs as another segment.
+// The trailing slot is owned by the breadcrumb component; squish
+// is the explicit glue that reads from the source card and writes
+// into the destination breadcrumb via breadcrumb.SetTrailing().
 //
 // A card with no title and no body is inert — it consumes the
-// squish slot without modifying the root (use to opt out of
-// absorption for the following card when ChainAbsorption was set).
+// squish slot without modifying the root. DismissSquish() is the
+// explicit escape hatch for commands that don't want the next card
+// absorbed (e.g., doctor, config, demo).
 
 // squishState captures the most recent root-card print so the next
 // non-root print can re-render it with an extended breadcrumb.

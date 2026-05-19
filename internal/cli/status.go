@@ -56,7 +56,7 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			cmd.Annotations[headerAnnotationTitle] = "Project Status"
-			return runStatusProject(ctx, cmd, projectRoot)
+			return runStatusProject(ctx, cmd)
 		},
 	}
 
@@ -192,7 +192,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 // sorting since rendering would happen in fetch order. The trade
 // is intentional — at project scope the user wants a sorted triage
 // overview more than progressive per-workspace disclosure.
-func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot string) error {
+func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return err
@@ -289,7 +289,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command, projectRoot strin
 	}
 
 	renderProjectSummary(results)
-	_ = projectRoot
+
 	return nil
 }
 
