@@ -94,7 +94,7 @@ func stripANSI(s string) string {
 		switch s[i+1] {
 		case '[':
 			j := i + 2
-			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+			for j < len(s) && (s[j] < 'A' || s[j] > 'Z') && (s[j] < 'a' || s[j] > 'z') {
 				j++
 			}
 			i = j + 1
