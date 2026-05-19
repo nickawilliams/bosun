@@ -226,14 +226,14 @@ func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) strin
 	version := versionStyle.Render(AppVersion)
 	versionWidth := lipgloss.Width(version)
 
-	// Layout: pad(1) + ╭─(2) + space(1) + crumb + space(1) + rule + space(1) + version
-	usedWidth := 1 + 2 + 1 + lipgloss.Width(crumb) + 1 + 1 + versionWidth
+	// Layout: pad(1) + ╭─(2) + space(1) + crumb + space(1) + rule + space(1) + version + space(1)
+	usedWidth := 1 + 2 + 1 + lipgloss.Width(crumb) + 1 + 1 + versionWidth + 1
 	ruleLen := termWidth - usedWidth
 	if ruleLen < 1 {
 		ruleLen = 1
 	}
 
-	return fmt.Sprintf("%s%s %s %s %s\n", pad,
+	return fmt.Sprintf("%s%s %s %s %s \n", pad,
 		rule.Render("╭─"),
 		crumb,
 		rule.Render(strings.Repeat("─", ruleLen)),
