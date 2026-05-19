@@ -25,7 +25,7 @@ const headerAnnotationTitle = "title"
 // the hierarchy (e.g., a config key being read).
 func rootCard(cmd *cobra.Command, context ...string) *ui.Card {
 	card := ui.NewCard(ui.CardRoot, commandBreadcrumb(cmd))
-	if project := resolveProject(cmd); project != "" {
+	if project := resolveProject(); project != "" {
 		card.Breadcrumb(project)
 	}
 	if len(context) > 0 {
