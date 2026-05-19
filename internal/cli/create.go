@@ -69,6 +69,7 @@ func newCreateCmd() *cobra.Command {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
 			rootCard(cmd).Print()
+			ui.DismissSquish()
 
 			// --- Resolve ---
 			project := viper.GetString("jira.project")
