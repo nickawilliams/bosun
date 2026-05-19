@@ -33,6 +33,7 @@ func newDemoCmd() *cobra.Command {
 			}
 
 			rootCard(cmd, "interactive walkthrough").Print()
+			ui.DismissSquish()
 
 			if err := demoContinue("Spinners", true); err != nil {
 				return err
@@ -87,9 +88,11 @@ func buildDemoPlan() *ui.Plan {
 
 func demoCards(cmd *cobra.Command) {
 	// Root card — breadcrumb title, subtitle, and body.
+	// The cards below are standalone demo content, not squish targets.
 	rootCard(cmd, "comprehensive UI component reference").
 		Text("Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.").
 		Print()
+	ui.DismissSquish()
 
 	// Static card — title, subtitle, and body with text, muted,
 	// and key-value to show the primitive body types together.

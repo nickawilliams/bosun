@@ -132,3 +132,10 @@ func clearSquish() {
 	squishPending = false
 	squishCurrent = squishState{}
 }
+
+// DismissSquish drops any pending root-card absorption so the next
+// card prints normally below the root instead of being absorbed
+// into its breadcrumb trailing slot. Use after rootCard.Print()
+// when the cards that follow are standalone content (e.g., demo
+// output, groups) rather than squish targets.
+func DismissSquish() { clearSquish() }
