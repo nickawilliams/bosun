@@ -73,6 +73,8 @@ func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState 
 		return ui.CardSuccess
 	case "closed":
 		return ui.CardFailed
+	case "draft":
+		return ui.CardWaiting
 	}
 	if strings.HasPrefix(branchState, "diverged") || strings.HasPrefix(branchState, "behind") {
 		return ui.CardSkipped
