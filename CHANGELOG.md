@@ -1,5 +1,65 @@
 # Changelog
 
+## [v0.2.0](https://github.com/nickawilliams/bosun/compare/1bdd655d07f49148e5660a1b959a8c506d9b8a8f...v0.2.0) - 2026-05-19
+
+### New Features
+
+- **CLI**
+  - Workspace status — real-data implementation - ([419c189](https://github.com/nickawilliams/bosun/commit/419c1899a5762ce713d572712c3cf71bbb84c876))
+  - Project status — workspace listing implementation - ([ee506c7](https://github.com/nickawilliams/bosun/commit/ee506c761b7f2a2b01bf63234156ad20ba5cc765))
+  - Lifecycle ordering for project workspaces - ([9041f35](https://github.com/nickawilliams/bosun/commit/9041f3512694fbcb9cce8250a293b50a0d430e83))
+  - Preview row on workspace status cards - ([c4ba066](https://github.com/nickawilliams/bosun/commit/c4ba066ffee4915c0064fd250cb1da8df8e6c34f))
+  - Persistent --project + --issue flags, auto-breadcrumb - ([f6515c7](https://github.com/nickawilliams/bosun/commit/f6515c7eb8f6e7846a6452e88a7ba325e8eb3468))
+- **UI**
+  - Add Card.Item primitive and supporting helpers - ([aea7e42](https://github.com/nickawilliams/bosun/commit/aea7e42701511fe5f5f27d3fa0ab0d0713b038eb))
+  - Root-card breadcrumb absorption for static cards - ([c2e77cf](https://github.com/nickawilliams/bosun/commit/c2e77cf6a8b0c3ea71f40a428f762ab5da87d973))
+  - Root-card breadcrumb spinner for RunCard - ([018ad84](https://github.com/nickawilliams/bosun/commit/018ad8440e671af39e84fd68cf3dfa1d72a44275))
+  - Squish honors RunCardReplace success-card replacement - ([318d241](https://github.com/nickawilliams/bosun/commit/318d241c1ab9bef68f37a4b92a6b8e246f4d8aa9))
+  - Card.HideAbsorbedGlyph for plain breadcrumb absorption - ([6125d3f](https://github.com/nickawilliams/bosun/commit/6125d3ffed661f898ac4c59e0766f241cd82d7f8))
+  - Card.AbsorbedTitleColor for breadcrumb data tinting - ([c6a1d76](https://github.com/nickawilliams/bosun/commit/c6a1d7638c3f1e57a4b7fb840ccb9fbb6541c401))
+  - Paint all chained data segments in absorbed-title color - ([2c64f33](https://github.com/nickawilliams/bosun/commit/2c64f33f075ebf712f6c79d79d413a376c695c6b))
+  - Add CardReady + CardWaiting states - ([41b625a](https://github.com/nickawilliams/bosun/commit/41b625a0e94d4a0c7cb544878c516154a04267a6))
+  - Card composition primitives for status redesign - ([0ae84d4](https://github.com/nickawilliams/bosun/commit/0ae84d44947934d7dd4bb82c8f9d6730f73360f9))
+  - Share KV key width across multiple Card.KV blocks - ([f2b24ef](https://github.com/nickawilliams/bosun/commit/f2b24ef5512652cc8530aa232aeba2b2513bff0d))
+  - Add compact header mode (config: header_mode=compact) - ([278c032](https://github.com/nickawilliams/bosun/commit/278c032786bc2ff72ba28e21c2e1060bede680de))
+- **Code:** Extend PullRequest + add CheckRollup for status command - ([df198ff](https://github.com/nickawilliams/bosun/commit/df198fff9d370702322f79a42df7dbc18fe1dfe6))
+- **Status:** Updated row from git commit activity across repos - ([737fe9c](https://github.com/nickawilliams/bosun/commit/737fe9c0ebbbde43d6f67502adbdb9c5e8a0b850))
+
+### Improvements
+
+- **CLI**
+  - Route status command through existing lifecycle seam - ([bd27962](https://github.com/nickawilliams/bosun/commit/bd279620c0dcbf13b7f661d23d1eae667077e7bf))
+  - Move fatal-error rendering and version wiring out of main - ([c0d9567](https://github.com/nickawilliams/bosun/commit/c0d9567576bc46617b47f471b49a11cfb9d6d0d7))
+  - Remove --project flag, defer to future branch - ([d31c2ad](https://github.com/nickawilliams/bosun/commit/d31c2ad8d3ac6e2170859d7ef6fe4f2a54a1dca6))
+- **UI**
+  - Unify Plan and PlanCard rendering via Card.Item - ([f89efc4](https://github.com/nickawilliams/bosun/commit/f89efc4432228af2d12680cbc2f73c4ae3e103c3))
+  - Align Card.Item glyph with Group child indent - ([02b239e](https://github.com/nickawilliams/bosun/commit/02b239eca611371f5435430bcb43c678c4d62765))
+  - Align Plan.RenderItems glyph with Card.Item indent - ([98f3ca1](https://github.com/nickawilliams/bosun/commit/98f3ca1e5236f8a7baafd420808f0bf346aa7809))
+  - Split breadcrumb storage; data goes before command - ([472d1c2](https://github.com/nickawilliams/bosun/commit/472d1c2ee5ab4d8138df1819daa4f42a83cdbcb7))
+  - Trim redundant Render call from squishConsume - ([bea99c4](https://github.com/nickawilliams/bosun/commit/bea99c4fecd789e16e5a08b72acc2e34083e5cc1))
+  - Separate breadcrumb component from card - ([dcc3356](https://github.com/nickawilliams/bosun/commit/dcc33560385289b76dc10ee2c55d1a88ab51f521))
+
+### Fixes
+
+- **CLI**
+  - Dismiss squish in doctor command to prevent duplicate header - ([edfbbd8](https://github.com/nickawilliams/bosun/commit/edfbbd8a92e3bf0baf9ed4af085205f7207eb780))
+  - Dismiss squish in all non-lifecycle commands - ([5a3bba0](https://github.com/nickawilliams/bosun/commit/5a3bba0840418d7620d9ed1e18ba07b287dba3b4))
+- **UI**
+  - Raise spinner timing floor to 250ms - ([29ae705](https://github.com/nickawilliams/bosun/commit/29ae7059157faa0d3377293cfab743fdc7e4daef))
+  - Preserve squish state across chained absorption - ([cd93b48](https://github.com/nickawilliams/bosun/commit/cd93b4822687bfe7e7fafd31193973ee8d583d1c))
+  - Print squish-spinner body after bubbletea exits - ([dfe1c27](https://github.com/nickawilliams/bosun/commit/dfe1c27b66823efc79eb8176989111ba86b58ef9))
+  - Make breadcrumb absorption chaining opt-in - ([bb9f7e2](https://github.com/nickawilliams/bosun/commit/bb9f7e22d2d1a658e1e9a41d1e2507304dd6b058))
+  - RunCardThen preserves title case by default - ([feb999b](https://github.com/nickawilliams/bosun/commit/feb999bae1e81493424831f5705cdce3fbe07717))
+  - Eliminate squish-mode breadcrumb flash via partial line rewrite - ([ec3e3c1](https://github.com/nickawilliams/bosun/commit/ec3e3c1a9e67ff26de891f1831eade371d54b7bd))
+  - Add DismissSquish and fix demo command duplicate headers - ([3959bcf](https://github.com/nickawilliams/bosun/commit/3959bcf7e64836ccd08724f7620d9c18e95a2bcb))
+  - Apply De Morgan's law in breadcrumb_test stripANSI helper - ([af646af](https://github.com/nickawilliams/bosun/commit/af646af8e6e96a89d0563323a623a5d01de9ae54))
+- **Preview:** Split OnInfo into (action, value) for richer rendering - ([66e6081](https://github.com/nickawilliams/bosun/commit/66e60815d16ae896cf99fd18de330d077ad7d44c))
+- **Status**
+  - Derive project name from project root dir basename - ([400e2ba](https://github.com/nickawilliams/bosun/commit/400e2ba5e80bf27afc451701d13a4c7a29d89ac1))
+  - Clamp statusKVWidth for Preview label + guard against panic - ([c1d5541](https://github.com/nickawilliams/bosun/commit/c1d554148cd5382d4101b3d5da7f84dbb90c2676))
+  - Buffer provider OnInfo events until after card prints - ([fdfe1a7](https://github.com/nickawilliams/bosun/commit/fdfe1a7c0d51d4f948deab1036c33e3d157c4d20))
+  - Add explicit draft case to resolveRepoCardState - ([c103b84](https://github.com/nickawilliams/bosun/commit/c103b846240f57a31ac46aef04ff991ebdabc8f7))
+
 ## [v0.1.0](https://github.com/nickawilliams/bosun/compare/f6d91dbfbe461d24e150b1a6f4444283b294334f...v0.1.0) - 2026-05-12
 
 ### New Features
