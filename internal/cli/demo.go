@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -25,14 +26,14 @@ func newDemoCmd() *cobra.Command {
 				demoCards(cmd)
 				demoTree()
 				demoGroupsStatic()
-				ui.ClearBreak()
-				fmt.Println()
+				demoItemCard()
 				demoPlanCardStates()
 				demoFormStatic()
 				return nil
 			}
 
 			rootCard(cmd, "interactive walkthrough").Print()
+			ui.DismissSquish()
 
 			if err := demoContinue("Spinners", true); err != nil {
 				return err
@@ -87,9 +88,11 @@ func buildDemoPlan() *ui.Plan {
 
 func demoCards(cmd *cobra.Command) {
 	// Root card — breadcrumb title, subtitle, and body.
+	// The cards below are standalone demo content, not squish targets.
 	rootCard(cmd, "comprehensive UI component reference").
 		Text("Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.").
 		Print()
+	ui.DismissSquish()
 
 	// Static card — title, subtitle, and body with text, muted,
 	// and key-value to show the primitive body types together.
@@ -115,6 +118,11 @@ func demoCards(cmd *cobra.Command) {
 		"Status", "In Progress",
 		"URL", issueURL,
 	))
+
+	// Heading with inline value — renders "Title: value" with the title
+	// in the standard bold/primary heading style and the value muted, on
+	// the same line.
+	ui.NewCard(ui.CardSuccess, "preview").Value("feature/login-page").Print()
 
 	// Card states — one bare card per state.
 	ui.NewCard(ui.CardPending, "pending").Print()
@@ -175,6 +183,24 @@ func demoGroupsStatic() {
 		})
 		g.Complete("continued after failure")
 	})
+}
+
+// demoItemCard renders a Card whose body uses the shared Card.Item
+// primitive — colored per-row glyph + content. Placed between the
+// group demo and the plan demo so the three card families can be
+// compared side-by-side for layout alignment.
+func demoItemCard() {
+	success := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	info := lipgloss.NewStyle().Foreground(ui.Palette.Info).Render("↑")
+	warning := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("↓")
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("◦")
+
+	ui.NewCard(ui.CardData, "card with items").
+		Item(success, "first row · all good").
+		Item(info, "second row · ahead 2").
+		Item(warning, "third row · behind 1").
+		Item(muted, "fourth row · pending").
+		Print()
 }
 
 func demoTree() {

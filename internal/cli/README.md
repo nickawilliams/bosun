@@ -205,3 +205,152 @@ Application: bosun
 
 4. **Lifecycle ordering follows the SDLC**: create, start, review,
    preview, prerelease, release, cleanup.
+
+## Heading & breadcrumb structure
+
+Every command run opens with a heading whose visible breadcrumb
+follows this shape:
+
+```
+[data segments] › [command path]
+```
+
+That is: location first ("where am I"), then action ("what am I
+doing"). Rendered as a single Card.Root by the UI layer (see
+`internal/ui/README.md`). The bosun ASCII logo replaces the
+implicit "Bosun" root segment.
+
+### Command path
+
+One or more segments describing *what command this is*. Always
+just the command name (or the full subcommand chain) — never
+mode-qualified, because the data segments below disambiguate the
+mode visually.
+
+- **Top-level commands**: a single segment. Examples: `Start`,
+  `Review`, `Cleanup`, `Status`, `Doctor`, `Init`.
+- **Subcommand commands**: parent + child. Examples:
+  `Workspace › Create`, `Config › Show`.
+
+### Data segments
+
+Zero or more segments after the command path naming the data the
+command is operating on. The breadcrumb's *shape* (which data
+segments are present, in what order) directly conveys what the
+command is doing — no mode qualifier on the command name needed.
+
+The hierarchy is: **project › issue/workspace › repo**.
+
+- **Project** is auto-detected from the current directory. It's
+  included for any command that acts within a project context.
+- **Issue / workspace** appears when the command is acting on a
+  specific issue (via `--issue` or auto-detected from CWD inside
+  a workspace). For workspace commands the issue ID is the
+  identifier; the workspace name itself lives in the body.
+- **Repo** appears when the command's scope narrows to a single
+  repository within the project or workspace.
+
+Meta commands (`help`) and tool-info commands run outside any
+project context skip project entirely.
+
+#### Status command shape (canonical multi-mode example)
+
+| Mode | Breadcrumb |
+| ---- | ---------- |
+| Project (no workspace, no specific repo) | `Clearstory › Status` |
+| Repo (single-repo project, not a workspace) | `Clearstory › extracker › Status` |
+| Workspace (issue-centric) | `Clearstory › EX-30434 › Status` |
+| Workspace + repo focus | `Clearstory › EX-30434 › extracker › Status` |
+| Outside any project | `Status` |
+
+#### Other commands
+
+| Command | Breadcrumb |
+| ------- | ---------- |
+| `bosun start --issue EX-30434` | `Clearstory › EX-30434 › Start` |
+| `bosun review` (in workspace) | `Clearstory › EX-30434 › Review` |
+| `bosun cleanup` | `Clearstory › EX-30434 › Cleanup` |
+| `bosun preview` | `Clearstory › EX-30434 › Preview` |
+| `bosun prerelease` | `Clearstory › EX-30434 › Prerelease` |
+| `bosun release` | `Clearstory › EX-30434 › Release` |
+| `bosun create` (no issue yet) | `Clearstory › Create` |
+| `bosun workspace create EX-30434` | `Clearstory › EX-30434 › Workspace › Create` |
+| `bosun workspace add EX-30434 my-api` | `Clearstory › EX-30434 › my-api › Workspace › Add` |
+| `bosun workspace rm EX-30434` | `Clearstory › EX-30434 › Workspace › Delete` |
+| `bosun config show` | `Clearstory › Config › Show` |
+| `bosun config check` | `Clearstory › Config › Check` |
+| `bosun config set foo.bar baz` | `Clearstory › foo.bar › Config › Set` |
+| `bosun config unset foo.bar` | `Clearstory › foo.bar › Config › Unset` |
+| `bosun config get foo.bar` | (raw output — no breadcrumb) |
+| `bosun init` | `Clearstory › Initialize` |
+| `bosun doctor` (in project) | `Clearstory › System Check` |
+| `bosun doctor` (outside project) | `System Check` |
+| `bosun help` | `Help` |
+| `bosun help start` | `Help › Start` |
+| `bosun help workspace create` | `Help › Workspace › Create` |
+
+Notes:
+
+- **`workspace status` is removed** — the root `bosun status`
+  with workspace mode (`Status › Clearstory › EX-30434`) covers
+  the same view; having two paths to the same output is
+  redundant.
+- **Doctor results** render below the heading as normal timeline
+  content, not as breadcrumb segments.
+- **Config get / set / unset** with a key argument include the
+  key as a trailing data segment when the command has a heading.
+  `config get` is raw-output and skips the heading entirely.
+
+### Color conventions
+
+| Segment kind | Color |
+| ------------ | ----- |
+| Command-path segments | bold, `Palette.Primary` (indigo) |
+| Separator (`›`) | bold, `Palette.Recessed` |
+| Data segments | bold, `Palette.Success` (green) when tinted via `Card.AbsorbedTitleColor` — green is the convention for data identifiers |
+| Absorbed state glyph | the absorbed card's state color (✓ success / ✗ error / spinner = primary) — suppressed via `Card.HideAbsorbedGlyph` when the data segment is purely informational |
+
+### Implementation
+
+- Command-path segments come from the `headerAnnotationTitle`
+  annotation (see `header.go` and `commandBreadcrumb`). Multi-
+  segment subcommand paths embed `›` directly in the annotation,
+  e.g. `"Workspace › Create"`.
+- Data segments are contributed by **non-root cards emitted after
+  the heading**, via the UI layer's "squish" mechanism. The first
+  card's title becomes the next data segment in the breadcrumb;
+  the card's body content renders below the box. See
+  `internal/ui/squish.go`.
+- Cards that contribute a data segment typically opt in to
+  `Card.AbsorbedTitleColor(ui.Palette.Success)` and
+  `Card.HideAbsorbedGlyph()` — green text, no leading glyph.
+- Commands with no data segments emit no absorbed card after the
+  heading; the breadcrumb stays as just the command path.
+
+### Examples
+
+```
+[Bosun logo box]
+[breadcrumb closing line:]
+ │  Clearstory › EX-30434 › Start ────────────╯
+```
+
+```
+ │  Clearstory › EX-30434 › Status ───────────╯
+```
+
+```
+ │  Clearstory › EX-30434 › extracker › Status ╯
+```
+
+```
+ │  Clearstory › EX-30434 › Workspace › Create ╯
+```
+
+```
+ │  System Check ─────────────────────────────╯
+```
+
+```
+ │  Help › Workspace › Create ────────────────╯
+```

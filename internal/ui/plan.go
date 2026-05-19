@@ -60,32 +60,20 @@ func (p *Plan) HasChanges() bool {
 	return false
 }
 
-// Render returns the plan as a styled string for display in the timeline.
+// Render returns the plan as a styled string for display in the
+// timeline. Builds a Card internally so plan rows render at the
+// same depth as Card.Item rows in other cards (status, etc.).
 func (p *Plan) Render() string {
 	if len(p.items) == 0 {
 		return ""
 	}
-
-	var b strings.Builder
-
-	// Plan heading as a card-style line.
-	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-
-	glyphStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	summary := p.Summary()
-	fmt.Fprintf(&b, " %s  %s %s\n", glyphStyle.Render(cardGlyphInfo), headingStyle.Render("Plan:"), summary)
-
+	card := NewCard(CardInfo, "Plan").Value(p.Summary())
 	widths := p.columnWidths()
-
 	for _, item := range p.items {
-		fmt.Fprintf(&b, " %s    %s\n",
-			connStyle.Render("│"),
-			renderPlanRow(item, widths),
-		)
+		glyph, content := planItemParts(item, widths)
+		card.Item(glyph, content)
 	}
-
-	return b.String()
+	return card.Render()
 }
 
 // Print writes the plan to stdout.
@@ -110,8 +98,13 @@ func (p *Plan) PrintRewindable() func() {
 	}
 }
 
-// RenderItems returns just the formatted action lines without heading or
-// timeline spine. Suitable for embedding as content in another component.
+// RenderItems returns the formatted action lines as a single string
+// (newline-joined, no trailing newline) without heading or timeline
+// spine. Each line is " <glyph>  <content>" with a leading space so
+// glyphs land at the same column as Card.Item rows when the form's
+// own border/padding supplies the column-2 spine. Suitable for
+// embedding as Title content in a huh form, or anywhere else that
+// wants raw rows.
 func (p *Plan) RenderItems() string {
 	if len(p.items) == 0 {
 		return ""
@@ -120,7 +113,7 @@ func (p *Plan) RenderItems() string {
 	widths := p.columnWidths()
 	var b strings.Builder
 	for _, item := range p.items {
-		fmt.Fprintf(&b, "  %s\n", renderPlanRow(item, widths))
+		fmt.Fprintf(&b, " %s\n", renderPlanRow(item, widths))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -210,9 +203,9 @@ func (p *Plan) SummaryPartial(succeeded, failed int) string {
 	return strings.Join(parts, ", ")
 }
 
-// RenderItemLines returns the formatted action lines as a slice for reuse
-// by PlanCard. Each line includes the symbol, action, type, name, and detail
-// but no spine or heading.
+// RenderItemLines returns the formatted action lines as a slice
+// for reuse by PlanCard. Each line is "<glyph>  <content>" with
+// no spine or heading.
 func (p *Plan) RenderItemLines() []string {
 	if len(p.items) == 0 {
 		return nil
@@ -221,7 +214,7 @@ func (p *Plan) RenderItemLines() []string {
 	widths := p.columnWidths()
 	var lines []string
 	for _, item := range p.items {
-		lines = append(lines, "  "+renderPlanRow(item, widths))
+		lines = append(lines, renderPlanRow(item, widths))
 	}
 	return lines
 }
@@ -251,30 +244,41 @@ func (p *Plan) columnWidths() planColumnWidths {
 	return w
 }
 
-// renderPlanRow renders one PlanItem as the symbol + action + type + name +
-// detail, padded to the given column widths. NoChange items render fully
-// muted to convey "no work to do."
-func renderPlanRow(item PlanItem, w planColumnWidths) string {
+// planItemParts splits a PlanItem into its styled glyph (the diff
+// symbol) and the column-aligned content string. Both pieces are
+// pre-rendered with their semantic colors. The glyph is used as
+// Card.Item's first argument; content as the second. For embedded
+// uses (RenderItems / RenderItemLines / PlanCard body), callers
+// can rejoin via "<glyph>  <content>".
+func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
 	symbol, symbolStyle := planSymbol(item.Op)
+	g := symbolStyle.Render(symbol)
+
 	actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
 	typeStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	nameStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-
 	if item.Op == PlanNoChange {
-		actionStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-		typeStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-		nameStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-		detailStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+		muted := lipgloss.NewStyle().Foreground(Palette.Muted)
+		actionStyle, typeStyle, nameStyle, detailStyle = muted, muted, muted, muted
 	}
 
-	return fmt.Sprintf("%s  %s  %s  %s  %s",
-		symbolStyle.Render(symbol),
+	c := fmt.Sprintf("%s  %s  %s  %s",
 		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),
 		typeStyle.Render(fmt.Sprintf("%-*s", w.typ, item.Type)),
 		nameStyle.Render(fmt.Sprintf("%-*s", w.name, item.Name)),
 		detailStyle.Render(item.Detail),
 	)
+	return g, c
+}
+
+// renderPlanRow returns "<glyph>  <content>" for a single plan
+// item. Used by RenderItems / RenderItemLines / PlanCard for
+// non-Card-body embedding. Card.Item-based rendering uses
+// planItemParts directly.
+func renderPlanRow(item PlanItem, w planColumnWidths) string {
+	glyph, content := planItemParts(item, w)
+	return glyph + "  " + content
 }
 
 // planSymbol returns the diff symbol and its style for a given operation.

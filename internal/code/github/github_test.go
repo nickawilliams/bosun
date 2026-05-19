@@ -59,9 +59,20 @@ func TestCreatePRIdempotent(t *testing.T) {
 	postCalled := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "GET":
-			// Existing PR found.
+		switch {
+		case r.Method == "POST":
+			postCalled = true
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/reviews"):
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/requested_reviewers"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"users": []any{}, "teams": []any{}})
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/pulls/99"):
+			// Single-PR detail call for mergeable_state.
+			_ = json.NewEncoder(w).Encode(map[string]any{"mergeable_state": "clean"})
+		case r.Method == "GET":
+			// Existing PR found via list endpoint.
 			_ = json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"number":    99,
@@ -69,12 +80,9 @@ func TestCreatePRIdempotent(t *testing.T) {
 					"html_url":  "https://github.com/org/repo/pull/99",
 					"state":     "open",
 					"merged_at": nil,
+					"head":      map[string]any{"sha": "abc123"},
 				},
 			})
-		case "POST":
-			postCalled = true
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{})
 		}
 	}))
 	defer server.Close()
@@ -97,15 +105,29 @@ func TestCreatePRIdempotent(t *testing.T) {
 
 func TestGetPRForBranch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{
-				"number":    5,
-				"title":     "My PR",
-				"html_url":  "https://github.com/org/repo/pull/5",
-				"state":     "open",
-				"merged_at": nil,
-			},
-		})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"user": map[string]any{"login": "alice"}, "state": "APPROVED"},
+			})
+		case strings.HasSuffix(r.URL.Path, "/requested_reviewers"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"users": []any{}, "teams": []any{}})
+		case strings.Contains(r.URL.Path, "/pulls/5"):
+			// Single-PR detail call.
+			_ = json.NewEncoder(w).Encode(map[string]any{"mergeable_state": "clean"})
+		default:
+			// List endpoint.
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number":    5,
+					"title":     "My PR",
+					"html_url":  "https://github.com/org/repo/pull/5",
+					"state":     "open",
+					"merged_at": nil,
+					"head":      map[string]any{"sha": "deadbeef"},
+				},
+			})
+		}
 	}))
 	defer server.Close()
 
@@ -120,6 +142,15 @@ func TestGetPRForBranch(t *testing.T) {
 	}
 	if pr.State != "open" {
 		t.Errorf("State = %q, want %q", pr.State, "open")
+	}
+	if pr.HeadSHA != "deadbeef" {
+		t.Errorf("HeadSHA = %q, want %q", pr.HeadSHA, "deadbeef")
+	}
+	if pr.MergeableState != "clean" {
+		t.Errorf("MergeableState = %q, want %q", pr.MergeableState, "clean")
+	}
+	if pr.Review != "approved" {
+		t.Errorf("Review = %q, want %q", pr.Review, "approved")
 	}
 }
 
@@ -429,6 +460,175 @@ func TestAuthHeader(t *testing.T) {
 
 	if gotAuth != "Bearer mytoken123" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer mytoken123")
+	}
+}
+
+func TestGetChecks(t *testing.T) {
+	cases := []struct {
+		name      string
+		runs      []map[string]any
+		wantState string
+		wantPass  int
+		wantFail  int
+		wantRun   int
+	}{
+		{
+			name:      "empty",
+			runs:      nil,
+			wantState: "none",
+		},
+		{
+			name: "all passing",
+			runs: []map[string]any{
+				{"status": "completed", "conclusion": "success"},
+				{"status": "completed", "conclusion": "neutral"},
+				{"status": "completed", "conclusion": "skipped"},
+			},
+			wantState: "passing",
+			wantPass:  3,
+		},
+		{
+			name: "mixed with failure",
+			runs: []map[string]any{
+				{"status": "completed", "conclusion": "success"},
+				{"status": "completed", "conclusion": "failure"},
+				{"status": "in_progress", "conclusion": nil},
+			},
+			wantState: "failing",
+			wantPass:  1,
+			wantFail:  1,
+			wantRun:   1,
+		},
+		{
+			name: "running with passes, no failures",
+			runs: []map[string]any{
+				{"status": "completed", "conclusion": "success"},
+				{"status": "in_progress", "conclusion": nil},
+			},
+			wantState: "running",
+			wantPass:  1,
+			wantRun:   1,
+		},
+		{
+			name: "action_required counts as failing",
+			runs: []map[string]any{
+				{"status": "completed", "conclusion": "action_required"},
+			},
+			wantState: "failing",
+			wantFail:  1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": tc.runs})
+			}))
+			defer server.Close()
+
+			a := NewWithClient(server.Client(), server.URL, "token")
+
+			rollup, err := a.GetChecks(context.Background(), "org", "repo", "abc123")
+			if err != nil {
+				t.Fatalf("GetChecks() error: %v", err)
+			}
+			if rollup.State != tc.wantState {
+				t.Errorf("State = %q, want %q", rollup.State, tc.wantState)
+			}
+			if rollup.Passing != tc.wantPass {
+				t.Errorf("Passing = %d, want %d", rollup.Passing, tc.wantPass)
+			}
+			if rollup.Failing != tc.wantFail {
+				t.Errorf("Failing = %d, want %d", rollup.Failing, tc.wantFail)
+			}
+			if rollup.Running != tc.wantRun {
+				t.Errorf("Running = %d, want %d", rollup.Running, tc.wantRun)
+			}
+		})
+	}
+}
+
+func TestReviewDecision(t *testing.T) {
+	cases := []struct {
+		name             string
+		reviews          []map[string]any
+		requestedUsers   []string
+		requestedTeams   []string
+		wantDecision     string
+	}{
+		{
+			name:         "approved by one",
+			reviews:      []map[string]any{{"user": map[string]any{"login": "alice"}, "state": "APPROVED"}},
+			wantDecision: "approved",
+		},
+		{
+			name: "changes requested beats approval",
+			reviews: []map[string]any{
+				{"user": map[string]any{"login": "alice"}, "state": "APPROVED"},
+				{"user": map[string]any{"login": "bob"}, "state": "CHANGES_REQUESTED"},
+			},
+			wantDecision: "changes_requested",
+		},
+		{
+			name: "latest review per user wins",
+			reviews: []map[string]any{
+				{"user": map[string]any{"login": "alice"}, "state": "CHANGES_REQUESTED"},
+				{"user": map[string]any{"login": "alice"}, "state": "APPROVED"},
+			},
+			wantDecision: "approved",
+		},
+		{
+			name:         "no reviews but reviewers requested → awaiting",
+			reviews:      []map[string]any{},
+			requestedUsers: []string{"carol"},
+			wantDecision: "awaiting",
+		},
+		{
+			name:         "no reviews and no requests → empty",
+			reviews:      []map[string]any{},
+			wantDecision: "",
+		},
+		{
+			name: "comments don't carry a decision",
+			reviews: []map[string]any{
+				{"user": map[string]any{"login": "alice"}, "state": "COMMENTED"},
+			},
+			wantDecision: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/reviews"):
+					_ = json.NewEncoder(w).Encode(tc.reviews)
+				case strings.HasSuffix(r.URL.Path, "/requested_reviewers"):
+					users := make([]map[string]any, len(tc.requestedUsers))
+					for i, u := range tc.requestedUsers {
+						users[i] = map[string]any{"login": u}
+					}
+					teams := make([]map[string]any, len(tc.requestedTeams))
+					for i, n := range tc.requestedTeams {
+						teams[i] = map[string]any{"slug": n}
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"users": users, "teams": teams,
+					})
+				}
+			}))
+			defer server.Close()
+
+			a := NewWithClient(server.Client(), server.URL, "token")
+
+			got, err := a.fetchReviewDecision(context.Background(), "org", "repo", 1)
+			if err != nil {
+				t.Fatalf("fetchReviewDecision() error: %v", err)
+			}
+			if got != tc.wantDecision {
+				t.Errorf("decision = %q, want %q", got, tc.wantDecision)
+			}
+		})
 	}
 }
 

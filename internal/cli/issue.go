@@ -22,11 +22,6 @@ import (
 // issuePattern matches common issue tracker IDs like PROJ-123, CS-42, etc.
 var issuePattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-\d+`)
 
-// addIssueFlag adds the shared --issue flag to a command.
-func addIssueFlag(cmd *cobra.Command) {
-	cmd.Flags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
-}
-
 // resolveIssue returns the issue identifier from the resolution chain:
 // (1) --issue flag, (2) BOSUN_ISSUE env var, (3) workspace path derivation,
 // (4) git branch name derivation.

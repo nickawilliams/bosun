@@ -28,6 +28,7 @@ func newConfigSetCmd() *cobra.Command {
 			global, _ := cmd.Flags().GetBool("global")
 
 			rootCard(cmd, key).Print()
+			ui.DismissSquish()
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {
@@ -61,6 +62,7 @@ func newConfigUnsetCmd() *cobra.Command {
 			global, _ := cmd.Flags().GetBool("global")
 
 			rootCard(cmd, key).Print()
+			ui.DismissSquish()
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {

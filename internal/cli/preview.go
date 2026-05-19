@@ -26,7 +26,7 @@ func newPreviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
+			rootCard(cmd).Breadcrumb(issueKey).Print()
 
 			ctx := cmd.Context()
 			tracker, _ := newIssueTracker()
@@ -160,7 +160,6 @@ func newPreviewCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	cmd.Flags().String("name", "", "ephemeral environment name (e.g., brave-falcon; auto-generated if not set)")
 	cmd.Flags().Bool("force", false, "auto-confirm prompts; replace existing or create missing without asking")

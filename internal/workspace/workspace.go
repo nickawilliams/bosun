@@ -129,6 +129,59 @@ func (m *Manager) Status(ctx context.Context, name string) ([]RepositoryStatus, 
 	return statuses, nil
 }
 
+// List returns the names of all workspaces under the workspace root.
+// A workspace is identified as a directory containing at least one
+// subdirectory that looks like a git worktree (has a `.git` entry).
+// Workspace names may contain slashes when nested under intermediate
+// directories (e.g., "feature/EX-30434_foo"). Returns nil with no
+// error when the workspace root doesn't exist or is empty.
+func (m *Manager) List() ([]string, error) {
+	if _, err := os.Stat(m.workspaceRoot); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading workspace root: %w", err)
+	}
+
+	var workspaces []string
+	walkWorkspaces(m.workspaceRoot, m.workspaceRoot, &workspaces)
+	return workspaces, nil
+}
+
+// walkWorkspaces recursively descends `path`, looking for "workspace"
+// directories — those containing at least one subdirectory with a
+// `.git` entry (indicating a git worktree). When found, records the
+// path relative to `root` and stops descending. Otherwise, recurses
+// into subdirectories.
+func walkWorkspaces(path, root string, workspaces *[]string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+	hasWorktree := false
+	var subdirs []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(path, entry.Name())
+		if _, err := os.Stat(filepath.Join(child, ".git")); err == nil {
+			hasWorktree = true
+			continue
+		}
+		subdirs = append(subdirs, child)
+	}
+	if hasWorktree {
+		if rel, err := filepath.Rel(root, path); err == nil && rel != "." {
+			*workspaces = append(*workspaces, rel)
+		}
+		return
+	}
+	for _, sd := range subdirs {
+		walkWorkspaces(sd, root, workspaces)
+	}
+}
+
 // Remove removes a workspace: worktrees, local branches, remote branches.
 // repositories maps repository names to their source paths (needed to run git
 // worktree remove and branch delete against the source repository). Returns an

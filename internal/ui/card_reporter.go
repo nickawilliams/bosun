@@ -79,9 +79,10 @@ func (r *cardReporter) Saved(label, value string) {
 }
 
 // Selected emits a CardSuccess with the label as title and the chosen
-// value as a subtitle. Use after an interactive single-value prompt.
+// value as a subtitle. The label preserves its original casing since
+// it represents a chosen value or identifier, not a heading.
 func (r *cardReporter) Selected(label, value string) {
-	NewCard(CardSuccess, label).Subtitle(value).Print()
+	NewCard(CardSuccess, label).PreserveCase().Subtitle(value).Print()
 }
 
 // SelectedMulti emits a CardSuccess with the label as title and chosen

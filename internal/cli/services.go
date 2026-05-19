@@ -116,12 +116,13 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 // additional content (e.g., KV pairs) using the fetched detail.
 func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
 	var detail issue.Issue
-	err := ui.RunCardReplace("fetching issue", func() error {
+	err := ui.RunCardReplace("", func() error {
 		var e error
 		detail, e = tracker.GetIssue(ctx, issueKey)
 		return e
 	}, func() *ui.Card {
-		card := ui.NewCard(ui.CardSuccess, fmt.Sprintf("%s: %s", detail.Type, detail.Key)).
+		card := ui.NewCard(ui.CardSuccess, "").
+			HideAbsorbedGlyph().
 			Subtitle(detail.Title)
 		if len(decorate) > 0 {
 			decorate[0](detail, card)
@@ -322,11 +323,12 @@ func resolveStatus(key string) (string, error) {
 }
 
 // buildStatusIndex returns a mapping from lowercase provider status
-// name to lifecycle sequence position. Unknown statuses are absent
-// from the map; callers should treat missing entries as sorting to
-// the end.
+// name to lifecycle sequence position. Includes "done" as the
+// terminal position after all lifecycleStatusKeys entries. Unknown
+// statuses are absent from the map; callers should treat missing
+// entries as sorting after "done".
 func buildStatusIndex() map[string]int {
-	idx := make(map[string]int, len(lifecycleStatusKeys))
+	idx := make(map[string]int, len(lifecycleStatusKeys)+1)
 	for i, key := range lifecycleStatusKeys {
 		name, err := resolveStatus(key)
 		if err != nil {
@@ -334,7 +336,32 @@ func buildStatusIndex() map[string]int {
 		}
 		idx[strings.ToLower(name)] = i
 	}
+	if name, err := resolveStatus("done"); err == nil {
+		idx[strings.ToLower(name)] = len(lifecycleStatusKeys)
+	}
 	return idx
+}
+
+// lifecycleKeyForStatus reverse-resolves a provider status name
+// (e.g., "Ready for Release") to the bosun lifecycle key (e.g.,
+// "ready_for_release") it's mapped from. Returns "" if the status
+// doesn't match any configured lifecycle stage. Comparison is
+// case-insensitive.
+func lifecycleKeyForStatus(status string) string {
+	if status == "" {
+		return ""
+	}
+	target := strings.ToLower(status)
+	for _, key := range append(append([]string{}, lifecycleStatusKeys...), "done") {
+		name, err := resolveStatus(key)
+		if err != nil {
+			continue
+		}
+		if strings.ToLower(name) == target {
+			return key
+		}
+	}
+	return ""
 }
 
 // newCodeHost creates a code.Host from current config. Resolution order:
@@ -646,11 +673,29 @@ func newCICD() (cicd.CICD, error) {
 	}
 }
 
-// newPreviewProvider creates a preview.Provider from current config.
-// The pipeline and tracker are optional — if either is unavailable, the
-// returned provider still supports the read paths (Get, Inspect) and
-// gracefully reports ErrNoPipeline / nothing-to-write on the write paths.
+// newPreviewProvider creates a preview.Provider with the default
+// OnInfo callback that renders incidental events inline as a success
+// card with a title (the action, title-cased by default) and a muted
+// raw-cased value. Suitable for commands where side-effect notifications
+// can fire immediately alongside other output (e.g., the preview command
+// itself).
 func newPreviewProvider() (preview.Provider, error) {
+	return newPreviewProviderWithInfo(func(action, value string) {
+		ui.NewCard(ui.CardSuccess, action).Value(value).Print()
+	})
+}
+
+// newPreviewProviderWithInfo creates a preview.Provider with a custom
+// OnInfo sink — useful when callers want to buffer side-effect events
+// (e.g., the status command at project scope, which captures
+// per-workspace cleanup notices and prints them after the relevant
+// card so they don't race with the loading spinner).
+//
+// The pipeline and tracker are optional — if either is unavailable,
+// the returned provider still supports the read paths (Get, Inspect)
+// and gracefully reports ErrNoPipeline / nothing-to-write on the
+// write paths.
+func newPreviewProviderWithInfo(onInfo func(action, value string)) (preview.Provider, error) {
 	providerName := viper.GetString("preview")
 	if providerName == "" {
 		providerName = "cicd"
@@ -659,10 +704,6 @@ func newPreviewProvider() (preview.Provider, error) {
 		return nil, fmt.Errorf("unsupported preview provider: %q", providerName)
 	}
 
-	// Pipeline and tracker are best-effort: degraded availability is
-	// surfaced at the call site (Create returns ErrNoPipeline; Adopt
-	// returns nil when tracker is missing) — same shape as the legacy
-	// command's pipelineErr handling.
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
@@ -698,7 +739,7 @@ func newPreviewProvider() (preview.Provider, error) {
 			return out, nil
 		},
 		InputName: stageInputName,
-		OnInfo:    ui.Complete,
+		OnInfo:    onInfo,
 	}), nil
 }
 

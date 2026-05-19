@@ -84,6 +84,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	cs := loadConfigSources()
 
 	rootCard(cmd).Print()
+	ui.DismissSquish()
 	tree := buildConfigTree(cs, sourceFilter, groupFilter)
 	tree.Print()
 
@@ -446,6 +447,7 @@ func newConfigCheckCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
+			ui.DismissSquish()
 			return runConfigCheck(args)
 		},
 	}

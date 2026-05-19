@@ -17,7 +17,7 @@ func main() {
 		outDir = filepath.Join("contrib", "completions")
 	}
 
-	cmd := cli.NewRootCmd()
+	cmd := cli.NewRootCmd("dev")
 
 	shells := []struct {
 		dir   string

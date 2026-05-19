@@ -37,6 +37,7 @@ func newDoctorCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCard(cmd).Print()
+			ui.DismissSquish()
 			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)

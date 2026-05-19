@@ -4,12 +4,43 @@ import "context"
 
 // PullRequest represents a pull request on a code hosting platform.
 type PullRequest struct {
-	Number int
-	Title  string
-	Body   string // Description text.
-	URL    string
-	State  string // "open", "closed", "merged"
-	Review string // "approved", "changes_requested", "pending", ""
+	Number  int
+	Title   string
+	Body    string // Description text.
+	URL     string
+	State   string // "open" | "closed" | "merged"
+	HeadSHA string // commit SHA at the PR's head — used for fetching checks
+
+	// Review is the aggregate review decision derived from per-user
+	// review states. Populated only for open PRs (closed / merged
+	// PRs leave it empty since reviews don't matter once settled).
+	// Values: "approved" | "changes_requested" | "awaiting" | ""
+	// (no reviews requested or completed).
+	Review string
+
+	// MergeableState is GitHub's calculated mergeable state, encoding
+	// the union of branch divergence, conflicts, required checks,
+	// and required reviews. Populated only for open PRs. Don't
+	// re-derive in client code — surface this directly. Values:
+	// "clean" | "dirty" | "unstable" | "blocked" | "behind" | "draft"
+	// | "unknown".
+	MergeableState string
+}
+
+// CheckRollup is the aggregate CI state for a commit's check runs.
+// Folds GitHub's multi-suite, multi-check-run model into a single
+// status-row summary suitable for at-a-glance display.
+type CheckRollup struct {
+	// State is the aggregate state derived from the counts:
+	//   - "passing" — all checks succeeded (success / neutral / skipped)
+	//   - "failing" — at least one check failed (failure / timed_out /
+	//     cancelled / action_required)
+	//   - "running" — at least one check still in_progress, none failing
+	//   - "none"    — no checks defined for this commit
+	State   string
+	Passing int
+	Failing int
+	Running int
 }
 
 // CreatePRRequest holds the fields needed to create a pull request.
@@ -73,4 +104,9 @@ type Host interface {
 	// GetLatestTag returns the most recent semver tag for a repository,
 	// or empty string if no tags exist.
 	GetLatestTag(ctx context.Context, owner, repository string) (string, error)
+
+	// GetChecks returns the aggregate check status for a commit ref
+	// (e.g., a PR head SHA or a branch HEAD). Returns CheckRollup
+	// with State="none" if no checks exist for the ref.
+	GetChecks(ctx context.Context, owner, repository, ref string) (CheckRollup, error)
 }

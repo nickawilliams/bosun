@@ -1,6 +1,8 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestTitleCase(t *testing.T) {
 	tests := []struct {
@@ -120,3 +122,4 @@ func TestWrapForTimeline(t *testing.T) {
 		}
 	})
 }
+

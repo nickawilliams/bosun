@@ -3,6 +3,7 @@ package ui
 import (
 	_ "embed"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 	"unicode"
@@ -16,10 +17,17 @@ import (
 // CardState represents the lifecycle state of a card.
 //
 // Semantic guide for command output:
-//   - CardSuccess — operation completed successfully
+//   - CardSuccess — operation completed successfully (terminal good)
+//   - CardReady   — operation is complete pending a user action (e.g.,
+//     a PR is mergeable but not yet merged)
 //   - CardFailed  — operation was attempted and returned an error
 //   - CardSkipped — operation was not attempted (missing config, optional
-//     dependency unavailable, precondition unmet)
+//     dependency unavailable, precondition unmet). Also doubles as
+//     the "blocked" state in aggregate status output — the glyph
+//     and color (▲ warning) read the same way regardless of whether
+//     the cause is "didn't run" or "needs you to act."
+//   - CardWaiting — operation is in progress and the ball is not in
+//     the user's court (CI running, PR under review, draft sitting)
 //   - CardInfo    — informational display, not an operation result
 //   - CardInput   — interactive prompt (use with PrintRewindable)
 //   - CardRoot    — command header (timeline anchor)
@@ -35,17 +43,21 @@ const (
 	CardInfo
 	CardInput
 	CardRoot
-	CardData // structured state snapshot, no status glyph
+	CardData    // structured state snapshot, no status glyph
+	CardReady   // ● — terminal good pending a user action
+	CardWaiting // ⧗ — in progress, not on the user
 )
 
 const (
 	cardConnector    = "│"
 	cardGlyphPending = "◦"
 	cardGlyphSuccess = "✓"
-	cardGlyphSkipped = "!"
+	cardGlyphSkipped = "▲" // !▲
 	cardGlyphFailed  = "✗"
 	cardGlyphInfo    = "●"
 	cardGlyphInput   = "?"
+	cardGlyphReady   = "●" // *●◆
+	cardGlyphWaiting = "⧗" // ~⧗●◆
 	// CardRoot uses the top-left rounded corner box-drawing
 	// character in the connector color so the root visually
 	// anchors the timeline: the corner turns into the vertical
@@ -83,13 +95,29 @@ var asciiLogo = func() []string {
 // lines are drawn with a muted connector so a run of cards reads as
 // a single vertical timeline.
 type Card struct {
-	state    CardState
-	title    string
-	value    string // Rendered after title as-is (no title-casing), muted style.
-	subtitle string
-	body     []cardBody
-	tight    bool // suppress comfy spacing (e.g. single-field prompts)
-	indent   int  // additional left-margin depth (1 = +4 spaces); used by Group children
+	state         CardState
+	title         string
+	titleColor    color.Color // optional override for the title foreground (default: Palette.Primary)
+	glyphColor    color.Color // optional override for the gutter glyph color (default: per-state)
+	value         string      // Rendered after title as-is (no title-casing), muted style.
+	subtitle      string
+	body          []cardBody
+	tight         bool // suppress comfy spacing (e.g. single-field prompts)
+	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
+	preserveTitle bool // skip the default titleCase transform on the title
+	tightBody     bool // when true, renderBodyAndSubtitle skips the leading blank-connector line
+
+	// suppressAbsorbedGlyph is read by the squish glue when this
+	// card becomes the source of a trailing-slot absorption: when
+	// true, the source's glyph is dropped from the trailing slot.
+	// Set via HideAbsorbedGlyph(). Has no effect on non-absorbed
+	// rendering of this card.
+	suppressAbsorbedGlyph bool
+
+	// breadcrumb is the root-header component. Non-nil only for
+	// CardRoot; lazy-initialized when any breadcrumb-related
+	// builder method is called. Owns segments + trailing slot.
+	breadcrumb *breadcrumb
 }
 
 type cardBodyKind int
@@ -100,13 +128,25 @@ const (
 	cardBodyKV
 	cardBodyStdout
 	cardBodyStderr
-	cardBodyRaw // pre-styled lines, no additional formatting
+	cardBodyRaw   // pre-styled lines, no additional formatting
+	cardBodyItem  // glyph + content rows, indented under the title
+	cardBodyTable // arbitrary-column tabular data, columns auto-aligned
 )
 
 type cardBody struct {
 	kind  cardBodyKind
 	lines []string
 	pairs [][2]string // used by cardBodyKV
+	items []cardItem  // used by cardBodyItem
+	table [][]string  // used by cardBodyTable; each inner slice is a row of pre-styled cells
+}
+
+// cardItem is one glyph+content row in a card body. Both fields
+// are pre-styled (may contain ANSI escapes); the renderer adds no
+// further styling, only spacing.
+type cardItem struct {
+	glyph   string
+	content string
 }
 
 // NewCard creates a card with the given state and title.
@@ -126,6 +166,74 @@ func (c *Card) Tight() *Card {
 // Group to nest children under a parent's spine.
 func (c *Card) Indent(n int) *Card {
 	c.indent = n
+	return c
+}
+
+// PreserveCase suppresses the default title-case transform on the
+// card title. Use for identifier-like titles (repo names, paths,
+// URLs) where the input casing is meaningful.
+func (c *Card) PreserveCase() *Card {
+	c.preserveTitle = true
+	return c
+}
+
+// TitleColor overrides the foreground color used for the card
+// title. Default is Palette.Primary (the branding indigo). Pass a
+// different color to tint the title — e.g., to match the state
+// glyph color so a card's identity reads at the same hue as its
+// status indicator.
+func (c *Card) TitleColor(col color.Color) *Card {
+	c.titleColor = col
+	return c
+}
+
+// GlyphColor overrides the foreground color used for the card's
+// gutter glyph. Default is the state's natural color (e.g., success
+// green for CardSuccess). Pass a different color to keep the
+// glyph shape from the state but recolor it — e.g., a muted
+// summary recap that uses the CardInfo bullet in muted gray.
+func (c *Card) GlyphColor(col color.Color) *Card {
+	c.glyphColor = col
+	return c
+}
+
+// TightBody suppresses the blank connector line normally inserted
+// between the card's breadcrumb / title and the start of its body
+// when absorbed via the squish path. Use when the body's first row
+// is already a header-style line (so the auto-pad would create
+// double spacing) or when vertical density matters more than the
+// usual breathing room.
+func (c *Card) TightBody() *Card {
+	c.tightBody = true
+	return c
+}
+
+// HideAbsorbedGlyph suppresses the leading state glyph when this
+// card is squished into a parent root card's breadcrumb. The
+// breadcrumb segment renders only the card's title, with no
+// glyph or color marker before it. Use when the absorbed segment
+// is purely informational and the state glyph would add noise.
+func (c *Card) HideAbsorbedGlyph() *Card {
+	c.suppressAbsorbedGlyph = true
+	return c
+}
+
+// Breadcrumb appends a data segment to this card's breadcrumb.
+// Only meaningful for CardRoot; lazy-initializes the breadcrumb
+// component on first call. Use when the segment value is known
+// synchronously at card construction — the segment renders inline
+// with the title on first paint.
+//
+// Empty strings are ignored. Style is fixed by the breadcrumb
+// component (data segments use Palette.Success).
+func (c *Card) Breadcrumb(s string) *Card {
+	if s == "" {
+		return c
+	}
+	if c.breadcrumb == nil {
+		c.breadcrumb = &breadcrumb{}
+	}
+	c.breadcrumb.AddSegment(s)
 	return c
 }
 
@@ -172,6 +280,45 @@ func (c *Card) Raw(lines ...string) *Card {
 	return c
 }
 
+// Item appends a glyph+content row to the body. The row renders
+// with │ at col 2, glyph at col 6, content at col 9 — aligning
+// with Group child glyphs (which sit one column right of the
+// parent's │ + 2-space gap). Use for body rows that carry their
+// own per-row state glyph (status repo rows, plan items, etc.).
+// Both arguments are pre-styled.
+//
+// Calling Item multiple times accumulates rows in the order given.
+func (c *Card) Item(glyph, content string) *Card {
+	if n := len(c.body); n > 0 && c.body[n-1].kind == cardBodyItem {
+		c.body[n-1].items = append(c.body[n-1].items, cardItem{glyph, content})
+		return c
+	}
+	c.body = append(c.body, cardBody{
+		kind:  cardBodyItem,
+		items: []cardItem{{glyph, content}},
+	})
+	return c
+}
+
+// Table appends a tabular body block. Each row is a slice of
+// pre-styled cells; the renderer auto-pads each column to its
+// widest cell (measured by visible width, ANSI-aware) and joins
+// columns with a 2-space gap. Rows with fewer cells than the
+// widest row pad with empty strings.
+//
+// Use for dimensional metadata where rows describe attributes
+// (Branch, PR, etc.) and columns are label/state/value rather
+// than a sequential list. Calling Table multiple times appends
+// distinct table blocks.
+func (c *Card) Table(rows ...[]string) *Card {
+	cells := make([][]string, len(rows))
+	for i, r := range rows {
+		cells[i] = append([]string{}, r...)
+	}
+	c.body = append(c.body, cardBody{kind: cardBodyTable, table: cells})
+	return c
+}
+
 // Stdout appends stdout stream lines (muted).
 func (c *Card) Stdout(lines ...string) *Card {
 	c.body = append(c.body, cardBody{kind: cardBodyStdout, lines: lines})
@@ -189,15 +336,80 @@ func (c *Card) Render() string {
 	return c.renderWithGlyph(c.glyph())
 }
 
+// RenderBreadcrumbLine returns just the breadcrumb-carrying row of
+// this root card's render. Empty for non-root cards. Used by the
+// squish mechanism to rewrite only the changed line instead of
+// erasing the whole root, regardless of the active root-header style.
+func (c *Card) RenderBreadcrumbLine() string {
+	if c.state != CardRoot {
+		return ""
+	}
+	return c.renderBreadcrumbRow()
+}
+
+// BreadcrumbLineCount returns how many terminal lines the breadcrumb
+// row occupies. Currently always 1 (no wrapping in the logo-mode
+// root, and a future compact root would also be a single line). The
+// squish path falls back to full-erase when this returns >1.
+func (c *Card) BreadcrumbLineCount() int {
+	s := c.renderBreadcrumbRow()
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n")
+}
+
+// renderBreadcrumbRow delegates to the breadcrumb component. Lazy-
+// inits an empty breadcrumb if needed (so a root with no segments
+// still renders its closing rule). In compact header mode, renders
+// the single-line header including all command segments and the
+// version string. In logo mode, renders just the bottom row of the
+// logo box.
+func (c *Card) renderBreadcrumbRow() string {
+	if c.state != CardRoot {
+		return ""
+	}
+	bc := c.breadcrumb
+	if bc == nil {
+		bc = &breadcrumb{}
+	}
+	titleSegs := strings.Split(c.title, " › ")
+	if IsCompactHeader() {
+		return bc.RenderCompactRow(TermWidth(), titleSegs)
+	}
+	boxInner := TermWidth() - 3
+	if boxInner < 10 {
+		boxInner = 10
+	}
+	var commandTail []string
+	if len(titleSegs) > 1 {
+		commandTail = titleSegs[1:]
+	}
+	return bc.RenderRow(boxInner, commandTail)
+}
+
 // Print writes the card to stdout. Suppressed in raw mode.
+//
+// Root-card absorption: if a CardRoot was just printed, the next
+// non-root Card.Print "squishes" — its title is appended to the
+// root's breadcrumb (separated by " › ") and any body content is
+// rendered below the (re-rendered) root box. A title-less and
+// body-less card consumes the squish slot without modifying the
+// root, providing an opt-out by emitting an inert card.
 func (c *Card) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(comfyPrefix() + c.Render())
+	if squishPending && c.state != CardRoot {
+		squishConsume(c)
+		return
+	}
+	rendered := c.Render()
+	fmt.Print(comfyPrefix() + rendered)
 	if !c.tight {
 		comfyBreak = true
 	}
+	rememberRootForSquish(c, rendered)
 }
 
 // PrintRewindable writes the card to stdout and returns a function
@@ -251,7 +463,14 @@ func (c *Card) renderWithGlyph(glyph string) string {
 // renderInner is the indent-agnostic render path.
 func (c *Card) renderInner(glyph string) string {
 	var b strings.Builder
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary).Transform(titleCase)
+	titleFg := Palette.Primary
+	if c.titleColor != nil {
+		titleFg = c.titleColor
+	}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleFg)
+	if !c.preserveTitle {
+		titleStyle = titleStyle.Transform(titleCase)
+	}
 	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	const pad = " "
 	conn := pad + c.renderConnector() + "  "
@@ -269,91 +488,55 @@ func (c *Card) renderInner(glyph string) string {
 	//  │
 	gap := "  "
 	if c.state == CardRoot {
-		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Secondary)
-
-		// Box spans the full terminal width.
-		// Layout: pad(1) + border(1) + inner + border(1) = TermWidth()
-		boxInner := TermWidth() - 3
-		if boxInner < 10 {
-			boxInner = 10
-		}
-
-		// Top border — the glyph (╭) starts the box.
-		fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
-			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
-
-		// Logo lines: │  art ...padding... │
-		// The first line includes the version string right-aligned.
-		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		versionStr := versionStyle.Render(AppVersion)
-		versionWidth := lipgloss.Width(versionStr)
-		for i, line := range asciiLogo {
-			artWidth := lipgloss.Width(line)
-			if i == 0 {
-				// │  art  ...padding...  version  │
-				rightPad := boxInner - 2 - artWidth - versionWidth - 2
-				if rightPad < 1 {
-					rightPad = 1
-				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
-					ruleStyle.Render("│"),
-					logoStyle.Render(line),
-					strings.Repeat(" ", rightPad),
-					versionStr,
-					ruleStyle.Render("│"))
-			} else {
-				rightPad := boxInner - 2 - artWidth
-				if rightPad < 1 {
-					rightPad = 1
-				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
-					ruleStyle.Render("│"),
-					logoStyle.Render(line),
-					strings.Repeat(" ", rightPad),
-					ruleStyle.Render("│"))
-			}
-		}
-
-		// Bottom: breadcrumb closes the right side with ╯.
-		segments := strings.Split(c.title, " › ")
-		if len(segments) > 1 {
-			primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary)
-			sepStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed)
-			styledSegs := make([]string, len(segments)-1)
-			for i, seg := range segments[1:] {
-				styledSegs[i] = primaryStyle.Render(titleCase(seg))
-			}
-			breadcrumb := strings.Join(styledSegs, sepStyle.Render(" › "))
-
-			// Optional prefix/postfix glyphs around the breadcrumb.
-			prefix := ""
-			prefixWidth := 0
-			if BreadcrumbPrefix != "" {
-				prefix = ruleStyle.Render(BreadcrumbPrefix) + " "
-				prefixWidth = lipgloss.Width(prefix)
-			}
-			postfix := " "
-			postfixWidth := 1
-			if BreadcrumbPostfix != "" {
-				postfix = " " + ruleStyle.Render(BreadcrumbPostfix) + " "
-				postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
-			}
-
-			ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(breadcrumb) - postfixWidth
-			if ruleLen < 1 {
-				ruleLen = 1
-			}
-			fmt.Fprintf(&b, "%s%s  %s%s%s%s\n", pad,
-				ruleStyle.Render("│"),
-				prefix,
-				breadcrumb,
-				postfix,
-				ruleStyle.Render(strings.Repeat("─", ruleLen)+"╯"))
+		if IsCompactHeader() {
+			// Compact mode: single-line header, no logo box.
+			b.WriteString(c.renderBreadcrumbRow())
 		} else {
-			fmt.Fprintf(&b, "%s%s  %s\n", pad,
-				ruleStyle.Render("│"),
-				ruleStyle.Render(strings.Repeat("─", boxInner-2)+"╯"))
+			// Logo mode: full ASCII art box with breadcrumb at bottom.
+			ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+			logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand)
+
+			boxInner := TermWidth() - 3
+			if boxInner < 10 {
+				boxInner = 10
+			}
+
+			// Top border — the glyph (╭) starts the box.
+			fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
+				ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
+
+			// Logo lines: │  art ...padding... │
+			versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+			versionStr := versionStyle.Render(AppVersion)
+			versionWidth := lipgloss.Width(versionStr)
+			for i, line := range asciiLogo {
+				artWidth := lipgloss.Width(line)
+				if i == 0 {
+					rightPad := boxInner - 2 - artWidth - versionWidth - 2
+					if rightPad < 1 {
+						rightPad = 1
+					}
+					fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
+						ruleStyle.Render("│"),
+						logoStyle.Render(line),
+						strings.Repeat(" ", rightPad),
+						versionStr,
+						ruleStyle.Render("│"))
+				} else {
+					rightPad := boxInner - 2 - artWidth
+					if rightPad < 1 {
+						rightPad = 1
+					}
+					fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
+						ruleStyle.Render("│"),
+						logoStyle.Render(line),
+						strings.Repeat(" ", rightPad),
+						ruleStyle.Render("│"))
+				}
+			}
+
+			// Bottom: breadcrumb closes the right side with ╯.
+			b.WriteString(c.renderBreadcrumbRow())
 		}
 	} else {
 		if c.value != "" {
@@ -376,8 +559,9 @@ func (c *Card) renderInner(glyph string) string {
 		fmt.Fprintf(&b, "%s\n", conn)
 	}
 
+	kvWidth := maxKVKeyWidth(c.body)
 	for _, body := range c.body {
-		for _, line := range renderCardBody(body) {
+		for _, line := range renderCardBody(body, kvWidth) {
 			for _, wrapped := range wrapForTimeline(line) {
 				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
 			}
@@ -387,29 +571,79 @@ func (c *Card) renderInner(glyph string) string {
 	return b.String()
 }
 
-// glyph returns the styled state glyph for this card.
+// renderBodyAndSubtitle returns just the subtitle + body portion
+// of the card (no title row, no glyph). Used by squish-mode
+// rendering, which prints the absorbed card's title in the parent
+// breadcrumb but still wants its body content below.
+//
+// Output starts with a blank connector line — the same visual
+// separator CardRoot uses between its title row and body — so the
+// absorbed body reads as a distinct block under the breadcrumb
+// rather than crowding directly against it. The blank line is
+// suppressed when the card opts into TightBody().
+func (c *Card) renderBodyAndSubtitle() string {
+	if c.subtitle == "" && len(c.body) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+	const pad = " "
+	conn := pad + c.renderConnector() + "  "
+	if !c.tightBody {
+		fmt.Fprintf(&b, "%s\n", pad+c.renderConnector())
+	}
+	if c.subtitle != "" {
+		for _, line := range wrapForTimeline(c.subtitle) {
+			fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
+		}
+	}
+	kvWidth := maxKVKeyWidth(c.body)
+	for _, body := range c.body {
+		for _, line := range renderCardBody(body, kvWidth) {
+			for _, wrapped := range wrapForTimeline(line) {
+				fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
+			}
+		}
+	}
+	return b.String()
+}
+
+// glyph returns the styled state glyph for this card. When
+// Card.GlyphColor has been set, it overrides the state's natural
+// color while preserving the glyph shape.
 func (c *Card) glyph() string {
+	var ch string
+	var fg color.Color
 	switch c.state {
 	case CardPending:
-		return lipgloss.NewStyle().Foreground(Palette.Muted).Render(cardGlyphPending)
+		ch, fg = cardGlyphPending, Palette.Muted
 	case CardRunning:
-		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphPending)
+		ch, fg = cardGlyphPending, Palette.Primary
 	case CardSuccess:
-		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
+		ch, fg = cardGlyphSuccess, Palette.Success
 	case CardSkipped:
-		return lipgloss.NewStyle().Foreground(Palette.Warning).Render(cardGlyphSkipped)
+		ch, fg = cardGlyphSkipped, Palette.Warning
 	case CardFailed:
-		return lipgloss.NewStyle().Foreground(Palette.Error).Render(cardGlyphFailed)
+		ch, fg = cardGlyphFailed, Palette.Error
 	case CardInfo:
-		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphInfo)
+		ch, fg = cardGlyphInfo, Palette.Primary
 	case CardInput:
-		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
+		ch, fg = cardGlyphInput, Palette.Accent
 	case CardRoot:
-		return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardGlyphRoot)
+		ch, fg = cardGlyphRoot, Palette.Recessed
 	case CardData:
-		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphInfo)
+		ch, fg = cardGlyphInfo, Palette.Primary
+	case CardReady:
+		ch, fg = cardGlyphReady, Palette.Success
+	case CardWaiting:
+		ch, fg = cardGlyphWaiting, Palette.Info
+	default:
+		return " "
 	}
-	return " "
+	if c.glyphColor != nil {
+		fg = c.glyphColor
+	}
+	return lipgloss.NewStyle().Foreground(fg).Render(ch)
 }
 
 // renderConnector returns the styled left-gutter connector for this
@@ -418,7 +652,27 @@ func (c *Card) renderConnector() string {
 	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
 }
 
-func renderCardBody(b cardBody) []string {
+// maxKVKeyWidth returns the widest KV key across all cardBodyKV
+// entries in body. Used to share dot-column alignment across multiple
+// KV blocks separated by Text spacers — without this, each KV call
+// computes its own width independently and dots land at different
+// columns across visual sections.
+func maxKVKeyWidth(body []cardBody) int {
+	max := 0
+	for _, b := range body {
+		if b.kind != cardBodyKV {
+			continue
+		}
+		for _, p := range b.pairs {
+			if len(p[0]) > max {
+				max = len(p[0])
+			}
+		}
+	}
+	return max
+}
+
+func renderCardBody(b cardBody, kvKeyWidth int) []string {
 	normalStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
 	mutedStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	errorStyle := lipgloss.NewStyle().Foreground(Palette.Error)
@@ -444,8 +698,56 @@ func renderCardBody(b cardBody) []string {
 		return out
 	case cardBodyRaw:
 		return b.lines
+	case cardBodyItem:
+		// One leading space so the glyph lands at col 6, aligning
+		// with Group child glyphs (which sit one column right of
+		// the parent's │ + 2-space gap).
+		out := make([]string, len(b.items))
+		for i, item := range b.items {
+			out[i] = " " + item.glyph + "  " + item.content
+		}
+		return out
+	case cardBodyTable:
+		// Compute max visible width per column across all rows.
+		// lipgloss.Width is ANSI-aware so styled cells measure
+		// by their displayed width, not byte count.
+		ncols := 0
+		for _, row := range b.table {
+			if len(row) > ncols {
+				ncols = len(row)
+			}
+		}
+		widths := make([]int, ncols)
+		for _, row := range b.table {
+			for i, cell := range row {
+				if w := lipgloss.Width(cell); w > widths[i] {
+					widths[i] = w
+				}
+			}
+		}
+		out := make([]string, len(b.table))
+		for i, row := range b.table {
+			parts := make([]string, ncols)
+			for j := 0; j < ncols; j++ {
+				cell := ""
+				if j < len(row) {
+					cell = row[j]
+				}
+				pad := widths[j] - lipgloss.Width(cell)
+				if pad < 0 {
+					pad = 0
+				}
+				parts[j] = cell + strings.Repeat(" ", pad)
+			}
+			out[i] = strings.Join(parts, "  ")
+		}
+		return out
 	case cardBodyKV:
-		maxKey := 0
+		// Use the shared width when it's wider than this block's own
+		// max so dots line up across KV blocks separated by spacers.
+		// Falls back to local max when no shared width was computed
+		// (kvKeyWidth == 0).
+		maxKey := kvKeyWidth
 		for _, p := range b.pairs {
 			if len(p[0]) > maxKey {
 				maxKey = len(p[0])
@@ -570,22 +872,254 @@ func (m cardSpinnerModel) waitForResult() tea.Cmd {
 	}
 }
 
+// squishedSpinnerModel renders a previously-printed root card with
+// an extended breadcrumb whose final segment is the running task's
+// title, prefixed by an animated spinner. On result, the spinner
+// frame is replaced with a success or failure glyph; if a success
+// card builder is set, its title + glyph replace the running
+// title and its subtitle/body render below the root box.
+type squishedSpinnerModel struct {
+	spinner     spinner.Model
+	root        *Card        // copy of the original root card (title is its base breadcrumb)
+	title       string       // running task title appended as the final breadcrumb segment
+	successCard func() *Card // optional: builds the replacement card on success
+	done        bool
+	err         error
+	resultCh    <-chan error
+	// partial selects the breadcrumb-only render path. When true, View
+	// returns just the breadcrumb line (1 visible row) and the caller
+	// (runSquishedCard) erases only that one line beforehand — the
+	// logo box stays static on screen, eliminating the bubbletea
+	// startup gap that would otherwise flash.
+	partial bool
+}
+
+func newSquishedSpinnerModel(root *Card, title string, successCard func() *Card, resultCh <-chan error) squishedSpinnerModel {
+	s := spinner.New(
+		spinner.WithSpinner(spinner.MiniDot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(Palette.Primary)),
+	)
+	return squishedSpinnerModel{
+		spinner:     s,
+		root:        root,
+		title:       title,
+		successCard: successCard,
+		resultCh:    resultCh,
+	}
+}
+
+func (m squishedSpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.waitForResult())
+}
+
+func (m squishedSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case taskDoneMsg:
+		m.done = true
+		m.err = msg.err
+		return m, tea.Quit
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			m.done = true
+			m.err = fmt.Errorf("interrupted")
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m squishedSpinnerModel) View() tea.View {
+	if m.done {
+		// Final frame: same breadcrumb assembly used by the
+		// non-interactive fallback so the spinner→final transition
+		// stays a constant line count. Body content prints after
+		// the program exits — see runSquishedCard.
+		extended, _ := squishedFinalExtended(m.root, m.title, m.successCard, m.err)
+		return tea.NewView(m.frameView(&extended))
+	}
+	// Running phase: glyph + title go into the breadcrumb's trailing
+	// slot. Title may be empty (caller passed "" to RunCardReplace);
+	// glyph is always the spinner during this phase.
+	extended := *m.root
+	extended.breadcrumb = m.root.breadcrumb.copy()
+	extended.breadcrumb.SetTrailing(m.title, m.spinner.View(), false)
+	return tea.NewView(m.frameView(&extended))
+}
+
+// frameView selects the render to hand bubbletea: the breadcrumb-only
+// row in partial mode (1 visible line + trailing newline so bubbletea's
+// cursor positioning on exit lands at the start of the next line —
+// matching the existing full-render behavior where Render() also ends
+// with a newline) or the full multi-line root render in fallback mode.
+func (m squishedSpinnerModel) frameView(extended *Card) string {
+	if m.partial {
+		return extended.RenderBreadcrumbLine()
+	}
+	return extended.Render()
+}
+
+func (m squishedSpinnerModel) waitForResult() tea.Cmd {
+	return func() tea.Msg {
+		return taskDoneMsg{err: <-m.resultCh}
+	}
+}
+
 // RunCard creates a card with the given title, displays it with an
 // animated spinner in the glyph position while fn runs, and prints
 // the finalized card in success or failed state when fn returns.
 func RunCard(title string, fn func() error) error {
-	return runCardWith(NewCard(CardRunning, title), fn)
+	return runCardWithFinalizer(NewCard(CardRunning, title), fn, nil)
+}
+
+// RunCardThen is like RunCard but on success replaces the running
+// card with whatever successCard() returns (typically the fully
+// resolved card with its body content). Useful for per-section
+// loading where a card shows just a title with spinner during the
+// fetch, then "settles" into the rich resolved card on completion.
+//
+// The running card preserves the title's case (skips the default
+// title-case transform) since its typical use is identifier-titled
+// cards (repo names, issue IDs, hostnames) where the input casing
+// is meaningful.
+//
+// On failure, behaves like RunCard — the running card is finalized
+// with the failure glyph and the error becomes its subtitle.
+func RunCardThen(title string, fn func() error, successCard func() *Card) error {
+	return runCardWithFinalizer(NewCard(CardRunning, title).PreserveCase(), fn, successCard)
+}
+
+// runSquishedCard is the squish-mode counterpart to runCardWith.
+// It runs fn while animating a spinner glyph in the LAST segment
+// of the previously-printed root card's breadcrumb (with the
+// passed card's title appended). On success, if successCard is
+// non-nil, its title and glyph replace the running title in the
+// breadcrumb (and its subtitle/body render below). On failure the
+// spinner frame is replaced with the failed glyph and the running
+// title stays in the breadcrumb.
+//
+// successCard may be nil — in that case the running title remains
+// in the breadcrumb with a ✓ glyph on success.
+func runSquishedCard(card *Card, fn func() error, successCard func() *Card) error {
+	if IsRaw() {
+		return fn()
+	}
+
+	root := squishCurrent.root
+	rootLines := squishCurrent.lineCount
+	clearSquish()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
+	}()
+
+	// Fast path: when the breadcrumb is the LAST line of the root
+	// (current logo-mode and future compact mode both satisfy this),
+	// position the cursor on the breadcrumb line WITHOUT clearing it
+	// and let bubbletea overwrite it in place. The breadcrumb width is
+	// fixed (filled to box-width with rule chars), so the new content
+	// covers the old cell-by-cell — no leftover chars. Skipping the
+	// pre-erase eliminates the bubbletea-startup gap that caused the
+	// 1-line flash even after partial-rewrite.
+	//
+	// Falls back to full erase + full repaint when the invariant
+	// doesn't hold (e.g., a future multi-line breadcrumb).
+	partial := root.BreadcrumbLineCount() == 1 && rootLines > 0
+	if partial {
+		fmt.Print("\x1b[1F\r")
+	} else if rootLines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", rootLines)
+	}
+
+	model := newSquishedSpinnerModel(root, card.title, successCard, resultCh)
+	model.partial = partial
+	p := tea.NewProgram(model)
+	finalModel, err := p.Run()
+	if err != nil {
+		// Non-interactive fallback — wait for the task and print a
+		// finalized extended root + body. In partial mode only the
+		// breadcrumb line was erased, so we reprint just that line;
+		// in full-erase mode the entire root needs reprinting.
+		taskErr := <-resultCh
+		extended, body := squishedFinalExtended(root, card.title, successCard, taskErr)
+		if partial {
+			fmt.Print(extended.RenderBreadcrumbLine() + body)
+		} else {
+			fmt.Print(extended.Render() + body)
+		}
+		comfyBreak = true
+		return taskErr
+	}
+
+	// Bubbletea rendered the extended root with the resolved
+	// breadcrumb in place; now print the body content separately
+	// so its line count doesn't have to fit inside the program's
+	// constant-line-count frame.
+	m := finalModel.(squishedSpinnerModel)
+	_, body := squishedFinalExtended(root, card.title, successCard, m.err)
+	if body != "" {
+		fmt.Print(body)
+	}
+	comfyBreak = true
+	return m.err
+}
+
+// squishedFinalRender produces the static "after-task" render of a
+// squished root card — used by the bubbletea final frame and by
+// the non-interactive fallback path. On success with a successCard
+// builder, the breadcrumb shows the replacement's title + glyph
+// and the replacement's subtitle/body render below the box.
+// squishedFinalExtended builds the post-task extended root card
+// (breadcrumb only — no body). The body is printed separately by
+// the caller after the bubbletea program exits, so the program's
+// per-frame line count stays constant during the spinner→final
+// transition.
+func squishedFinalExtended(root *Card, runningTitle string, successCard func() *Card, err error) (extended Card, body string) {
+	extended = *root
+	extended.breadcrumb = root.breadcrumb.copy()
+	if err == nil && successCard != nil {
+		repl := successCard()
+		// On success, the replacement card's title and glyph become
+		// the trailing slot. Empty title is fine (slot just shows
+		// glyph, or is empty if HideAbsorbedGlyph was set).
+		extended.breadcrumb.SetTrailing(repl.title, repl.glyph(), repl.suppressAbsorbedGlyph)
+		body = repl.renderBodyAndSubtitle()
+	} else {
+		// Failure (or no replacement): keep running title in trailing
+		// slot, swap glyph for the final ✓/✗ state.
+		extended.breadcrumb.SetTrailing(runningTitle, squishedFinalGlyph(err), false)
+	}
+	return extended, body
+}
+
+// squishedFinalGlyph picks the styled glyph for a completed
+// squish-mode RunCard: ✓ on success, ✗ on failure.
+func squishedFinalGlyph(err error) string {
+	if err != nil {
+		return lipgloss.NewStyle().Foreground(Palette.Error).Render(cardGlyphFailed)
+	}
+	return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
 }
 
 // runCardWith is the inner implementation of RunCard that takes a
 // pre-built card so callers can configure indent / tight before the
 // spinner runs. The card's state is mutated to its final value
 // before printing.
-func runCardWith(card *Card, fn func() error) error {
+func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card) error {
 	// Raw mode: run synchronously without BubbleTea to avoid
 	// terminal-mode-query escape leaks on non-TTY stdout.
 	if IsRaw() {
 		return fn()
+	}
+	if squishPending {
+		return runSquishedCard(card, fn, successCard)
 	}
 
 	resultCh := make(chan error, 1)
@@ -600,18 +1134,23 @@ func runCardWith(card *Card, fn func() error) error {
 	// View() bypasses Print() so it won't consume the prefix itself.
 	fmt.Print(comfyPrefix())
 
-	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
-	model, err := p.Run()
+	model := newCardSpinnerModel(card, resultCh)
+	model.successCard = successCard
+	p := tea.NewProgram(model)
+	result, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for the task and print final card.
 		taskErr := <-resultCh
 		if taskErr != nil {
 			card.state = CardFailed
 			card.Subtitle(taskErr.Error())
+			card.Print()
+		} else if successCard != nil {
+			successCard().Print()
 		} else {
 			card.state = CardSuccess
+			card.Print()
 		}
-		card.Print()
 		return taskErr
 	}
 
@@ -619,7 +1158,7 @@ func runCardWith(card *Card, fn func() error) error {
 	// in place (state set in Update's taskDoneMsg handler), so the
 	// output is on screen. No reprint needed — just propagate the
 	// comfy break state and return.
-	m := model.(cardSpinnerModel)
+	m := result.(cardSpinnerModel)
 	if !card.tight {
 		comfyBreak = true
 	}
@@ -632,6 +1171,12 @@ func runCardWith(card *Card, fn func() error) error {
 func RunCardReplace(title string, fn func() error, successCard func() *Card) error {
 	if IsRaw() {
 		return fn()
+	}
+	if squishPending {
+		// Squish-mode honors the replacement: on success, the
+		// successCard's title + glyph take the breadcrumb's last
+		// segment, and its subtitle/body render below the root box.
+		return runSquishedCard(NewCard(CardRunning, title), fn, successCard)
 	}
 
 	card := NewCard(CardRunning, title)
@@ -678,6 +1223,14 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 func RunCardRewindable(title string, fn func() error) (func(), error) {
 	if IsRaw() {
 		err := fn()
+		return func() {}, err
+	}
+	if squishPending {
+		// Squish-mode: the action lives in the root breadcrumb
+		// permanently — there's nothing to "rewind" to a prior
+		// state. Return a no-op rewind so callers using this for
+		// transient overlay rendering degrade gracefully.
+		err := runSquishedCard(NewCard(CardRunning, title), fn, nil)
 		return func() {}, err
 	}
 

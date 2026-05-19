@@ -6,12 +6,15 @@ type taskDoneMsg struct{ err error }
 
 // minSpinnerDuration is the floor on how long a spinner-driven
 // BubbleTea program runs before it tears down. BubbleTea v2 emits
-// terminal-mode-query escape sequences during its setup; if the
-// program quits before those queries are answered and consumed,
-// the escapes leak into the terminal output. 100ms is enough cycles
-// for the queries to round-trip without being noticeable on
-// genuinely fast operations.
-const minSpinnerDuration = 100 * time.Millisecond
+// terminal-capability queries during setup (DA1, kitty keyboard
+// `CSI ? u`, etc.); if the program quits before those query
+// responses are consumed, the responses leak into stdin and show
+// up in the user's shell input (e.g., `1u` from a kitty keyboard
+// response). 250ms is enough cycles for slower queries like the
+// kitty keyboard one to round-trip on first invocation, while
+// staying short enough that genuinely fast operations don't feel
+// laggy.
+const minSpinnerDuration = 250 * time.Millisecond
 
 // holdSpinner blocks until at least minSpinnerDuration has elapsed
 // since start. Call from the end of spinner-driving goroutines —

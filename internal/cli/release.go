@@ -21,7 +21,7 @@ func newReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Print()
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			ctx := cmd.Context()
 
@@ -105,7 +105,6 @@ func newReleaseCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	return cmd

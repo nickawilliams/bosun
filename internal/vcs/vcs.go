@@ -1,12 +1,32 @@
 package vcs
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // BranchStatus represents the state of a branch in a repository.
 type BranchStatus struct {
 	Name   string
 	Exists bool
 	Dirty  bool // Uncommitted changes present.
+}
+
+// BranchSync describes a branch's relationship to its remote tracking
+// branch (and, when no remote exists, to the project's default
+// branch). Used by the status command to render the per-repo branch
+// row's state (in sync / ahead / behind / diverged / unpushed).
+type BranchSync struct {
+	// HasRemote is true when the branch has a remote tracking
+	// counterpart (i.e., has been pushed at least once). When false,
+	// Ahead reports commits relative to the default branch instead.
+	HasRemote bool
+	// Ahead is the count of commits on the branch that the remote
+	// (or default branch, when HasRemote=false) doesn't have.
+	Ahead int
+	// Behind is the count of commits on the remote that the branch
+	// doesn't have. Always 0 when HasRemote=false.
+	Behind int
 }
 
 // VCS defines version control operations needed by bosun.
@@ -55,8 +75,19 @@ type VCS interface {
 	// has no remote counterpart (never been pushed).
 	UnpushedCommits(ctx context.Context, repositoryPath, branchName string) (int, error)
 
+	// GetBranchSync returns the ahead/behind state of branchName
+	// relative to its remote tracking branch. When the branch has
+	// no remote counterpart, returns HasRemote=false with Ahead set
+	// to the count of commits ahead of the project's default branch.
+	GetBranchSync(ctx context.Context, repositoryPath, branchName string) (BranchSync, error)
+
 	// ChangedFiles returns the file paths changed on the current branch
 	// relative to the default branch (origin/<default>...HEAD). Paths are
 	// relative to the repository root. Returns nil when no files differ.
 	ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error)
+
+	// LastCommitTime returns the commit timestamp of the most recent
+	// commit on branchName. Returns the zero time and an error when
+	// the branch doesn't exist or the lookup fails.
+	LastCommitTime(ctx context.Context, repositoryPath, branchName string) (time.Time, error)
 }

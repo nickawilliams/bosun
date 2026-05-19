@@ -24,11 +24,11 @@ func newReviewCmd() *cobra.Command {
 			headerAnnotationTitle: "code review",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rootCard(cmd).Print()
 			issue, err := resolveIssue(cmd)
 			if err != nil {
 				return err
 			}
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			ctx := cmd.Context()
 			draft, _ := cmd.Flags().GetBool("draft")
@@ -482,7 +482,6 @@ func newReviewCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
 	cmd.Flags().String("base", "", "target branch (default: pull_request.base config or main)")

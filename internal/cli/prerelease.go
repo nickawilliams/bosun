@@ -25,7 +25,7 @@ func newPrereleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, issue).Print()
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			ctx := cmd.Context()
 			bump, _ := cmd.Flags().GetString("bump")
@@ -190,7 +190,6 @@ func newPrereleaseCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().String("bump", "patch", "version bump level (patch|minor|major)")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd

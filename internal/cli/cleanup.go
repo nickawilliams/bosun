@@ -26,7 +26,7 @@ func newCleanupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, issue).Print()
+			rootCard(cmd).Breadcrumb(issue).Print()
 
 			repositories, err := resolveRepositories(nil)
 			if err != nil {
@@ -155,7 +155,6 @@ func newCleanupCmd() *cobra.Command {
 		},
 	}
 
-	addIssueFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
 	return cmd
 }

@@ -20,7 +20,7 @@ func main() {
 		log.Fatalf("unable to create man dir: %v", err)
 	}
 
-	root := cli.NewRootCmd()
+	root := cli.NewRootCmd("dev")
 	outPath := filepath.Join(outDir, "bosun.1")
 
 	f, err := os.Create(outPath)

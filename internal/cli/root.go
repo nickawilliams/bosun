@@ -9,8 +9,10 @@ import (
 
 const groupLifecycle = "lifecycle"
 
-// NewRootCmd creates the root bosun command.
-func NewRootCmd() *cobra.Command {
+// NewRootCmd creates the root bosun command. The version is propagated to
+// the UI layer so cards can render it in their breadcrumb.
+func NewRootCmd(version string) *cobra.Command {
+	ui.AppVersion = version
 	cobra.EnableCommandSorting = false
 
 	cmd := &cobra.Command{
@@ -35,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 				ui.SetDefault(ui.NewRawReporter())
 			} else {
 				ui.ApplyDisplayMode(viper.GetString("display_mode"))
+				ui.ApplyHeaderMode(viper.GetString("header_mode"))
 				ui.BeginTimeline()
 			}
 			return nil
@@ -49,6 +52,12 @@ func NewRootCmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("dry-run", false, "show what would happen without making changes")
 	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
 	cmd.PersistentFlags().Bool("interactive", false, "prompt for configurable values")
+
+	// Global context flags. Persistent here so every command shares
+	// the resolution chain (flag → env → config → CWD detection)
+	// without per-command boilerplate. resolveIssue is consumed by
+	// commands that need an issue context.
+	cmd.PersistentFlags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
 
 	cmd.AddGroup(
 		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},
