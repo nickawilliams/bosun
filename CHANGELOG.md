@@ -1,5 +1,27 @@
 # Changelog
 
+## [v0.3.0](https://github.com/nickawilliams/bosun/compare/94ddc860208aa9fe1ca4e0cc4afe58310ff80073...v0.3.0) - 2026-05-27
+
+### New Features
+
+- **Config:** Configurable issue extraction and resolveWorkContext - ([444b383](https://github.com/nickawilliams/bosun/commit/444b383cbd10ba906a71f9467bc9c5903a1e131f))
+- **Status:** Show linked issue key in workspace issue card - ([e2fb2ad](https://github.com/nickawilliams/bosun/commit/e2fb2ad93a183b7d8e4fd58a6d7123d80bc37283))
+
+### Improvements
+
+- **UI**
+  - Remove display.mode setting, make comfy permanent - ([1bba5d4](https://github.com/nickawilliams/bosun/commit/1bba5d434c4997843e2186199866c25256eded66))
+  - Replace squish with eager header rendering (#10) - ([c66b3ab](https://github.com/nickawilliams/bosun/commit/c66b3ab76bfb723d25aaa0029f9aae3699c85f53))
+  - Simplify card rendering with flat content model - ([63e2e0b](https://github.com/nickawilliams/bosun/commit/63e2e0b9057244212015d4acdaab7c36bce88b1e))
+- **Config**
+  - Restructure schema to nest provider keys under categories - ([46f6cd0](https://github.com/nickawilliams/bosun/commit/46f6cd0d7b22e4dcd267bd83e437d8a67e5acf3d))
+  - Replace display.header enum with display.compact_header bool - ([7e84f16](https://github.com/nickawilliams/bosun/commit/7e84f1624aa5b0523e306c913607a2653245f274))
+
+### Fixes
+
+- **UI:** Preserve case in Group.Selected and pad compact header - ([94ddc86](https://github.com/nickawilliams/bosun/commit/94ddc860208aa9fe1ca4e0cc4afe58310ff80073))
+- **Config:** Deduplicate dot-separated schema keys in config tree - ([4f5abf5](https://github.com/nickawilliams/bosun/commit/4f5abf5f8536877c05368f169b04b92c506aaa00))
+
 ## [v0.2.0](https://github.com/nickawilliams/bosun/compare/1bdd655d07f49148e5660a1b959a8c506d9b8a8f...v0.2.0) - 2026-05-19
 
 ### New Features
