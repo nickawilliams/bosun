@@ -573,19 +573,20 @@ func projectRepos() []projectRepoEntry {
 // breathing room. Used as the success-card finalizer for the issue
 // fetch's RunCardReplace.
 func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
-	boldTitle := lipgloss.NewStyle().Bold(true).Render(detail.Title)
-
 	workspacePath := workspaceFilesystemPath(branch)
 	workspaceValue := branch
 	if workspacePath != "" {
 		workspaceValue = osc8Link("file://"+workspacePath, branch)
 	}
 
-	// The issue key is already a hierarchy segment in the breadcrumb
-	// (added synchronously in runStatusWorkspace). The card has no
-	// title — its content lives entirely in the body. The squish
-	// glue's trailing slot ends up empty (glyph suppressed via
-	// HideAbsorbedGlyph), so the breadcrumb stays clean.
+	// Build the title value as "KEY: Title" with the key as a
+	// clickable link to the issue tracker.
+	issueRef := detail.Key
+	if detail.URL != "" {
+		issueRef = osc8Link(detail.URL, detail.Key)
+	}
+	boldTitle := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
