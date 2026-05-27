@@ -398,7 +398,21 @@ func (c *Card) renderWithGlyph(glyph string) string {
 
 // renderInner is the indent-agnostic render path.
 func (c *Card) renderInner(glyph string) string {
-	var b strings.Builder
+	const pad = " "
+	conn := pad + c.renderConnector() + "  "
+
+	// CardRoot has its own rendering path (logo box / compact header).
+	if c.state == CardRoot {
+		return c.renderRoot(glyph, pad, conn)
+	}
+
+	// Build a flat list of content lines from title, subtitle, body.
+	// The first line renders next to the glyph; the rest get connector
+	// prefixes. Missing elements are simply absent from the list, so
+	// empty titles collapse naturally without special cases.
+	var lines []string
+
+	// Title line (with optional inline value).
 	titleFg := Palette.Primary
 	if c.titleColor != nil {
 		titleFg = c.titleColor
@@ -407,133 +421,98 @@ func (c *Card) renderInner(glyph string) string {
 	if !c.preserveTitle {
 		titleStyle = titleStyle.Transform(titleCase)
 	}
-	subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-	const pad = " "
-	conn := pad + c.renderConnector() + "  "
 
-	// Between the glyph and the title is normally two spaces. Root
-	// cards wrap the ASCII art logo in a full-width box that extends
-	// to the terminal edge. The left side doubles as the timeline
-	// connector and the right border sweeps back to the breadcrumb:
-	//
-	//  ╭──────────────────────────────────────────────────────────╮
-	//  │  ▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖▗▖  ▗▖                            │
-	//  │  ...                                                     │
-	//  │                                                          │
-	//  │  Command ────────────────────────────────────────────────╯
-	//  │
+	if c.value != "" {
+		valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+		lines = append(lines, titleStyle.Render(c.title+":")+
+			" "+valueStyle.Render(c.value))
+	} else if c.title != "" {
+		lines = append(lines, titleStyle.Render(c.title))
+	}
+
+	// Subtitle lines.
+	if c.subtitle != "" {
+		subtitleStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+		for _, line := range wrapForTimeline(c.subtitle) {
+			lines = append(lines, subtitleStyle.Render(line))
+		}
+	}
+
+	// Body lines.
+	kvWidth := maxKVKeyWidth(c.body)
+	for _, body := range c.body {
+		for _, line := range renderCardBody(body, kvWidth) {
+			lines = append(lines, wrapForTimeline(line)...)
+		}
+	}
+
+	// Render: first line next to glyph, rest with connector prefix.
+	var b strings.Builder
 	gap := "  "
-	if c.state == CardRoot {
-		if IsCompactHeader() {
-			// Compact mode: single-line header, no logo box.
-			b.WriteString(c.renderBreadcrumbRow())
-		} else {
-			// Logo mode: full ASCII art box with breadcrumb at bottom.
-			ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-			logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand)
-
-			boxInner := TermWidth() - 3
-			if boxInner < 10 {
-				boxInner = 10
-			}
-
-			// Top border — the glyph (╭) starts the box.
-			fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
-				ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
-
-			// Logo lines: │  art ...padding... │
-			versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-			versionStr := versionStyle.Render(AppVersion)
-			versionWidth := lipgloss.Width(versionStr)
-			for i, line := range asciiLogo {
-				artWidth := lipgloss.Width(line)
-				if i == 0 {
-					rightPad := boxInner - 2 - artWidth - versionWidth - 2
-					if rightPad < 1 {
-						rightPad = 1
-					}
-					fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
-						ruleStyle.Render("│"),
-						logoStyle.Render(line),
-						strings.Repeat(" ", rightPad),
-						versionStr,
-						ruleStyle.Render("│"))
-				} else {
-					rightPad := boxInner - 2 - artWidth
-					if rightPad < 1 {
-						rightPad = 1
-					}
-					fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
-						ruleStyle.Render("│"),
-						logoStyle.Render(line),
-						strings.Repeat(" ", rightPad),
-						ruleStyle.Render("│"))
-				}
-			}
-
-			// Bottom: breadcrumb closes the right side with ╯.
-			b.WriteString(c.renderBreadcrumbRow())
-		}
+	if len(lines) == 0 {
+		fmt.Fprintf(&b, "%s%s\n", pad, glyph)
 	} else {
-		subtitlePromoted := false
-		bodyStart := 0
-		if c.value != "" {
-			valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-			fmt.Fprintf(&b, "%s%s%s%s %s\n", pad, glyph, gap, titleStyle.Render(c.title+":"), valueStyle.Render(c.value))
-		} else if c.title == "" && c.subtitle != "" {
-			// No title — promote the subtitle to the glyph line.
-			lines := wrapForTimeline(c.subtitle)
-			fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, subtitleStyle.Render(lines[0]))
-			for _, line := range lines[1:] {
-				fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
-			}
-			subtitlePromoted = true
-		} else if c.title == "" && len(c.body) > 0 {
-			// No title, no subtitle — promote the first body line
-			// to the glyph row so the card doesn't start with a
-			// bare glyph on its own line.
-			kvWidth := maxKVKeyWidth(c.body)
-			firstLines := renderCardBody(c.body[0], kvWidth)
-			if len(firstLines) > 0 {
-				wrapped := wrapForTimeline(firstLines[0])
-				fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, wrapped[0])
-				for _, line := range wrapped[1:] {
-					fmt.Fprintf(&b, "%s%s\n", conn, line)
-				}
-				for _, line := range firstLines[1:] {
-					for _, w := range wrapForTimeline(line) {
-						fmt.Fprintf(&b, "%s%s\n", conn, w)
-					}
-				}
-				bodyStart = 1
-			}
-		} else {
-			fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, titleStyle.Render(c.title))
-		}
-
-		if c.subtitle != "" && !subtitlePromoted {
-			for _, line := range wrapForTimeline(c.subtitle) {
-				fmt.Fprintf(&b, "%s%s\n", conn, subtitleStyle.Render(line))
-			}
-		}
-
-		kvWidth := maxKVKeyWidth(c.body)
-		for _, body := range c.body[bodyStart:] {
-			for _, line := range renderCardBody(body, kvWidth) {
-				for _, wrapped := range wrapForTimeline(line) {
-					fmt.Fprintf(&b, "%s%s\n", conn, wrapped)
-				}
-			}
+		fmt.Fprintf(&b, "%s%s%s%s\n", pad, glyph, gap, lines[0])
+		for _, line := range lines[1:] {
+			fmt.Fprintf(&b, "%s%s\n", conn, line)
 		}
 	}
+	return b.String()
+}
 
-	// Root cards visually separate the title row from the body content
-	// with a blank connector line.
-	if c.state == CardRoot && len(c.body) > 0 {
+// renderRoot handles the CardRoot-specific logo box and compact header.
+func (c *Card) renderRoot(glyph, pad, conn string) string {
+	var b strings.Builder
+
+	if IsCompactHeader() {
+		b.WriteString(c.renderBreadcrumbRow())
+	} else {
+		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+		logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand)
+
+		boxInner := TermWidth() - 3
+		if boxInner < 10 {
+			boxInner = 10
+		}
+
+		fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
+			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
+
+		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
+		versionStr := versionStyle.Render(AppVersion)
+		versionWidth := lipgloss.Width(versionStr)
+		for i, line := range asciiLogo {
+			artWidth := lipgloss.Width(line)
+			if i == 0 {
+				rightPad := boxInner - 2 - artWidth - versionWidth - 2
+				if rightPad < 1 {
+					rightPad = 1
+				}
+				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
+					ruleStyle.Render("│"),
+					logoStyle.Render(line),
+					strings.Repeat(" ", rightPad),
+					versionStr,
+					ruleStyle.Render("│"))
+			} else {
+				rightPad := boxInner - 2 - artWidth
+				if rightPad < 1 {
+					rightPad = 1
+				}
+				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
+					ruleStyle.Render("│"),
+					logoStyle.Render(line),
+					strings.Repeat(" ", rightPad),
+					ruleStyle.Render("│"))
+			}
+		}
+
+		b.WriteString(c.renderBreadcrumbRow())
+	}
+
+	// Root body (rare — used by demo cards with body on root).
+	if len(c.body) > 0 {
 		fmt.Fprintf(&b, "%s\n", conn)
-	}
-
-	if c.state == CardRoot {
 		kvWidth := maxKVKeyWidth(c.body)
 		for _, body := range c.body {
 			for _, line := range renderCardBody(body, kvWidth) {
