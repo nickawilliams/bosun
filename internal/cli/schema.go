@@ -19,7 +19,7 @@ type ConfigKey struct {
 	Source   func() ([]SourceOption, error) // Dynamic value source for interactive picker.
 }
 
-// ConfigGroup describes a related set of config values (e.g., "jira").
+// ConfigGroup describes a related set of config values (e.g., "issue_tracker").
 type ConfigGroup struct {
 	Label string      // Human-readable label (e.g., "Jira").
 	Keys  []ConfigKey // The config keys in this group.
@@ -38,18 +38,17 @@ var lifecycleStatusKeys = []string{
 }
 
 // configSchema is the central registry of all known config keys.
+//
+// Keys are resolved via fullKey(groupName, ck) → "groupName.ck.Key".
+// Provider-specific keys live directly under their category group
+// (e.g., Jira keys under "issue_tracker", not a separate "jira" group).
+// Status mappings live under "issue_tracker.statuses" as a sub-group.
 var configSchema = map[string]ConfigGroup{
 	"issue_tracker": {
 		Label: "issue tracker",
 
 		Keys: []ConfigKey{
-			{Key: "issue_tracker", Label: "provider", Options: []string{"jira"}, Required: true},
-		},
-	},
-	"jira": {
-		Label: "jira",
-
-		Keys: []ConfigKey{
+			{Key: "provider", Label: "provider", Options: []string{"jira"}, Required: true},
 			{Key: "base_url", Label: "base URL", Example: "https://mycompany.atlassian.net", Required: true},
 			{Key: "email", Label: "email", Required: true},
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_JIRA_TOKEN", Secret: true, Required: true},
@@ -57,7 +56,7 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "board_id", Label: "board ID", Example: "123"},
 		},
 	},
-	"statuses": {
+	"issue_tracker.statuses": {
 		Label: "status mappings",
 
 		Keys: []ConfigKey{
@@ -85,20 +84,14 @@ var configSchema = map[string]ConfigGroup{
 		Label: "workspace",
 
 		Keys: []ConfigKey{
-			{Key: "workspace_root", Label: "workspace root", Example: ".workspaces"},
+			{Key: "root", Label: "workspace root", Example: ".workspaces"},
 		},
 	},
 	"code_host": {
 		Label: "code host",
 
 		Keys: []ConfigKey{
-			{Key: "code_host", Label: "provider", Options: []string{"github"}, Required: true},
-		},
-	},
-	"github": {
-		Label: "GitHub",
-
-		Keys: []ConfigKey{
+			{Key: "provider", Label: "provider", Options: []string{"github"}, Required: true},
 			{Key: "token", Label: "personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
 		},
 	},
@@ -119,13 +112,7 @@ var configSchema = map[string]ConfigGroup{
 		Label: "notification",
 
 		Keys: []ConfigKey{
-			{Key: "notification", Label: "provider", Options: []string{"slack"}},
-		},
-	},
-	"slack": {
-		Label: "slack",
-
-		Keys: []ConfigKey{
+			{Key: "provider", Label: "provider", Options: []string{"slack"}},
 			{Key: "auth", Label: "auth method", Options: []string{"token", "local"}, Default: "token"},
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true},
 			{Key: "workspace", Label: "workspace name", Example: "mycompany"},
@@ -137,20 +124,7 @@ var configSchema = map[string]ConfigGroup{
 		Label: "CI/CD",
 
 		Keys: []ConfigKey{
-			{Key: "cicd", Label: "provider", Options: []string{"github_actions"}},
-		},
-	},
-	"preview": {
-		Label: "preview environments",
-
-		Keys: []ConfigKey{
-			{Key: "preview", Label: "provider", Options: []string{"cicd"}, Default: "cicd"},
-		},
-	},
-	"github_actions": {
-		Label: "GitHub Actions",
-
-		Keys: []ConfigKey{
+			{Key: "provider", Label: "provider", Options: []string{"github_actions"}},
 			{Key: "workflows.preview.url_template", Label: "preview URL template", Example: "https://host-ui-{{.Name}}.example.dev"},
 			{Key: "workflows.preview.up.target", Label: "preview up workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
 			{Key: "workflows.preview.up.inputs.services", Label: "preview up services input", Default: "services-to-deploy"},
@@ -162,25 +136,13 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workflows.release.inputs.issue", Label: "release issue input"},
 		},
 	},
-	"color_mode": {
-		Label: "color mode",
+	"display": {
+		Label: "display",
 
 		Keys: []ConfigKey{
-			{Key: "color_mode", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
-		},
-	},
-	"display_mode": {
-		Label: "display mode",
-
-		Keys: []ConfigKey{
-			{Key: "display_mode", Label: "display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
-		},
-	},
-	"header_mode": {
-		Label: "header mode",
-
-		Keys: []ConfigKey{
-			{Key: "header_mode", Label: "header mode", Options: []string{"logo", "compact"}, Default: "logo"},
+			{Key: "color", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
+			{Key: "mode", Label: "display mode", Options: []string{"compact", "comfy"}, Default: "compact"},
+			{Key: "header", Label: "header mode", Options: []string{"logo", "compact"}, Default: "logo"},
 		},
 	},
 }
@@ -204,11 +166,10 @@ func lookupGroup(name string) (ConfigGroup, bool) {
 }
 
 // fullKey returns the fully-qualified viper key for a group key.
-// For top-level groups like "issue_tracker", the key is used as-is.
-// For nested groups like "jira", the key is prefixed: "jira.base_url".
+// For nested groups like "issue_tracker", the key is prefixed:
+// "issue_tracker.base_url". Top-level keys (where key equals group
+// name) are returned as-is for backward compatibility.
 func fullKey(groupName string, key ConfigKey) string {
-	// If the key already contains the group prefix or is the group itself,
-	// use it as-is.
 	if key.Key == groupName || len(groupName) == 0 {
 		return key.Key
 	}

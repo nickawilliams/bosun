@@ -72,9 +72,9 @@ func newCreateCmd() *cobra.Command {
 			ui.DismissSquish()
 
 			// --- Resolve ---
-			project := viper.GetString("jira.project")
+			project := viper.GetString("issue_tracker.project")
 			if project == "" {
-				return fmt.Errorf("jira.project not configured in .bosun/config.yaml")
+				return fmt.Errorf("issue_tracker.project not configured in .bosun/config.yaml")
 			}
 
 			tracker, err := newIssueTracker()

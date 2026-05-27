@@ -24,7 +24,7 @@ func NewRootCmd(version string) *cobra.Command {
 			if err := config.Load(); err != nil {
 				return err
 			}
-			ui.ApplyColorMode(viper.GetString("color_mode"))
+			ui.ApplyColorMode(viper.GetString("display.color"))
 
 			// Determine output mode: raw when stdout isn't a TTY, or
 			// when the command explicitly declares raw output (annotation
@@ -36,8 +36,8 @@ func NewRootCmd(version string) *cobra.Command {
 			if raw {
 				ui.SetDefault(ui.NewRawReporter())
 			} else {
-				ui.ApplyDisplayMode(viper.GetString("display_mode"))
-				ui.ApplyHeaderMode(viper.GetString("header_mode"))
+				ui.ApplyDisplayMode(viper.GetString("display.mode"))
+				ui.ApplyHeaderMode(viper.GetString("display.header"))
 				ui.BeginTimeline()
 			}
 			return nil

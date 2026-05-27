@@ -754,10 +754,10 @@ func renderWorkspaceSummary(states []repoState) {
 
 // workspaceFilesystemPath returns the absolute filesystem path for a
 // workspace branch, derived the same way other commands resolve it
-// (workspace_root + branch, joined against project root for relative
+// (workspace.root + branch, joined against project root for relative
 // roots). Empty string when not in a project.
 func workspaceFilesystemPath(branch string) string {
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
 	}

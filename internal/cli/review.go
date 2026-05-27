@@ -371,7 +371,7 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			// Notification action — appears in plan, runs after PR creation.
-			reviewChannel := viper.GetString("slack.channel_review")
+			reviewChannel := viper.GetString("notification.channel_review")
 			notifier, notifierErr := newNotifier()
 			if notifierErr == nil {
 				defer notifier.Close()

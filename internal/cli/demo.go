@@ -211,12 +211,14 @@ func demoTree() {
 			ui.Leaf("▲", ui.Palette.Warning, "token", "••••••••"),
 			ui.Leaf("◆", ui.Palette.Success, "project", "ABC"),
 		),
-		ui.Group("github",
-			ui.Leaf("◼︎", ui.Palette.Primary, "owner", "acme-corp"),
+		ui.Group("code_host",
+			ui.Leaf("◼︎", ui.Palette.Primary, "provider", "github"),
 			ui.Leaf("◻︎", ui.Palette.Muted, "auto_merge", "true"),
 			ui.Leaf("◻︎", ui.Palette.Muted, "max_retries", "3"),
 		),
-		ui.Leaf("◻︎", ui.Palette.Muted, "display_mode", "comfy"),
+		ui.Group("display",
+			ui.Leaf("◻︎", ui.Palette.Muted, "mode", "comfy"),
+		),
 	).Print()
 }
 

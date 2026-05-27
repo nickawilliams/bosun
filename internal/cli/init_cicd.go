@@ -11,12 +11,12 @@ import (
 // workflows for preview and release stages.
 func setupGitHubActions() error {
 	// --- Preview up (deploy) workflow ---
-	preview, err := promptDefault("Preview Up Workflow", viper.GetString("github_actions.workflows.preview.up.target"))
+	preview, err := promptDefault("Preview Up Workflow", viper.GetString("cicd.workflows.preview.up.target"))
 	if err != nil {
 		return err
 	}
 	if preview != "" {
-		if err := saveConfigKey("github_actions.workflows.preview.up.target", "Preview Up Workflow", preview); err != nil {
+		if err := saveConfigKey("cicd.workflows.preview.up.target", "Preview Up Workflow", preview); err != nil {
 			return err
 		}
 	} else {
@@ -24,7 +24,7 @@ func setupGitHubActions() error {
 	}
 
 	// --- Service input parameter ---
-	serviceInputDefault := viper.GetString("github_actions.workflows.preview.up.inputs.services")
+	serviceInputDefault := viper.GetString("cicd.workflows.preview.up.inputs.services")
 	if serviceInputDefault == "" {
 		// Matches schema default in schema.go. The config schema refactor
 		// (ROADMAP.md) will unify these into a single source of truth.
@@ -35,7 +35,7 @@ func setupGitHubActions() error {
 		return err
 	}
 	if serviceInput != "" {
-		if err := saveConfigKey("github_actions.workflows.preview.up.inputs.services", "Service Input Parameter", serviceInput); err != nil {
+		if err := saveConfigKey("cicd.workflows.preview.up.inputs.services", "Service Input Parameter", serviceInput); err != nil {
 			return err
 		}
 	} else {
@@ -86,12 +86,12 @@ func setupGitHubActions() error {
 	// --- Release workflow(s) ---
 	if reposErr != nil || len(repos) == 0 {
 		// No repos configured — prompt for a single release workflow path.
-		release, err := promptDefault("Release Workflow", viper.GetString("github_actions.workflows.release.target"))
+		release, err := promptDefault("Release Workflow", viper.GetString("cicd.workflows.release.target"))
 		if err != nil {
 			return err
 		}
 		if release != "" {
-			if err := saveConfigKey("github_actions.workflows.release.target", "Release Workflow", release); err != nil {
+			if err := saveConfigKey("cicd.workflows.release.target", "Release Workflow", release); err != nil {
 				return err
 			}
 		} else {
@@ -104,7 +104,7 @@ func setupGitHubActions() error {
 	releaseMap := make(map[string]string)
 
 	for _, r := range repos {
-		existing := viper.GetString("github_actions.workflows.release.target." + r.Name)
+		existing := viper.GetString("cicd.workflows.release.target." + r.Name)
 		if existing == "" {
 			existing = ".github/workflows/production.yml"
 		}
@@ -125,7 +125,7 @@ func setupGitHubActions() error {
 	// Single repo — save as a plain string.
 	if len(releaseMap) == 1 {
 		for _, v := range releaseMap {
-			if err := saveConfigKey("github_actions.workflows.release.target", "Release Workflow", v); err != nil {
+			if err := saveConfigKey("cicd.workflows.release.target", "Release Workflow", v); err != nil {
 				return err
 			}
 		}
@@ -133,13 +133,13 @@ func setupGitHubActions() error {
 	}
 
 	// Multiple repos — save as a YAML map.
-	viper.Set("github_actions.workflows.release.target", releaseMap)
+	viper.Set("cicd.workflows.release.target", releaseMap)
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}
-	if err := setConfigMap(configPath, "github_actions.workflows.release.target", releaseMap); err != nil {
+	if err := setConfigMap(configPath, "cicd.workflows.release.target", releaseMap); err != nil {
 		ui.Skip(fmt.Sprintf("could not save release workflows: %v", err))
 		return nil
 	}
@@ -153,7 +153,7 @@ func setupGitHubActions() error {
 // name input parameter defaults to whatever was configured for preview up,
 // since most teams will want them aligned.
 func setupPreviewDownWorkflow() error {
-	target, err := promptDefault("Preview Down Workflow", viper.GetString("github_actions.workflows.preview.down.target"))
+	target, err := promptDefault("Preview Down Workflow", viper.GetString("cicd.workflows.preview.down.target"))
 	if err != nil {
 		return err
 	}
@@ -161,13 +161,13 @@ func setupPreviewDownWorkflow() error {
 		ui.Skip("preview down workflow")
 		return nil
 	}
-	if err := saveConfigKey("github_actions.workflows.preview.down.target", "Preview Down Workflow", target); err != nil {
+	if err := saveConfigKey("cicd.workflows.preview.down.target", "Preview Down Workflow", target); err != nil {
 		return err
 	}
 
-	nameDefault := viper.GetString("github_actions.workflows.preview.down.inputs.name")
+	nameDefault := viper.GetString("cicd.workflows.preview.down.inputs.name")
 	if nameDefault == "" {
-		nameDefault = viper.GetString("github_actions.workflows.preview.up.inputs.name")
+		nameDefault = viper.GetString("cicd.workflows.preview.up.inputs.name")
 	}
 	if nameDefault == "" {
 		nameDefault = "name"
@@ -180,5 +180,5 @@ func setupPreviewDownWorkflow() error {
 		ui.Skip("preview down name input")
 		return nil
 	}
-	return saveConfigKey("github_actions.workflows.preview.down.inputs.name", "Preview Down Name Input Parameter", nameInput)
+	return saveConfigKey("cicd.workflows.preview.down.inputs.name", "Preview Down Name Input Parameter", nameInput)
 }

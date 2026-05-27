@@ -64,7 +64,7 @@ func issueFromWorkspacePath() string {
 		return ""
 	}
 
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if wsRoot == "" {
 		return ""
 	}
@@ -158,7 +158,7 @@ func pickAssignedIssue() (string, error) {
 		if fetchErr != nil {
 			return fetchErr
 		}
-		boardID := viper.GetString("jira.board_id")
+		boardID := viper.GetString("issue_tracker.board_id")
 		if boardID != "" {
 			// Best-effort: sort falls back to lifecycle keys on error.
 			columns, _ = tracker.BoardColumns(context.Background(), boardID)
@@ -272,7 +272,7 @@ func sortIssuesByStatus(issues []issuepkg.Issue) {
 	})
 }
 
-func init() { registerSource("jira", "board_id", boardSource) }
+func init() { registerSource("issue_tracker", "board_id", boardSource) }
 
 // boardSource returns available boards as SourceOptions for the config picker.
 func boardSource() ([]SourceOption, error) {
@@ -283,7 +283,7 @@ func boardSource() ([]SourceOption, error) {
 
 	boards, err := tracker.ListBoards(
 		context.Background(),
-		viper.GetString("jira.project"),
+		viper.GetString("issue_tracker.project"),
 	)
 	if err != nil {
 		return nil, err

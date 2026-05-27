@@ -106,7 +106,7 @@ func (cs *configSources) resolveKeySource(key string) (value, source string) {
 }
 
 // envVarForKey returns the automatic BOSUN_* env var name for a
-// viper key (e.g., "jira.base_url" → "BOSUN_JIRA_BASE_URL").
+// viper key (e.g., "issue_tracker.base_url" → "BOSUN_ISSUE_TRACKER_BASE_URL").
 func envVarForKey(key string) string {
 	return "BOSUN_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
 }
