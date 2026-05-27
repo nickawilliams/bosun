@@ -342,9 +342,9 @@ func (c *Card) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(comfyPrefix() + c.Render())
-	if !c.tight {
-		comfyBreak = true
+	fmt.Print(spacerPrefix() + c.Render())
+	if c.tight {
+		ClearSpacer()
 	}
 }
 
@@ -356,19 +356,18 @@ func (c *Card) PrintRewindable() func() {
 	if IsRaw() {
 		return func() {}
 	}
-	prev := comfyBreak
-	rendered := comfyPrefix() + c.Render()
+	prev := needsSpacer
+	rendered := spacerPrefix() + c.Render()
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
-	if !c.tight {
-		comfyBreak = true
+	if c.tight {
+		ClearSpacer()
 	}
 	return func() {
 		if lines > 0 {
-			// CPL (cursor previous line) + ED (erase to end of screen).
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
-		comfyBreak = prev
+		needsSpacer = prev
 	}
 }
 
@@ -468,8 +467,6 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 		b.WriteString(c.renderBreadcrumbRow())
 	} else {
 		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		logoStyle := lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand)
-
 		boxInner := TermWidth() - 3
 		if boxInner < 10 {
 			boxInner = 10
@@ -481,7 +478,12 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 		versionStr := versionStyle.Render(AppVersion)
 		versionWidth := lipgloss.Width(versionStr)
+
+		// Vertical gradient from LogoTop to LogoBottom.
+		logoColors := lerpColors(Palette.LogoTop, Palette.LogoBottom, len(asciiLogo))
+
 		for i, line := range asciiLogo {
+			lineStyle := lipgloss.NewStyle().Bold(true).Foreground(logoColors[i])
 			artWidth := lipgloss.Width(line)
 			if i == 0 {
 				rightPad := boxInner - 2 - artWidth - versionWidth - 2
@@ -490,7 +492,7 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 				}
 				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
 					ruleStyle.Render("│"),
-					logoStyle.Render(line),
+					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
 					versionStr,
 					ruleStyle.Render("│"))
@@ -501,7 +503,7 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 				}
 				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
 					ruleStyle.Render("│"),
-					logoStyle.Render(line),
+					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
 					ruleStyle.Render("│"))
 			}
@@ -726,7 +728,8 @@ type cardSpinnerModel struct {
 	done        bool
 	err         error
 	resultCh    <-chan error
-	successCard func() *Card // optional: if set, render this instead of card on success
+	successCard func() *Card   // optional: if set, render this instead of card on success
+	prefix      string         // rendered before the first frame (e.g., comfy connector)
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {
@@ -774,14 +777,12 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m cardSpinnerModel) View() tea.View {
 	if m.done {
-		// Render the finalized card so BubbleTea's last frame
-		// replaces the spinner in place without a visible gap.
 		if m.err == nil && m.successCard != nil {
-			return tea.NewView(m.successCard().Render())
+			return tea.NewView(m.prefix + m.successCard().Render())
 		}
-		return tea.NewView(m.card.Render())
+		return tea.NewView(m.prefix + m.card.Render())
 	}
-	return tea.NewView(m.card.renderWithGlyph(m.spinner.View()))
+	return tea.NewView(m.prefix + m.card.renderWithGlyph(m.spinner.View()))
 }
 
 func (m cardSpinnerModel) waitForResult() tea.Cmd {
@@ -842,11 +843,11 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 		resultCh <- err
 	}()
 
-	// Emit comfy connector before the spinner starts — BubbleTea's
-	// View() bypasses Print() so it won't consume the prefix itself.
-	fmt.Print(comfyPrefix())
-
+	// Capture the comfy connector so BubbleTea renders it atomically
+	// with the first spinner frame — no visible gap between the
+	// connector and the spinner appearing.
 	model := newCardSpinnerModel(card, resultCh)
+	model.prefix = spacerPrefix()
 	model.successCard = successCard
 	p := tea.NewProgram(model)
 	result, err := p.Run()
@@ -871,9 +872,6 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 	// output is on screen. No reprint needed — just propagate the
 	// comfy break state and return.
 	m := result.(cardSpinnerModel)
-	if !card.tight {
-		comfyBreak = true
-	}
 	return m.err
 }
 
@@ -895,9 +893,8 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 		resultCh <- err
 	}()
 
-	fmt.Print(comfyPrefix())
-
 	sm := newCardSpinnerModel(card, resultCh)
+	sm.prefix = spacerPrefix()
 	sm.successCard = successCard
 	p := tea.NewProgram(sm)
 	model, err := p.Run()
@@ -917,7 +914,6 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	// BubbleTea's final View() already rendered the finalized card
 	// (or replacement card on success) in place.
 	m := model.(cardSpinnerModel)
-	comfyBreak = true
 	return m.err
 }
 
@@ -942,11 +938,12 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 		resultCh <- err
 	}()
 
-	prevComfy := comfyBreak
-	prefix := comfyPrefix()
-	fmt.Print(prefix)
+	prevSpacer := needsSpacer
+	prefix := spacerPrefix()
 
-	p := tea.NewProgram(newCardSpinnerModel(card, resultCh))
+	sm := newCardSpinnerModel(card, resultCh)
+	sm.prefix = prefix
+	p := tea.NewProgram(sm)
 	model, err := p.Run()
 
 	// Determine the task result regardless of how BubbleTea exited.
@@ -967,14 +964,11 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 	// card BubbleTea rendered) so the rewind function can erase it.
 	rendered := card.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
-	if !card.tight {
-		comfyBreak = true
-	}
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
-		comfyBreak = prevComfy
+		needsSpacer = prevSpacer
 	}, nil
 }
 

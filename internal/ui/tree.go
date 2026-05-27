@@ -82,8 +82,7 @@ func (t *Tree) Render() string {
 // Print writes the tree to stdout, integrating with the timeline.
 // Consumes a pending comfy break and sets one for the next card.
 func (t *Tree) Print() {
-	fmt.Print(comfyPrefix() + t.Render())
-	comfyBreak = true
+	fmt.Print(spacerPrefix() + t.Render())
 }
 
 const (

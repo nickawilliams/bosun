@@ -58,23 +58,21 @@ func (pc *PlanCard) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(comfyPrefix() + pc.Render())
-	comfyBreak = true
+	fmt.Print(spacerPrefix() + pc.Render())
 }
 
 // PrintRewindable writes the card to stdout and returns a function that
 // erases it via ANSI cursor movement.
 func (pc *PlanCard) PrintRewindable() func() {
-	prev := comfyBreak
-	rendered := comfyPrefix() + pc.Render()
+	prev := needsSpacer
+	rendered := spacerPrefix() + pc.Render()
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
-	comfyBreak = true
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
-		comfyBreak = prev
+		needsSpacer = prev
 	}
 }
 
@@ -250,7 +248,7 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 		resultCh <- planApplyResult{err: firstErr, succeeded: succeeded, failed: failed}
 	}()
 
-	fmt.Print(comfyPrefix())
+	fmt.Print(spacerPrefix())
 
 	p := tea.NewProgram(newPlanCardSpinnerModel(pc, resultCh))
 	model, err := p.Run()
@@ -267,7 +265,6 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 	// BubbleTea's final View() already rendered the finalized plan
 	// card in place (state set in Update's planApplyDoneMsg handler).
 	m := model.(planCardSpinnerModel)
-	comfyBreak = true
 	return m.err
 }
 

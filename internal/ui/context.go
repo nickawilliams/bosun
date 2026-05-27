@@ -1,6 +1,10 @@
 package ui
 
-import "fmt"
+import (
+	"fmt"
+
+	"charm.land/lipgloss/v2"
+)
 
 // SetContext renders the root header immediately from the given
 // context and begins the timeline. Call once at command init, before
@@ -23,8 +27,9 @@ func SetContext(project, workContext, command string) {
 	if workContext != "" {
 		root.breadcrumb.AddSegment(workContext)
 	}
-	fmt.Print(comfyPrefix() + root.Render())
-	comfyBreak = true
+	conn := lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
+	fmt.Print(spacerPrefix() + root.Render() + " " + conn + "\n")
+	needsSpacer = false
 }
 
 // ResetContext is a no-op kept for test compatibility.

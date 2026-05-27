@@ -78,23 +78,21 @@ func (p *Plan) Render() string {
 
 // Print writes the plan to stdout.
 func (p *Plan) Print() {
-	fmt.Print(comfyPrefix() + p.Render())
-	comfyBreak = true
+	fmt.Print(spacerPrefix() + p.Render())
 }
 
 // PrintRewindable writes the plan to stdout and returns a function that
 // erases it (same pattern as Card.PrintRewindable).
 func (p *Plan) PrintRewindable() func() {
-	prev := comfyBreak
-	rendered := comfyPrefix() + p.Render()
+	prev := needsSpacer
+	rendered := spacerPrefix() + p.Render()
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
-	comfyBreak = true
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
-		comfyBreak = prev
+		needsSpacer = prev
 	}
 }
 
