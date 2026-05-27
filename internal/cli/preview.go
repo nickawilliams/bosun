@@ -26,7 +26,7 @@ func newPreviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issueKey).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			tracker, _ := newIssueTracker()
@@ -95,7 +95,7 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
-			channel := viper.GetString("slack.channel_review")
+			channel := viper.GetString("notification.channel_review")
 			previewNotifier, previewNotifierErr := newNotifier()
 			if previewNotifierErr == nil {
 				defer previewNotifier.Close()

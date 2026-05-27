@@ -122,7 +122,6 @@ func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, dec
 		return e
 	}, func() *ui.Card {
 		card := ui.NewCard(ui.CardSuccess, "").
-			HideAbsorbedGlyph().
 			Subtitle(detail.Title)
 		if len(decorate) > 0 {
 			decorate[0](detail, card)
@@ -197,9 +196,9 @@ func newWorkspaceManager() (*workspace.Manager, error) {
 		return nil, fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
 	}
 
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if wsRoot == "" {
-		return nil, fmt.Errorf("workspaces not configured (set workspace_root in config)")
+		return nil, fmt.Errorf("workspaces not configured (set workspace.root in config)")
 	}
 	if !filepath.IsAbs(wsRoot) {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
@@ -234,9 +233,9 @@ func detectWorkspaceFromCWD() (string, error) {
 		return "", fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
 	}
 
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if wsRoot == "" {
-		return "", fmt.Errorf("workspaces not configured (set workspace_root in config)")
+		return "", fmt.Errorf("workspaces not configured (set workspace.root in config)")
 	}
 	if !filepath.IsAbs(wsRoot) {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
@@ -285,16 +284,13 @@ func newIssueTracker() (issue.Tracker, error) {
 		return nil, err
 	}
 
-	provider := viper.GetString("issue_tracker")
+	provider := viper.GetString("issue_tracker.provider")
 	switch provider {
 	case "jira":
-		if err := requireConfig("jira"); err != nil {
-			return nil, err
-		}
 		return jira.New(
-			viper.GetString("jira.base_url"),
-			viper.GetString("jira.email"),
-			viper.GetString("jira.token"),
+			viper.GetString("issue_tracker.base_url"),
+			viper.GetString("issue_tracker.email"),
+			viper.GetString("issue_tracker.token"),
 		), nil
 	default:
 		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
@@ -305,13 +301,13 @@ func newIssueTracker() (issue.Tracker, error) {
 // the provider-specific status name from config (e.g., "In Progress").
 // Falls back to schema defaults if not set in config.
 func resolveStatus(key string) (string, error) {
-	name := viper.GetString("statuses." + key)
+	name := viper.GetString("issue_tracker.statuses." + key)
 	if name != "" {
 		return name, nil
 	}
 
 	// Check schema defaults.
-	if group, ok := lookupGroup("statuses"); ok {
+	if group, ok := lookupGroup("issue_tracker.statuses"); ok {
 		for _, ck := range group.Keys {
 			if ck.Key == key && ck.Default != "" {
 				return ck.Default, nil
@@ -365,13 +361,13 @@ func lifecycleKeyForStatus(status string) string {
 }
 
 // newCodeHost creates a code.Host from current config. Resolution order:
-// 1. github.token from viper (config file or BOSUN_GITHUB_TOKEN env)
+// 1. code_host.token from viper (config file or GITHUB_TOKEN env)
 // 2. gh auth token (GitHub CLI)
 // 3. GITHUB_TOKEN env var
 // 4. JIT prompt (saves to config)
 func newCodeHost() (code.Host, error) {
 	// Check viper first (config file or env var via AutomaticEnv).
-	if token := viper.GetString("github.token"); token != "" {
+	if token := viper.GetString("code_host.token"); token != "" {
 		return gh.New(token), nil
 	}
 
@@ -385,13 +381,10 @@ func newCodeHost() (code.Host, error) {
 		return nil, err
 	}
 
-	provider := viper.GetString("code_host")
+	provider := viper.GetString("code_host.provider")
 	switch provider {
 	case "github":
-		if err := requireConfig("github"); err != nil {
-			return nil, err
-		}
-		return gh.New(viper.GetString("github.token")), nil
+		return gh.New(viper.GetString("code_host.token")), nil
 	default:
 		return nil, fmt.Errorf("unsupported code host: %q", provider)
 	}
@@ -483,7 +476,7 @@ var defaultNotifyTemplates = map[string]map[string]string{
 //	  body: "..."
 //	  context: "..."
 func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
-	key := "slack.templates." + notifType
+	key := "notification.templates." + notifType
 
 	// Check if it's a simple string template.
 	if s := viper.GetString(key); s != "" {
@@ -615,18 +608,18 @@ func renderTemplate(pattern string, data notifyTemplateData) string {
 // if the notification provider is not configured — callers treat this as a
 // skip, not a fatal error. Does not prompt for missing values (opt-in only).
 func newNotifier() (notify.Notifier, error) {
-	provider := viper.GetString("notification")
+	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return nil, fmt.Errorf("notification provider not configured")
 	}
 
 	switch provider {
 	case "slack":
-		auth := viper.GetString("slack.auth")
+		auth := viper.GetString("notification.auth")
 		if auth == "local" {
-			workspace := viper.GetString("slack.workspace")
+			workspace := viper.GetString("notification.workspace")
 			if workspace == "" {
-				return nil, fmt.Errorf("slack.workspace required for local auth")
+				return nil, fmt.Errorf("notification.workspace required for local auth")
 			}
 			token, cookie, err := slack.ResolveLocalToken(workspace)
 			if err != nil {
@@ -636,10 +629,10 @@ func newNotifier() (notify.Notifier, error) {
 		}
 
 		// Token-based auth.
-		if err := requireConfig("slack"); err != nil {
+		if err := requireConfig("notification"); err != nil {
 			return nil, err
 		}
-		return slack.New(viper.GetString("slack.token")), nil
+		return slack.New(viper.GetString("notification.token")), nil
 	default:
 		return nil, fmt.Errorf("unsupported notification provider: %q", provider)
 	}
@@ -649,7 +642,7 @@ func newNotifier() (notify.Notifier, error) {
 // newCodeHost: viper → gh CLI → env → JIT prompt.
 func newCICD() (cicd.CICD, error) {
 	// Reuse the same GitHub token used for code hosting.
-	if token := viper.GetString("github.token"); token != "" {
+	if token := viper.GetString("code_host.token"); token != "" {
 		return githubactions.New(token), nil
 	}
 	if token := gh.ResolveToken(); token != "" {
@@ -657,17 +650,14 @@ func newCICD() (cicd.CICD, error) {
 	}
 
 	// Fall back to config-prompted flow.
-	if err := requireConfig("cicd"); err != nil {
+	if err := requireConfig("code_host"); err != nil {
 		return nil, err
 	}
 
-	provider := viper.GetString("cicd")
+	provider := viper.GetString("cicd.provider")
 	switch provider {
 	case "github_actions":
-		if err := requireConfig("github"); err != nil {
-			return nil, err
-		}
-		return githubactions.New(viper.GetString("github.token")), nil
+		return githubactions.New(viper.GetString("code_host.token")), nil
 	default:
 		return nil, fmt.Errorf("unsupported CI/CD provider: %q", provider)
 	}
@@ -696,20 +686,12 @@ func newPreviewProvider() (preview.Provider, error) {
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
 func newPreviewProviderWithInfo(onInfo func(action, value string)) (preview.Provider, error) {
-	providerName := viper.GetString("preview")
-	if providerName == "" {
-		providerName = "cicd"
-	}
-	if providerName != "cicd" {
-		return nil, fmt.Errorf("unsupported preview provider: %q", providerName)
-	}
-
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
 	const stage = "preview"
 	var urlTmpl *template.Template
-	if pattern := viper.GetString("github_actions.workflows." + stage + ".url_template"); pattern != "" {
+	if pattern := viper.GetString("cicd.workflows." + stage + ".url_template"); pattern != "" {
 		parsed, err := template.New("stage-url").Parse(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("preview url_template: %w", err)
@@ -779,7 +761,7 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
 func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
-	key := "github_actions.workflows." + stage + ".target"
+	key := "cicd.workflows." + stage + ".target"
 
 	// Try string first (global mode).
 	if s := viper.GetString(key); s != "" {
@@ -890,9 +872,9 @@ func resolveRepoServiceNames(repoName string) []string {
 // given bosun concept (e.g., "services", "issue", "name") within a lifecycle
 // stage. Returns empty string if not configured, signaling callers to skip.
 //
-// Config path: github_actions.workflows.<stage>.inputs.<concept>
+// Config path: cicd.workflows.<stage>.inputs.<concept>
 func stageInputName(stage, concept string) string {
-	return viper.GetString("github_actions.workflows." + stage + ".inputs." + concept)
+	return viper.GetString("cicd.workflows." + stage + ".inputs." + concept)
 }
 
 // buildWorkflowInputs constructs the inputs map for a workflow dispatch.
@@ -946,9 +928,9 @@ type stageURLTemplate struct {
 // renderStageURL renders the url_template for a stage with the given name.
 // Returns empty string if the template is not configured or rendering fails.
 //
-// Config path: github_actions.workflows.<stage>.url_template
+// Config path: cicd.workflows.<stage>.url_template
 func renderStageURL(stage, name string) string {
-	pattern := viper.GetString("github_actions.workflows." + stage + ".url_template")
+	pattern := viper.GetString("cicd.workflows." + stage + ".url_template")
 	if pattern == "" {
 		return ""
 	}

@@ -345,3 +345,54 @@ func TestExtractIssue(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractIssueCustomPattern(t *testing.T) {
+	t.Run("custom pattern overrides default", func(t *testing.T) {
+		viper.Reset()
+		viper.Set("workspace.issue_pattern", `(#\d+)`)
+		t.Cleanup(func() { viper.Reset() })
+
+		got := extractIssue("feature/#42_add-widget")
+		if got != "#42" {
+			t.Errorf("extractIssue() = %q, want %q", got, "#42")
+		}
+
+		// Default pattern should not match with custom set.
+		got = extractIssue("PROJ-123")
+		if got != "" {
+			t.Errorf("extractIssue() = %q, want %q", got, "")
+		}
+	})
+
+	t.Run("invalid pattern falls back to default", func(t *testing.T) {
+		viper.Reset()
+		viper.Set("workspace.issue_pattern", `([invalid`)
+		t.Cleanup(func() { viper.Reset() })
+
+		got := extractIssue("PROJ-123")
+		if got != "PROJ-123" {
+			t.Errorf("extractIssue() = %q, want %q", got, "PROJ-123")
+		}
+	})
+
+	t.Run("empty pattern uses default", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(func() { viper.Reset() })
+
+		got := extractIssue("feature/PROJ-123_foo")
+		if got != "PROJ-123" {
+			t.Errorf("extractIssue() = %q, want %q", got, "PROJ-123")
+		}
+	})
+
+	t.Run("lowercase pattern", func(t *testing.T) {
+		viper.Reset()
+		viper.Set("workspace.issue_pattern", `(proj-\d+)`)
+		t.Cleanup(func() { viper.Reset() })
+
+		got := extractIssue("feature/proj-99_stuff")
+		if got != "proj-99" {
+			t.Errorf("extractIssue() = %q, want %q", got, "proj-99")
+		}
+	})
+}

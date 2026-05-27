@@ -60,8 +60,7 @@ func newCaptainCmd() *cobra.Command {
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if args[0] == "on" && args[1] == "deck" {
-				rootCard(cmd).Print()
-				ui.DismissSquish()
+				initHeader(cmd)
 				printCaptainArt()
 				audio.Play()
 			}

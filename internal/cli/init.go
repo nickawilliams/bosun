@@ -32,8 +32,7 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	rootCard(cmd).Print()
-	ui.DismissSquish()
+	initHeader(cmd)
 	skipConfirm := isAutoApprove(cmd)
 	quick, _ := cmd.Flags().GetBool("quick")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")
@@ -74,7 +73,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	var existingWSRoot string
 	if reinit {
 		existingRepos = viper.GetStringSlice("repositories")
-		existingWSRoot = viper.GetString("workspace_root")
+		existingWSRoot = viper.GetString("workspace.root")
 	}
 
 	// Resolve repository globs.
@@ -87,7 +86,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Resolve workspace_root.
+	// Resolve workspace root.
 	wsRoot, _ := cmd.Flags().GetString("workspace-root")
 
 	// Prompt for project settings. In quick mode on reinit, skip if
@@ -200,8 +199,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if wsRoot != "" {
-			if err := setConfigValue(configPath, "workspace_root", wsRoot); err != nil {
-				return fmt.Errorf("updating workspace_root: %w", err)
+			if err := setConfigValue(configPath, "workspace.root", wsRoot); err != nil {
+				return fmt.Errorf("updating workspace.root: %w", err)
 			}
 		}
 	} else {
@@ -235,27 +234,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 
 		for _, ig := range serviceInitGroups {
+			group, ok := lookupGroup(ig.Group)
+			if !ok {
+				continue
+			}
+
 			if quick {
 				// Quick mode: only resolve missing required keys.
-				providerGroup, ok := lookupGroup(ig.Provider)
-				if !ok {
-					continue
-				}
-				if err := resolveGroup(ig.Provider, providerGroup); err != nil {
+				if err := resolveGroup(ig.Group, group); err != nil {
 					return err
-				}
-				if ig.Setup != nil {
-					// Custom setups handle their own quick logic.
-					continue
-				}
-				if ig.Detail != "" {
-					detailGroup, ok := lookupGroup(ig.Detail)
-					if !ok {
-						continue
-					}
-					if err := resolveGroup(ig.Detail, detailGroup); err != nil {
-						return err
-					}
 				}
 				continue
 			}
@@ -270,25 +257,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			providerGroup, ok := lookupGroup(ig.Provider)
-			if !ok {
-				continue
-			}
-			if err := resolveGroupReconfigure(ig.Provider, providerGroup); err != nil {
+			if err := resolveGroupReconfigure(ig.Group, group); err != nil {
 				return err
 			}
 
-			// Resolve provider-specific config: custom setup or schema-driven.
+			// Custom setup for provider-specific flows (e.g., CI/CD workflow wizard).
 			if ig.Setup != nil {
 				if err := ig.Setup(); err != nil {
-					return err
-				}
-			} else if ig.Detail != "" {
-				detailGroup, ok := lookupGroup(ig.Detail)
-				if !ok {
-					continue
-				}
-				if err := resolveGroupReconfigure(ig.Detail, detailGroup); err != nil {
 					return err
 				}
 			}
@@ -306,18 +281,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 // initGroup describes an optional service group for the init wizard.
 type initGroup struct {
 	Label    string       // Human-readable name for the confirmation prompt.
-	Provider string       // Schema group for provider selection (e.g., "issue_tracker").
-	Detail   string       // Schema group for provider-specific config (e.g., "jira").
-	Setup    func() error // Custom setup flow, replaces resolveGroup(Detail) when set.
+	Group    string       // Schema group name (e.g., "issue_tracker").
+	Setup    func() error // Custom setup flow, replaces resolveGroup when set.
 }
 
 // serviceInitGroups defines the ordered list of optional service groups
 // presented during interactive init.
 var serviceInitGroups = []initGroup{
-	{Label: "issue tracker", Provider: "issue_tracker", Detail: "jira"},
-	{Label: "code host", Provider: "code_host", Detail: "github"},
-	{Label: "notifications", Provider: "notification", Detail: "slack"},
-	{Label: "CI/CD", Provider: "cicd", Detail: "github_actions", Setup: setupGitHubActions},
+	{Label: "issue tracker", Group: "issue_tracker"},
+	{Label: "code host", Group: "code_host"},
+	{Label: "notifications", Group: "notification"},
+	{Label: "CI/CD", Group: "cicd", Setup: setupGitHubActions},
 }
 
 // detectRepositories scans a directory for git repositories: the directory
@@ -389,17 +363,21 @@ func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 
 	if wsRoot != "" {
 		b.WriteString("\n# Where workspaces are created (relative to project root)\n")
-		fmt.Fprintf(&b, "workspace_root: %s\n", wsRoot)
+		b.WriteString("workspace:\n")
+		fmt.Fprintf(&b, "  root: %s\n", wsRoot)
 	} else {
 		b.WriteString("\n# Uncomment to enable worktree-based workspaces:\n")
-		b.WriteString("# workspace_root: .workspaces\n")
+		b.WriteString("# workspace:\n")
+		b.WriteString("#   root: .workspaces\n")
 	}
 
 	b.WriteString("\n# Uncomment and configure as needed:\n")
-	b.WriteString("# jira:\n")
+	b.WriteString("# issue_tracker:\n")
+	b.WriteString("#   provider: jira\n")
 	b.WriteString("#   project: PROJ\n")
 	b.WriteString("#\n")
-	b.WriteString("# slack:\n")
+	b.WriteString("# notification:\n")
+	b.WriteString("#   provider: slack\n")
 	b.WriteString("#   channel_review: code-review\n")
 	b.WriteString("#   channel_release: releases\n")
 

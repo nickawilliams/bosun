@@ -25,7 +25,7 @@ func newPrereleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			bump, _ := cmd.Flags().GetString("bump")
@@ -135,7 +135,7 @@ func newPrereleaseCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
-			releaseChannel := viper.GetString("slack.channel_release")
+			releaseChannel := viper.GetString("notification.channel_release")
 			releaseNotifier, releaseNotifierErr := newNotifier()
 			if releaseNotifierErr == nil {
 				defer releaseNotifier.Close()

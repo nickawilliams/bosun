@@ -136,8 +136,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			name := args[0]
 			repositoryNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
-			rootCard(cmd, name).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 
 			repositories, err := argsToWorkspaceRepositories(repositoryNames)
 			if err != nil {
@@ -185,8 +184,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, name).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -242,8 +240,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, name).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -289,8 +286,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd, name).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 			force, _ := cmd.Flags().GetBool("force")
 			yes, _ := cmd.Flags().GetBool("yes")
 

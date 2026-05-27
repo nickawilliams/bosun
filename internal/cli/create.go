@@ -68,13 +68,12 @@ func newCreateCmd() *cobra.Command {
 			if title == "" {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
-			rootCard(cmd).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 
 			// --- Resolve ---
-			project := viper.GetString("jira.project")
+			project := viper.GetString("issue_tracker.project")
 			if project == "" {
-				return fmt.Errorf("jira.project not configured in .bosun/config.yaml")
+				return fmt.Errorf("issue_tracker.project not configured in .bosun/config.yaml")
 			}
 
 			tracker, err := newIssueTracker()

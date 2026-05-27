@@ -17,7 +17,9 @@ type palette struct {
 	// Semantic colors.
 	Primary   color.Color // Titles, headings
 	Secondary color.Color // Secondary headings
-	Brand     color.Color // Application logo / app name
+	Brand     color.Color // Application name in breadcrumbs
+	LogoTop   color.Color // Logo gradient start (top line)
+	LogoBottom color.Color // Logo gradient end (bottom line)
 	Accent    color.Color // Selectors, prompts, interactive elements
 	Info     color.Color // Informational, non-actionable signals
 	Success  color.Color // Confirmations, selected items
@@ -44,107 +46,65 @@ type palette struct {
 // any rendering occurs; read freely afterward (single-goroutine init).
 var Palette = defaultPalette()
 
-// DisplayMode controls the density of rendered output.
-type DisplayMode int
+// compactHeader controls whether the root card renders as a compact
+// single-line breadcrumb instead of the full ASCII logo box.
+var compactHeader bool
 
-const (
-	DisplayCompact     DisplayMode = iota // No extra spacing (default).
-	DisplayComfy                    // Breathing room between cards.
-	DisplayVerbose                        // Reserved: richer incremental output.
-)
-
-// displayMode is the active display mode. Set by ApplyDisplayMode before
-// any rendering occurs; read freely afterward (single-goroutine init).
-var displayMode = DisplayCompact
-
-// ApplyDisplayMode sets the active display mode from a config string.
-// Must be called after config loads and before any rendering.
-func ApplyDisplayMode(mode string) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "comfy":
-		displayMode = DisplayComfy
-	case "verbose":
-		displayMode = DisplayVerbose
-	default:
-		displayMode = DisplayCompact
-	}
-}
-
-// IsComfy reports whether the display mode adds breathing room.
-// Returns true for both comfortable and verbose modes.
-func IsComfy() bool {
-	return displayMode >= DisplayComfy
-}
-
-// headerMode controls whether the root card renders the full ASCII
-// logo box or a compact single-line header.
-var headerCompact bool
-
-// ApplyHeaderMode sets the header mode from a config string.
-// "compact" enables the single-line header; anything else (including
-// empty) uses the full logo box.
-func ApplyHeaderMode(mode string) {
-	headerCompact = strings.ToLower(strings.TrimSpace(mode)) == "compact"
+// SetCompactHeader sets the compact header flag directly from a bool
+// config value.
+func SetCompactHeader(v bool) {
+	compactHeader = v
 }
 
 // IsCompactHeader reports whether the root card should render as a
 // single-line breadcrumb header instead of the full logo box.
 func IsCompactHeader() bool {
-	return headerCompact
+	return compactHeader
 }
 
 // displayPadding returns extra vertical whitespace to insert after a
-// non-timeline block (e.g. Panel) when the display mode calls for
-// breathing room.
+// non-timeline block (e.g. Panel) for breathing room.
 func displayPadding() string {
-	if displayMode >= DisplayComfy {
-		return "\n"
-	}
-	return ""
+	return "\n"
 }
 
-// comfyBreak is set after a timeline card prints to signal that the
-// next card should be preceded by a connector line. The connector is
-// emitted as a leading prefix so the last card in a run never leaves
-// a dangling │.
-var comfyBreak bool
+// needsSpacer is set after a timeline card prints to signal that
+// the next card should be preceded by a connector line (" │\n").
+// The connector is emitted as a leading prefix so the last card
+// in a run never leaves a dangling │.
+var needsSpacer bool
 
-// BreakTimeline requests a connector-line break before the next
-// card in comfy mode. Use when the next card follows output that
-// didn't go through the normal Print path (e.g. an interrupted
-// huh form).
-func BreakTimeline() {
-	comfyBreak = true
+// RequestSpacer requests a connector-line spacer before the next
+// card. Use when the next card follows output that didn't go
+// through the normal Print path (e.g. an interrupted huh form).
+func RequestSpacer() {
+	needsSpacer = true
 }
 
-// FlushBreak prints and clears a pending comfy break immediately.
+// FlushSpacer prints and clears a pending spacer immediately.
 // Use before non-card output (e.g., huh forms) that won't call
-// comfyPrefix() itself.
-func FlushBreak() {
-	fmt.Print(comfyPrefix())
+// spacerPrefix() itself.
+func FlushSpacer() {
+	fmt.Print(spacerPrefix())
 }
 
-// ClearBreak discards a pending comfy connector without printing
-// it. Use to create a visual gap between unrelated timeline
-// sections where the │ connector would be misleading.
-func ClearBreak() {
-	comfyBreak = false
+// ClearSpacer discards a pending spacer without printing it.
+// Use to suppress the connector between unrelated timeline
+// sections where the │ would be misleading.
+func ClearSpacer() {
+	needsSpacer = false
 }
 
-// BeginTimeline prints a leading blank line in comfy mode to
-// separate the timeline from the shell prompt above.
+// BeginTimeline prints a leading blank line to separate the
+// timeline from the shell prompt above.
 func BeginTimeline() {
-	if IsComfy() {
-		fmt.Println()
-	}
+	fmt.Println()
 }
 
-// EndTimeline prints a trailing blank line in comfy mode to close
-// the visual timeline with clean whitespace.
+// EndTimeline prints a trailing blank line to close the visual
+// timeline with clean whitespace.
 func EndTimeline() {
-	if IsComfy() {
-		fmt.Println()
-	}
+	fmt.Println()
 }
 
 // Divider prints a muted horizontal rule between cards while
@@ -158,7 +118,7 @@ func Divider() {
 	}
 	// Emit any pending comfy connector first so the divider has a
 	// blank │ row above it in comfy mode.
-	fmt.Print(comfyPrefix())
+	fmt.Print(spacerPrefix())
 
 	style := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	width := max(TermWidth()-2, 10)
@@ -166,26 +126,49 @@ func Divider() {
 
 	// Trigger a │ row above the next card so the divider has
 	// breathing room beneath it too.
-	comfyBreak = true
+	needsSpacer = true
 }
 
-// comfyPrefix returns (and clears) a pending connector-line prefix
-// for comfy-mode breathing room between timeline cards.
-func comfyPrefix() string {
-	if !comfyBreak || !IsComfy() {
-		comfyBreak = false
+// spacerPrefix returns a connector-line spacer (" │\n") if one is
+// pending, then re-arms the flag so the next consumer gets one too.
+// Returns "" on the first call (before any output has set the flag).
+// Tight cards call ClearSpacer() to suppress the next spacer.
+func spacerPrefix() string {
+	if !needsSpacer {
+		needsSpacer = true // arm for next time
 		return ""
 	}
-	comfyBreak = false
 	conn := lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
 	return " " + conn + "\n"
+}
+
+// lerpColors returns n colors interpolated linearly from a to b.
+// For n <= 1, returns []color.Color{a}.
+func lerpColors(a, b color.Color, n int) []color.Color {
+	if n <= 1 {
+		return []color.Color{a}
+	}
+	ar, ag, ab, _ := a.RGBA()
+	br, bg, bb, _ := b.RGBA()
+	colors := make([]color.Color, n)
+	for i := range n {
+		t := float64(i) / float64(n-1)
+		colors[i] = lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
+			uint8(float64(ar>>8)*(1-t)+float64(br>>8)*t),
+			uint8(float64(ag>>8)*(1-t)+float64(bg>>8)*t),
+			uint8(float64(ab>>8)*(1-t)+float64(bb>>8)*t),
+		))
+	}
+	return colors
 }
 
 func defaultPalette() palette {
 	return palette{
 		Primary:   lipgloss.Color("#7571F9"), // Indigo
 		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
-		Brand:     lipgloss.Color("#9997CC"), // Desaturated indigo (logo / app name)
+		Brand:      lipgloss.Color("#9997CC"), // Desaturated indigo (app name in breadcrumbs)
+		LogoTop:    lipgloss.Color("#7571F9"), // Bright indigo (logo gradient start)
+		LogoBottom: lipgloss.Color("#9997CC"), // Desaturated indigo (logo gradient end)
 		Accent:    lipgloss.Color("#F780E2"), // Fuchsia
 		Info:     lipgloss.Color("#5DA9F8"), // Sky blue
 		Success:  lipgloss.Color("#02BF87"), // Green
@@ -210,7 +193,9 @@ func ansiPalette() palette {
 	return palette{
 		Primary:   lipgloss.BrightBlue,
 		Secondary: lipgloss.Blue,
-		Brand:     lipgloss.Blue,
+		Brand:      lipgloss.Blue,
+		LogoTop:    lipgloss.BrightBlue,
+		LogoBottom: lipgloss.Blue,
 		Accent:    lipgloss.BrightMagenta,
 		Info:     lipgloss.Cyan,
 		Success:  lipgloss.Green,
@@ -230,7 +215,7 @@ func ansiPalette() palette {
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
 	return palette{
-		Primary: nc, Secondary: nc, Brand: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
+		Primary: nc, Secondary: nc, Brand: nc, LogoTop: nc, LogoBottom: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 

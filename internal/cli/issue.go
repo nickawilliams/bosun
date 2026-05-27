@@ -19,8 +19,20 @@ import (
 	"github.com/spf13/viper"
 )
 
-// issuePattern matches common issue tracker IDs like PROJ-123, CS-42, etc.
-var issuePattern = regexp.MustCompile(`[A-Z][A-Z0-9]+-\d+`)
+// defaultIssuePattern matches common issue tracker IDs like PROJ-123, CS-42, etc.
+const defaultIssuePattern = `[A-Z][A-Z0-9]+-\d+`
+
+// issuePattern returns the compiled regex for extracting issue keys.
+// It reads the configured workspace.issue_pattern, falling back to
+// the default pattern if not set or invalid.
+func issuePattern() *regexp.Regexp {
+	if pat := viper.GetString("workspace.issue_pattern"); pat != "" {
+		if re, err := regexp.Compile(pat); err == nil {
+			return re
+		}
+	}
+	return regexp.MustCompile(defaultIssuePattern)
+}
 
 // resolveIssue returns the issue identifier from the resolution chain:
 // (1) --issue flag, (2) BOSUN_ISSUE env var, (3) workspace path derivation,
@@ -64,7 +76,7 @@ func issueFromWorkspacePath() string {
 		return ""
 	}
 
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if wsRoot == "" {
 		return ""
 	}
@@ -158,7 +170,7 @@ func pickAssignedIssue() (string, error) {
 		if fetchErr != nil {
 			return fetchErr
 		}
-		boardID := viper.GetString("jira.board_id")
+		boardID := viper.GetString("issue_tracker.board_id")
 		if boardID != "" {
 			// Best-effort: sort falls back to lifecycle keys on error.
 			columns, _ = tracker.BoardColumns(context.Background(), boardID)
@@ -272,7 +284,7 @@ func sortIssuesByStatus(issues []issuepkg.Issue) {
 	})
 }
 
-func init() { registerSource("jira", "board_id", boardSource) }
+func init() { registerSource("issue_tracker", "board_id", boardSource) }
 
 // boardSource returns available boards as SourceOptions for the config picker.
 func boardSource() ([]SourceOption, error) {
@@ -283,7 +295,7 @@ func boardSource() ([]SourceOption, error) {
 
 	boards, err := tracker.ListBoards(
 		context.Background(),
-		viper.GetString("jira.project"),
+		viper.GetString("issue_tracker.project"),
 	)
 	if err != nil {
 		return nil, err
@@ -323,9 +335,24 @@ func displayStatus(iss issuepkg.Issue, colNames map[string]string) string {
 	return iss.Status
 }
 
+// resolveWorkContext returns a display label for the current workspace.
+// If the workspace name contains an issue key (matched by the configured
+// issue pattern), the key is returned. Otherwise the raw workspace name
+// is returned. Returns empty string when not inside a workspace.
+func resolveWorkContext() string {
+	name, err := detectWorkspaceFromCWD()
+	if err != nil || name == "" {
+		return ""
+	}
+	if issue := extractIssue(name); issue != "" {
+		return issue
+	}
+	return name
+}
+
 // extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.
 // Works with branch names like "feature/PROJ-123_add-widget" or workspace
 // paths like "feature/PROJ-123_add-widget".
 func extractIssue(s string) string {
-	return issuePattern.FindString(s)
+	return issuePattern().FindString(s)
 }

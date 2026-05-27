@@ -36,8 +36,7 @@ func newDoctorCmd() *cobra.Command {
 			headerAnnotationTitle: "system check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rootCard(cmd).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
@@ -212,7 +211,7 @@ func checkBranchTemplate(_ context.Context) (string, error) {
 }
 
 func checkStatusMappings(_ context.Context) (string, error) {
-	group, ok := lookupGroup("statuses")
+	group, ok := lookupGroup("issue_tracker.statuses")
 	if !ok {
 		return "", fmt.Errorf("no status schema defined")
 	}
@@ -221,7 +220,7 @@ func checkStatusMappings(_ context.Context) (string, error) {
 	var mapped int
 	var missing []string
 	for _, ck := range group.Keys {
-		fk := fullKey("statuses", ck)
+		fk := fullKey("issue_tracker.statuses", ck)
 		if viper.GetString(fk) != "" || ck.Default != "" {
 			mapped++
 		} else {
@@ -239,7 +238,7 @@ func checkStatusMappings(_ context.Context) (string, error) {
 }
 
 func checkIssueTracker(ctx context.Context) (string, error) {
-	provider := viper.GetString("issue_tracker")
+	provider := viper.GetString("issue_tracker.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
@@ -247,8 +246,8 @@ func checkIssueTracker(ctx context.Context) (string, error) {
 	// Validate config completeness.
 	switch provider {
 	case "jira":
-		if group, ok := lookupGroup("jira"); ok {
-			if missing := checkGroupCompleteness("jira", group); len(missing) > 0 {
+		if group, ok := lookupGroup("issue_tracker"); ok {
+			if missing := checkGroupCompleteness("issue_tracker", group); len(missing) > 0 {
 				return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
 			}
 		}
@@ -270,8 +269,8 @@ func checkIssueTracker(ctx context.Context) (string, error) {
 		}
 		if strings.Contains(errStr, "404") {
 			// 404 means we authenticated but the issue doesn't exist — that's fine.
-			baseURL := viper.GetString("jira.base_url")
-			email := viper.GetString("jira.email")
+			baseURL := viper.GetString("issue_tracker.base_url")
+			email := viper.GetString("issue_tracker.email")
 			host := strings.TrimPrefix(baseURL, "https://")
 			host = strings.TrimPrefix(host, "http://")
 			host = strings.TrimRight(host, "/")
@@ -298,30 +297,30 @@ func checkCodeHost(ctx context.Context) (string, error) {
 }
 
 func checkNotificationConfig(_ context.Context) (string, error) {
-	provider := viper.GetString("notification")
+	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
 
-	auth := viper.GetString("slack.auth")
+	auth := viper.GetString("notification.auth")
 	if auth == "" {
 		auth = "token"
 	}
 
 	detail := provider + " (auth: " + auth + ")"
 	if auth == "local" {
-		ws := viper.GetString("slack.workspace")
+		ws := viper.GetString("notification.workspace")
 		if ws == "" {
-			return "", fmt.Errorf("slack.workspace not set (required for local auth)")
+			return "", fmt.Errorf("notification.workspace not set (required for local auth)")
 		}
 		detail += "\nworkspace: " + ws
 	}
 
 	var channels []string
-	if ch := viper.GetString("slack.channel_review"); ch != "" {
+	if ch := viper.GetString("notification.channel_review"); ch != "" {
 		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
 	}
-	if ch := viper.GetString("slack.channel_release"); ch != "" {
+	if ch := viper.GetString("notification.channel_release"); ch != "" {
 		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
 	}
 	if len(channels) > 0 {
@@ -334,7 +333,7 @@ func checkNotificationConfig(_ context.Context) (string, error) {
 }
 
 func checkNotificationAuth(ctx context.Context) (string, error) {
-	provider := viper.GetString("notification")
+	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
@@ -354,7 +353,7 @@ func checkNotificationAuth(ctx context.Context) (string, error) {
 }
 
 func checkNotificationChannels(ctx context.Context) (string, error) {
-	provider := viper.GetString("notification")
+	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
@@ -366,7 +365,7 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 	defer notifier.Close()
 
 	var results []string
-	for _, key := range []string{"slack.channel_review", "slack.channel_release"} {
+	for _, key := range []string{"notification.channel_review", "notification.channel_release"} {
 		ch := viper.GetString(key)
 		if ch == "" {
 			continue
@@ -396,7 +395,7 @@ func cicdChecks() []healthCheck {
 }
 
 func checkCICDConfig(_ context.Context) (string, error) {
-	provider := viper.GetString("cicd")
+	provider := viper.GetString("cicd.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
@@ -404,15 +403,15 @@ func checkCICDConfig(_ context.Context) (string, error) {
 	var details []string
 	details = append(details, "provider: "+provider)
 
-	if up := viper.GetString("github_actions.workflows.preview.up.target"); up != "" {
+	if up := viper.GetString("cicd.workflows.preview.up.target"); up != "" {
 		details = append(details, "preview up: "+up)
 	}
 
-	if down := viper.GetString("github_actions.workflows.preview.down.target"); down != "" {
+	if down := viper.GetString("cicd.workflows.preview.down.target"); down != "" {
 		details = append(details, "preview down: "+down)
 	}
 
-	release := viper.Get("github_actions.workflows.release.target")
+	release := viper.Get("cicd.workflows.release.target")
 	switch v := release.(type) {
 	case string:
 		details = append(details, "release: "+v)
@@ -428,7 +427,7 @@ func checkCICDConfig(_ context.Context) (string, error) {
 }
 
 func checkCICDAuth(ctx context.Context) (string, error) {
-	provider := viper.GetString("cicd")
+	provider := viper.GetString("cicd.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}

@@ -41,7 +41,7 @@ func runForm(fields ...huh.Field) error {
 	if ui.IsRaw() {
 		return fmt.Errorf("interactive input required but stdout is not a terminal")
 	}
-	ui.FlushBreak()
+	ui.FlushSpacer()
 	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
 		WithLayout(ui.NewTimelineLayout()).

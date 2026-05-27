@@ -62,7 +62,7 @@ func (r *cardReporter) Info(format string, args ...any) {
 // Muted prints dimmed text in the timeline without a glyph.
 func (r *cardReporter) Muted(format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
-	fmt.Print(comfyPrefix())
+	fmt.Print(spacerPrefix())
 	fmt.Printf(" %s  %s\n", NewCard(CardInfo, "").renderConnector(), mutedStyle.Render(text))
 }
 
@@ -126,7 +126,7 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 		msgCh <- groupDoneMsg{}
 	}()
 
-	fmt.Print(comfyPrefix())
+	fmt.Print(spacerPrefix())
 
 	model := newGroupModel(title, indentLevel, msgCh)
 	p := tea.NewProgram(model)
@@ -135,7 +135,6 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	if err != nil {
 		// Non-interactive fallback: drain messages and print directly.
 		drainGroupFallback(title, indentLevel, g, msgCh)
-		comfyBreak = true
 		return
 	}
 
@@ -143,7 +142,6 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	// in place (root finalized in groupDoneMsg handler), so the
 	// output is already on screen. No reprint needed.
 	_ = final
-	comfyBreak = true
 }
 
 // drainGroupFallback handles the case where BubbleTea can't run

@@ -75,7 +75,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 	// issue title) lands later in the trailing slot via the squish
 	// glue when the async tracker fetch resolves.
 	issueKey, _ := resolveIssue(cmd)
-	rootCard(cmd).Breadcrumb(issueKey).Print()
+	initHeader(cmd)
 
 	// Enumerate repos first — cheap local call, needed up front so the
 	// issue card's Updated row can show the workspace's last-activity
@@ -201,19 +201,12 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
 	// Enumerate workspaces (cheap — local filesystem walk).
 	wsNames, err := mgr.List()
 	if err != nil {
-		rootCard(cmd).Print()
+		initHeader(cmd)
 		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
 		return nil
 	}
 
-	// Print root card. rootCard auto-includes the project segment via
-	// resolveProject, so the breadcrumb renders complete on first
-	// paint. The next non-root card (the loading-spinner success card
-	// from RunCardReplace below) absorbs into the breadcrumb via the
-	// standard squish mechanism — its empty title means the spinner
-	// disappears cleanly when the fetch completes, and its body
-	// (Repos KV) renders below the root.
-	rootCard(cmd).Print()
+	initHeader(cmd)
 
 	repos := projectRepos()
 
@@ -237,7 +230,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
 			wg.Wait()
 			return nil
 		}, func() *ui.Card {
-			card := ui.NewCard(ui.CardSuccess, "").HideAbsorbedGlyph()
+			card := ui.NewCard(ui.CardSuccess, "")
 			if len(repos) > 0 {
 				reposLines := projectRepoColumns(repos, ui.TermWidth()-12, 2, 4)
 				card.KV("Repos", strings.Join(reposLines, "\n"))
@@ -246,7 +239,7 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
 		})
 	} else {
 		// No workspaces — still need the project header rendered.
-		card := ui.NewCard(ui.CardSuccess, "").HideAbsorbedGlyph()
+		card := ui.NewCard(ui.CardSuccess, "")
 		if len(repos) > 0 {
 			reposLines := projectRepoColumns(repos, ui.TermWidth()-12, 2, 4)
 			card.KV("Repos", strings.Join(reposLines, "\n"))
@@ -580,26 +573,26 @@ func projectRepos() []projectRepoEntry {
 // breathing room. Used as the success-card finalizer for the issue
 // fetch's RunCardReplace.
 func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
-	boldTitle := lipgloss.NewStyle().Bold(true).Render(detail.Title)
-
 	workspacePath := workspaceFilesystemPath(branch)
 	workspaceValue := branch
 	if workspacePath != "" {
 		workspaceValue = osc8Link("file://"+workspacePath, branch)
 	}
 
-	// The issue key is already a hierarchy segment in the breadcrumb
-	// (added synchronously in runStatusWorkspace). The card has no
-	// title — its content lives entirely in the body. The squish
-	// glue's trailing slot ends up empty (glyph suppressed via
-	// HideAbsorbedGlyph), so the breadcrumb stays clean.
+	// Build the title value as "KEY: Title" with the key as a
+	// clickable link to the issue tracker.
+	issueRef := detail.Key
+	if detail.URL != "" {
+		issueRef = osc8Link(detail.URL, detail.Key)
+	}
+	boldTitle := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
 	}
 
 	return ui.NewCard(ui.CardSuccess, "").
-		HideAbsorbedGlyph().
 		KV(
 			typeLabel, boldTitle,
 			"Status", detail.Status,
@@ -754,10 +747,10 @@ func renderWorkspaceSummary(states []repoState) {
 
 // workspaceFilesystemPath returns the absolute filesystem path for a
 // workspace branch, derived the same way other commands resolve it
-// (workspace_root + branch, joined against project root for relative
+// (workspace.root + branch, joined against project root for relative
 // roots). Empty string when not in a project.
 func workspaceFilesystemPath(branch string) string {
-	wsRoot := viper.GetString("workspace_root")
+	wsRoot := viper.GetString("workspace.root")
 	if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
 		wsRoot = filepath.Join(projectRoot, wsRoot)
 	}

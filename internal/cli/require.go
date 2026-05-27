@@ -231,7 +231,7 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 }
 
 // findConfigKey searches the schema for a fully-qualified key (e.g.,
-// "jira.base_url") and returns the ConfigKey, its group name, and whether
+// "issue_tracker.base_url") and returns the ConfigKey, its group name, and whether
 // it was found.
 func findConfigKey(key string) (ConfigKey, string, bool) {
 	for groupName, group := range configSchema {

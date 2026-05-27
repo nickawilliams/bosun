@@ -27,7 +27,7 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
@@ -121,7 +121,7 @@ func newStartCmd() *cobra.Command {
 
 			// Compute workspace root for worktree path display.
 			projectRoot := config.FindProjectRoot()
-			wsRoot := viper.GetString("workspace_root")
+			wsRoot := viper.GetString("workspace.root")
 			if !filepath.IsAbs(wsRoot) && projectRoot != "" {
 				wsRoot = filepath.Join(projectRoot, wsRoot)
 			}

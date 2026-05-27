@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,89 @@ func TestTitleCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRender_EmptyTitlePromotesSubtitle(t *testing.T) {
+	card := NewCard(CardSuccess, "").Subtitle("promoted subtitle")
+	rendered := card.Render()
+	stripped := stripANSI(rendered)
+	lines := splitRendered(stripped)
+
+	// First line should have the glyph and the subtitle together.
+	if len(lines) == 0 {
+		t.Fatal("Render() produced no lines")
+	}
+	if !containsAll(lines[0], "✓", "promoted subtitle") {
+		t.Errorf("first line should have glyph and subtitle; got %q", lines[0])
+	}
+}
+
+func TestRender_EmptyTitlePromotesBody(t *testing.T) {
+	card := NewCard(CardSuccess, "").KV("Key", "Value")
+	rendered := card.Render()
+	stripped := stripANSI(rendered)
+	lines := splitRendered(stripped)
+
+	if len(lines) == 0 {
+		t.Fatal("Render() produced no lines")
+	}
+	// First line should have the glyph and KV content together.
+	if !containsAll(lines[0], "✓", "Key", "Value") {
+		t.Errorf("first line should have glyph and KV; got %q", lines[0])
+	}
+}
+
+func TestRender_TitleAndSubtitle(t *testing.T) {
+	card := NewCard(CardSuccess, "My Title").Subtitle("my subtitle")
+	rendered := card.Render()
+	stripped := stripANSI(rendered)
+	lines := splitRendered(stripped)
+
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines; got %d", len(lines))
+	}
+	if !containsAll(lines[0], "✓", "My Title") {
+		t.Errorf("first line should have glyph and title; got %q", lines[0])
+	}
+	if !containsAll(lines[1], "my subtitle") {
+		t.Errorf("second line should have subtitle; got %q", lines[1])
+	}
+}
+
+func TestRender_ValueInline(t *testing.T) {
+	card := NewCard(CardSuccess, "label").Value("val")
+	rendered := card.Render()
+	stripped := stripANSI(rendered)
+	lines := splitRendered(stripped)
+
+	if len(lines) == 0 {
+		t.Fatal("Render() produced no lines")
+	}
+	if !containsAll(lines[0], "✓", "Label:", "val") {
+		t.Errorf("first line should have glyph, title:, and value; got %q", lines[0])
+	}
+}
+
+// splitRendered splits rendered output into non-empty trimmed lines.
+func splitRendered(s string) []string {
+	raw := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	var lines []string
+	for _, l := range raw {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// containsAll checks that s contains every substring.
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestWrapForTimeline(t *testing.T) {
