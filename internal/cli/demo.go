@@ -217,7 +217,7 @@ func demoTree() {
 			ui.Leaf("◻︎", ui.Palette.Muted, "max_retries", "3"),
 		),
 		ui.Group("display",
-			ui.Leaf("◻︎", ui.Palette.Muted, "mode", "comfy"),
+			ui.Leaf("◻︎", ui.Palette.Muted, "header", "compact"),
 		),
 	).Print()
 }

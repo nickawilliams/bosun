@@ -44,38 +44,6 @@ type palette struct {
 // any rendering occurs; read freely afterward (single-goroutine init).
 var Palette = defaultPalette()
 
-// DisplayMode controls the density of rendered output.
-type DisplayMode int
-
-const (
-	DisplayCompact     DisplayMode = iota // No extra spacing (default).
-	DisplayComfy                    // Breathing room between cards.
-	DisplayVerbose                        // Reserved: richer incremental output.
-)
-
-// displayMode is the active display mode. Set by ApplyDisplayMode before
-// any rendering occurs; read freely afterward (single-goroutine init).
-var displayMode = DisplayCompact
-
-// ApplyDisplayMode sets the active display mode from a config string.
-// Must be called after config loads and before any rendering.
-func ApplyDisplayMode(mode string) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "comfy":
-		displayMode = DisplayComfy
-	case "verbose":
-		displayMode = DisplayVerbose
-	default:
-		displayMode = DisplayCompact
-	}
-}
-
-// IsComfy reports whether the display mode adds breathing room.
-// Returns true for both comfortable and verbose modes.
-func IsComfy() bool {
-	return displayMode >= DisplayComfy
-}
-
 // headerMode controls whether the root card renders the full ASCII
 // logo box or a compact single-line header.
 var headerCompact bool
@@ -94,13 +62,9 @@ func IsCompactHeader() bool {
 }
 
 // displayPadding returns extra vertical whitespace to insert after a
-// non-timeline block (e.g. Panel) when the display mode calls for
-// breathing room.
+// non-timeline block (e.g. Panel) for breathing room.
 func displayPadding() string {
-	if displayMode >= DisplayComfy {
-		return "\n"
-	}
-	return ""
+	return "\n"
 }
 
 // comfyBreak is set after a timeline card prints to signal that the
@@ -131,20 +95,16 @@ func ClearBreak() {
 	comfyBreak = false
 }
 
-// BeginTimeline prints a leading blank line in comfy mode to
-// separate the timeline from the shell prompt above.
+// BeginTimeline prints a leading blank line to separate the
+// timeline from the shell prompt above.
 func BeginTimeline() {
-	if IsComfy() {
-		fmt.Println()
-	}
+	fmt.Println()
 }
 
-// EndTimeline prints a trailing blank line in comfy mode to close
-// the visual timeline with clean whitespace.
+// EndTimeline prints a trailing blank line to close the visual
+// timeline with clean whitespace.
 func EndTimeline() {
-	if IsComfy() {
-		fmt.Println()
-	}
+	fmt.Println()
 }
 
 // Divider prints a muted horizontal rule between cards while
@@ -170,10 +130,9 @@ func Divider() {
 }
 
 // comfyPrefix returns (and clears) a pending connector-line prefix
-// for comfy-mode breathing room between timeline cards.
+// for breathing room between timeline cards.
 func comfyPrefix() string {
-	if !comfyBreak || !IsComfy() {
-		comfyBreak = false
+	if !comfyBreak {
 		return ""
 	}
 	comfyBreak = false
