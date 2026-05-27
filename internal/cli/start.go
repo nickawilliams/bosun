@@ -27,7 +27,7 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")

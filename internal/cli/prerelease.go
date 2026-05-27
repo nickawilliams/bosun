@@ -25,7 +25,7 @@ func newPrereleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			bump, _ := cmd.Flags().GetString("bump")

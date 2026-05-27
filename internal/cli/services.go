@@ -122,7 +122,6 @@ func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, dec
 		return e
 	}, func() *ui.Card {
 		card := ui.NewCard(ui.CardSuccess, "").
-			HideAbsorbedGlyph().
 			Subtitle(detail.Title)
 		if len(decorate) > 0 {
 			decorate[0](detail, card)

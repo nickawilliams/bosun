@@ -26,7 +26,7 @@ func newCleanupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			repositories, err := resolveRepositories(nil)
 			if err != nil {

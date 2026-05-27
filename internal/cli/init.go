@@ -32,8 +32,7 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	rootCard(cmd).Print()
-	ui.DismissSquish()
+	initHeader(cmd)
 	skipConfirm := isAutoApprove(cmd)
 	quick, _ := cmd.Flags().GetBool("quick")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")

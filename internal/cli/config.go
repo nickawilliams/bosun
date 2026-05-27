@@ -83,8 +83,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	// Human-readable tree display.
 	cs := loadConfigSources()
 
-	rootCard(cmd).Print()
-	ui.DismissSquish()
+	initHeader(cmd)
 	tree := buildConfigTree(cs, sourceFilter, groupFilter)
 	tree.Print()
 
@@ -485,8 +484,7 @@ func newConfigCheckCmd() *cobra.Command {
 			headerAnnotationTitle: "check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rootCard(cmd).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 			return runConfigCheck(args)
 		},
 	}

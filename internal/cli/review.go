@@ -28,7 +28,7 @@ func newReviewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rootCard(cmd).Breadcrumb(issue).Print()
+			initHeader(cmd)
 
 			ctx := cmd.Context()
 			draft, _ := cmd.Flags().GetBool("draft")

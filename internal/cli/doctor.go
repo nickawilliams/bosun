@@ -36,8 +36,7 @@ func newDoctorCmd() *cobra.Command {
 			headerAnnotationTitle: "system check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rootCard(cmd).Print()
-			ui.DismissSquish()
+			initHeader(cmd)
 			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
