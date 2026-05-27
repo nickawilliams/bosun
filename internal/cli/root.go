@@ -36,7 +36,7 @@ func NewRootCmd(version string) *cobra.Command {
 			if raw {
 				ui.SetDefault(ui.NewRawReporter())
 			} else {
-				ui.ApplyHeaderMode(viper.GetString("display.header"))
+				ui.SetCompactHeader(viper.GetBool("display.compact_header"))
 				ui.BeginTimeline()
 			}
 			return nil

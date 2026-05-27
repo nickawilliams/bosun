@@ -142,7 +142,7 @@ var configSchema = map[string]ConfigGroup{
 
 		Keys: []ConfigKey{
 			{Key: "color", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
-			{Key: "header", Label: "header mode", Options: []string{"logo", "compact"}, Default: "logo"},
+			{Key: "compact_header", Label: "compact header", Default: "false"},
 		},
 	},
 }

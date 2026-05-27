@@ -44,21 +44,20 @@ type palette struct {
 // any rendering occurs; read freely afterward (single-goroutine init).
 var Palette = defaultPalette()
 
-// headerMode controls whether the root card renders the full ASCII
-// logo box or a compact single-line header.
-var headerCompact bool
+// compactHeader controls whether the root card renders as a compact
+// single-line breadcrumb instead of the full ASCII logo box.
+var compactHeader bool
 
-// ApplyHeaderMode sets the header mode from a config string.
-// "compact" enables the single-line header; anything else (including
-// empty) uses the full logo box.
-func ApplyHeaderMode(mode string) {
-	headerCompact = strings.ToLower(strings.TrimSpace(mode)) == "compact"
+// SetCompactHeader sets the compact header flag directly from a bool
+// config value.
+func SetCompactHeader(v bool) {
+	compactHeader = v
 }
 
 // IsCompactHeader reports whether the root card should render as a
 // single-line breadcrumb header instead of the full logo box.
 func IsCompactHeader() bool {
-	return headerCompact
+	return compactHeader
 }
 
 // displayPadding returns extra vertical whitespace to insert after a
