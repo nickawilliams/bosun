@@ -228,12 +228,51 @@ func injectSchemaDefaults(settings map[string]any) {
 					sub = make(map[string]any)
 					settings[parent] = sub
 				}
-				if _, exists := sub[child]; !exists {
-					sub[child] = val
+				if !nestedKeyExists(sub, child) {
+					setNestedKey(sub, child, val)
 				}
 			}
 		}
 	}
+}
+
+// setNestedKey writes a value into a nested map at a dot-separated
+// path, creating intermediate maps as needed. For "statuses.ready"
+// it sets m["statuses"]["ready"] = val.
+func setNestedKey(m map[string]any, key string, val any) {
+	parts := strings.Split(key, ".")
+	current := m
+	for _, p := range parts[:len(parts)-1] {
+		next, ok := current[p].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			current[p] = next
+		}
+		current = next
+	}
+	current[parts[len(parts)-1]] = val
+}
+
+// nestedKeyExists checks whether a dot-separated key already exists
+// in a nested map. For "categories.bug" it walks m["categories"]["bug"].
+func nestedKeyExists(m map[string]any, key string) bool {
+	parts := strings.Split(key, ".")
+	current := m
+	for i, p := range parts {
+		v, ok := current[p]
+		if !ok {
+			return false
+		}
+		if i == len(parts)-1 {
+			return true
+		}
+		next, ok := v.(map[string]any)
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	return false
 }
 
 func buildGroupChildren(cs *configSources, groupKey string, m map[string]any, sourceFilter []string) []*ui.TreeNode {
