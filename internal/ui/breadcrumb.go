@@ -44,9 +44,9 @@ func (b *breadcrumb) RenderRow(boxInner int, commandTail []string) string {
 	rule := ruleStyle()
 
 	if len(b.segments) == 0 && len(commandTail) == 0 {
-		return fmt.Sprintf("%s%s  %s\n", pad,
+		return fmt.Sprintf("%s%s  %s \n", pad,
 			rule.Render("│"),
-			rule.Render(strings.Repeat("─", boxInner-2)+"╯"))
+			rule.Render(strings.Repeat("─", boxInner-3)+"╯"))
 	}
 
 	dataStyle := dataSegmentStyle()
@@ -75,11 +75,11 @@ func (b *breadcrumb) RenderRow(boxInner int, commandTail []string) string {
 		postfixWidth = lipgloss.Width(BreadcrumbPostfix) + 2
 	}
 
-	ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(full) - postfixWidth
+	ruleLen := boxInner - 2 - prefixWidth - lipgloss.Width(full) - postfixWidth - 1
 	if ruleLen < 1 {
 		ruleLen = 1
 	}
-	return fmt.Sprintf("%s%s  %s%s%s%s\n", pad,
+	return fmt.Sprintf("%s%s  %s%s%s%s \n", pad,
 		rule.Render("│"),
 		prefix,
 		full,
@@ -128,7 +128,8 @@ func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) strin
 	version := versionStyle.Render(AppVersion)
 	versionWidth := lipgloss.Width(version)
 
-	usedWidth := 1 + 2 + 1 + lipgloss.Width(crumb) + 1 + 1 + versionWidth + 1
+	// pad(1) + ╭─(2) + space(1) + crumb + space(1) + rule + space(1) + version + space(1) + pad(1)
+	usedWidth := 1 + 2 + 1 + lipgloss.Width(crumb) + 1 + 1 + versionWidth + 1 + 1
 	ruleLen := termWidth - usedWidth
 	if ruleLen < 1 {
 		ruleLen = 1

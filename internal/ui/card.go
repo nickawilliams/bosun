@@ -467,12 +467,13 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 		b.WriteString(c.renderBreadcrumbRow())
 	} else {
 		ruleStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-		boxInner := TermWidth() - 3
+		// 1 pad left + 1 border + content + 1 border + 1 pad right = 4 chrome cols.
+		boxInner := TermWidth() - 4
 		if boxInner < 10 {
 			boxInner = 10
 		}
 
-		fmt.Fprintf(&b, "%s%s%s\n", pad, glyph,
+		fmt.Fprintf(&b, "%s%s%s \n", pad, glyph,
 			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
 
 		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
@@ -490,7 +491,7 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 				if rightPad < 1 {
 					rightPad = 1
 				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s  %s\n", pad,
+				fmt.Fprintf(&b, "%s%s  %s%s%s  %s \n", pad,
 					ruleStyle.Render("│"),
 					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
@@ -501,7 +502,7 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 				if rightPad < 1 {
 					rightPad = 1
 				}
-				fmt.Fprintf(&b, "%s%s  %s%s%s\n", pad,
+				fmt.Fprintf(&b, "%s%s  %s%s%s \n", pad,
 					ruleStyle.Render("│"),
 					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
