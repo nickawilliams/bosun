@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -70,6 +71,10 @@ func TestResolveProject(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Mirror PersistentPreRunE: validate + stash absolute path.
+		config.ProjectRootOverride = dir
+		t.Cleanup(func() { config.ProjectRootOverride = "" })
+
 		cmd := newProjectTestCmd()
 		cmd.SetArgs([]string{"--project", dir})
 		_ = cmd.Execute()
@@ -94,6 +99,9 @@ func TestResolveProject(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(dir, ".bosun"), 0o755); err != nil {
 			t.Fatal(err)
 		}
+
+		config.ProjectRootOverride = dir
+		t.Cleanup(func() { config.ProjectRootOverride = "" })
 
 		cmd := newProjectTestCmd()
 		cmd.SetArgs([]string{"--project", dir})

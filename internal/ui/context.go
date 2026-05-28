@@ -11,9 +11,6 @@ import (
 // when Cobra flag-parsing errors bypass PersistentPreRunE entirely.
 var headerRendered bool
 
-// HeaderRendered reports whether the root header has been rendered.
-func HeaderRendered() bool { return headerRendered }
-
 // SetContext renders the root header immediately from the given
 // context and begins the timeline. Call once at command init, before
 // printing any cards. project is the resolved project name;
@@ -54,5 +51,8 @@ func EnsureHeader() {
 	SetContext("", "", "")
 }
 
-// ResetContext is a no-op kept for test compatibility.
-func ResetContext() {}
+// ResetContext clears the headerRendered flag so tests starting with a
+// fresh state don't inherit it from prior test cases.
+func ResetContext() {
+	headerRendered = false
+}
