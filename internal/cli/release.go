@@ -17,10 +17,7 @@ func newReleaseCmd() *cobra.Command {
 			headerAnnotationTitle: "release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 			if err := cc.RequireIssue(); err != nil {
 				return err
 			}

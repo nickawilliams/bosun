@@ -22,10 +22,7 @@ func newPreviewCmd() *cobra.Command {
 			headerAnnotationTitle: "deploy",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 			if err := cc.RequireIssue(); err != nil {
 				return err
 			}

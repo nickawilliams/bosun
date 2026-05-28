@@ -37,10 +37,7 @@ func newStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 
 			projectRoot := config.FindProjectRoot()
 			if projectRoot == "" {

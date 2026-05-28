@@ -27,8 +27,6 @@ func newConfigSetCmd() *cobra.Command {
 			value := args[1]
 			global, _ := cmd.Flags().GetBool("global")
 
-			resolveCommandContext(cmd)
-
 			configPath, err := resolveConfigPath(global)
 			if err != nil {
 				return err
@@ -60,8 +58,6 @@ func newConfigUnsetCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 			global, _ := cmd.Flags().GetBool("global")
-
-			resolveCommandContext(cmd)
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {

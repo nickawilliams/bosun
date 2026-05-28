@@ -32,8 +32,6 @@ func newDemoCmd() *cobra.Command {
 				return nil
 			}
 
-			resolveCommandContext(cmd)
-
 			if err := demoContinue("Spinners", true); err != nil {
 				return err
 			}
@@ -86,8 +84,6 @@ func buildDemoPlan() *ui.Plan {
 // --- Static sections ---
 
 func demoCards(cmd *cobra.Command) {
-	resolveCommandContext(cmd)
-
 	// Static card — title, subtitle, and body with text, muted,
 	// and key-value to show the primitive body types together.
 	ui.NewCard(ui.CardInfo, "static card title").

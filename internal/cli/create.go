@@ -68,8 +68,6 @@ func newCreateCmd() *cobra.Command {
 			if title == "" {
 				return fmt.Errorf("title is required: use --title or run interactively")
 			}
-			resolveCommandContext(cmd)
-
 			// --- Resolve ---
 			project := viper.GetString("issue_tracker.project")
 			if project == "" {

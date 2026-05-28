@@ -57,6 +57,16 @@ func NewRootCmd(version string) *cobra.Command {
 				ui.SetCompactHeader(viper.GetBool("display.compact_header"))
 				ui.BeginTimeline()
 			}
+
+			// Resolve context and render header. Runs for every
+			// command so the breadcrumb is always present before
+			// any RunE logic (including errors). Raw-mode commands
+			// skip the header via SetContext's IsRaw() guard.
+			cc, ccErr := resolveCommandContext(cmd)
+			initHeader(cmd, cc)
+			if ccErr != nil {
+				return ccErr
+			}
 			return nil
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {

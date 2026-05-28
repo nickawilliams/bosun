@@ -121,10 +121,6 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		},
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
 			name := args[0]
 			repositoryNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
@@ -169,10 +165,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 			headerAnnotationTitle: "add",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 			ctx := cmd.Context()
 
@@ -232,10 +225,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			headerAnnotationTitle: "status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 			name := cc.Workspace
 			if len(args) > 0 {
 				name = args[0]
@@ -285,10 +275,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			headerAnnotationTitle: "remove",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc, err := resolveCommandContext(cmd)
-			if err != nil {
-				return err
-			}
+			cc := commandContext(cmd)
 			name := cc.Workspace
 			if len(args) > 0 {
 				name = args[0]

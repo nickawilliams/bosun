@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,19 +12,34 @@ import (
 )
 
 // CommandContext holds the resolved context values for a command
-// invocation. Populated once by resolveCommandContext and threaded
-// through the command's RunE and downstream helpers. Empty strings
-// indicate the stage was not resolved (command doesn't use it, or
-// auto-detection found nothing).
+// invocation. Populated once in PersistentPreRunE and stored on the
+// cobra command's context. Commands retrieve it via commandContext(cmd).
+// Empty strings indicate the stage was not resolved (command doesn't
+// use it, or auto-detection found nothing).
 type CommandContext struct {
 	Project   string // Display name (e.g., "clearstory").
 	Workspace string // Workspace name (e.g., "feature/EX-31432_put-provider").
 	Issue     string // Issue key (e.g., "EX-31432").
 }
 
+type contextKey struct{}
+
+// commandContext retrieves the CommandContext stored in PersistentPreRunE.
+func commandContext(cmd *cobra.Command) CommandContext {
+	if cc, ok := cmd.Context().Value(contextKey{}).(CommandContext); ok {
+		return cc
+	}
+	return CommandContext{}
+}
+
 // resolveCommandContext performs staged resolution in dependency order:
 // project → workspace → issue. Each stage only runs if the command
 // registered the corresponding flag (via addProjectFlag, etc.).
+//
+// Called from PersistentPreRunE so the header renders before any
+// command logic — including arg validation — can fail. The resolved
+// context is stored on cmd.Context() for commands to retrieve via
+// commandContext(cmd).
 //
 // Validation: when --workspace is explicitly set and a project root
 // is known, verifies the workspace directory exists.
@@ -47,9 +63,6 @@ func resolveCommandContext(cmd *cobra.Command) (CommandContext, error) {
 		// workspace directory exists under the project's workspace root.
 		if f := cmd.Flags().Lookup("workspace"); f != nil && f.Changed && cc.Workspace != "" {
 			if err := validateWorkspaceExists(cc.Workspace); err != nil {
-				// Render header before returning so error output
-				// always appears with breadcrumb context.
-				initHeader(cmd, cc)
 				return cc, err
 			}
 		}
@@ -60,9 +73,8 @@ func resolveCommandContext(cmd *cobra.Command) (CommandContext, error) {
 		cc.Issue = resolveIssueSilent(cmd, cc.Workspace)
 	}
 
-	// Always render the header so error messages (from RequireIssue
-	// or later in RunE) appear with breadcrumb context.
-	initHeader(cmd, cc)
+	// Store on cmd context for retrieval by commandContext(cmd).
+	cmd.SetContext(context.WithValue(cmd.Context(), contextKey{}, cc))
 
 	return cc, nil
 }
