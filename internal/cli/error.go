@@ -11,6 +11,7 @@ import (
 // ErrCancelled is surfaced as a skipped card rather than a failure.
 func HandleError(err error) {
 	if errors.Is(err, ErrCancelled) {
+		ui.EnsureHeader()
 		ui.NewCard(ui.CardSkipped, "user cancelled").Print()
 		if !ui.IsRaw() {
 			ui.EndTimeline()
@@ -21,6 +22,7 @@ func HandleError(err error) {
 		ui.Error("%s", err.Error())
 		return
 	}
-	ui.Fail(err.Error())
+	ui.EnsureHeader()
+	ui.NewCard(ui.CardFailed, err.Error()).TitleColor(ui.Palette.Error).Print()
 	ui.EndTimeline()
 }

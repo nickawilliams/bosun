@@ -33,6 +33,16 @@ func TestFindProjectRoot(t *testing.T) {
 		}
 	})
 
+	t.Run("override takes precedence", func(t *testing.T) {
+		ProjectRootOverride = "/some/override/path"
+		t.Cleanup(func() { ProjectRootOverride = "" })
+
+		got := FindProjectRoot()
+		if got != "/some/override/path" {
+			t.Errorf("FindProjectRoot() = %q, want %q", got, "/some/override/path")
+		}
+	})
+
 	t.Run("returns empty when no .bosun exists", func(t *testing.T) {
 		dir := t.TempDir()
 

@@ -21,11 +21,11 @@ func newPrereleaseCmd() *cobra.Command {
 			headerAnnotationTitle: "pre-release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issue, err := resolveIssue(cmd)
-			if err != nil {
+			cc := commandContext(cmd)
+			if err := cc.RequireIssue(); err != nil {
 				return err
 			}
-			initHeader(cmd)
+			issue := cc.Issue
 
 			ctx := cmd.Context()
 			bump, _ := cmd.Flags().GetString("bump")
@@ -33,7 +33,7 @@ func newPrereleaseCmd() *cobra.Command {
 			// --- Resolve ---
 
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
-			repositories, err := resolveActiveRepositories(ctx, filterRepositories)
+			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
 			if err != nil {
 				return err
 			}
@@ -190,6 +190,9 @@ func newPrereleaseCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	addIssueFlag(cmd)
 	cmd.Flags().String("bump", "patch", "version bump level (patch|minor|major)")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd

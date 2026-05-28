@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -21,6 +25,20 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// --project must resolve before config.Load() because
+			// Load() calls FindProjectRoot() to locate .bosun/config.yaml.
+			if f := cmd.Flags().Lookup("project"); f != nil && f.Changed {
+				abs, err := filepath.Abs(f.Value.String())
+				if err != nil {
+					return fmt.Errorf("--project: %w", err)
+				}
+				info, err := os.Stat(filepath.Join(abs, ".bosun"))
+				if err != nil || !info.IsDir() {
+					return fmt.Errorf("--project: no .bosun/ directory found in %s", abs)
+				}
+				config.ProjectRootOverride = abs
+			}
+
 			if err := config.Load(); err != nil {
 				return err
 			}
@@ -39,6 +57,16 @@ func NewRootCmd(version string) *cobra.Command {
 				ui.SetCompactHeader(viper.GetBool("display.compact_header"))
 				ui.BeginTimeline()
 			}
+
+			// Resolve context and render header. Runs for every
+			// command so the breadcrumb is always present before
+			// any RunE logic (including errors). Raw-mode commands
+			// skip the header via SetContext's IsRaw() guard.
+			cc, ccErr := resolveCommandContext(cmd)
+			initHeader(cmd, cc)
+			if ccErr != nil {
+				return ccErr
+			}
 			return nil
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
@@ -51,12 +79,6 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.PersistentFlags().Bool("dry-run", false, "show what would happen without making changes")
 	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
 	cmd.PersistentFlags().Bool("interactive", false, "prompt for configurable values")
-
-	// Global context flags. Persistent here so every command shares
-	// the resolution chain (flag → env → config → CWD detection)
-	// without per-command boilerplate. resolveIssue is consumed by
-	// commands that need an issue context.
-	cmd.PersistentFlags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
 
 	cmd.AddGroup(
 		&cobra.Group{ID: groupLifecycle, Title: "Lifecycle"},

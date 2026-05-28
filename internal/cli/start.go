@@ -23,11 +23,11 @@ func newStartCmd() *cobra.Command {
 			headerAnnotationTitle: "start work",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issue, err := resolveIssue(cmd)
-			if err != nil {
+			cc := commandContext(cmd)
+			if err := cc.RequireIssue(); err != nil {
 				return err
 			}
-			initHeader(cmd)
+			issue := cc.Issue
 
 			ctx := cmd.Context()
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
@@ -200,6 +200,9 @@ func newStartCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	addIssueFlag(cmd)
 	cmd.Flags().String("slug", "", "custom slug for branch name")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")

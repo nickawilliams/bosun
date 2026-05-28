@@ -6,6 +6,11 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// headerRendered tracks whether SetContext has been called. Used by
+// EnsureHeader to bootstrap a minimal header before error output
+// when Cobra flag-parsing errors bypass PersistentPreRunE entirely.
+var headerRendered bool
+
 // SetContext renders the root header immediately from the given
 // context and begins the timeline. Call once at command init, before
 // printing any cards. project is the resolved project name;
@@ -15,6 +20,7 @@ func SetContext(project, workContext, command string) {
 	if IsRaw() {
 		return
 	}
+	headerRendered = true
 	title := "bosun"
 	if command != "" {
 		title += " › " + command
@@ -32,5 +38,21 @@ func SetContext(project, workContext, command string) {
 	needsSpacer = false
 }
 
-// ResetContext is a no-op kept for test compatibility.
-func ResetContext() {}
+// EnsureHeader bootstraps a minimal timeline and header if one
+// hasn't been rendered yet. Call from error paths that may fire
+// before PersistentPreRunE completes (e.g., Cobra flag-parsing
+// errors). No-ops if the header was already rendered or output
+// is raw.
+func EnsureHeader() {
+	if headerRendered || IsRaw() {
+		return
+	}
+	BeginTimeline()
+	SetContext("", "", "")
+}
+
+// ResetContext clears the headerRendered flag so tests starting with a
+// fresh state don't inherit it from prior test cases.
+func ResetContext() {
+	headerRendered = false
+}

@@ -15,7 +15,6 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
-	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
@@ -32,40 +31,6 @@ func issuePattern() *regexp.Regexp {
 		}
 	}
 	return regexp.MustCompile(defaultIssuePattern)
-}
-
-// resolveIssue returns the issue identifier from the resolution chain:
-// (1) --issue flag, (2) BOSUN_ISSUE env var, (3) workspace path derivation,
-// (4) git branch name derivation.
-func resolveIssue(cmd *cobra.Command) (string, error) {
-	// (1) Check the flag.
-	if issue, _ := cmd.Flags().GetString("issue"); issue != "" {
-		return issue, nil
-	}
-
-	// (2) Check Viper (env var BOSUN_ISSUE via AutomaticEnv).
-	if issue := viper.GetString("issue"); issue != "" {
-		return issue, nil
-	}
-
-	// (3) Workspace path derivation.
-	if issue := issueFromWorkspacePath(); issue != "" {
-		return issue, nil
-	}
-
-	// (4) Git branch name derivation.
-	if issue := issueFromBranch(); issue != "" {
-		return issue, nil
-	}
-
-	// (5) Interactive issue picker (terminal only).
-	if issue := pickOrPromptIssue(); issue != "" {
-		return issue, nil
-	}
-
-	return "", fmt.Errorf(
-		"issue not specified: use --issue, set BOSUN_ISSUE, or run from a workspace",
-	)
 }
 
 // issueFromWorkspacePath attempts to extract an issue ID from the current
@@ -333,21 +298,6 @@ func displayStatus(iss issuepkg.Issue, colNames map[string]string) string {
 		return name
 	}
 	return iss.Status
-}
-
-// resolveWorkContext returns a display label for the current workspace.
-// If the workspace name contains an issue key (matched by the configured
-// issue pattern), the key is returned. Otherwise the raw workspace name
-// is returned. Returns empty string when not inside a workspace.
-func resolveWorkContext() string {
-	name, err := detectWorkspaceFromCWD()
-	if err != nil || name == "" {
-		return ""
-	}
-	if issue := extractIssue(name); issue != "" {
-		return issue
-	}
-	return name
 }
 
 // extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -38,8 +37,8 @@ func newStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			// Scope detection: workspace if CWD is inside one, else
-			// project if inside a project's bosun config, else error.
+			cc := commandContext(cmd)
+
 			projectRoot := config.FindProjectRoot()
 			if projectRoot == "" {
 				return fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
@@ -49,16 +48,21 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cwd, _ := os.Getwd()
-			if wsName, derr := mgr.DetectWorkspace(cwd); derr == nil {
+
+			// Scope detection: workspace if resolved, else project.
+			if cc.Workspace != "" {
 				cmd.Annotations[headerAnnotationTitle] = "Workspace Status"
-				return runStatusWorkspace(ctx, cmd, mgr, wsName)
+				return runStatusWorkspace(ctx, cc, mgr)
 			}
 
 			cmd.Annotations[headerAnnotationTitle] = "Project Status"
-			return runStatusProject(ctx, cmd)
+			return runStatusProject(ctx)
 		},
 	}
+
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	addIssueFlag(cmd)
 
 	return cmd
 }
@@ -66,16 +70,9 @@ func newStatusCmd() *cobra.Command {
 // runStatusWorkspace renders the workspace-scope output — issue
 // header card with KV body, then one card per repo with body rows
 // (Branch / Checks / PR), then a summary recap.
-func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.Manager, wsName string) error {
-	// Root card — rootCard auto-includes the project segment. We
-	// also resolve the issue key synchronously (from the workspace
-	// name / flag / env / branch) and add it as a hierarchy segment
-	// so the breadcrumb reads `Project › Issue › Workspace Status`
-	// from first paint. The issue card's TITLE (the human-readable
-	// issue title) lands later in the trailing slot via the squish
-	// glue when the async tracker fetch resolves.
-	issueKey, _ := resolveIssue(cmd)
-	initHeader(cmd)
+func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.Manager) error {
+	wsName := cc.Workspace
+	issueKey := cc.Issue
 
 	// Enumerate repos first — cheap local call, needed up front so the
 	// issue card's Updated row can show the workspace's last-activity
@@ -113,7 +110,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 			updatedMu    sync.Mutex
 			infoMessages []previewInfoEvent
 		)
-		previewProvider, _ := newPreviewProviderWithInfo(func(action, value string) {
+		previewProvider, _ := newPreviewProviderWithInfo(wsName, func(action, value string) {
 			infoMessages = append(infoMessages, previewInfoEvent{action: action, value: value})
 		})
 		_ = ui.RunCardReplace("", func() error {
@@ -192,7 +189,7 @@ func runStatusWorkspace(ctx context.Context, cmd *cobra.Command, mgr *workspace.
 // sorting since rendering would happen in fetch order. The trade
 // is intentional — at project scope the user wants a sorted triage
 // overview more than progressive per-workspace disclosure.
-func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
+func runStatusProject(ctx context.Context) error {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return err
@@ -201,12 +198,9 @@ func runStatusProject(ctx context.Context, cmd *cobra.Command) error {
 	// Enumerate workspaces (cheap — local filesystem walk).
 	wsNames, err := mgr.List()
 	if err != nil {
-		initHeader(cmd)
 		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
 		return nil
 	}
-
-	initHeader(cmd)
 
 	repos := projectRepos()
 
@@ -360,7 +354,7 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 	// workspace's buffer (no shared state with other goroutines, since
 	// each fetch has its own ws value).
 	if ws.issueKey != "" {
-		if provider, err := newPreviewProviderWithInfo(func(action, value string) {
+		if provider, err := newPreviewProviderWithInfo(wsName, func(action, value string) {
 			ws.infoMessages = append(ws.infoMessages, previewInfoEvent{action: action, value: value})
 		}); err == nil && provider != nil {
 			ws.previewEnv, ws.previewErr = provider.Get(ctx, ws.issueKey)

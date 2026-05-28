@@ -22,11 +22,11 @@ func newCleanupCmd() *cobra.Command {
 			headerAnnotationTitle: "cleanup",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issue, err := resolveIssue(cmd)
-			if err != nil {
+			cc := commandContext(cmd)
+			if err := cc.RequireIssue(); err != nil {
 				return err
 			}
-			initHeader(cmd)
+			issue := cc.Issue
 
 			repositories, err := resolveRepositories(nil)
 			if err != nil {
@@ -155,6 +155,9 @@ func newCleanupCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	addIssueFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
 	return cmd
 }

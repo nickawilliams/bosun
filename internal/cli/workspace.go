@@ -10,7 +10,6 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 func newWorkspaceCmd() *cobra.Command {
@@ -29,23 +28,12 @@ func newWorkspaceCmd() *cobra.Command {
 	return cmd
 }
 
-// addWorkspaceFlag adds the shared --workspace flag to a command.
-func addWorkspaceFlag(cmd *cobra.Command) {
-	cmd.Flags().StringP("workspace", "w", "", "workspace name (e.g. feature/PROJ-123)")
-}
-
 // resolveWorkspaceAddArgs splits positional args into a workspace name and a
-// list of repositories. The name comes from --workspace, BOSUN_WORKSPACE, or
-// CWD detection — falling back to args[0] only when none of those resolve.
-func resolveWorkspaceAddArgs(cmd *cobra.Command, args []string) (string, []string, error) {
-	if name, _ := cmd.Flags().GetString("workspace"); name != "" {
-		return name, args, nil
-	}
-	if name := viper.GetString("workspace"); name != "" {
-		return name, args, nil
-	}
-	if name, err := detectWorkspaceFromCWD(); err == nil && name != "" {
-		return name, args, nil
+// list of repositories. Uses the already-resolved workspace from
+// CommandContext, falling back to args[0] only when empty.
+func resolveWorkspaceAddArgs(cc CommandContext, args []string) (string, []string, error) {
+	if cc.Workspace != "" {
+		return cc.Workspace, args, nil
 	}
 	if len(args) >= 1 {
 		return args[0], args[1:], nil
@@ -136,7 +124,6 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			name := args[0]
 			repositoryNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
-			initHeader(cmd)
 
 			repositories, err := argsToWorkspaceRepositories(repositoryNames)
 			if err != nil {
@@ -164,6 +151,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
 	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
 
 	return cmd
@@ -177,14 +165,14 @@ func newWorkspaceAddCmd() *cobra.Command {
 			headerAnnotationTitle: "add",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cc := commandContext(cmd)
 			fromHead, _ := cmd.Flags().GetBool("from-head")
 			ctx := cmd.Context()
 
-			name, repositoryNames, err := resolveWorkspaceAddArgs(cmd, args)
+			name, repositoryNames, err := resolveWorkspaceAddArgs(cc, args)
 			if err != nil {
 				return err
 			}
-			initHeader(cmd)
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -222,8 +210,9 @@ func newWorkspaceAddCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
+	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
+	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
 
 	return cmd
 }
@@ -236,11 +225,14 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			headerAnnotationTitle: "status",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := resolveWorkspaceName(cmd, args)
-			if err != nil {
-				return err
+			cc := commandContext(cmd)
+			name := cc.Workspace
+			if len(args) > 0 {
+				name = args[0]
 			}
-			initHeader(cmd)
+			if name == "" {
+				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
+			}
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -269,6 +261,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 
 	return cmd
@@ -282,11 +275,14 @@ func newWorkspaceRmCmd() *cobra.Command {
 			headerAnnotationTitle: "remove",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := resolveWorkspaceName(cmd, args)
-			if err != nil {
-				return err
+			cc := commandContext(cmd)
+			name := cc.Workspace
+			if len(args) > 0 {
+				name = args[0]
 			}
-			initHeader(cmd)
+			if name == "" {
+				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
+			}
 			force, _ := cmd.Flags().GetBool("force")
 			yes, _ := cmd.Flags().GetBool("yes")
 
@@ -354,9 +350,10 @@ func newWorkspaceRmCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
 	cmd.Flags().BoolP("yes", "y", false, "skip the confirmation prompt")
-	addWorkspaceFlag(cmd)
 
 	return cmd
 }

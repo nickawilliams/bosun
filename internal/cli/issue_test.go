@@ -10,29 +10,22 @@ import (
 
 func newTestCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "test",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return nil
-		},
+		Use:  "test",
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
 	}
-	// Mirror the persistent --issue flag on root for tests that
-	// don't construct the full command tree.
-	cmd.Flags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
+	addIssueFlag(cmd)
 	return cmd
 }
 
-func TestResolveIssue(t *testing.T) {
+func TestResolveIssueSilent(t *testing.T) {
 	t.Run("from flag", func(t *testing.T) {
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{"--issue", "PROJ-123"})
 		_ = cmd.Execute()
 
-		got, err := resolveIssue(cmd)
-		if err != nil {
-			t.Fatalf("resolveIssue() error: %v", err)
-		}
+		got := resolveIssueSilent(cmd, "")
 		if got != "PROJ-123" {
-			t.Errorf("resolveIssue() = %q, want %q", got, "PROJ-123")
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-123")
 		}
 	})
 
@@ -41,12 +34,9 @@ func TestResolveIssue(t *testing.T) {
 		cmd.SetArgs([]string{"-i", "PROJ-456"})
 		_ = cmd.Execute()
 
-		got, err := resolveIssue(cmd)
-		if err != nil {
-			t.Fatalf("resolveIssue() error: %v", err)
-		}
+		got := resolveIssueSilent(cmd, "")
 		if got != "PROJ-456" {
-			t.Errorf("resolveIssue() = %q, want %q", got, "PROJ-456")
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-456")
 		}
 	})
 
@@ -64,12 +54,9 @@ func TestResolveIssue(t *testing.T) {
 		cmd.SetArgs([]string{})
 		_ = cmd.Execute()
 
-		got, err := resolveIssue(cmd)
-		if err != nil {
-			t.Fatalf("resolveIssue() error: %v", err)
-		}
+		got := resolveIssueSilent(cmd, "")
 		if got != "PROJ-789" {
-			t.Errorf("resolveIssue() = %q, want %q", got, "PROJ-789")
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-789")
 		}
 	})
 
@@ -80,25 +67,44 @@ func TestResolveIssue(t *testing.T) {
 		cmd.SetArgs([]string{"--issue", "PROJ-FLAG"})
 		_ = cmd.Execute()
 
-		got, err := resolveIssue(cmd)
-		if err != nil {
-			t.Fatalf("resolveIssue() error: %v", err)
-		}
+		got := resolveIssueSilent(cmd, "")
 		if got != "PROJ-FLAG" {
-			t.Errorf("resolveIssue() = %q, want %q", got, "PROJ-FLAG")
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-FLAG")
 		}
 	})
 
-	t.Run("error when not specified", func(t *testing.T) {
+	t.Run("empty when not specified", func(t *testing.T) {
 		t.Setenv("BOSUN_ISSUE", "")
 
 		cmd := newTestCmd()
 		cmd.SetArgs([]string{})
 		_ = cmd.Execute()
 
-		_, err := resolveIssue(cmd)
-		if err == nil {
-			t.Error("resolveIssue() expected error, got nil")
+		got := resolveIssueSilent(cmd, "")
+		if got != "" {
+			t.Errorf("resolveIssueSilent() = %q, want empty", got)
+		}
+	})
+
+	t.Run("derived from workspace name", func(t *testing.T) {
+		cmd := newTestCmd()
+		cmd.SetArgs([]string{})
+		_ = cmd.Execute()
+
+		got := resolveIssueSilent(cmd, "feature/PROJ-999_some-slug")
+		if got != "PROJ-999" {
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-999")
+		}
+	})
+
+	t.Run("flag takes precedence over workspace derivation", func(t *testing.T) {
+		cmd := newTestCmd()
+		cmd.SetArgs([]string{"--issue", "PROJ-FLAG"})
+		_ = cmd.Execute()
+
+		got := resolveIssueSilent(cmd, "feature/PROJ-999_some-slug")
+		if got != "PROJ-FLAG" {
+			t.Errorf("resolveIssueSilent() = %q, want %q", got, "PROJ-FLAG")
 		}
 	})
 }

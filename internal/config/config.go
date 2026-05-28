@@ -63,9 +63,19 @@ func Load() error {
 	return nil
 }
 
+// ProjectRootOverride, when non-empty, bypasses CWD-based discovery
+// and is returned directly by FindProjectRoot. Set by the CLI layer
+// when the --project flag is provided.
+var ProjectRootOverride string
+
 // FindProjectRoot walks up from the current directory looking for a .bosun/
 // directory. Returns the path containing .bosun/, or empty string if not found.
+// When ProjectRootOverride is set, returns that value directly.
 func FindProjectRoot() string {
+	if ProjectRootOverride != "" {
+		return ProjectRootOverride
+	}
+
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""

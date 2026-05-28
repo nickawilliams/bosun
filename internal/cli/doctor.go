@@ -29,14 +29,13 @@ type healthCheck struct {
 var errNotConfigured = fmt.Errorf("(not configured)")
 
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check bosun configuration and connectivity",
 		Annotations: map[string]string{
 			headerAnnotationTitle: "system check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			initHeader(cmd)
 			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
@@ -79,6 +78,9 @@ func newDoctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	addProjectFlag(cmd)
+	return cmd
 }
 
 // --- Providers ---

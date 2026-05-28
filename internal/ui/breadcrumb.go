@@ -18,10 +18,21 @@ type breadcrumb struct {
 var (
 	dataSegmentStyle = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Success) }
 	commandTailStyle = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Primary) }
-	appNameStyle     = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Brand) }
 	separatorStyle   = func() lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(Palette.Recessed) }
 	ruleStyle        = func() lipgloss.Style { return lipgloss.NewStyle().Foreground(Palette.Recessed) }
 )
+
+// gradientText renders each character of s with a color interpolated
+// between Palette.LogoTop and Palette.LogoBottom.
+func gradientText(s string) string {
+	runes := []rune(s)
+	colors := lerpColors(Palette.LogoTop, Palette.LogoBottom, len(runes))
+	var b strings.Builder
+	for i, r := range runes {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colors[i]).Render(string(r)))
+	}
+	return b.String()
+}
 
 // AddSegment appends a hierarchy data segment.
 func (b *breadcrumb) AddSegment(s string) {
@@ -105,9 +116,9 @@ func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) strin
 
 	var styledSegs []string
 
-	// Root segment ("Bosun") — brand color.
+	// Root segment ("Bosun") — logo gradient across letters.
 	if len(commandPath) > 0 {
-		styledSegs = append(styledSegs, appNameStyle().Render(titleCase(commandPath[0])))
+		styledSegs = append(styledSegs, gradientText(titleCase(commandPath[0])))
 	}
 
 	// Data segments (project, work context).
