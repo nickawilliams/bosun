@@ -21,6 +21,6 @@ func HandleError(err error) {
 		ui.Error("%s", err.Error())
 		return
 	}
-	ui.Fail(err.Error())
+	ui.NewCard(ui.CardFailed, err.Error()).TitleColor(ui.Palette.Error).Print()
 	ui.EndTimeline()
 }
