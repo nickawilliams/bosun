@@ -14,13 +14,17 @@ import (
 const headerAnnotationTitle = "title"
 
 // initHeader renders the root header immediately from the resolved
-// context. Call once at the start of a command's RunE, before
-// printing any cards.
-func initHeader(cmd *cobra.Command) {
-	project := resolveProject()
-	workContext := resolveWorkContext()
-	command := commandTitle(cmd)
-	ui.SetContext(project, workContext, command)
+// context. Call once at the start of a command's RunE, after
+// resolveCommandContext. Uses the already-resolved values from cc
+// so nothing is re-resolved.
+func initHeader(cmd *cobra.Command, cc CommandContext) {
+	var workContext string
+	if cc.Issue != "" {
+		workContext = cc.Issue
+	} else if cc.Workspace != "" {
+		workContext = cc.Workspace
+	}
+	ui.SetContext(cc.Project, workContext, commandTitle(cmd))
 }
 
 // commandTitle returns the human-readable display title for a

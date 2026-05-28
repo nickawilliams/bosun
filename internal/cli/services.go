@@ -132,25 +132,22 @@ func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, dec
 }
 
 // resolveActiveRepositories resolves repositories scoped to the current
-// workspace when CWD is inside one, falling back to resolveRepositories
-// (global config patterns) otherwise. Commands that operate on worktrees
-// (review, prerelease) should use this instead of resolveRepositories so
-// they stay scoped to the workspace context.
-func resolveActiveRepositories(ctx context.Context, filterNames []string) ([]Repository, error) {
+// workspace, falling back to resolveRepositories (global config patterns)
+// when no workspace context is available. Resolution uses the standard
+// workspace chain (--workspace flag → env → CWD detection). Commands
+// that operate on worktrees (review, prerelease) should use this instead
+// of resolveRepositories so they stay scoped to the workspace context.
+func resolveActiveRepositories(ctx context.Context, workspace string, filterNames []string) ([]Repository, error) {
+	if workspace == "" {
+		return resolveRepositories(filterNames)
+	}
+
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return resolveRepositories(filterNames)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return resolveRepositories(filterNames)
-	}
-
-	wsName, err := mgr.DetectWorkspace(cwd)
-	if err != nil {
-		return resolveRepositories(filterNames)
-	}
+	wsName := workspace
 
 	statuses, err := mgr.Status(ctx, wsName)
 	if err != nil {
@@ -208,9 +205,9 @@ func newWorkspaceManager() (*workspace.Manager, error) {
 }
 
 // resolveWorkspaceName returns the workspace name from the resolution chain:
-// (1) --workspace flag, (2) BOSUN_WORKSPACE env var, (3) positional arg,
-// (4) auto-detected from CWD.
-func resolveWorkspaceName(cmd *cobra.Command, args []string) (string, error) {
+// (1) --workspace flag, (2) BOSUN_WORKSPACE env var,
+// (3) auto-detected from CWD.
+func resolveWorkspaceName(cmd *cobra.Command) (string, error) {
 	if cmd != nil {
 		if name, _ := cmd.Flags().GetString("workspace"); name != "" {
 			return name, nil
@@ -218,9 +215,6 @@ func resolveWorkspaceName(cmd *cobra.Command, args []string) (string, error) {
 	}
 	if name := viper.GetString("workspace"); name != "" {
 		return name, nil
-	}
-	if len(args) > 0 {
-		return args[0], nil
 	}
 	return detectWorkspaceFromCWD()
 }
@@ -669,8 +663,8 @@ func newCICD() (cicd.CICD, error) {
 // raw-cased value. Suitable for commands where side-effect notifications
 // can fire immediately alongside other output (e.g., the preview command
 // itself).
-func newPreviewProvider() (preview.Provider, error) {
-	return newPreviewProviderWithInfo(func(action, value string) {
+func newPreviewProvider(workspace string) (preview.Provider, error) {
+	return newPreviewProviderWithInfo(workspace, func(action, value string) {
 		ui.NewCard(ui.CardSuccess, action).Value(value).Print()
 	})
 }
@@ -685,7 +679,7 @@ func newPreviewProvider() (preview.Provider, error) {
 // the returned provider still supports the read paths (Get, Inspect)
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
-func newPreviewProviderWithInfo(onInfo func(action, value string)) (preview.Provider, error) {
+func newPreviewProviderWithInfo(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
@@ -705,7 +699,7 @@ func newPreviewProviderWithInfo(onInfo func(action, value string)) (preview.Prov
 		Stage:       stage,
 		URLTemplate: urlTmpl,
 		Targets: func(ctx context.Context, subStage string) ([]previewcicd.Target, error) {
-			raw, err := resolveWorkflowTargets(ctx, subStage)
+			raw, err := resolveWorkflowTargets(ctx, workspace, subStage)
 			if err != nil {
 				return nil, err
 			}
@@ -760,7 +754,7 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 //
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
-func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget, error) {
+func resolveWorkflowTargets(ctx context.Context, workspace string, stage string) ([]WorkflowTarget, error) {
 	key := "cicd.workflows." + stage + ".target"
 
 	// Try string first (global mode).
@@ -783,7 +777,7 @@ func resolveWorkflowTargets(ctx context.Context, stage string) ([]WorkflowTarget
 	}
 
 	// Build repo name → Repository lookup from active workspace.
-	repos, err := resolveActiveRepositories(ctx, nil)
+	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +875,7 @@ func stageInputName(stage, concept string) string {
 // Reads input parameter names from the stage's config
 // (github_actions.workflows.<stage>.inputs.*). Used by the release
 // command; the preview command builds inputs inside its adapter.
-func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, stage, issue string) (map[string]string, error) {
+func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, stage, issue string) (map[string]string, error) {
 	inputs := make(map[string]string)
 
 	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
@@ -902,7 +896,7 @@ func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, stage, issue s
 
 	// Change-based detection: diff branches, filter to affected services.
 	g := git.New()
-	results, err := resolveAffectedServices(ctx, g)
+	results, err := resolveAffectedServices(ctx, workspace, g)
 	if err != nil {
 		return nil, err
 	}
