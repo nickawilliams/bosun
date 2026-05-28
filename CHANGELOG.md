@@ -1,5 +1,26 @@
 # Changelog
 
+## [v0.4.0](https://github.com/nickawilliams/bosun/compare/fa8951dd9c4cd4d602e292ede90b7e43bcabe1a6...v0.4.0) - 2026-05-28
+
+### New Features
+
+- **CLI**
+  - Add ProjectRootOverride and per-command flag helpers - ([fa8951d](https://github.com/nickawilliams/bosun/commit/fa8951dd9c4cd4d602e292ede90b7e43bcabe1a6))
+  - Centralized context resolution pipeline - ([6e62b40](https://github.com/nickawilliams/bosun/commit/6e62b4011445012abdbc7144f259a79f5a2a115c))
+
+### Improvements
+
+- **CLI**
+  - Per-command context flags and normalized resolver signatures - ([b7c0845](https://github.com/nickawilliams/bosun/commit/b7c0845cbec36e72ae6ecc62bd67e8d7c2aa454e))
+  - Adopt context pipeline across all commands - ([1a0b085](https://github.com/nickawilliams/bosun/commit/1a0b085de3a76faa256896ac11237f12dd2b2cdf))
+  - Resolve context in PersistentPreRunE - ([8d3c3ac](https://github.com/nickawilliams/bosun/commit/8d3c3ac1ed2250be0ca4324280d3535e13166268))
+  - Collapse duplicated --project absolute-path logic - ([39b881b](https://github.com/nickawilliams/bosun/commit/39b881bb21a8d4eb0f4fd75ad2f3c0c88e9206d0))
+
+### Fixes
+
+- **CLI:** Restore workspace scoping for release command - ([1948675](https://github.com/nickawilliams/bosun/commit/19486753b04c26ef84d7fab5a2524f1dda9e958d))
+- **UI:** Ensure header renders for pre-RunE errors - ([d333b3c](https://github.com/nickawilliams/bosun/commit/d333b3c203bf4fc8ab4244e85e398e19b999f0a3))
+
 ## [v0.3.0](https://github.com/nickawilliams/bosun/compare/94ddc860208aa9fe1ca4e0cc4afe58310ff80073...v0.3.0) - 2026-05-27
 
 ### New Features
