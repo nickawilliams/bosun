@@ -105,6 +105,8 @@ func newReleaseCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
