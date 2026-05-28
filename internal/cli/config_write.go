@@ -27,7 +27,7 @@ func newConfigSetCmd() *cobra.Command {
 			value := args[1]
 			global, _ := cmd.Flags().GetBool("global")
 
-			initHeader(cmd)
+			resolveCommandContext(cmd)
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {
@@ -43,6 +43,7 @@ func newConfigSetCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
 	cmd.Flags().BoolP("global", "g", false, "write to global config instead of project config")
 
 	return cmd
@@ -60,7 +61,7 @@ func newConfigUnsetCmd() *cobra.Command {
 			key := args[0]
 			global, _ := cmd.Flags().GetBool("global")
 
-			initHeader(cmd)
+			resolveCommandContext(cmd)
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {
@@ -82,6 +83,7 @@ func newConfigUnsetCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
 	cmd.Flags().BoolP("global", "g", false, "remove from global config instead of project config")
 
 	return cmd

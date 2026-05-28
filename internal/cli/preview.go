@@ -22,11 +22,14 @@ func newPreviewCmd() *cobra.Command {
 			headerAnnotationTitle: "deploy",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issueKey, err := resolveIssue(cmd)
+			cc, err := resolveCommandContext(cmd)
 			if err != nil {
 				return err
 			}
-			initHeader(cmd)
+			if err := cc.RequireIssue(); err != nil {
+				return err
+			}
+			issueKey := cc.Issue
 
 			ctx := cmd.Context()
 			tracker, _ := newIssueTracker()
@@ -42,7 +45,7 @@ func newPreviewCmd() *cobra.Command {
 				}
 			}
 
-			provider, err := newPreviewProvider()
+			provider, err := newPreviewProvider(cc.Workspace)
 			if err != nil {
 				return fmt.Errorf("preview provider: %w", err)
 			}
@@ -85,7 +88,7 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			if resolution.deployName != "" && pipelineErr == nil {
-				deployAction, prs := buildDeployAction(cmd, ctx, provider, issueKey, resolution)
+				deployAction, prs := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
 				actions = append(actions, deployAction)
 				actions = append(actions, prDetailActions(prs)...)
 				prData = prs
@@ -160,6 +163,9 @@ func newPreviewCmd() *cobra.Command {
 		},
 	}
 
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	cmd.Flags().String("name", "", "ephemeral environment name (e.g., brave-falcon; auto-generated if not set)")
 	cmd.Flags().Bool("force", false, "auto-confirm prompts; replace existing or create missing without asking")
@@ -224,8 +230,8 @@ func currentAction(name string) Action {
 // resolved PR data so callers can reuse it for notifications. The
 // adapter fans out the workflow dispatches across all configured
 // targets internally.
-func buildDeployAction(cmd *cobra.Command, ctx context.Context, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR) {
-	services, overrides, prData := resolvePreviewInputs(cmd, ctx)
+func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR) {
+	services, overrides, prData := resolvePreviewInputs(cmd, ctx, workspace)
 
 	deployOp := ui.PlanCreate
 	if resolution.isRedeploy {
@@ -277,11 +283,11 @@ func prDetailActions(prs []repoPR) []Action {
 // from affected-service detection. Overrides always derive from affected
 // detection (PR lookups per repo). UI output (printAffectedSummary) fires
 // during plan build, matching today's flow.
-func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context) ([]string, map[string]string, []repoPR) {
+func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
 
 	g := git.New()
-	results, _ := resolveAffectedServices(ctx, g)
+	results, _ := resolveAffectedServices(ctx, workspace, g)
 
 	var services []string
 	if len(flagServices) > 0 {

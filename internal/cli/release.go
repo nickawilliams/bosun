@@ -17,11 +17,14 @@ func newReleaseCmd() *cobra.Command {
 			headerAnnotationTitle: "release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issue, err := resolveIssue(cmd)
+			cc, err := resolveCommandContext(cmd)
 			if err != nil {
 				return err
 			}
-			initHeader(cmd)
+			if err := cc.RequireIssue(); err != nil {
+				return err
+			}
+			issue := cc.Issue
 
 			ctx := cmd.Context()
 
@@ -72,8 +75,8 @@ func newReleaseCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
 			}
 			if pipeline != nil {
-				targets, _ := resolveWorkflowTargets(ctx, "release")
-				inputs, _ := buildWorkflowInputs(cmd, ctx, "release", issue)
+				targets, _ := resolveWorkflowTargets(ctx, cc.Workspace, "release")
+				inputs, _ := buildWorkflowInputs(cmd, ctx, cc.Workspace, "release", issue)
 				for _, t := range targets {
 					target := t
 					actions = append(actions, Action{
@@ -105,6 +108,7 @@ func newReleaseCmd() *cobra.Command {
 		},
 	}
 
+	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	return cmd

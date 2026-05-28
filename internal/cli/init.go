@@ -23,6 +23,7 @@ func newInitCmd() *cobra.Command {
 		RunE: runInit,
 	}
 
+	addProjectFlag(cmd)
 	cmd.Flags().Bool("no-detect", false, "skip auto-detection")
 	cmd.Flags().Bool("quick", false, "only prompt for required values without defaults")
 	cmd.Flags().String("workspace-root", "", "where workspaces are created")
@@ -32,7 +33,7 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	initHeader(cmd)
+	resolveCommandContext(cmd)
 	skipConfirm := isAutoApprove(cmd)
 	quick, _ := cmd.Flags().GetBool("quick")
 	noDetect, _ := cmd.Flags().GetBool("no-detect")

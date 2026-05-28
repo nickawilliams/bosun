@@ -44,6 +44,7 @@ func newConfigCmd() *cobra.Command {
 	)
 
 	// Inherit show's flags on the parent so "config --source env" works.
+	addProjectFlag(cmd)
 	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
 	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
 
@@ -61,6 +62,7 @@ func newConfigShowCmd() *cobra.Command {
 		RunE: runConfigShow,
 	}
 
+	addProjectFlag(cmd)
 	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
 	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
 
@@ -83,7 +85,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	// Human-readable tree display.
 	cs := loadConfigSources()
 
-	initHeader(cmd)
+	resolveCommandContext(cmd)
 	tree := buildConfigTree(cs, sourceFilter, groupFilter)
 	tree.Print()
 
@@ -476,7 +478,7 @@ func newConfigGetCmd() *cobra.Command {
 }
 
 func newConfigCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "check [group]",
 		Short: "Validate configuration completeness",
 		Args:  cobra.MaximumNArgs(1),
@@ -484,10 +486,13 @@ func newConfigCheckCmd() *cobra.Command {
 			headerAnnotationTitle: "check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			initHeader(cmd)
+			resolveCommandContext(cmd)
 			return runConfigCheck(args)
 		},
 	}
+
+	addProjectFlag(cmd)
+	return cmd
 }
 
 func runConfigCheck(args []string) error {

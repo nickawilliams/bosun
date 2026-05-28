@@ -34,8 +34,8 @@ type AffectedResult struct {
 //
 // Pre-flight: checks for unpushed commits and offers to push (interactive)
 // or aborts (non-interactive) so the diff matches what CI has seen.
-func resolveAffectedServices(ctx context.Context, g vcs.VCS) ([]AffectedResult, error) {
-	repos, err := resolveActiveRepositories(ctx, nil)
+func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) ([]AffectedResult, error) {
+	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
 		return nil, err
 	}
