@@ -271,9 +271,10 @@ func repositoryNames(repositories []Repository) string {
 	return strings.Join(names, ", ")
 }
 
-// newIssueTracker creates an issue.Tracker from current config. Prompts for
-// missing values interactively and saves them for future use.
-func newIssueTracker() (issue.Tracker, error) {
+// newIssueTrackerImpl is the production factory for issue.Tracker.
+// Reachable via the newIssueTracker wrapper in services_factory.go,
+// which dispatches through the swappable Services struct.
+func newIssueTrackerImpl() (issue.Tracker, error) {
 	if err := requireConfig("issue_tracker"); err != nil {
 		return nil, err
 	}
@@ -359,7 +360,7 @@ func lifecycleKeyForStatus(status string) string {
 // 2. gh auth token (GitHub CLI)
 // 3. GITHUB_TOKEN env var
 // 4. JIT prompt (saves to config)
-func newCodeHost() (code.Host, error) {
+func newCodeHostImpl() (code.Host, error) {
 	// Check viper first (config file or env var via AutomaticEnv).
 	if token := viper.GetString("code_host.token"); token != "" {
 		return gh.New(token), nil
@@ -601,7 +602,7 @@ func renderTemplate(pattern string, data notifyTemplateData) string {
 // newNotifier creates a notify.Notifier from current config. Returns an error
 // if the notification provider is not configured — callers treat this as a
 // skip, not a fatal error. Does not prompt for missing values (opt-in only).
-func newNotifier() (notify.Notifier, error) {
+func newNotifierImpl() (notify.Notifier, error) {
 	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return nil, fmt.Errorf("notification provider not configured")
@@ -634,7 +635,7 @@ func newNotifier() (notify.Notifier, error) {
 
 // newCICD creates a cicd.CICD from current config. Token resolution mirrors
 // newCodeHost: viper → gh CLI → env → JIT prompt.
-func newCICD() (cicd.CICD, error) {
+func newCICDImpl() (cicd.CICD, error) {
 	// Reuse the same GitHub token used for code hosting.
 	if token := viper.GetString("code_host.token"); token != "" {
 		return githubactions.New(token), nil
@@ -679,7 +680,7 @@ func newPreviewProvider(workspace string) (preview.Provider, error) {
 // the returned provider still supports the read paths (Get, Inspect)
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
-func newPreviewProviderWithInfo(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
+func newPreviewProviderWithInfoImpl(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
