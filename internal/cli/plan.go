@@ -64,10 +64,9 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 		return applyPlanCard(pc, actions)
 	}
 
-	// Confirmation required but can't prompt — either stdin is piped
-	// (can't read input) or stdout is piped/raw (can't render the
-	// confirmation form). Require --yes.
-	if !isInteractive() || ui.IsRaw() {
+	// Confirmation required but stdin can't prompt — CI / piped input.
+	// Require --yes (or --dry-run).
+	if !isInteractive() {
 		return fmt.Errorf("confirmation required (pass --yes to approve, or --dry-run to preview)")
 	}
 

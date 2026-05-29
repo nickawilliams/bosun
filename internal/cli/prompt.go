@@ -3,26 +3,25 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 // formTheme is the shared huh theme derived from the app palette.
 var formTheme = ui.FormTheme()
 
-// isInteractive returns true if stdin is a terminal.
+// isInteractive returns true when the current input stream supports
+// prompting (real TTY stdin or an injected reader in tests).
 func isInteractive() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
+	return ui.Interactive()
 }
 
 // forceInteractive returns true if the user passed --interactive and
-// stdin is a TTY. Use this to gate prompts for optional fields that would
-// otherwise be silently skipped.
+// the input stream is interactive. Use this to gate prompts for
+// optional fields that would otherwise be silently skipped.
 func forceInteractive(cmd *cobra.Command) bool {
 	fi, _ := cmd.Flags().GetBool("interactive")
 	return fi && isInteractive()
@@ -34,24 +33,32 @@ func forceInteractive(cmd *cobra.Command) bool {
 // huh's default layout to recolor field separator bars in the
 // recessed timeline gray.
 //
+// Input/output flow through ui.Input() / ui.Output() so tests that
+// inject streams via cmd.SetIn/SetOut drive prompts against buffers.
+//
 // If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
-	// Raw mode: stdout is not a TTY, so BubbleTea can't render forms.
-	// Return an error rather than panicking.
-	if ui.IsRaw() {
-		return fmt.Errorf("interactive input required but stdout is not a terminal")
+	// Non-interactive (CI, piped stdin): refuse rather than hang.
+	if !ui.Interactive() {
+		return fmt.Errorf("interactive input required but stdin is not a terminal")
 	}
 	ui.FlushSpacer()
+	// WithWidth is critical when the output isn't a real terminal —
+	// huh's bubbletea program never receives a resize message in that
+	// case and otherwise crashes inside textinput on a 0-width slice.
 	err := huh.NewForm(huh.NewGroup(fields...)).
 		WithTheme(formTheme).
 		WithLayout(ui.NewTimelineLayout()).
 		WithShowHelp(true).
+		WithInput(ui.Input()).
+		WithOutput(ui.Output()).
+		WithWidth(ui.TermWidth()).
 		Run()
 	if errors.Is(err, huh.ErrUserAborted) {
 		// BubbleTea leaves a trailing blank line on exit; move the
 		// cursor up so the cancel card (or its comfy connector)
 		// overwrites it rather than creating double spacing.
-		fmt.Print("\x1b[A")
+		_, _ = fmt.Fprint(ui.Output(), "\x1b[A")
 		return ErrCancelled
 	}
 	return err
