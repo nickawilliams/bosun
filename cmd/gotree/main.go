@@ -185,7 +185,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "gotree:", err)
 			os.Exit(2)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		r = f
 	}
 
@@ -434,7 +434,7 @@ func parseCoverProfile(profilePath string) (perPkg map[string]string, overall st
 	if openErr != nil {
 		return nil, "", openErr
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	type block struct {
 		pkg     string
