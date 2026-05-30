@@ -143,7 +143,7 @@ endef
 # Main Targets
 # ============================================================================
 
-.PHONY: all build clean test bench lint format prep watch
+.PHONY: all build clean test test/tree test/tree/stream bench lint format prep watch
 
 ## Build all artifacts
 all: build
@@ -165,6 +165,16 @@ test:
 	@$(GO) tool cover -html=$(OUT_DIR)/coverage/coverage.out -o $(OUT_DIR)/coverage/index.html
 	@echo "Coverage (LCOV): $(OUT_DIR)/coverage/lcov.info"
 	@echo "Coverage (HTML): $(OUT_DIR)/coverage/index.html"
+
+## Run all tests with cross-package coverage attribution, rendered as a tree via cmd/gotree
+test/tree:
+	@mkdir -p $(OUT_DIR)/coverage
+	@set -o pipefail; $(GO) test ./... -coverpkg=./cmd/...,./internal/... -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -coverprofile=$(OUT_DIR)/coverage/gotree.out
+
+## Same as test/tree but renders each package the moment it finishes (only overall coverage shown at end)
+test/tree/stream:
+	@mkdir -p $(OUT_DIR)/coverage
+	@set -o pipefail; $(GO) test ./... -coverpkg=./cmd/...,./internal/... -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -stream -coverprofile=$(OUT_DIR)/coverage/gotree.out
 
 ## Run benchmarks across all packages
 bench:
