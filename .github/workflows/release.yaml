@@ -3,9 +3,20 @@ name: Release
 on:
   push:
     branches: [main]
+  # Per-project knob: scheduled release cadence. Cron strings can
+  # only be literal in GitHub Actions — they cannot reference env
+  # or workflow inputs.
+  schedule:
+    - cron: "0 14 * * 1" # Mondays 14:00 UTC
+  workflow_dispatch:
 
 env:
   CARGO_HOME: ${{ github.workspace }}/.cache/cargo
+  # Per-project knob: which bump types cut a release immediately on
+  # push to main. All other push-triggered runs are deferred to the
+  # scheduled release. Schedule and workflow_dispatch ignore this
+  # gate (subject to the downstream tag-exists check).
+  RELEASE_IMMEDIATE_BUMPS: major
 
 permissions:
   contents: write
@@ -52,13 +63,24 @@ jobs:
         id: version
         shell: bash
         run: make version/github_actions
-      - name: Check Version Exists
+      - name: Release Gate
         id: check_version
+        env:
+          EVENT: ${{ github.event_name }}
+          BUMP: ${{ steps.version.outputs.bump_type }}
+          IMMEDIATE_BUMPS: ${{ env.RELEASE_IMMEDIATE_BUMPS }}
+          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
         run: |
-          next_version="${{ steps.version.outputs.next_version }}"
-          if git rev-parse "${next_version}" >/dev/null 2>&1; then
+          decision=$(make --no-print-directory release/gate \
+            EVENT="$EVENT" BUMP="$BUMP" IMMEDIATE_BUMPS="$IMMEDIATE_BUMPS")
+          if [ "$decision" = "skip" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Version ${next_version} already exists, skipping release"
+            echo "::notice::Release gated by cadence policy (event=$EVENT, bump=$BUMP, immediate=$IMMEDIATE_BUMPS)"
+            exit 0
+          fi
+          if git rev-parse "$NEXT_VERSION" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version $NEXT_VERSION already exists, skipping release"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
