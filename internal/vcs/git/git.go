@@ -121,6 +121,15 @@ func (a *Adapter) BranchExists(ctx context.Context, repositoryPath, branchName s
 }
 
 func (a *Adapter) CreateWorktree(ctx context.Context, repositoryPath, worktreePath, branchName string) error {
+	// Clear stale worktree registrations before adding. Git refuses to
+	// add a worktree at a path it already has a registration for, even
+	// when the on-disk directory was deleted manually (rm -rf without
+	// `git worktree remove`). Prune only removes registrations whose
+	// target paths don't exist on disk, so it's safe to run
+	// unconditionally and leaves valid worktrees alone.
+	if err := run(ctx, repositoryPath, "worktree", "prune"); err != nil {
+		return fmt.Errorf("pruning stale worktrees: %w", err)
+	}
 	return run(ctx, repositoryPath, "worktree", "add", worktreePath, branchName)
 }
 

@@ -95,6 +95,23 @@ func (cc *CommandContext) RequireIssue() error {
 	)
 }
 
+// RequireWorkspace ensures the workspace is populated. If the pipeline
+// did not resolve a workspace, runs the interactive picker as a last
+// resort. Returns an error if the workspace is still empty after all
+// attempts.
+func (cc *CommandContext) RequireWorkspace() error {
+	if cc.Workspace != "" {
+		return nil
+	}
+	if ws := pickOrPromptWorkspace(); ws != "" {
+		cc.Workspace = ws
+		return nil
+	}
+	return fmt.Errorf(
+		"workspace not specified: use --workspace, set BOSUN_WORKSPACE, or run from inside a workspace",
+	)
+}
+
 // resolveIssueSilent resolves the issue key without interactive
 // prompts. Chain: (1) --issue flag, (2) BOSUN_ISSUE env,
 // (3) derive from resolved workspace name, (4) CWD workspace path,

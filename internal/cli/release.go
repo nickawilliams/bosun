@@ -18,6 +18,9 @@ func newReleaseCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
 			if err := cc.RequireIssue(); err != nil {
 				return err
 			}

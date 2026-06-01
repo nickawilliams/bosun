@@ -446,20 +446,20 @@ the same branch name.
 
 ```
 bosun workspace create [--from-head] <name> <repositories...>
-bosun workspace add [--from-head] [<name>] <repositories...>
-bosun workspace status [<name>]
+bosun workspace add [--from-head] [<repositories...>]
 bosun workspace rm [--force] [<name>]
 ```
 
 - **create**: Create worktrees for each repository under
   `<workspace_root>/<name>/`. By default branches from each repository's
   default branch. `--from-head` branches from current HEAD instead.
-- **add**: Add repositories to an existing workspace. Name auto-detected from
-  CWD if omitted.
-- **status**: Show branch and dirty state per repository. Name auto-detected
-  from CWD if omitted.
-- **rm**: Remove worktrees, delete local and remote branches. Refuses if any
-  repository has uncommitted changes unless `--force`.
+- **add**: Add repositories to an existing workspace. Workspace resolved
+  via the standard chain (`--workspace`, `BOSUN_WORKSPACE`, CWD, or
+  interactive picker). Prompts for repositories if none given.
+- **rm**: Remove worktrees, delete local and remote branches. Workspace
+  name positional or resolved via the standard chain. Refuses if any
+  repository has uncommitted changes unless `--force`. (Per-repo status
+  is available via `bosun status` in a workspace.)
 
 ### Compatibility with external worktree tools
 

@@ -281,7 +281,7 @@ project context skip project entirely.
 | `bosun release` | `Clearstory › EX-30434 › Release` |
 | `bosun create` (no issue yet) | `Clearstory › Create` |
 | `bosun workspace create EX-30434` | `Clearstory › EX-30434 › Workspace › Create` |
-| `bosun workspace add EX-30434 my-api` | `Clearstory › EX-30434 › my-api › Workspace › Add` |
+| `bosun workspace add my-api` (in workspace) | `Clearstory › EX-30434 › my-api › Workspace › Add` |
 | `bosun workspace rm EX-30434` | `Clearstory › EX-30434 › Workspace › Delete` |
 | `bosun config show` | `Clearstory › Config › Show` |
 | `bosun config check` | `Clearstory › Config › Check` |

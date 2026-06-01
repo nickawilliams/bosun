@@ -131,20 +131,15 @@ func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, dec
 	return detail, err
 }
 
-// resolveActiveRepositories resolves repositories scoped to the current
-// workspace, falling back to resolveRepositories (global config patterns)
-// when no workspace context is available. Resolution uses the standard
-// workspace chain (--workspace flag → env → CWD detection). Commands
-// that operate on worktrees (review, prerelease) should use this instead
-// of resolveRepositories so they stay scoped to the workspace context.
+// resolveActiveRepositories resolves repositories scoped to the given
+// workspace. Workspace-required lifecycle commands (review, prerelease)
+// use this to stay scoped to the workspace's worktrees rather than
+// every configured repository. Callers must ensure workspace is
+// non-empty (via cc.RequireWorkspace()); resolution does not fall back.
 func resolveActiveRepositories(ctx context.Context, workspace string, filterNames []string) ([]Repository, error) {
-	if workspace == "" {
-		return resolveRepositories(filterNames)
-	}
-
 	mgr, err := newWorkspaceManager()
 	if err != nil {
-		return resolveRepositories(filterNames)
+		return nil, err
 	}
 
 	wsName := workspace

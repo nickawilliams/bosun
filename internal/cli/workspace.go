@@ -21,24 +21,53 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
 		newWorkspaceAddCmd(),
-		newWorkspaceStatusCmd(),
 		newWorkspaceRmCmd(),
 	)
 
 	return cmd
 }
 
-// resolveWorkspaceAddArgs splits positional args into a workspace name and a
-// list of repositories. Uses the already-resolved workspace from
-// CommandContext, falling back to args[0] only when empty.
-func resolveWorkspaceAddArgs(cc CommandContext, args []string) (string, []string, error) {
-	if cc.Workspace != "" {
-		return cc.Workspace, args, nil
+// pickOrPromptWorkspace presents an interactive picker of existing
+// workspaces. Returns the selected workspace name, or empty string in
+// non-interactive mode, when no workspaces exist, or when the user
+// cancels. Falls back to a free-text prompt when the workspace root is
+// configured but empty so the caller still has a path to supply a name.
+func pickOrPromptWorkspace() string {
+	if !isInteractive() {
+		return ""
 	}
-	if len(args) >= 1 {
-		return args[0], args[1:], nil
+
+	mgr, err := newWorkspaceManager()
+	if err != nil {
+		return promptRequired("Workspace")
 	}
-	return "", nil, fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or include the name as the first argument")
+
+	names, err := mgr.List()
+	if err != nil || len(names) == 0 {
+		return promptRequired("Workspace")
+	}
+
+	if len(names) == 1 {
+		return names[0]
+	}
+
+	opts := make([]huh.Option[string], len(names))
+	for i, n := range names {
+		opts[i] = huh.NewOption(n, n)
+	}
+
+	var selected string
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, "select workspace").Tight())
+	if err := runForm(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return ""
+	}
+	slot.Clear()
+	return selected
 }
 
 // pickWorkspaceAddRepositories prompts the user to select repositories to add
@@ -159,20 +188,20 @@ func newWorkspaceCreateCmd() *cobra.Command {
 
 func newWorkspaceAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [name] [repositories...]",
+		Use:   "add [repositories...]",
 		Short: "Add repositories to an existing workspace",
 		Annotations: map[string]string{
 			headerAnnotationTitle: "add",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
-			fromHead, _ := cmd.Flags().GetBool("from-head")
-			ctx := cmd.Context()
-
-			name, repositoryNames, err := resolveWorkspaceAddArgs(cc, args)
-			if err != nil {
+			if err := cc.RequireWorkspace(); err != nil {
 				return err
 			}
+			name := cc.Workspace
+			repositoryNames := args
+			fromHead, _ := cmd.Flags().GetBool("from-head")
+			ctx := cmd.Context()
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -217,56 +246,6 @@ func newWorkspaceAddCmd() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceStatusCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "status [name]",
-		Short: "Show workspace status",
-		Annotations: map[string]string{
-			headerAnnotationTitle: "status",
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cc := commandContext(cmd)
-			name := cc.Workspace
-			if len(args) > 0 {
-				name = args[0]
-			}
-			if name == "" {
-				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
-			}
-
-			mgr, err := newWorkspaceManager()
-			if err != nil {
-				return err
-			}
-
-			statuses, err := mgr.Status(context.Background(), name)
-			if err != nil {
-				return err
-			}
-
-			if len(statuses) == 0 {
-				ui.Skip(fmt.Sprintf("no repositories found in workspace %q", name))
-				return nil
-			}
-
-			for _, s := range statuses {
-				if s.Dirty {
-					ui.Skip(fmt.Sprintf("%s: %s · dirty", s.Name, s.Branch))
-				} else {
-					ui.Complete(fmt.Sprintf("%s: %s · clean", s.Name, s.Branch))
-				}
-			}
-
-			return nil
-		},
-	}
-
-	addProjectFlag(cmd)
-	addWorkspaceFlag(cmd)
-
-	return cmd
-}
-
 func newWorkspaceRmCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rm [name]",
@@ -276,13 +255,16 @@ func newWorkspaceRmCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
-			name := cc.Workspace
+			// Positional name wins over the resolution chain — it's an
+			// explicit on-the-line target. Otherwise fall through to the
+			// standard --workspace/env/CWD/prompt path.
 			if len(args) > 0 {
-				name = args[0]
+				cc.Workspace = args[0]
 			}
-			if name == "" {
-				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
 			}
+			name := cc.Workspace
 			force, _ := cmd.Flags().GetBool("force")
 			yes, _ := cmd.Flags().GetBool("yes")
 

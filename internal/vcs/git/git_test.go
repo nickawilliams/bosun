@@ -246,3 +246,41 @@ func TestWorktree(t *testing.T) {
 		t.Fatalf("RemoveWorktree() error: %v", err)
 	}
 }
+
+// TestCreateWorktree_StaleRegistration covers the case where a worktree
+// directory was deleted on disk (e.g., rm -rf) without `git worktree
+// remove`. Git's worktree admin metadata still references the path, so
+// a fresh `worktree add` at the same path fails with "missing but
+// already registered worktree" unless prune runs first. CreateWorktree
+// prunes implicitly so this works transparently.
+func TestCreateWorktree_StaleRegistration(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	_ = a.CreateBranchFromHead(ctx, repository, "wt-branch")
+
+	wtPath := filepath.Join(t.TempDir(), "worktree")
+	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {
+		t.Fatalf("first CreateWorktree() error: %v", err)
+	}
+
+	// Simulate manual deletion: blow away the directory without telling git.
+	if err := os.RemoveAll(wtPath); err != nil {
+		t.Fatalf("RemoveAll(%q) error: %v", wtPath, err)
+	}
+
+	// Without the implicit prune, this would fail with "missing but
+	// already registered worktree". With prune, it should succeed.
+	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {
+		t.Fatalf("re-CreateWorktree() error after stale registration: %v", err)
+	}
+
+	branch, err := a.GetCurrentBranch(ctx, wtPath)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch() in re-added worktree error: %v", err)
+	}
+	if branch != "wt-branch" {
+		t.Errorf("re-added worktree branch = %q, want %q", branch, "wt-branch")
+	}
+}
