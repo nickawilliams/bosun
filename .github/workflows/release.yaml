@@ -21,6 +21,12 @@ env:
 permissions:
   contents: write
 
+# Serialize release runs so push and scheduled triggers can't race
+# on tag creation or release commits.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   verify:
     if: ${{ !startsWith(github.event.head_commit.message, 'release(') && !startsWith(github.event.head_commit.message, 'release:') }}
