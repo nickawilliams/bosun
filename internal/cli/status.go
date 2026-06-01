@@ -316,7 +316,7 @@ type previewInfoEvent struct {
 }
 
 type workspaceRepoCounts struct {
-	repos                                int
+	repos                                 int
 	done, ready, blocked, pending, broken int
 }
 
@@ -458,6 +458,16 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	return card
 }
 
+// pluralize returns singular when n == 1, otherwise plural. Keeps
+// summary headings grammatically correct ("1 repository" vs.
+// "3 repositories").
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
 // workspaceRepoBreakdown composes a colored single-line summary of
 // the workspace's repos. Same vocabulary and color story as the
 // project-level summary, just scoped to one workspace.
@@ -469,7 +479,7 @@ func workspaceRepoBreakdown(c workspaceRepoCounts) string {
 	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
 
 	parts := []string{
-		muted.Render(fmt.Sprintf("%d repos", c.repos)),
+		muted.Render(fmt.Sprintf("%d %s", c.repos, pluralize(c.repos, "repository", "repositories"))),
 	}
 	if c.done > 0 {
 		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", c.done)))
@@ -516,7 +526,7 @@ func renderProjectSummary(states []workspaceState) {
 	}
 
 	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d workspaces", len(states))),
+		mutedStyle.Render(fmt.Sprintf("%d %s", len(states), pluralize(len(states), "workspace", "workspaces"))),
 	}
 	if done > 0 {
 		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
@@ -534,7 +544,7 @@ func renderProjectSummary(states []workspaceState) {
 		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
 	}
 
-	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).
+	ui.NewCard(ui.CardInfo, strings.Join(parts, mutedStyle.Render(", "))).
 		PreserveCase().
 		GlyphColor(ui.Palette.Muted).
 		Print()
@@ -557,7 +567,6 @@ func projectRepos() []projectRepoEntry {
 	}
 	return out
 }
-
 
 // buildWorkspaceIssueCard constructs the issue header card with a
 // three-section KV body: (1) Type/title + Status — what kind of work
@@ -715,7 +724,7 @@ func renderWorkspaceSummary(states []repoState) {
 	}
 
 	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d repos", len(states))),
+		mutedStyle.Render(fmt.Sprintf("%d %s", len(states), pluralize(len(states), "repository", "repositories"))),
 	}
 	if done > 0 {
 		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
@@ -733,7 +742,7 @@ func renderWorkspaceSummary(states []repoState) {
 		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
 	}
 
-	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).
+	ui.NewCard(ui.CardInfo, strings.Join(parts, mutedStyle.Render(", "))).
 		PreserveCase().
 		GlyphColor(ui.Palette.Muted).
 		Print()
@@ -753,4 +762,3 @@ func workspaceFilesystemPath(branch string) string {
 	}
 	return filepath.Join(wsRoot, branch)
 }
-
