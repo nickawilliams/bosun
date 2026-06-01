@@ -51,6 +51,13 @@ func ErrOutput() io.Writer { return defaultErr }
 // Interactive reports whether the input stream supports prompting.
 // Non-*os.File readers (test buffers) are treated as interactive so
 // injected input drives prompts; real os.Stdin must be a TTY.
+//
+// The non-File branch exists to enable test injection (a bytes.Buffer
+// stand-in for stdin counts as interactive). It is not a security
+// or correctness guarantee — a misconfigured caller that wraps real
+// os.Stdin in bufio.Reader or similar would also report interactive.
+// In this codebase the only producer of non-File readers is the test
+// harness; if that ever changes, this heuristic needs revisiting.
 func Interactive() bool {
 	f, ok := defaultInput.(*os.File)
 	if !ok {
