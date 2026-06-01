@@ -131,8 +131,10 @@ func (h *Harness) WorktreePath(branch, repoName string) string {
 	return filepath.Join(root, branch, repoName)
 }
 
-// hasFlag reports whether args contains flag as a token. Doesn't
-// handle =value forms; tests should pass --flag value style.
+// hasFlag reports whether args contains flag as a token. Only handles
+// the long --flag and --flag=value forms — short -f flags would need
+// extra logic we don't need yet (the harness only auto-injects --project,
+// which has no short form). Add short-flag support when a test needs it.
 func hasFlag(args []string, flag string) bool {
 	for _, a := range args {
 		if a == flag || strings.HasPrefix(a, flag+"=") {
