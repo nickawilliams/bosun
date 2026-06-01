@@ -85,3 +85,17 @@ func IsTerminalWriter(w io.Writer) bool {
 	}
 	return term.IsTerminal(int(f.Fd()))
 }
+
+// CanRenderInteractively reports whether the current output stream
+// can present an interactive UI to a human. True when output is a
+// real TTY (production interactive use) or any non-*os.File writer
+// (test harness buffers). False when output is a *os.File but not a
+// terminal — i.e. piped stdout in production, where drawing a huh
+// form would emit ANSI to the pipe while still blocking the user
+// on stdin with no visible prompt.
+func CanRenderInteractively() bool {
+	if f, ok := defaultOutput.(*os.File); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return true
+}

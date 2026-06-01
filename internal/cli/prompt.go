@@ -38,9 +38,12 @@ func forceInteractive(cmd *cobra.Command) bool {
 //
 // If the user aborts with ctrl+c, returns ErrCancelled.
 func runForm(fields ...huh.Field) error {
-	// Non-interactive (CI, piped stdin): refuse rather than hang.
-	if !ui.Interactive() {
-		return fmt.Errorf("interactive input required but stdin is not a terminal")
+	// Refuse when either stdin can't be read interactively (CI /
+	// piped stdin) or stdout can't render the prompt visibly (piped
+	// stdout). Without the second check we'd block on TTY stdin while
+	// the form's ANSI silently went into the pipe.
+	if !ui.Interactive() || !ui.CanRenderInteractively() {
+		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
 	ui.FlushSpacer()
 	// WithWidth is critical when the output isn't a real terminal —
