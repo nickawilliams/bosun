@@ -132,15 +132,21 @@ func TestStart(t *testing.T) {
 			t.Fatalf("first run did not create branch %q", branch)
 		}
 
-		// Second run should detect everything already exists and apply
-		// nothing — no error, no duplicate work.
+		// Snapshot tracker calls so we can assert the second run
+		// performs no further work — the whole point of idempotency.
+		before := append([]string(nil), h.Tracker.Calls()...)
+
 		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--yes"); err != nil {
 			t.Fatalf("second run: %v", err)
 		}
 
-		// Tracker should have seen status updates only when needed.
-		// The exact call count isn't load-bearing — what matters is
-		// the issue is still in_progress and no error fired.
+		// Second run may re-fetch the issue during assessment (GetIssue),
+		// but must never SetStatus again — the issue is already in_progress.
+		newCalls := h.Tracker.Calls()[len(before):]
+		if slices.Contains(newCalls, "SetStatus") {
+			t.Errorf("second run called SetStatus; expected no-op (new calls: %v)", newCalls)
+		}
+
 		got, _ := h.Tracker.Issue("EX-4")
 		if got.Status != "In Progress" {
 			t.Errorf("issue status = %q, want %q", got.Status, "In Progress")
