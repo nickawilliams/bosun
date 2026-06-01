@@ -41,6 +41,13 @@ type Harness struct {
 // the global state (viper, ui streams, services factory, project root
 // override) reset and restored on test cleanup.
 //
+// The harness mutates package-level state (cli.services, the ui
+// stream vars, viper, config.ProjectRootOverride, the XDG_CONFIG_HOME
+// env) via t.Cleanup-managed swaps. Tests using this harness must NOT
+// call t.Parallel() — sibling tests would race on the shared state and
+// produce nondeterministic failures. Sequential is fine; the per-test
+// setup is fast (single-digit hundreds of milliseconds).
+//
 // Fakes for capability interfaces beyond issue tracker (CodeHost,
 // CICD, Notifier, PreviewProvider) default to functions that fail
 // the test if invoked. Tests for commands needing those services
