@@ -141,7 +141,7 @@ func (r *Repo) WorktreeExists(path string) bool {
 			return false
 		}
 	}
-	for _, line := range splitLines(string(out)) {
+	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.HasPrefix(line, "worktree ") {
 			continue
 		}
@@ -154,21 +154,4 @@ func (r *Repo) WorktreeExists(path string) bool {
 		}
 	}
 	return false
-}
-
-// splitLines is a trivial newline splitter used by WorktreeExists.
-// Avoids pulling in bufio for one call.
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		out = append(out, s[start:])
-	}
-	return out
 }
