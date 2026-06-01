@@ -25,6 +25,12 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Thread cmd's I/O streams to the UI layer. Tests that call
+			// cmd.SetIn/SetOut/SetErr flow through to runForm and
+			// rendering automatically. In production, these resolve to
+			// the process streams.
+			ui.SetStreams(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+
 			// --project must resolve before config.Load() because
 			// Load() calls FindProjectRoot() to locate .bosun/config.yaml.
 			if f := cmd.Flags().Lookup("project"); f != nil && f.Changed {

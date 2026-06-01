@@ -17,6 +17,7 @@ type TreeNode struct {
 	GlyphColor color.Color
 	Key        string
 	Value      string      // empty for group/branch nodes
+	ValueColor color.Color // nil = use the styledValue heuristic
 	Children   []*TreeNode // non-empty for group/branch nodes
 }
 
@@ -50,7 +51,8 @@ func Group(key string, children ...*TreeNode) *TreeNode {
 // The tree integrates with the card timeline by rendering its
 // connectors in the timeline column position.
 type Tree struct {
-	nodes []*TreeNode
+	nodes       []*TreeNode
+	valueColumn int // 0 = auto from widest leaf; >0 = align values at this column
 }
 
 // NewTree creates an empty tree.
@@ -64,6 +66,16 @@ func (t *Tree) Add(nodes ...*TreeNode) *Tree {
 	return t
 }
 
+// ValueColumn requests that leaf values start at the given 1-indexed
+// terminal column. The natural auto-pad still applies as a floor —
+// values are pushed right past the requested column when a key is
+// too long to fit, never truncated. Zero (the default) keeps the
+// pure auto-pad behavior.
+func (t *Tree) ValueColumn(col int) *Tree {
+	t.valueColumn = col
+	return t
+}
+
 // Render returns the tree as a styled multi-line string.
 func (t *Tree) Render() string {
 	if len(t.nodes) == 0 {
@@ -73,6 +85,13 @@ func (t *Tree) Render() string {
 	// Pre-compute global alignment: max (depth * indentWidth + keyLen)
 	// across all leaf nodes, so dots align across the entire tree.
 	globalMax := maxEffectiveKeyWidth(t.nodes, 0)
+	// If the caller requested a target column, expand globalMax so
+	// values land at (or past) it. 11 accounts for the fixed visible
+	// columns before the padded key in renderTreeNodes' format:
+	// " " + branch(4) + glyph(1) + " " + key + " " + dot + " " + value.
+	if t.valueColumn > 0 {
+		globalMax = max(globalMax, t.valueColumn-11)
+	}
 
 	var b strings.Builder
 	renderTreeNodes(&b, t.nodes, "", 0, globalMax)
@@ -134,18 +153,19 @@ func renderTreeNodes(b *strings.Builder, nodes []*TreeNode, indent string, depth
 
 		if node.Value != "" {
 			// Pad key so the dot column aligns globally.
-			padWidth := globalMax - depth*treeIndentWidth
-			if padWidth < len(node.Key) {
-				padWidth = len(node.Key)
-			}
+			padWidth := max(globalMax-depth*treeIndentWidth, len(node.Key))
 			paddedKey := fmt.Sprintf("%-*s", padWidth, node.Key)
+			value := styledValue(node.Value)
+			if node.ValueColor != nil {
+				value = lipgloss.NewStyle().Foreground(node.ValueColor).Render(node.Value)
+			}
 			fmt.Fprintf(b, " %s%s%s %s %s %s\n",
 				indent,
 				connStyle.Render(branch),
 				glyph,
 				keyStyle.Render(paddedKey),
 				dotStyle.Render(Palette.Dot),
-				styledValue(node.Value),
+				value,
 			)
 		} else {
 			fmt.Fprintf(b, " %s%s%s %s\n",
