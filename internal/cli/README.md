@@ -222,15 +222,21 @@ implicit "Bosun" root segment.
 
 ### Command path
 
-One or more segments describing *what command this is*. Always
-just the command name (or the full subcommand chain) — never
-mode-qualified, because the data segments below disambiguate the
-mode visually.
+One or more segments describing *what command this is*. Usually
+just the command name (or the full subcommand chain); the data
+segments below disambiguate mode visually, so the command name
+generally stays mode-neutral.
 
 - **Top-level commands**: a single segment. Examples: `Start`,
-  `Review`, `Cleanup`, `Status`, `Doctor`, `Init`.
+  `Review`, `Cleanup`, `Doctor`, `Init`.
 - **Subcommand commands**: parent + child. Examples:
   `Workspace › Create`, `Config › Show`.
+- **Scope-aware commands**: a small number of commands render
+  different titles per scope when the scope materially changes
+  what's shown. `status` is the canonical example —
+  `Project Status` vs `Workspace Status` — because the two
+  views surface fundamentally different information. Scope-aware
+  titles are registered via `setTitleResolver` in `header.go`.
 
 ### Data segments
 
@@ -257,11 +263,11 @@ project context skip project entirely.
 
 | Mode | Breadcrumb |
 | ---- | ---------- |
-| Project (no workspace, no specific repo) | `Clearstory › Status` |
-| Repo (single-repo project, not a workspace) | `Clearstory › extracker › Status` |
-| Workspace (issue-centric) | `Clearstory › EX-30434 › Status` |
-| Workspace + repo focus | `Clearstory › EX-30434 › extracker › Status` |
-| Outside any project | `Status` |
+| Project (no workspace, no specific repo) | `Clearstory › Project Status` |
+| Repo (single-repo project, not a workspace) | `Clearstory › extracker › Project Status` |
+| Workspace (issue-centric) | `Clearstory › EX-30434 › Workspace Status` |
+| Workspace + repo focus | `Clearstory › EX-30434 › extracker › Workspace Status` |
+| Outside any project | `Project Status` |
 
 #### Other commands
 
@@ -292,8 +298,8 @@ project context skip project entirely.
 Notes:
 
 - **`workspace status` is removed** — the root `bosun status`
-  with workspace mode (`Status › Clearstory › EX-30434`) covers
-  the same view; having two paths to the same output is
+  with workspace mode (`Clearstory › EX-30434 › Workspace Status`)
+  covers the same view; having two paths to the same output is
   redundant.
 - **Doctor results** render below the heading as normal timeline
   content, not as breadcrumb segments.
@@ -315,7 +321,9 @@ Notes:
 - Command-path segments come from the `headerAnnotationTitle`
   annotation (see `header.go` and `commandBreadcrumb`). Multi-
   segment subcommand paths embed `›` directly in the annotation,
-  e.g. `"Workspace › Create"`.
+  e.g. `"Workspace › Create"`. Scope-aware commands register a
+  function via `setTitleResolver` instead, returning the title
+  segment from the resolved `CommandContext` at header-render time.
 - Data segments are contributed by **non-root cards emitted after
   the heading**, via the UI layer's "squish" mechanism. The first
   card's title becomes the next data segment in the breadcrumb;
@@ -336,11 +344,11 @@ Notes:
 ```
 
 ```
- │  Clearstory › EX-30434 › Status ───────────╯
+ │  Clearstory › EX-30434 › Workspace Status ─╯
 ```
 
 ```
- │  Clearstory › EX-30434 › extracker › Status ╯
+ │  Clearstory › EX-30434 › extracker › Workspace Status ╯
 ```
 
 ```

@@ -23,17 +23,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// newStatusCmd is the scope-aware status command. The annotation
-// title is set dynamically per scope in RunE before the root card
-// renders (Workspace Status / Project Status), so the breadcrumb
-// reflects the current scope.
+// newStatusCmd is the scope-aware status command. A title resolver
+// renders "Workspace Status" or "Project Status" in the breadcrumb
+// based on the resolved scope, so the header reflects what the
+// command will actually show.
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show what wants your attention at workspace or project scope",
-		Annotations: map[string]string{
-			headerAnnotationTitle: "Status",
-		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -49,16 +46,19 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			// Scope detection: workspace if resolved, else project.
 			if cc.Workspace != "" {
-				cmd.Annotations[headerAnnotationTitle] = "Workspace Status"
 				return runStatusWorkspace(ctx, cc, mgr)
 			}
-
-			cmd.Annotations[headerAnnotationTitle] = "Project Status"
 			return runStatusProject(ctx)
 		},
 	}
+
+	setTitleResolver(cmd, func(cc CommandContext) string {
+		if cc.Workspace != "" {
+			return "Workspace Status"
+		}
+		return "Project Status"
+	})
 
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
