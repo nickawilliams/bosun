@@ -103,3 +103,18 @@ When adding a new command, use these as models:
 - **Multi-repository fan-out.** Lifecycle commands operate on all configured repositories.
 - **Config resolution.** Global config merges under project config. Env vars
   with `BOSUN_` prefix override both via Viper.
+
+## GitHub Conventions
+
+### Issue Titles
+
+Issue titles become slugs in branch names, PR titles, and URLs — keep
+them short so the generated slugs stay a reasonable length.
+
+- **3 words ideal, ~5 words as a soft cap.** Going slightly over is fine
+  when forcing fewer words would mangle the meaning; the goal is short
+  slugs, not a strict count.
+- **Title Case** (e.g., "Refine Command Output", "Improve Timeline
+  Termination").
+- No scope prefixes (`cli:`, `ui:`) and no trailing punctuation; the
+  issue body carries the detail.
