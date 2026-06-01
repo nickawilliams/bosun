@@ -5,6 +5,10 @@ event="${EVENT:-}"
 bump="${BUMP:-}"
 immediate="${IMMEDIATE_BUMPS:-major}"
 
+# Tolerate "major, minor" — otherwise a stray space silently
+# defeats the match.
+immediate="${immediate// /}"
+
 if [ -z "$event" ]; then
     echo "ERROR: EVENT is required" >&2
     exit 1
