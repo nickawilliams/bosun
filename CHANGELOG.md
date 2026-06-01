@@ -1,5 +1,12 @@
 # Changelog
 
+## [v0.4.1](https://github.com/nickawilliams/bosun/compare/1ca8b3f20419ba73fe9ebbce67e6debae8358017...v0.4.1) - 2026-06-01
+
+### Improvements
+
+- **CLI:** Swappable capability factories via Services struct - ([839d725](https://github.com/nickawilliams/bosun/commit/839d725718f3f90c0026031eed0e263839452eb4))
+- **Ui,cli:** Thread I/O streams through cobra cmd accessors - ([84d9668](https://github.com/nickawilliams/bosun/commit/84d966866368c6b64e5161ee1170047257d9089f))
+
 ## [v0.4.0](https://github.com/nickawilliams/bosun/compare/fa8951dd9c4cd4d602e292ede90b7e43bcabe1a6...v0.4.0) - 2026-05-28
 
 ### New Features
