@@ -22,11 +22,21 @@ type Services struct {
 }
 
 // services is the active factory set. Replaced by SetServices in tests;
-// the wrappers below dispatch through whatever is current. Initialized
-// in init() rather than at var declaration so the compiler doesn't
-// flag a reachability cycle through newPreviewProviderWithInfoImpl,
-// which calls newIssueTracker/newCICD (these dispatch back through
-// services at runtime, but never during initialization).
+// the wrappers below dispatch through whatever is current.
+//
+// Initialized in init() rather than at var declaration to break a Go
+// reachability cycle. defaultServices() stores function *values* (not
+// invocations), but the compiler's init-order analysis traces through
+// function bodies regardless of whether they're called. The path
+//
+//	services -> defaultServices -> newPreviewProviderWithInfoImpl ->
+//	    newIssueTracker -> services
+//
+// trips the cycle detector at var-init time. init() defers the
+// assignment past the initializer phase, breaking the analysis cycle
+// without any runtime cost. Confirmed with a minimal repro: removing
+// init() and using `var services = defaultServices()` reproduces the
+// "initialization cycle for services" compile error.
 var services *Services
 
 func init() { services = defaultServices() }
