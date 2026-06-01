@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "0 14 * * 1" # Mondays 14:00 UTC
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the next version and skip tag/release/publish."
+        type: boolean
+        default: false
 
 env:
   CARGO_HOME: ${{ github.workspace }}/.cache/cargo
@@ -76,7 +81,13 @@ jobs:
           BUMP: ${{ steps.version.outputs.bump_type }}
           IMMEDIATE_BUMPS: ${{ env.RELEASE_IMMEDIATE_BUMPS }}
           NEXT_VERSION: ${{ steps.version.outputs.next_version }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dry run requested; would have released $NEXT_VERSION"
+            exit 0
+          fi
           decision=$(make --no-print-directory release/gate \
             EVENT="$EVENT" BUMP="$BUMP" IMMEDIATE_BUMPS="$IMMEDIATE_BUMPS")
           if [ "$decision" = "skip" ]; then
