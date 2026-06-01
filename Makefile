@@ -284,7 +284,16 @@ version/github_actions:
 # Release
 # ============================================================================
 
-.PHONY: release/commit release/tag
+.PHONY: release/commit release/tag release/gate
+
+## Decide whether the current trigger should cut a release
+##
+## EVENT           push | schedule | workflow_dispatch
+## BUMP            major | minor | patch
+## IMMEDIATE_BUMPS comma-separated list, default "major"
+release/gate:
+	@EVENT="$(EVENT)" BUMP="$(BUMP)" IMMEDIATE_BUMPS="$(IMMEDIATE_BUMPS)" \
+		./scripts/release_gate.sh
 
 ## Commit release artifacts (CHANGELOG, manpage, etc.)
 release/commit:
