@@ -59,7 +59,12 @@ func newDoctorCmd() *cobra.Command {
 			for _, dg := range groups {
 				r.Group(dg.label, func(g ui.Reporter) {
 					for _, hc := range dg.checks {
-						detail, checkErr := hc.Check(ctx)
+						var detail string
+						checkErr := g.Spinner(hc.Name, func() error {
+							var err error
+							detail, err = hc.Check(ctx)
+							return err
+						})
 						emitCheckResult(g, hc, detail, checkErr, &passed, &warned, &failed)
 					}
 				})
