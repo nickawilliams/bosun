@@ -34,14 +34,33 @@ func (r *cardReporter) CompleteDetail(label string, items []string) {
 	NewCard(CardSuccess, label).Muted(items...).Print()
 }
 
+// CompleteValue emits a CardSuccess with the label as title and the
+// value rendered inline on the same line ("label: value"), label in
+// title style, value muted.
+func (r *cardReporter) CompleteValue(label, value string) {
+	NewCard(CardSuccess, label).Value(value).Print()
+}
+
 // Skip emits a CardSkipped for a step that was not attempted.
 func (r *cardReporter) Skip(label string) {
 	NewCard(CardSkipped, label).Print()
 }
 
+// SkipValue emits a CardSkipped with the label as title and the value
+// inline on the same line — same shape as CompleteValue.
+func (r *cardReporter) SkipValue(label, value string) {
+	NewCard(CardSkipped, label).Value(value).Print()
+}
+
 // Fail emits a CardFailed for a step that errored.
 func (r *cardReporter) Fail(label string) {
 	NewCard(CardFailed, label).Print()
+}
+
+// FailValue emits a CardFailed with the label as title and the value
+// inline on the same line — same shape as CompleteValue.
+func (r *cardReporter) FailValue(label, value string) {
+	NewCard(CardFailed, label).Value(value).Print()
 }
 
 // Success emits a CardSuccess with the formatted message as title.

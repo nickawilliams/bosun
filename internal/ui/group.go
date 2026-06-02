@@ -119,12 +119,24 @@ func (g *group) CompleteDetail(label string, items []string) {
 	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Muted(items...))
 }
 
+func (g *group) CompleteValue(label, value string) {
+	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Value(value))
+}
+
 func (g *group) Skip(label string) {
 	g.sendChild(CardSkipped, NewCard(CardSkipped, label))
 }
 
+func (g *group) SkipValue(label, value string) {
+	g.sendChild(CardSkipped, NewCard(CardSkipped, label).Value(value))
+}
+
 func (g *group) Fail(label string) {
 	g.sendChild(CardFailed, NewCard(CardFailed, label))
+}
+
+func (g *group) FailValue(label, value string) {
+	g.sendChild(CardFailed, NewCard(CardFailed, label).Value(value))
 }
 
 func (g *group) Success(format string, args ...any) {
