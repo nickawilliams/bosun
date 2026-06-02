@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func newWorkspaceCmd() *cobra.Command {
@@ -20,6 +23,7 @@ func newWorkspaceCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
+		newWorkspaceDeleteCmd(),
 		newWorkspaceAddCmd(),
 		newWorkspaceRmCmd(),
 	)
@@ -111,6 +115,53 @@ func pickWorkspaceAddRepositories(ctx context.Context, mgr *workspace.Manager, n
 	opts := make([]huh.Option[string], len(available))
 	for i, n := range available {
 		opts[i] = huh.NewOption(n, n)
+	}
+
+	var selected []string
+	repositorySlot := ui.NewSlot()
+	repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
+	if err := runForm(
+		huh.NewMultiSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return nil, err
+	}
+	repositorySlot.Clear()
+
+	if len(selected) > 0 {
+		ui.SelectedMulti("repositories", selected)
+	}
+	return selected, nil
+}
+
+// pickWorkspaceRmRepositories prompts the user to select repositories to
+// remove from the named workspace. Enumerates from the workspace's
+// current repo statuses (so the picker shows only repos actually
+// present). Returns the selected names, or nil if there is nothing to
+// remove.
+func pickWorkspaceRmRepositories(ctx context.Context, mgr *workspace.Manager, name string) ([]string, error) {
+	statuses, err := mgr.Status(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(statuses) == 0 {
+		ui.Skip(fmt.Sprintf("workspace %q has no repositories to remove", name))
+		return nil, nil
+	}
+
+	if len(statuses) == 1 {
+		return []string{statuses[0].Name}, nil
+	}
+
+	if !isInteractive() {
+		return nil, fmt.Errorf("no repositories specified (pass repository names or run interactively)")
+	}
+
+	opts := make([]huh.Option[string], len(statuses))
+	for i, s := range statuses {
+		opts[i] = huh.NewOption(s.Name, s.Name)
 	}
 
 	var selected []string
@@ -248,10 +299,120 @@ func newWorkspaceAddCmd() *cobra.Command {
 
 func newWorkspaceRmCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "rm [name]",
-		Short: "Remove a workspace",
+		Use:   "rm [repositories...]",
+		Short: "Remove repositories from an existing workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "remove",
+			headerAnnotationTitle: "rm",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
+			name := cc.Workspace
+			repositoryNames := args
+			force, _ := cmd.Flags().GetBool("force")
+			yes, _ := cmd.Flags().GetBool("yes")
+			ctx := cmd.Context()
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			if len(repositoryNames) == 0 {
+				repositoryNames, err = pickWorkspaceRmRepositories(ctx, mgr, name)
+				if err != nil {
+					return err
+				}
+				if len(repositoryNames) == 0 {
+					return nil
+				}
+			}
+
+			// Pre-Plan confirmation (separate from the Plan Card gate).
+			// Dry-run skips this — the user just wants to see what
+			// would happen, not commit to removing.
+			if !isDryRun(cmd) && !yes {
+				if !isInteractive() {
+					return fmt.Errorf("refusing to remove repositories from %q non-interactively (pass --yes to confirm)", name)
+				}
+				confirmed, err := promptConfirm(fmt.Sprintf("Remove %d %s from workspace %q?", len(repositoryNames), pluralize(len(repositoryNames), "repository", "repositories"), name), false)
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					ui.Skip("aborted")
+					return nil
+				}
+			}
+
+			// If we're standing inside one of the worktrees about to be
+			// removed, move the process out so the operation doesn't run
+			// from a directory that's about to disappear, and we can guide
+			// the user back.
+			var movedFrom string
+			projectRoot := config.FindProjectRoot()
+			if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
+				wsRoot := viper.GetString("workspace.root")
+				if !filepath.IsAbs(wsRoot) {
+					wsRoot = filepath.Join(projectRoot, wsRoot)
+				}
+				for _, r := range repositoryNames {
+					wtPath := filepath.Join(wsRoot, name, r)
+					if cwd == wtPath || strings.HasPrefix(cwd+string(os.PathSeparator), wtPath+string(os.PathSeparator)) {
+						if err := os.Chdir(projectRoot); err != nil {
+							return fmt.Errorf("moving to project root: %w", err)
+						}
+						movedFrom = cwd
+						break
+					}
+				}
+			}
+
+			repositories, err := resolveRepositories(repositoryNames)
+			if err != nil {
+				return err
+			}
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
+
+			plan := ui.NewPlan()
+			for _, r := range repositories {
+				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+			}
+
+			actions := []PlanAction{func() error {
+				return mgr.RemoveRepositories(ctx, name, wsRepos, repositoryNames, force)
+			}}
+
+			if err := runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: false,
+				Apply:   !isDryRun(cmd),
+			}); err != nil {
+				return err
+			}
+
+			if movedFrom != "" {
+				ui.Info("shell is in a removed directory (%s); cd to %s", movedFrom, projectRoot)
+			}
+			return nil
+		},
+	}
+
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
+	cmd.Flags().BoolP("yes", "y", false, "skip the confirmation prompt")
+
+	return cmd
+}
+
+func newWorkspaceDeleteCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete [name]",
+		Short: "Delete a workspace",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "delete",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
@@ -270,12 +431,12 @@ func newWorkspaceRmCmd() *cobra.Command {
 
 			// Pre-Plan confirmation (separate from the Plan Card gate).
 			// Dry-run skips this — the user just wants to see what
-			// would happen, not commit to removing.
+			// would happen, not commit to deleting.
 			if !isDryRun(cmd) && !yes {
 				if !isInteractive() {
-					return fmt.Errorf("refusing to remove workspace %q non-interactively (pass --yes to confirm)", name)
+					return fmt.Errorf("refusing to delete workspace %q non-interactively (pass --yes to confirm)", name)
 				}
-				confirmed, err := promptConfirm(fmt.Sprintf("Remove workspace %q?", name), false)
+				confirmed, err := promptConfirm(fmt.Sprintf("Delete workspace %q?", name), false)
 				if err != nil {
 					return err
 				}

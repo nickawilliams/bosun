@@ -282,7 +282,8 @@ project context skip project entirely.
 | `bosun create` (no issue yet) | `Clearstory › Create` |
 | `bosun workspace create EX-30434` | `Clearstory › EX-30434 › Workspace › Create` |
 | `bosun workspace add my-api` (in workspace) | `Clearstory › EX-30434 › my-api › Workspace › Add` |
-| `bosun workspace rm EX-30434` | `Clearstory › EX-30434 › Workspace › Delete` |
+| `bosun workspace rm my-api` (in workspace) | `Clearstory › EX-30434 › my-api › Workspace › Rm` |
+| `bosun workspace delete EX-30434` | `Clearstory › EX-30434 › Workspace › Delete` |
 | `bosun config show` | `Clearstory › Config › Show` |
 | `bosun config check` | `Clearstory › Config › Check` |
 | `bosun config set foo.bar baz` | `Clearstory › foo.bar › Config › Set` |

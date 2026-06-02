@@ -133,6 +133,66 @@ func TestRemoveBlockedByDirtyRepository(t *testing.T) {
 	}
 }
 
+func TestRemoveRepositories(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Remove only "api"; "web" should remain.
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() error: %v", err)
+	}
+
+	wsPath := filepath.Join(wsRoot, "branch")
+	if _, err := os.Stat(filepath.Join(wsPath, "api")); !os.IsNotExist(err) {
+		t.Error("api worktree should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(wsPath, "web")); err != nil {
+		t.Errorf("web worktree should remain: %v", err)
+	}
+	if _, err := os.Stat(wsPath); err != nil {
+		t.Errorf("workspace directory should remain: %v", err)
+	}
+}
+
+func TestRemoveRepositoriesBlockedByDirty(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Dirty up "api"; ask to remove both "api" and "web".
+	_ = os.WriteFile(filepath.Join(wsRoot, "branch", "api", "dirty.txt"), []byte("x"), 0o644)
+
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api", "web"}, false); err == nil {
+		t.Error("RemoveRepositories() should fail with dirty named repo")
+	}
+
+	// Force overrides.
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api", "web"}, true); err != nil {
+		t.Fatalf("RemoveRepositories(force=true) error: %v", err)
+	}
+}
+
+func TestRemoveRepositoriesIgnoresUnaffectedDirty(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Dirty up "web"; only remove "api". Should succeed without force —
+	// dirty checks only consider the targeted repos.
+	_ = os.WriteFile(filepath.Join(wsRoot, "branch", "web", "dirty.txt"), []byte("x"), 0o644)
+
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() error: %v", err)
+	}
+}
+
 func TestRemoveWithNestedBranchName(t *testing.T) {
 	wsRoot, repositories := setupTestProject(t, "api")
 	mgr := NewManager(git.New(), wsRoot)

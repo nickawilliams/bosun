@@ -182,11 +182,46 @@ func walkWorkspaces(path, root string, workspaces *[]string) {
 	}
 }
 
-// Remove removes a workspace: worktrees, local branches, remote branches.
-// repositories maps repository names to their source paths (needed to run git
-// worktree remove and branch delete against the source repository). Returns an
-// error if any repository has uncommitted changes (unless force is true).
+// Remove removes a workspace: every repo's worktree + branch, then the
+// workspace directory itself. repositories maps repo names to their
+// source paths (needed to run git worktree remove and branch delete
+// against the source repository). Refuses if any repository has
+// uncommitted changes unless force is true.
 func (m *Manager) Remove(ctx context.Context, name string, repositories []Repository, force bool) error {
+	wsPath := filepath.Join(m.workspaceRoot, name)
+
+	statuses, err := m.Status(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	// Remove every repo currently in the workspace via the shared
+	// per-repo cleanup. Passing the full status list as the target set
+	// removes them all.
+	targets := make([]string, len(statuses))
+	for i, s := range statuses {
+		targets[i] = s.Name
+	}
+	if err := m.RemoveRepositories(ctx, name, repositories, targets, force); err != nil {
+		return err
+	}
+
+	// Clean up workspace directory (and empty parent dirs).
+	if err := os.RemoveAll(wsPath); err != nil {
+		return fmt.Errorf("removing workspace directory: %w", err)
+	}
+	cleanEmptyParents(m.workspaceRoot, wsPath)
+
+	return nil
+}
+
+// RemoveRepositories removes the named repos from a workspace: each
+// repo's worktree, local branch, and remote branch. The workspace
+// directory itself stays. repositories supplies the source-path lookup
+// (same shape as Remove). Refuses if any of the named repos is dirty
+// unless force is true. Names that aren't currently in the workspace
+// are silently skipped.
+func (m *Manager) RemoveRepositories(ctx context.Context, name string, repositories []Repository, names []string, force bool) error {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 
 	statuses, err := m.Status(ctx, name)
@@ -200,10 +235,23 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 		repositoryPath[r.Name] = r.Path
 	}
 
-	// Check for dirty repositories unless force is set.
+	// Build the set of repo names to act on; intersect against repos
+	// actually present in the workspace.
+	targetSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		targetSet[n] = true
+	}
+	var targets []RepositoryStatus
+	for _, s := range statuses {
+		if targetSet[s.Name] {
+			targets = append(targets, s)
+		}
+	}
+
+	// Check for dirty repositories among the targets unless force is set.
 	if !force {
 		var dirty []string
-		for _, s := range statuses {
+		for _, s := range targets {
 			if s.Dirty {
 				dirty = append(dirty, s.Name)
 			}
@@ -217,7 +265,7 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 	}
 
 	// Remove worktrees and branches.
-	for _, s := range statuses {
+	for _, s := range targets {
 		srcPath, ok := repositoryPath[s.Name]
 		if !ok {
 			return fmt.Errorf("source repository path unknown for %q: provide it via repositories config", s.Name)
@@ -239,12 +287,6 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 			return fmt.Errorf("deleting branch in %s: %w", s.Name, err)
 		}
 	}
-
-	// Clean up workspace directory (and empty parent dirs).
-	if err := os.RemoveAll(wsPath); err != nil {
-		return fmt.Errorf("removing workspace directory: %w", err)
-	}
-	cleanEmptyParents(m.workspaceRoot, wsPath)
 
 	return nil
 }

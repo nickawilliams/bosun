@@ -446,20 +446,34 @@ the same branch name.
 
 ```
 bosun workspace create [--from-head] <name> <repositories...>
-bosun workspace add [--from-head] [<repositories...>]
-bosun workspace rm [--force] [<name>]
+bosun workspace delete [--force] [<name>]
+bosun workspace add    [--from-head] [<repositories...>]
+bosun workspace rm     [--force] [<repositories...>]
 ```
 
-- **create**: Create worktrees for each repository under
-  `<workspace_root>/<name>/`. By default branches from each repository's
-  default branch. `--from-head` branches from current HEAD instead.
+The verb pairs split by scope: **`create` / `delete`** operate on the
+workspace itself; **`add` / `rm`** operate on the repositories within
+an existing workspace.
+
+- **create**: Create a new workspace with worktrees for each repository
+  under `<workspace_root>/<name>/`. Branches from each repository's
+  default branch by default; `--from-head` branches from current HEAD.
+- **delete**: Delete a workspace entirely — remove every worktree, the
+  local + remote branch, and the workspace directory. Workspace name is
+  a positional shortcut or resolved via the standard chain
+  (`--workspace`, `BOSUN_WORKSPACE`, CWD, or interactive picker).
+  Refuses if any repository is dirty unless `--force`.
 - **add**: Add repositories to an existing workspace. Workspace resolved
-  via the standard chain (`--workspace`, `BOSUN_WORKSPACE`, CWD, or
-  interactive picker). Prompts for repositories if none given.
-- **rm**: Remove worktrees, delete local and remote branches. Workspace
-  name positional or resolved via the standard chain. Refuses if any
-  repository has uncommitted changes unless `--force`. (Per-repo status
-  is available via `bosun status` in a workspace.)
+  via the standard chain. Prompts for repositories if none given.
+  `--from-head` branches from current HEAD.
+- **rm**: Remove specific repositories from an existing workspace —
+  worktree, local branch, and remote branch — leaving the workspace
+  itself intact. Workspace resolved via the standard chain. Prompts to
+  multi-select if no repositories are given. Refuses if any named
+  repository is dirty unless `--force`.
+
+(Per-repo status across a workspace is available via `bosun status`
+when CWD'd inside one.)
 
 ### Compatibility with external worktree tools
 
