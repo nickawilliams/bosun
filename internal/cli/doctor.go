@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,18 +42,23 @@ func newDoctorCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			// Groups mirror MODEL.md phases: environment, project,
-			// integrations, CI/CD. Each check runs inline; the
-			// group's parent spinner provides activity feedback.
+			// Groups organize checks by kind: local environment,
+			// project configuration, and external integrations. Each
+			// check runs inline; the group's parent spinner provides
+			// activity feedback, and the per-check Spinner shows which
+			// check is currently in flight.
 			groups := []struct {
 				label  string
 				checks []healthCheck
 			}{
 				{"environment", environmentChecks()},
 				{"project", projectChecks()},
-				{"integrations", append(append(
-					issueTrackerChecks(), codeHostChecks()...), notificationChecks()...)},
-				{"CI/CD", cicdChecks()},
+				{"integrations", slices.Concat(
+					issueTrackerChecks(),
+					codeHostChecks(),
+					notificationChecks(),
+					cicdChecks(),
+				)},
 			}
 
 			passed, warned, failed := 0, 0, 0
@@ -385,45 +391,32 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 
 func cicdChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "config", Check: checkCICDConfig},
-		{Name: "auth", Check: checkCICDAuth},
+		{Name: "CI/CD", Check: checkCICD},
 	}
 }
 
-func checkCICDConfig(_ context.Context) (string, error) {
+func checkCICD(ctx context.Context) (string, error) {
 	provider := viper.GetString("cicd.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
-	// Wiring check is just the provider configuration. Per-workflow
-	// target presence is config detail visible via `bosun config`;
-	// auth is verified separately by checkCICDAuth.
-	return provider, nil
-}
-
-func checkCICDAuth(ctx context.Context) (string, error) {
-	provider := viper.GetString("cicd.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	pipeline, err := newCICD()
-	if err != nil {
+	if _, err := newCICD(); err != nil {
 		return "", fmt.Errorf("cannot initialize: %w", err)
 	}
-
-	// Use the code host to verify the GitHub token works, since the
-	// CI/CD adapter uses the same token.
+	// TODO(arch #28): provider-specific leak. The GitHub Actions
+	// adapter shares the code host's token, so cli verifies CI/CD
+	// auth by reaching into the code host — and the result string
+	// hardcodes "github actions" regardless of which CI/CD provider
+	// is configured. cicd.CICD should expose AuthTest returning a
+	// display string so the provider owns its auth verification and
+	// its identity in the result.
 	host, err := newCodeHost()
 	if err != nil {
 		return "", fmt.Errorf("cannot verify token: %w", err)
 	}
-
 	username, err := host.GetAuthenticatedUser(ctx)
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
-
-	_ = pipeline // validated by newCICD succeeding
 	return fmt.Sprintf("github actions → %s", username), nil
 }
