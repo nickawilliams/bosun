@@ -118,3 +118,26 @@ them short so the generated slugs stay a reasonable length.
   Termination").
 - No scope prefixes (`cli:`, `ui:`) and no trailing punctuation; the
   issue body carries the detail.
+
+## Polish-Before-Refactor Discipline
+
+When polish or feature work surfaces an architectural smell that's out
+of scope for the current branch, capture the discovery — don't fix it
+silently and don't expand scope. Paired action:
+
+1. **At the smell site**, drop a one-line TODO referencing the open
+   refactor ticket: `// TODO(arch #NN): <short smell name>`. Keep it
+   under 80 chars; the comment is a pointer, not the explanation.
+2. **In the refactor ticket**, append a one-line bullet describing the
+   discovery. The ticket holds the actual context; the inline TODO is
+   how a future reader of the code finds it.
+
+Both, not either. TODOs scatter without aggregate visibility; tickets
+are invisible at the point of patching. The pair covers both failure
+modes.
+
+**Non-negotiable:** don't *enlarge* a known leak. Patches that inherit
+the existing leak shape are fine when flagged with a TODO. Patches
+that add new provider-flavored helpers, new hardcoded provider
+formats, or new direct provider imports in `internal/cli/` are not —
+either route through the relevant interface or pause and discuss.
