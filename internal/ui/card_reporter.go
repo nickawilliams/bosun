@@ -121,6 +121,16 @@ func (r *cardReporter) Task(title string, fn func() error) error {
 	return RunCard(title, fn)
 }
 
+// Spinner at the top level has no containing group to show a child
+// spinner in, so it just runs fn synchronously. The use case for
+// Spinner — "show a running indicator for this work, then let the
+// caller render the result" — is meaningful inside a Group (where
+// group.Spinner overrides this). Outside a group the caller can
+// reach for RunCard family directly if they want top-level animation.
+func (r *cardReporter) Spinner(_ string, fn func() error) error {
+	return fn()
+}
+
 // Group renders a Timeline Card with children via a single BubbleTea
 // program that animates both parent and child spinners simultaneously.
 // The callback runs in a goroutine; its Reporter emissions become

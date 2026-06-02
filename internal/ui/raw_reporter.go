@@ -34,6 +34,12 @@ func (r *rawReporter) Task(_ string, fn func() error) error {
 	return fn()
 }
 
+// Spinner runs fn synchronously without an indicator — matches Task's
+// raw-mode behavior of preserving execution while suppressing UI.
+func (r *rawReporter) Spinner(_ string, fn func() error) error {
+	return fn()
+}
+
 // Group runs fn synchronously without animation. The inner Reporter
 // is another rawReporter so nested emissions are also suppressed.
 func (r *rawReporter) Group(_ string, fn func(g Reporter)) {

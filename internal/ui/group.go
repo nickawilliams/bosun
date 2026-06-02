@@ -203,6 +203,26 @@ func (g *group) Task(title string, fn func() error) error {
 	return err
 }
 
+// Spinner shows an inline running indicator at the child level for
+// title while fn executes, then clears the indicator without emitting
+// any terminal card — the caller renders the final result. Counts
+// are NOT incremented; the caller's subsequent Complete/Fail/Skip
+// (or value-form variant) drives count aggregation.
+func (g *group) Spinner(title string, fn func() error) error {
+	doneCh := make(chan error, 1)
+	g.msgCh <- groupTaskStartMsg{title: title, indent: g.indent}
+	go func() {
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		doneCh <- err
+		// Empty rendered string signals the message handler to clear
+		// the active task without appending a child card.
+		g.msgCh <- groupTaskDoneMsg{err: err, rendered: "", state: CardSuccess}
+	}()
+	return <-doneCh
+}
+
 func (g *group) Details(heading string, fields Fields) {
 	if len(fields) == 0 {
 		return
@@ -360,13 +380,20 @@ func (m *groupModel) processMsg(msg groupMsg) {
 
 	case groupTaskDoneMsg:
 		if m.current.activeTask != nil {
-			m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
-			m.current.activeTask = nil
-			if msg.err != nil {
-				m.current.counts.failed++
-			} else {
-				m.current.counts.success++
+			// Empty rendered = spinner-only (group.Spinner). Clear the
+			// active task and skip both the child append and the count
+			// update — the caller will emit its own terminal card via a
+			// follow-up Complete/Fail/Skip (or value-form variant),
+			// which handles counts through its own message path.
+			if msg.rendered != "" {
+				m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
+				if msg.err != nil {
+					m.current.counts.failed++
+				} else {
+					m.current.counts.success++
+				}
 			}
+			m.current.activeTask = nil
 		}
 
 	case groupBeginMsg:

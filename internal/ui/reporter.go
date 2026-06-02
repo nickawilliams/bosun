@@ -66,6 +66,15 @@ type Reporter interface {
 	// finalizes as success or failure. Returns fn's error.
 	Task(title string, fn func() error) error
 
+	// Spinner runs fn while showing a running indicator for the
+	// named work item, then clears the indicator without emitting
+	// any terminal card. The caller is responsible for emitting the
+	// final state via Complete / Fail / Skip (or their value-form
+	// variants). Use when the work's result has a non-default
+	// rendering shape that doesn't fit Task's auto-success /
+	// auto-failure card.
+	Spinner(title string, fn func() error) error
+
 	// --- Grouped output ---
 
 	// Group renders a Timeline Card with children. The parent header
