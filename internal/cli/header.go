@@ -34,13 +34,27 @@ func setTitleResolver(cmd *cobra.Command, fn func(CommandContext) string) {
 // resolveCommandContext. Uses the already-resolved values from cc
 // so nothing is re-resolved.
 func initHeader(cmd *cobra.Command, cc CommandContext) {
-	var workContext string
-	if cc.Issue != "" {
-		workContext = cc.Issue
-	} else if cc.Workspace != "" {
-		workContext = cc.Workspace
-	}
+	workContext := workContextSegment(cc)
 	ui.SetContext(cc.Project, workContext, commandTitle(cmd, cc))
+}
+
+// workContextSegment chooses the breadcrumb's work-context segment.
+// Prefers the resolved issue key, then an issue key extracted from the
+// workspace name (so commands that don't register --issue — like the
+// workspace subcommands — still render a compact "EX-1234" instead of
+// the full directory name), and finally the raw workspace name when no
+// issue identifier is present.
+func workContextSegment(cc CommandContext) string {
+	if cc.Issue != "" {
+		return cc.Issue
+	}
+	if cc.Workspace == "" {
+		return ""
+	}
+	if issue := extractIssue(cc.Workspace); issue != "" {
+		return issue
+	}
+	return cc.Workspace
 }
 
 // commandTitle returns the human-readable display title for a
