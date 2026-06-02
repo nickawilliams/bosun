@@ -86,14 +86,16 @@ func newDoctorCmd() *cobra.Command {
 // --- Providers ---
 
 // emitCheckResult routes a health check outcome through the group
-// Reporter. Detail formatting matches the spec's inline style
-// (e.g. "tracker: authenticated as nick", "code host: auth failed").
+// Reporter, rendering every state as a one-line `glyph name: detail`
+// row so passing, warning, and failing checks share the same visual
+// shape. Multi-line detail spills below the heading as an indented
+// muted block.
 func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, passed, warned, failed *int) {
 	if checkErr != nil {
-		label := fmt.Sprintf("%s: %s", hc.Name, checkErr.Error())
+		reason := checkErr.Error()
 		if errors.Is(checkErr, errNotConfigured) {
 			*warned++
-			g.Skip(label)
+			g.SkipValue(hc.Name, reason)
 			return
 		}
 		if hc.Required {
@@ -101,7 +103,7 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		} else {
 			*warned++
 		}
-		g.Fail(label)
+		g.FailValue(hc.Name, reason)
 		return
 	}
 	*passed++
@@ -112,7 +114,7 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 	if strings.Contains(detail, "\n") {
 		g.CompleteDetail(hc.Name, strings.Split(detail, "\n"))
 	} else {
-		g.Selected(hc.Name, detail)
+		g.CompleteValue(hc.Name, detail)
 	}
 }
 
@@ -309,29 +311,16 @@ func checkNotificationConfig(_ context.Context) (string, error) {
 		auth = "token"
 	}
 
-	detail := provider + " (auth: " + auth + ")"
-	if auth == "local" {
-		ws := viper.GetString("notification.workspace")
-		if ws == "" {
-			return "", fmt.Errorf("notification.workspace not set (required for local auth)")
-		}
-		detail += "\nworkspace: " + ws
+	// Wiring check: when the configured auth mode requires extra
+	// inputs, those inputs must be present. Channel reachability is
+	// verified by checkNotificationChannels; auth by
+	// checkNotificationAuth. This check just confirms the configured
+	// shape is internally consistent.
+	if auth == "local" && viper.GetString("notification.workspace") == "" {
+		return "", fmt.Errorf("notification.workspace not set (required for local auth)")
 	}
 
-	var channels []string
-	if ch := viper.GetString("notification.channel_review"); ch != "" {
-		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
-	}
-	if ch := viper.GetString("notification.channel_release"); ch != "" {
-		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
-	}
-	if len(channels) > 0 {
-		detail += "\nchannels: " + strings.Join(channels, ", ")
-	} else {
-		detail += "\nno channels configured"
-	}
-
-	return detail, nil
+	return fmt.Sprintf("%s (auth: %s)", provider, auth), nil
 }
 
 func checkNotificationAuth(ctx context.Context) (string, error) {
@@ -401,31 +390,10 @@ func checkCICDConfig(_ context.Context) (string, error) {
 	if provider == "" {
 		return "", errNotConfigured
 	}
-
-	var details []string
-	details = append(details, "provider: "+provider)
-
-	if up := viper.GetString("cicd.workflows.preview.up.target"); up != "" {
-		details = append(details, "preview up: "+up)
-	}
-
-	if down := viper.GetString("cicd.workflows.preview.down.target"); down != "" {
-		details = append(details, "preview down: "+down)
-	}
-
-	release := viper.Get("cicd.workflows.release.target")
-	switch v := release.(type) {
-	case string:
-		details = append(details, "release: "+v)
-	case map[string]any:
-		details = append(details, fmt.Sprintf("release: %d repos configured", len(v)))
-	}
-
-	if input := stageInputName("preview.up", "services"); input != "" {
-		details = append(details, "service input: "+input)
-	}
-
-	return strings.Join(details, "\n"), nil
+	// Wiring check is just the provider configuration. Per-workflow
+	// target presence is config detail visible via `bosun config`;
+	// auth is verified separately by checkCICDAuth.
+	return provider, nil
 }
 
 func checkCICDAuth(ctx context.Context) (string, error) {
