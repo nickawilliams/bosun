@@ -385,8 +385,8 @@ func checkNotificationChannels(ctx context.Context) (string, error) {
 
 func cicdChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "CI/CD config", Check: checkCICDConfig},
-		{Name: "CI/CD auth", Check: checkCICDAuth},
+		{Name: "config", Check: checkCICDConfig},
+		{Name: "auth", Check: checkCICDAuth},
 	}
 }
 
