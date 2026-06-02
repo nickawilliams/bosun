@@ -423,8 +423,8 @@ func (c *Card) renderInner(glyph string) string {
 
 	if c.value != "" {
 		valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		lines = append(lines, titleStyle.Render(c.title+":")+
-			" "+valueStyle.Render(c.value))
+		lines = append(lines, titleStyle.Render(c.title)+
+			valueStyle.Render(" · "+c.value))
 	} else if c.title != "" {
 		lines = append(lines, titleStyle.Render(c.title))
 	}
