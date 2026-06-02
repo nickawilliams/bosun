@@ -159,8 +159,7 @@ func codeHostChecks() []healthCheck {
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "notification config", Check: checkNotificationConfig},
-		{Name: "notification auth", Check: checkNotificationAuth},
+		{Name: "notification", Check: checkNotification},
 		{Name: "notification channels", Check: checkNotificationChannels},
 	}
 }
@@ -311,30 +310,13 @@ func checkCodeHost(ctx context.Context) (string, error) {
 	return fmt.Sprintf("github → %s", username), nil
 }
 
-func checkNotificationConfig(_ context.Context) (string, error) {
-	provider := viper.GetString("notification.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	auth := viper.GetString("notification.auth")
-	if auth == "" {
-		auth = "token"
-	}
-
-	// Wiring check: when the configured auth mode requires extra
-	// inputs, those inputs must be present. Channel reachability is
-	// verified by checkNotificationChannels; auth by
-	// checkNotificationAuth. This check just confirms the configured
-	// shape is internally consistent.
-	if auth == "local" && viper.GetString("notification.workspace") == "" {
-		return "", fmt.Errorf("notification.workspace not set (required for local auth)")
-	}
-
-	return fmt.Sprintf("%s (auth: %s)", provider, auth), nil
-}
-
-func checkNotificationAuth(ctx context.Context) (string, error) {
+// checkNotification verifies the notification provider is configured
+// and that we can authenticate. After the earlier config-row trim,
+// the standalone config check became a strict subset of the auth
+// check (newNotifier validates the same local-auth-requires-workspace
+// rule), so the two are merged here. Mirrors the Issue Tracker /
+// Code Host one-check shape.
+func checkNotification(ctx context.Context) (string, error) {
 	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return "", errNotConfigured
@@ -351,7 +333,7 @@ func checkNotificationAuth(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
 
-	return fmt.Sprintf("authenticated as %s", user), nil
+	return fmt.Sprintf("%s → %s", provider, user), nil
 }
 
 func checkNotificationChannels(ctx context.Context) (string, error) {
