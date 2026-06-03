@@ -45,7 +45,7 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
-	emitFormPrologue(fields)
+	prologueLines := emitFormPrologue(fields)
 	err := buildForm(fields).Run()
 	if errors.Is(err, huh.ErrUserAborted) {
 		// BubbleTea leaves a trailing blank line on exit; move the
@@ -53,6 +53,16 @@ func runForm(fields ...huh.Field) error {
 		// overwrites it rather than creating double spacing.
 		_, _ = fmt.Fprint(ui.Output(), "\x1b[A")
 		return ErrCancelled
+	}
+	// Undo the prologue lines so any wrapping PrintRewindable's rewind
+	// closure sees the cursor in the same position as if no form had
+	// run. Without this, multi-field forms leave their prologue spacer
+	// above the form's render area, and the rewind (which moves up by
+	// the card's line count only) can't reach back over it — leaving
+	// a stranded spacer above the card that the next emit then stacks
+	// against.
+	if prologueLines > 0 {
+		fmt.Fprintf(ui.Output(), "\x1b[%dF\x1b[J", prologueLines)
 	}
 	return err
 }
@@ -64,8 +74,12 @@ func runForm(fields ...huh.Field) error {
 // snapshot stays in visual parity with what a real interactive run
 // produces. Skips runForm's interactivity guard since snapshots are
 // intentionally non-interactive.
+//
+// Unlike runForm, the snapshot doesn't undo the prologue — the
+// caller wants the leading spacer visible in the captured output,
+// not cleaned up.
 func snapshotForm(fields ...huh.Field) {
-	emitFormPrologue(fields)
+	_ = emitFormPrologue(fields)
 	f := buildForm(fields)
 	_ = f.Init()
 	fmt.Fprint(ui.Output(), f.View())
@@ -99,14 +113,19 @@ func buildForm(fields []huh.Field) *huh.Form {
 // stay on the existing FlushSpacer behavior — only emit if one is
 // pending — since a leading row would create awkward whitespace
 // above a bare Confirm with no description.
-func emitFormPrologue(fields []huh.Field) {
+//
+// Returns the number of stdout lines actually written so runForm can
+// undo them on exit, restoring the cursor to its pre-runForm position
+// for any wrapping rewind.
+func emitFormPrologue(fields []huh.Field) int {
 	if len(fields) > 1 {
 		ui.ClearSpacer()
 		fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
 		ui.RequestSpacer()
-	} else {
-		ui.FlushSpacer()
+		return 1
 	}
+	ui.FlushSpacer()
+	return 0
 }
 
 // newConfirm creates a huh Confirm field with app defaults (left-aligned buttons).
