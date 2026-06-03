@@ -267,14 +267,18 @@ func (g *group) aggregate() CardState {
 }
 
 func aggregateCounts(c groupCounts) CardState {
+	// Worst child state dominates: failures first, then skipped/warn
+	// (so warnings propagate visibly to the group glyph even when
+	// most children succeeded), then success. The empty group falls
+	// through to CardSuccess as a no-op default.
 	if c.failed > 0 {
 		return CardFailed
 	}
-	if c.success > 0 {
-		return CardSuccess
-	}
 	if c.skipped > 0 {
 		return CardSkipped
+	}
+	if c.success > 0 {
+		return CardSuccess
 	}
 	return CardSuccess
 }
