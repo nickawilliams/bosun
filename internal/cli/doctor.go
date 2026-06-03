@@ -86,42 +86,18 @@ func newDoctorCmd() *cobra.Command {
 				})
 			}
 
-			// Summary card mirrors the project/workspace status summary
-			// convention: muted total + comma-joined colored breakdown
-			// of non-zero categories. The CardInfo glyph symbol stays
-			// the same; its color reflects the aggregate outcome (green
-			// when everything passed, warning when anything warned but
-			// nothing hard-failed, error when anything failed) so the
-			// rollup state is readable from the row glyph alone.
-			glyphColor := ui.Palette.Success
-			if failed > 0 {
-				glyphColor = ui.Palette.Error
-			} else if warned > 0 {
-				glyphColor = ui.Palette.Warning
-			}
-
-			mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-			successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-			warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-			errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-
+			// Summary card — segments ordered ascending by severity
+			// so the last non-zero one (failed > warned > passed)
+			// drives the glyph color via the order-based rollup.
 			total := passed + warned + failed
-			parts := []string{
-				mutedStyle.Render(fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks"))),
-			}
-			if passed > 0 {
-				parts = append(parts, successStyle.Render(fmt.Sprintf("%d passed", passed)))
-			}
-			if warned > 0 {
-				parts = append(parts, warningStyle.Render(fmt.Sprintf("%d %s", warned, pluralize(warned, "warning", "warnings"))))
-			}
-			if failed > 0 {
-				parts = append(parts, errorStyle.Render(fmt.Sprintf("%d failed", failed)))
-			}
-			ui.NewCard(ui.CardInfo, strings.Join(parts, mutedStyle.Render(", "))).
-				PreserveCase().
-				GlyphColor(glyphColor).
-				Print()
+			r.Summary(
+				fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+				[]ui.SummarySegment{
+					{Count: passed, Label: "passed", Color: ui.Palette.Success},
+					{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+					{Count: failed, Label: "failed", Color: ui.Palette.Error},
+				},
+			)
 
 			return nil
 		},
