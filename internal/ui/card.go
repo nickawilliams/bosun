@@ -105,6 +105,7 @@ type Card struct {
 	tight         bool // suppress comfy spacing (e.g. single-field prompts)
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
+	alignWidth    int  // pad styled title to this visual width before " · " when Value is set; 0 = natural
 
 	// breadcrumb is the root-header component. Non-nil only for
 	// CardRoot; lazy-initialized when any breadcrumb-related
@@ -209,10 +210,24 @@ func (c *Card) Breadcrumb(s string) *Card {
 	return c
 }
 
-// Value sets an inline value rendered after the title, separated by a colon.
-// The value is not title-cased and uses muted non-bold style.
+// Value sets an inline value rendered after the title, separated by
+// a muted middle-dot. The value is not title-cased and uses muted
+// non-bold style. When the value contains newlines, the first line
+// renders inline and subsequent lines indent to align under the
+// first value character.
 func (c *Card) Value(s string) *Card {
 	c.value = s
+	return c
+}
+
+// AlignWidth sets a target visual column width for the title when
+// combined with Value. The title is padded with spaces so the " · "
+// separator (and the first character of the value) lines up with
+// sibling cards using the same alignment width. If the title is
+// already wider than w, alignment has no effect on that card. Zero
+// (the default) means natural title width — no padding.
+func (c *Card) AlignWidth(w int) *Card {
+	c.alignWidth = w
 	return c
 }
 
@@ -423,8 +438,34 @@ func (c *Card) renderInner(glyph string) string {
 
 	if c.value != "" {
 		valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		lines = append(lines, titleStyle.Render(c.title)+
-			valueStyle.Render(" · "+c.value))
+		titleRendered := titleStyle.Render(c.title)
+
+		// Title column alignment: when c.alignWidth is set and exceeds
+		// the title's natural visual width, pad the styled title with
+		// spaces so the " · " separator lines up with sibling cards.
+		naturalW := lipgloss.Width(titleRendered)
+		alignW := c.alignWidth
+		if alignW < naturalW {
+			alignW = naturalW
+		}
+		if alignW > naturalW {
+			titleRendered += strings.Repeat(" ", alignW-naturalW)
+		}
+
+		// Multi-line value support: first line renders inline after
+		// the title separator; subsequent lines align under the first
+		// value character (4-char conn prefix is added by the outer
+		// loop, so we add alignW + 3 spaces here so total leading
+		// padding matches the first line's value column).
+		valueLines := strings.Split(c.value, "\n")
+		lines = append(lines, titleRendered+
+			valueStyle.Render(" · "+valueLines[0]))
+		if len(valueLines) > 1 {
+			contPad := strings.Repeat(" ", alignW+3)
+			for _, line := range valueLines[1:] {
+				lines = append(lines, contPad+valueStyle.Render(line))
+			}
+		}
 	} else if c.title != "" {
 		lines = append(lines, titleStyle.Render(c.title))
 	}

@@ -129,8 +129,8 @@ func TestRender_ValueInline(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("Render() produced no lines")
 	}
-	if !containsAll(lines[0], "✓", "Label:", "val") {
-		t.Errorf("first line should have glyph, title:, and value; got %q", lines[0])
+	if !containsAll(lines[0], "✓", "Label", "·", "val") {
+		t.Errorf("first line should have glyph, title, dot separator, and value; got %q", lines[0])
 	}
 }
 
