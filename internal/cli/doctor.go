@@ -61,6 +61,15 @@ func newDoctorCmd() *cobra.Command {
 				)},
 			}
 
+			// Pre-compute the global title alignment width across every
+			// check in every group so all rows in the doctor output
+			// share the same value column.
+			var allChecks []healthCheck
+			for _, dg := range groups {
+				allChecks = append(allChecks, dg.checks...)
+			}
+			alignWidth := maxCheckTitleWidth(allChecks)
+
 			passed, warned, failed := 0, 0, 0
 			for _, dg := range groups {
 				r.Group(dg.label, func(g ui.Reporter) {
@@ -71,7 +80,7 @@ func newDoctorCmd() *cobra.Command {
 							detail, err = hc.Check(ctx)
 							return err
 						})
-						emitCheckResult(g, hc, detail, checkErr, &passed, &warned, &failed)
+						emitCheckResult(g, hc, detail, checkErr, alignWidth, &passed, &warned, &failed)
 					}
 				})
 			}
@@ -97,16 +106,18 @@ func newDoctorCmd() *cobra.Command {
 // --- Providers ---
 
 // emitCheckResult routes a health check outcome through the group
-// Reporter, rendering every state as a one-line `glyph name: detail`
+// Reporter, rendering every state as a one-line `glyph name · detail`
 // row so passing, warning, and failing checks share the same visual
-// shape. Multi-line detail spills below the heading as an indented
-// muted block.
-func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, passed, warned, failed *int) {
+// shape. Multi-line details render inline after the separator, with
+// continuation lines aligned under the first value character. The
+// alignWidth pads every row's title to a common column so the value
+// dividers line up across siblings.
+func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, alignWidth int, passed, warned, failed *int) {
 	if checkErr != nil {
 		reason := checkErr.Error()
 		if errors.Is(checkErr, errNotConfigured) {
 			*warned++
-			g.SkipValue(hc.Name, reason)
+			g.SkipValue(hc.Name, reason, alignWidth)
 			return
 		}
 		if hc.Required {
@@ -114,7 +125,7 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		} else {
 			*warned++
 		}
-		g.FailValue(hc.Name, reason)
+		g.FailValue(hc.Name, reason, alignWidth)
 		return
 	}
 	*passed++
@@ -122,11 +133,24 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		g.Complete(hc.Name)
 		return
 	}
-	if strings.Contains(detail, "\n") {
-		g.CompleteDetail(hc.Name, strings.Split(detail, "\n"))
-	} else {
-		g.CompleteValue(hc.Name, detail)
+	g.CompleteValue(hc.Name, detail, alignWidth)
+}
+
+// maxCheckTitleWidth computes the maximum visual width across the
+// title-cased rendering of a check group's names. The result is
+// passed as the alignWidth to the Reporter value-form methods so
+// every check in the group renders with the same title column.
+func maxCheckTitleWidth(checks []healthCheck) int {
+	var maxW int
+	for _, hc := range checks {
+		// titleCase only uppercases fully-lowercase words; visual
+		// width is identical to the input string width since no
+		// characters are added or removed.
+		if w := len(hc.Name); w > maxW {
+			maxW = w
+		}
 	}
+	return maxW
 }
 
 func environmentChecks() []healthCheck {
