@@ -119,24 +119,35 @@ func (g *group) CompleteDetail(label string, items []string) {
 	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Muted(items...))
 }
 
-func (g *group) CompleteValue(label, value string) {
-	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Value(value))
+func (g *group) CompleteValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardSuccess, alignedValueCard(CardSuccess, label, value, alignWidth))
 }
 
 func (g *group) Skip(label string) {
 	g.sendChild(CardSkipped, NewCard(CardSkipped, label))
 }
 
-func (g *group) SkipValue(label, value string) {
-	g.sendChild(CardSkipped, NewCard(CardSkipped, label).Value(value))
+func (g *group) SkipValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardSkipped, alignedValueCard(CardSkipped, label, value, alignWidth))
 }
 
 func (g *group) Fail(label string) {
 	g.sendChild(CardFailed, NewCard(CardFailed, label))
 }
 
-func (g *group) FailValue(label, value string) {
-	g.sendChild(CardFailed, NewCard(CardFailed, label).Value(value))
+func (g *group) FailValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardFailed, alignedValueCard(CardFailed, label, value, alignWidth))
+}
+
+// alignedValueCard constructs a value-form card with optional title
+// alignment. Pulled out so the three value-form group methods share
+// the same construction logic.
+func alignedValueCard(state CardState, label, value string, alignWidth []int) *Card {
+	card := NewCard(state, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	return card
 }
 
 func (g *group) Success(format string, args ...any) {

@@ -19,20 +19,24 @@ type Reporter interface {
 	// detail items beneath it.
 	CompleteDetail(label string, items []string)
 	// CompleteValue marks a step as complete with a brief inline
-	// value, rendered as "label: value" on one line — label in the
+	// value, rendered as "label · value" on one line — label in the
 	// title style, value muted. Use when a step's result is a single
 	// concise datum (a version, a path, a resolved identifier).
-	CompleteValue(label, value string)
+	// Multi-line values are supported: the first line renders
+	// inline, subsequent lines align under the first value character.
+	// An optional alignWidth pads the label to a fixed visual column
+	// so sibling cards line up; 0 (or omitted) means natural width.
+	CompleteValue(label, value string, alignWidth ...int)
 	// Skip marks a step as intentionally skipped.
 	Skip(label string)
 	// SkipValue marks a step as skipped with a brief inline reason,
 	// rendered in the same shape as CompleteValue.
-	SkipValue(label, value string)
+	SkipValue(label, value string, alignWidth ...int)
 	// Fail marks a step as failed without aborting the command.
 	Fail(label string)
 	// FailValue marks a step as failed with a brief inline reason,
 	// rendered in the same shape as CompleteValue.
-	FailValue(label, value string)
+	FailValue(label, value string, alignWidth ...int)
 
 	// --- Free-form messages ---
 

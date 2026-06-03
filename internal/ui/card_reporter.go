@@ -35,10 +35,15 @@ func (r *cardReporter) CompleteDetail(label string, items []string) {
 }
 
 // CompleteValue emits a CardSuccess with the label as title and the
-// value rendered inline on the same line ("label: value"), label in
-// title style, value muted.
-func (r *cardReporter) CompleteValue(label, value string) {
-	NewCard(CardSuccess, label).Value(value).Print()
+// value rendered inline on the same line ("label · value"), label in
+// title style, value muted. Optional alignWidth pads the title to a
+// fixed visual column for alignment with sibling cards.
+func (r *cardReporter) CompleteValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardSuccess, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
 }
 
 // Skip emits a CardSkipped for a step that was not attempted.
@@ -48,8 +53,12 @@ func (r *cardReporter) Skip(label string) {
 
 // SkipValue emits a CardSkipped with the label as title and the value
 // inline on the same line — same shape as CompleteValue.
-func (r *cardReporter) SkipValue(label, value string) {
-	NewCard(CardSkipped, label).Value(value).Print()
+func (r *cardReporter) SkipValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardSkipped, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
 }
 
 // Fail emits a CardFailed for a step that errored.
@@ -59,8 +68,12 @@ func (r *cardReporter) Fail(label string) {
 
 // FailValue emits a CardFailed with the label as title and the value
 // inline on the same line — same shape as CompleteValue.
-func (r *cardReporter) FailValue(label, value string) {
-	NewCard(CardFailed, label).Value(value).Print()
+func (r *cardReporter) FailValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardFailed, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
 }
 
 // Success emits a CardSuccess with the formatted message as title.

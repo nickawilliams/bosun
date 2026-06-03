@@ -13,11 +13,11 @@ func NewRawReporter() Reporter { return &rawReporter{} }
 func (r *rawReporter) Header(_ string, _ ...string)        {}
 func (r *rawReporter) Complete(_ string)                   {}
 func (r *rawReporter) CompleteDetail(_ string, _ []string) {}
-func (r *rawReporter) CompleteValue(_ string, _ string)    {}
+func (r *rawReporter) CompleteValue(_, _ string, _ ...int) {}
 func (r *rawReporter) Skip(_ string)                       {}
-func (r *rawReporter) SkipValue(_ string, _ string)        {}
+func (r *rawReporter) SkipValue(_, _ string, _ ...int)     {}
 func (r *rawReporter) Fail(_ string)                       {}
-func (r *rawReporter) FailValue(_ string, _ string)        {}
+func (r *rawReporter) FailValue(_, _ string, _ ...int)     {}
 func (r *rawReporter) Success(_ string, _ ...any)    {}
 func (r *rawReporter) Warning(_ string, _ ...any)    {}
 func (r *rawReporter) Info(_ string, _ ...any)       {}
