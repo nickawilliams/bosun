@@ -150,17 +150,17 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		if reason == "" {
 			reason = checkErr.Error()
 		}
-		if errors.Is(checkErr, errNotConfigured) {
-			*warned++
-			g.SkipValue(hc.Name, reason, alignWidth)
+		// Required failures get the hard-fail glyph (✗) and counter;
+		// anything else — not-required failures and errNotConfigured —
+		// counts as a warning and uses the warn glyph (!) so the row's
+		// visible state matches the summary count category.
+		if hc.Required && !errors.Is(checkErr, errNotConfigured) {
+			*failed++
+			g.FailValue(hc.Name, reason, alignWidth)
 			return
 		}
-		if hc.Required {
-			*failed++
-		} else {
-			*warned++
-		}
-		g.FailValue(hc.Name, reason, alignWidth)
+		*warned++
+		g.SkipValue(hc.Name, reason, alignWidth)
 		return
 	}
 	*passed++
