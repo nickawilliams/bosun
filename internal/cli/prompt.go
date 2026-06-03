@@ -129,26 +129,12 @@ func promptRequired(label string) string {
 	return value
 }
 
-// promptConfirm shows a yes/no confirmation. Returns true if confirmed.
-// Defaults to the provided value. Returns (defaultVal, nil) in
-// non-interactive mode. Returns ErrCancelled if the user presses ctrl+c.
+// promptConfirm shows a yes/no confirmation as a Dialog with the
+// label as its title. Returns the user's choice (or the default in
+// non-interactive mode). Returns ErrCancelled if the user presses
+// ctrl+c.
 func promptConfirm(label string, defaultVal bool) (bool, error) {
-	if !isInteractive() {
-		return defaultVal, nil
-	}
-
-	confirmed := defaultVal
-	err := runForm(
-		newConfirm().
-			Title(label).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirmed),
-	)
-	if err != nil {
-		return defaultVal, err
-	}
-	return confirmed, nil
+	return NewDialog(label).Default(defaultVal).Show()
 }
 
 // promptValue displays a prompt with a default value.

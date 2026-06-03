@@ -483,35 +483,29 @@ func demoPlanNoWork(cmd *cobra.Command) {
 
 // --- Helpers ---
 
-// demoContinue shows a gate card between demo sections. The title
-// names the upcoming batch of components. When first is true, the
-// body invites the user to start; otherwise it gives them a moment
-// to review what just rendered. After the user chooses Continue, the
-// card stays on screen (rewound to its title only) as a section
-// heading for the output that follows.
+// demoContinue shows a gate card between demo sections via the
+// Dialog component. The title names the upcoming batch of
+// components; the body invites review or starts the run. After
+// the user chooses Continue, the dialog is gone and a section
+// heading card replaces it for the output that follows.
 func demoContinue(title string, first bool) error {
 	body := "Review the output above, then continue when ready."
 	if first {
 		body = "Each section pauses so you can review at your own pace."
 	}
 
-	confirmed := true
-	rewind := ui.NewCard(ui.CardInput, title).
-		Muted(body, "").
-		Tight().PrintRewindable()
-	if err := runForm(
-		newConfirm().
-			Affirmative("Continue").
-			Negative("Stop").
-			Value(&confirmed),
-	); err != nil {
+	confirmed, err := NewDialog(title).
+		Description(body).
+		Affirmative("Continue").
+		Negative("Stop").
+		Show()
+	if err != nil {
 		return err
 	}
-	rewind()
 	if !confirmed {
 		return ErrCancelled
 	}
-	// Re-print the title as a section heading (no body, no form).
+	// Re-print the title as a section heading for the output that follows.
 	ui.NewCard(ui.CardInfo, title).Print()
 	return nil
 }
