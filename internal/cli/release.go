@@ -31,26 +31,20 @@ func newReleaseCmd() *cobra.Command {
 			// --- Pre-flight: migration confirmation ---
 			migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
 			if !migrationsDone {
-				if isInteractive() {
-					var confirmed bool
-					rewind := ui.NewCard(ui.CardInput, "have any required database migrations been run?").Tight().PrintRewindable()
-					if err := runForm(
-						newConfirm().
-							Affirmative("Yes").
-							Negative("No").
-							Value(&confirmed),
-					); err != nil {
-						return err
-					}
-					rewind()
-					if !confirmed {
-						ui.Skip("run migrations first, then use --migrations-done")
-						return nil
-					}
-					ui.Complete("migrations confirmed")
-				} else {
+				if !isInteractive() {
 					return fmt.Errorf("use --migrations-done to confirm migrations have been run")
 				}
+				confirmed, err := NewDialog("have any required database migrations been run?").
+					Default(false).
+					Show()
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					ui.Skip("run migrations first, then use --migrations-done")
+					return nil
+				}
+				ui.Complete("migrations confirmed")
 			} else {
 				ui.Saved("migrations confirmed", "--migrations-done")
 			}
