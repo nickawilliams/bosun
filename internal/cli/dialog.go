@@ -81,7 +81,7 @@ func (d *Dialog) Show() (bool, error) {
 		return d.defaultYes, nil
 	}
 
-	card := ui.NewCard(ui.CardInput, d.title)
+	card := ui.NewCard(ui.CardInput, d.title).AccentBody()
 	if d.description != "" {
 		card = card.Muted(d.description, "")
 	}

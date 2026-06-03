@@ -106,6 +106,7 @@ type Card struct {
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
 	alignWidth    int  // pad styled title to this visual width before " · " when Value is set; 0 = natural
+	accentBody    bool // render body-line connectors in Palette.Accent rather than the default Palette.Recessed
 
 	// breadcrumb is the root-header component. Non-nil only for
 	// CardRoot; lazy-initialized when any breadcrumb-related
@@ -228,6 +229,17 @@ func (c *Card) Value(s string) *Card {
 // (the default) means natural title width — no padding.
 func (c *Card) AlignWidth(w int) *Card {
 	c.alignWidth = w
+	return c
+}
+
+// AccentBody flips the body-line connector color from the default
+// recessed timeline gray to Palette.Accent. Use when this card is
+// the heading of a single-input active prompt and the card body +
+// the form below it should read as one continuous accent-colored
+// section (e.g., Dialog confirmations). Multi-input forms should
+// leave this default so only the focused field renders in accent.
+func (c *Card) AccentBody() *Card {
+	c.accentBody = true
 	return c
 }
 
@@ -609,14 +621,14 @@ func (c *Card) glyph() string {
 }
 
 // renderConnector returns the styled left-gutter connector for this
-// card's continuation lines. CardInput cards use the active-input
-// accent so the body lines under a prompt visually belong to the
-// active section instead of looking like a recessed gap between
-// the glyph row and whatever follows (e.g., huh form buttons).
-// Other states stay on the recessed timeline gray.
+// card's continuation lines. Defaults to the recessed timeline gray
+// so most cards' body lines visually recede behind their glyph row.
+// Cards that opt in via AccentBody() use Palette.Accent instead —
+// used by Dialog and similar single-input prompts where the whole
+// card-plus-form reads as one continuous active section.
 func (c *Card) renderConnector() string {
 	color := Palette.Recessed
-	if c.state == CardInput {
+	if c.accentBody {
 		color = Palette.Accent
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(cardConnector)
