@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"charm.land/huh/v2"
@@ -29,6 +30,7 @@ func newDemoCmd() *cobra.Command {
 				demoItemCard()
 				demoPlanCardStates()
 				demoFormStatic()
+				demoSummary()
 				return nil
 			}
 
@@ -60,6 +62,13 @@ func newDemoCmd() *cobra.Command {
 			demoPlanApply(cmd)
 			demoPlanDryRun(cmd)
 			demoPlanNoWork(cmd)
+
+			if err := demoContinue("Summary", false); err != nil {
+				return err
+			}
+			if err := demoSummaryInteractive(); err != nil {
+				return err
+			}
 
 			return nil
 		},
@@ -159,6 +168,23 @@ func demoPlanCardStates() {
 	f.Init()
 	fmt.Print(f.View())
 	fmt.Print("\n\n")
+}
+
+// demoSummary renders one Reporter.Summary card with a mixed
+// breakdown so the colored segments and the order-based glyph
+// rollup are both visible at a glance. Sits at the end of the
+// static demo since the summary card is conceptually an
+// end-of-run rollup.
+func demoSummary() {
+	ui.NewCard(ui.CardInfo, "summary").Tight().Print()
+	ui.Default().Summary(
+		"8 checks",
+		[]ui.SummarySegment{
+			{Count: 5, Label: "passed", Color: ui.Palette.Success},
+			{Count: 2, Label: "warnings", Color: ui.Palette.Warning},
+			{Count: 1, Label: "failed", Color: ui.Palette.Error},
+		},
+	)
 }
 
 func demoGroupsStatic() {
@@ -514,4 +540,41 @@ func boolStr(b bool) string {
 		return "Yes"
 	}
 	return "No"
+}
+
+// demoSummaryInteractive shows the summary card by way of a form
+// that gathers counts from the user, then re-renders the summary
+// card with those values. Lets a designer play with the order-based
+// glyph rollup and the per-segment color treatment without leaving
+// the demo.
+func demoSummaryInteractive() error {
+	passedStr := "5"
+	warnedStr := "2"
+	failedStr := "1"
+
+	title := "summary: counts"
+	rewind := ui.NewCard(ui.CardInput, title).Tight().PrintRewindable()
+	if err := runForm(
+		huh.NewInput().Title("Passed").Value(&passedStr),
+		huh.NewInput().Title("Warnings").Value(&warnedStr),
+		huh.NewInput().Title("Failed").Value(&failedStr),
+	); err != nil {
+		return err
+	}
+	rewind()
+
+	passed, _ := strconv.Atoi(passedStr)
+	warned, _ := strconv.Atoi(warnedStr)
+	failed, _ := strconv.Atoi(failedStr)
+	total := passed + warned + failed
+
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+		[]ui.SummarySegment{
+			{Count: passed, Label: "passed", Color: ui.Palette.Success},
+			{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+			{Count: failed, Label: "failed", Color: ui.Palette.Error},
+		},
+	)
+	return nil
 }
