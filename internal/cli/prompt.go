@@ -45,7 +45,20 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
-	ui.FlushSpacer()
+	// Multi-field forms get a leading visual break between the
+	// containing card (any prompt title/description above) and the
+	// first field, regardless of whether the prior caller armed
+	// needsSpacer (Tight cards intentionally clear it). Without this,
+	// the form's first field title sits flush against the heading
+	// above with no separation. Single-field forms keep the current
+	// behavior — only emit a spacer if one is pending.
+	if len(fields) > 1 {
+		ui.ClearSpacer()
+		fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
+		ui.RequestSpacer()
+	} else {
+		ui.FlushSpacer()
+	}
 	// WithWidth is critical when the output isn't a real terminal —
 	// huh's bubbletea program never receives a resize message in that
 	// case and otherwise crashes inside textinput on a 0-width slice.

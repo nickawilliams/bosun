@@ -406,9 +406,8 @@ func demoForms() error {
 		issuePriority string
 	)
 	createTitle := "form: multi-field"
-	rewind = ui.NewCard(ui.CardInput, createTitle).
-		Muted("").
-		Tight().PrintRewindable()
+	rewind = ui.NewCard(ui.CardInput, createTitle).Tight().
+		PrintRewindable()
 	if err := runForm(
 		huh.NewInput().
 			Title("Summary").
