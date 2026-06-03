@@ -25,12 +25,12 @@ func newDemoCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !interactive {
 				demoCards(cmd)
+				demoSummary()
 				demoTree()
 				demoGroupsStatic()
 				demoItemCard()
 				demoPlanCardStates()
 				demoFormStatic()
-				demoSummary()
 				return nil
 			}
 
@@ -172,11 +172,8 @@ func demoPlanCardStates() {
 
 // demoSummary renders one Reporter.Summary card with a mixed
 // breakdown so the colored segments and the order-based glyph
-// rollup are both visible at a glance. Sits at the end of the
-// static demo since the summary card is conceptually an
-// end-of-run rollup.
+// rollup are both visible at a glance.
 func demoSummary() {
-	ui.NewCard(ui.CardInfo, "summary").Tight().Print()
 	ui.Default().Summary(
 		"8 checks",
 		[]ui.SummarySegment{
