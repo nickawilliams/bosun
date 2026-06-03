@@ -57,8 +57,8 @@ func newDoctorCmd() *cobra.Command {
 				{"integrations", slices.Concat(
 					issueTrackerChecks(),
 					codeHostChecks(),
-					notificationChecks(),
 					cicdChecks(),
+					notificationChecks(),
 				)},
 			}
 
