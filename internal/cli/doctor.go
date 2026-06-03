@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -114,7 +115,14 @@ func newDoctorCmd() *cobra.Command {
 // dividers line up across siblings.
 func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, alignWidth int, passed, warned, failed *int) {
 	if checkErr != nil {
-		reason := checkErr.Error()
+		// Prefer the check's detail when it provided one — lets a
+		// check supply a formatted display string alongside an error
+		// that just signals the state. Falls back to the error
+		// message when no detail is set.
+		reason := detail
+		if reason == "" {
+			reason = checkErr.Error()
+		}
 		if errors.Is(checkErr, errNotConfigured) {
 			*warned++
 			g.SkipValue(hc.Name, reason, alignWidth)
@@ -184,7 +192,6 @@ func codeHostChecks() []healthCheck {
 func notificationChecks() []healthCheck {
 	return []healthCheck{
 		{Name: "notification", Check: checkNotification},
-		{Name: "notification channels", Check: checkNotificationChannels},
 	}
 }
 
@@ -334,12 +341,14 @@ func checkCodeHost(ctx context.Context) (string, error) {
 	return fmt.Sprintf("github → %s", username), nil
 }
 
-// checkNotification verifies the notification provider is configured
-// and that we can authenticate. After the earlier config-row trim,
-// the standalone config check became a strict subset of the auth
-// check (newNotifier validates the same local-auth-requires-workspace
-// rule), so the two are merged here. Mirrors the Issue Tracker /
-// Code Host one-check shape.
+// checkNotification verifies the notification provider end-to-end:
+// it's configured, we can authenticate, and each configured channel
+// is reachable. The result rolls up into one row — auth confirmation
+// on the first line, each channel on its own continuation line —
+// with failed channels rendered in the error color. The overall
+// glyph reflects the aggregate state: ✓ if auth and all channels
+// pass, warn if anything failed (notification isn't a required
+// integration, so failures warn rather than fail the whole run).
 func checkNotification(ctx context.Context) (string, error) {
 	provider := viper.GetString("notification.provider")
 	if provider == "" {
@@ -357,42 +366,33 @@ func checkNotification(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
 
-	return fmt.Sprintf("%s → %s", provider, user), nil
-}
+	// First line: auth confirmation. Continuation lines: one per
+	// configured channel; failed probes render in the error color so
+	// the per-channel state is visible at a glance.
+	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	lines := []string{fmt.Sprintf("%s → %s", provider, user)}
 
-func checkNotificationChannels(ctx context.Context) (string, error) {
-	provider := viper.GetString("notification.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	notifier, err := newNotifier()
-	if err != nil {
-		return "", err
-	}
-	defer notifier.Close()
-
-	var results []string
+	var failedCount int
 	for _, key := range []string{"notification.channel_review", "notification.channel_release"} {
 		ch := viper.GetString(key)
 		if ch == "" {
 			continue
 		}
-		// FindThread with a bogus issue key just to exercise channel resolution.
 		display := "#" + strings.TrimPrefix(ch, "#")
 		_, err := notifier.FindThread(notify.WithNoCache(ctx), ch, "__bosun_doctor_probe__")
 		if err != nil {
-			results = append(results, fmt.Sprintf("%s ✗ %v", display, err))
+			failedCount++
+			lines = append(lines, errorStyle.Render(display))
 		} else {
-			results = append(results, fmt.Sprintf("%s ✓", display))
+			lines = append(lines, display)
 		}
 	}
 
-	if len(results) == 0 {
-		return "", fmt.Errorf("no channels configured")
+	value := strings.Join(lines, "\n")
+	if failedCount > 0 {
+		return value, fmt.Errorf("%d %s failed", failedCount, pluralize(failedCount, "channel", "channels"))
 	}
-
-	return strings.Join(results, "\n"), nil
+	return value, nil
 }
 
 func cicdChecks() []healthCheck {
