@@ -248,6 +248,12 @@ func (g *group) Details(heading string, fields Fields) {
 	g.sendChild(CardData, NewCard(CardData, heading).KV(pairs...))
 }
 
+func (g *group) Summary(total string, segments []SummarySegment) {
+	g.sendChild(CardInfo, NewCard(CardInfo, renderSummaryText(total, segments)).
+		PreserveCase().
+		GlyphColor(summaryGlyphColor(segments)))
+}
+
 func (g *group) Group(title string, fn func(Reporter)) {
 	g.msgCh <- groupBeginMsg{title: title, indent: g.indent}
 	inner := &group{

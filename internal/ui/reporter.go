@@ -1,5 +1,7 @@
 package ui
 
+import "image/color"
+
 // Reporter is the semantic output surface commands render through.
 // An implementation decides how to present each call — card timeline,
 // JSON, silent, test capture, etc. The interface contains only the
@@ -94,6 +96,24 @@ type Reporter interface {
 	// Details renders a Data Card: a heading with key-value body,
 	// no status glyph. Empty fields are suppressed entirely.
 	Details(heading string, fields Fields)
+
+	// Summary renders an end-of-run rollup card: muted total head
+	// followed by a comma-joined colored breakdown of non-zero
+	// segments. The card glyph color is the color of the *last*
+	// non-zero segment, so order segments ascending by severity for
+	// the worst case to dominate. Use for the summary line at the
+	// end of multi-step operations (status, doctor, lifecycle).
+	Summary(total string, segments []SummarySegment)
+}
+
+// SummarySegment is one entry in a Summary card's colored breakdown.
+// Segments render in the order provided, comma-separated, non-zero
+// only. The Color is applied both to the segment's text and to the
+// card glyph if this is the last non-zero segment.
+type SummarySegment struct {
+	Count int
+	Label string
+	Color color.Color
 }
 
 // Fields is an ordered list of key-value pairs. Ordered so that

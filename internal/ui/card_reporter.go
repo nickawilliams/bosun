@@ -221,3 +221,14 @@ func (r *cardReporter) Details(heading string, fields Fields) {
 	NewCard(CardData, heading).KV(pairs...).Print()
 }
 
+// Summary emits an end-of-run rollup card: muted total head, then
+// comma-joined non-zero segments each styled with its own color.
+// The card glyph color is the color of the last non-zero segment
+// (order ascending by severity for the worst case to dominate).
+func (r *cardReporter) Summary(total string, segments []SummarySegment) {
+	NewCard(CardInfo, renderSummaryText(total, segments)).
+		PreserveCase().
+		GlyphColor(summaryGlyphColor(segments)).
+		Print()
+}
+

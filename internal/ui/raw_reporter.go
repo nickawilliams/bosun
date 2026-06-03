@@ -25,8 +25,9 @@ func (r *rawReporter) Muted(_ string, _ ...any)      {}
 func (r *rawReporter) DryRun(_ string, _ ...any)     {}
 func (r *rawReporter) Saved(_ string, _ string)      {}
 func (r *rawReporter) Selected(_ string, _ string)   {}
-func (r *rawReporter) SelectedMulti(_ string, _ []string) {}
-func (r *rawReporter) Details(_ string, _ Fields)    {}
+func (r *rawReporter) SelectedMulti(_ string, _ []string)   {}
+func (r *rawReporter) Details(_ string, _ Fields)           {}
+func (r *rawReporter) Summary(_ string, _ []SummarySegment) {}
 
 // Task runs fn synchronously without a spinner. The function still
 // executes — raw mode suppresses rendering, not behavior.
