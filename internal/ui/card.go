@@ -609,9 +609,17 @@ func (c *Card) glyph() string {
 }
 
 // renderConnector returns the styled left-gutter connector for this
-// card's continuation lines.
+// card's continuation lines. CardInput cards use the active-input
+// accent so the body lines under a prompt visually belong to the
+// active section instead of looking like a recessed gap between
+// the glyph row and whatever follows (e.g., huh form buttons).
+// Other states stay on the recessed timeline gray.
 func (c *Card) renderConnector() string {
-	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
+	color := Palette.Recessed
+	if c.state == CardInput {
+		color = Palette.Accent
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(cardConnector)
 }
 
 // maxKVKeyWidth returns the widest KV key across all cardBodyKV

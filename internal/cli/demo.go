@@ -506,7 +506,7 @@ func demoContinue(title string, first bool) error {
 
 	confirmed := true
 	rewind := ui.NewCard(ui.CardInput, title).
-		Muted(body).
+		Muted(body, "").
 		Tight().PrintRewindable()
 	if err := runForm(
 		newConfirm().
