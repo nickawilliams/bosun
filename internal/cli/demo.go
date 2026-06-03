@@ -151,14 +151,10 @@ func demoPlanCardStates() {
 	// title + confirm with plan items as its content + buttons.
 	// Routes through snapshotForm so the static rendering matches
 	// what runForm produces when the user actually runs a plan.
-	//
-	// The heading uses CardInfo (not CardInput) because the
-	// snapshot is informational; an actual interactive plan
-	// confirmation would use CardInput.
 	plan := buildDemoPlan()
 	var confirmed bool
 
-	ui.NewCard(ui.CardInfo, "pending: "+plan.Summary()).Tight().Print()
+	ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().Print()
 
 	snapshotForm(
 		newConfirm().
@@ -240,18 +236,13 @@ func demoFormStatic() {
 	// and the theme/layout/help wiring all match what runForm
 	// produces in interactive mode — no parallel construction code
 	// to keep in sync.
-	//
-	// The heading uses CardInfo (not CardInput) because the
-	// snapshot is informational, not an active prompt. CardInput's
-	// accent-colored body connector would misleadingly mark this
-	// section as awaiting input.
 	var (
 		summary   string
 		issueType string
 		confirmed bool
 	)
 
-	ui.NewCard(ui.CardInfo, "form").
+	ui.NewCard(ui.CardInput, "form").
 		Subtitle("static snapshot (no interaction)").
 		Tight().Print()
 
