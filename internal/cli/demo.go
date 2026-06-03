@@ -149,25 +149,20 @@ func demoCards(cmd *cobra.Command) {
 func demoPlanCardStates() {
 	// Static snapshot of the plan confirmation flow — plan card
 	// title + confirm with plan items as its content + buttons.
+	// Routes through snapshotForm so the static rendering matches
+	// what runForm produces when the user actually runs a plan.
 	plan := buildDemoPlan()
 	var confirmed bool
 
 	ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().Print()
 
-	f := huh.NewForm(huh.NewGroup(
+	snapshotForm(
 		newConfirm().
 			Title(plan.RenderItems()).
 			Affirmative("Apply").
 			Negative("Cancel").
 			Value(&confirmed),
-	)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true)
-
-	f.Init()
-	fmt.Print(f.View())
-	fmt.Print("\n\n")
+	)
 }
 
 // demoSummary renders one Reporter.Summary card with a mixed
@@ -236,8 +231,11 @@ func demoTree() {
 }
 
 func demoFormStatic() {
-	// Static snapshot of a multi-field form — Init() + View()
-	// renders the focused state without running the interactive loop.
+	// Static snapshot of a multi-field form. Routes through
+	// snapshotForm so the prologue (leading spacer for multi-field)
+	// and the theme/layout/help wiring all match what runForm
+	// produces in interactive mode — no parallel construction code
+	// to keep in sync.
 	var (
 		summary   string
 		issueType string
@@ -248,7 +246,7 @@ func demoFormStatic() {
 		Subtitle("static snapshot (no interaction)").
 		Tight().Print()
 
-	f := huh.NewForm(huh.NewGroup(
+	snapshotForm(
 		huh.NewInput().
 			Title("Summary").
 			Placeholder("add user authentication flow").
@@ -265,14 +263,7 @@ func demoFormStatic() {
 			Affirmative("Apply").
 			Negative("Cancel").
 			Value(&confirmed),
-	)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true)
-
-	f.Init()
-	fmt.Print(f.View())
-	fmt.Print("\n\n")
+	)
 }
 
 // --- Interactive sections (gated by --interactive) ---

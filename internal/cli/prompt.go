@@ -45,31 +45,8 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
-	// Multi-field forms get a leading visual break between the
-	// containing card (any prompt title/description above) and the
-	// first field, regardless of whether the prior caller armed
-	// needsSpacer (Tight cards intentionally clear it). Without this,
-	// the form's first field title sits flush against the heading
-	// above with no separation. Single-field forms keep the current
-	// behavior — only emit a spacer if one is pending.
-	if len(fields) > 1 {
-		ui.ClearSpacer()
-		fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
-		ui.RequestSpacer()
-	} else {
-		ui.FlushSpacer()
-	}
-	// WithWidth is critical when the output isn't a real terminal —
-	// huh's bubbletea program never receives a resize message in that
-	// case and otherwise crashes inside textinput on a 0-width slice.
-	err := huh.NewForm(huh.NewGroup(fields...)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true).
-		WithInput(ui.Input()).
-		WithOutput(ui.Output()).
-		WithWidth(ui.TermWidth()).
-		Run()
+	emitFormPrologue(fields)
+	err := buildForm(fields).Run()
 	if errors.Is(err, huh.ErrUserAborted) {
 		// BubbleTea leaves a trailing blank line on exit; move the
 		// cursor up so the cancel card (or its comfy connector)
@@ -78,6 +55,58 @@ func runForm(fields ...huh.Field) error {
 		return ErrCancelled
 	}
 	return err
+}
+
+// snapshotForm renders a form as a static visual snapshot — used by
+// the demo command to illustrate form layouts without requiring an
+// interactive session. Shares its prologue (leading spacer) and
+// construction (theme, layout, help, I/O) with runForm, so the
+// snapshot stays in visual parity with what a real interactive run
+// produces. Skips runForm's interactivity guard since snapshots are
+// intentionally non-interactive.
+func snapshotForm(fields ...huh.Field) {
+	emitFormPrologue(fields)
+	f := buildForm(fields)
+	_ = f.Init()
+	fmt.Fprint(ui.Output(), f.View())
+	fmt.Fprint(ui.Output(), "\n\n")
+}
+
+// buildForm constructs a huh.Form with the app's theme, layout,
+// help, and I/O bindings. Single source of truth so any change to
+// the form's chrome (theme, layout, help, width) flows to every
+// caller — interactive runs via runForm and static snapshots via
+// snapshotForm — without manual parity maintenance.
+//
+// WithWidth is critical when the output isn't a real terminal —
+// huh's bubbletea program never receives a resize message in that
+// case and otherwise crashes inside textinput on a 0-width slice.
+func buildForm(fields []huh.Field) *huh.Form {
+	return huh.NewForm(huh.NewGroup(fields...)).
+		WithTheme(formTheme).
+		WithLayout(ui.NewTimelineLayout()).
+		WithShowHelp(true).
+		WithInput(ui.Input()).
+		WithOutput(ui.Output()).
+		WithWidth(ui.TermWidth())
+}
+
+// emitFormPrologue emits the leading visual break before a form
+// renders. Multi-field forms get an unconditional recessed │ row
+// so the form's first field doesn't sit flush against any heading
+// above it (Tight cards intentionally clear needsSpacer, so the
+// default FlushSpacer path doesn't help here). Single-field forms
+// stay on the existing FlushSpacer behavior — only emit if one is
+// pending — since a leading row would create awkward whitespace
+// above a bare Confirm with no description.
+func emitFormPrologue(fields []huh.Field) {
+	if len(fields) > 1 {
+		ui.ClearSpacer()
+		fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
+		ui.RequestSpacer()
+	} else {
+		ui.FlushSpacer()
+	}
 }
 
 // newConfirm creates a huh Confirm field with app defaults (left-aligned buttons).
