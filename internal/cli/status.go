@@ -499,16 +499,11 @@ func workspaceRepoBreakdown(c workspaceRepoCounts) string {
 	return strings.Join(parts, muted.Render(", "))
 }
 
-// renderProjectSummary prints the muted recap card at the bottom of
-// project status — single-line tally of workspaces by their resolved
-// state.
+// renderProjectSummary prints the recap card at the bottom of project
+// status — tally of workspaces by their resolved state. Segments are
+// ordered ascending by severity (info-ish first, error last) so the
+// order-based glyph rollup in Reporter.Summary picks the worst case.
 func renderProjectSummary(states []workspaceState) {
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-
 	var done, ready, blocked, pending, broken int
 	for _, ws := range states {
 		switch ws.rollup {
@@ -525,29 +520,16 @@ func renderProjectSummary(states []workspaceState) {
 		}
 	}
 
-	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d %s", len(states), pluralize(len(states), "workspace", "workspaces"))),
-	}
-	if done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
-	}
-	if ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", ready)))
-	}
-	if blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", blocked)))
-	}
-	if pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", pending)))
-	}
-	if broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
-	}
-
-	ui.NewCard(ui.CardInfo, strings.Join(parts, mutedStyle.Render(", "))).
-		PreserveCase().
-		GlyphColor(ui.Palette.Muted).
-		Print()
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "workspace", "workspaces")),
+		[]ui.SummarySegment{
+			{Count: done, Label: "done", Color: ui.Palette.Success},
+			{Count: ready, Label: "ready", Color: ui.Palette.Success},
+			{Count: pending, Label: "pending", Color: ui.Palette.Info},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.Warning},
+			{Count: broken, Label: "broken", Color: ui.Palette.Error},
+		},
+	)
 }
 
 // projectRepos returns the project's configured repositories with
@@ -697,15 +679,12 @@ func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card
 		Item(prGlyph, statusRowKV("PR", prValue))
 }
 
-// renderWorkspaceSummary prints the muted recap card at the bottom
-// — single-line tally of repos by their resolved state.
+// renderWorkspaceSummary prints the recap card at the bottom of
+// workspace status — tally of repos by their resolved state.
+// Segments are ordered ascending by severity (info-ish first, error
+// last) so the order-based glyph rollup in Reporter.Summary picks
+// the worst case.
 func renderWorkspaceSummary(states []repoState) {
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-
 	var done, ready, blocked, pending, broken int
 	for _, rs := range states {
 		branchState := branchStateString(rs.sync)
@@ -723,29 +702,16 @@ func renderWorkspaceSummary(states []repoState) {
 		}
 	}
 
-	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d %s", len(states), pluralize(len(states), "repository", "repositories"))),
-	}
-	if done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
-	}
-	if ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", ready)))
-	}
-	if blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", blocked)))
-	}
-	if pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", pending)))
-	}
-	if broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
-	}
-
-	ui.NewCard(ui.CardInfo, strings.Join(parts, mutedStyle.Render(", "))).
-		PreserveCase().
-		GlyphColor(ui.Palette.Muted).
-		Print()
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "repository", "repositories")),
+		[]ui.SummarySegment{
+			{Count: done, Label: "done", Color: ui.Palette.Success},
+			{Count: ready, Label: "ready", Color: ui.Palette.Success},
+			{Count: pending, Label: "pending", Color: ui.Palette.Info},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.Warning},
+			{Count: broken, Label: "broken", Color: ui.Palette.Error},
+		},
+	)
 }
 
 // workspaceFilesystemPath returns the absolute filesystem path for a
