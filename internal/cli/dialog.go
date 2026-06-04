@@ -72,10 +72,18 @@ func (d *Dialog) Default(yes bool) *Dialog {
 	return d
 }
 
-// Show renders the dialog, blocks for an answer, rewinds the card,
-// and returns the user's choice. In non-interactive mode, returns
-// the default value without rendering. Returns ErrCancelled if the
-// user aborts with ctrl+c.
+// Show renders the dialog, blocks for an answer, and returns the
+// user's choice. In non-interactive mode, returns the default value
+// without rendering. Returns ErrCancelled if the user aborts with
+// ctrl+c.
+//
+// On confirmation, the card is rewound so the caller can print the
+// resulting action card in its place. On either cancellation path
+// (negative button or ctrl+c), the question stays visible and the
+// caller (or HandleError) surfaces the cancellation status below.
+// For ctrl+c, huh leaves its form render in place; Dialog pads one
+// extra row so the cancellation card doesn't bump against the form
+// residue.
 func (d *Dialog) Show() (bool, error) {
 	if !isInteractive() {
 		return d.defaultYes, nil
@@ -85,18 +93,30 @@ func (d *Dialog) Show() (bool, error) {
 	if d.description != "" {
 		card = card.Muted(d.description, "")
 	}
-	rewind := card.Tight().PrintRewindable()
+	card.Tight()
+	rewind := card.PrintRewindable()
 
 	confirmed := d.defaultYes
-	err := runForm(
+	formErr := runForm(
 		newConfirm().
 			Affirmative(d.affirmative).
 			Negative(d.negative).
 			Value(&confirmed),
 	)
-	rewind()
-	if err != nil {
-		return d.defaultYes, err
+
+	if formErr == nil && confirmed {
+		rewind()
+		return true, nil
 	}
-	return confirmed, nil
+
+	// On ctrl+c, huh leaves its form render in place and runForm
+	// parked the cursor on the form's bottom row (the help line).
+	// Request a spacer so the caller's next card emits a │ connector
+	// that overwrites that row, giving a clean 1-row gap between
+	// huh's residue and the cancellation status.
+	if formErr != nil {
+		ui.RequestSpacer()
+	}
+
+	return confirmed, formErr
 }
