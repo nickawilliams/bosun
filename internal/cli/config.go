@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -493,32 +494,152 @@ func newConfigCheckCmd() *cobra.Command {
 	return cmd
 }
 
+// configIssueSeverity ranks schema violations so a group's row glyph
+// reflects its worst issue and the summary's count buckets are clear.
+type configIssueSeverity int
+
+const (
+	configWarn configIssueSeverity = iota
+	configFail
+)
+
+// configIssue is one schema violation surfaced by validateGroup.
+// Category buckets per-key issues for compact rendering ("missing: a,
+// b" rather than one line per key); Detail carries the per-key
+// rendering for categories where the key name alone isn't enough
+// (e.g., "invalid" wants both key and bad value).
+type configIssue struct {
+	Key      string
+	Severity configIssueSeverity
+	Category string // "missing" | "invalid"
+	Detail   string // for "invalid": "key=\"value\" (expected: a|b)"; empty for "missing"
+}
+
+// validateGroup walks every key in a schema group and returns the
+// schema violations the resolved config has against it. Today the
+// rules are minimal — Required keys must be set (or have a Default),
+// and any key declaring Options must hold a value within that list —
+// but new rules (Pattern, EnvVar resolution, cross-key consistency)
+// land here without changing call sites.
+func validateGroup(groupName string, group ConfigGroup) []configIssue {
+	var issues []configIssue
+	for _, ck := range group.Keys {
+		fk := fullKey(groupName, ck)
+		value := viper.GetString(fk)
+
+		if ck.Required && value == "" && ck.Default == "" {
+			issues = append(issues, configIssue{
+				Key:      ck.Key,
+				Severity: configFail,
+				Category: "missing",
+			})
+			continue
+		}
+
+		if value != "" && len(ck.Options) > 0 && !slices.Contains(ck.Options, value) {
+			severity := configWarn
+			if ck.Required {
+				severity = configFail
+			}
+			issues = append(issues, configIssue{
+				Key:      ck.Key,
+				Severity: severity,
+				Category: "invalid",
+				Detail:   fmt.Sprintf("%s=%q (expected: %s)", ck.Key, value, strings.Join(ck.Options, "|")),
+			})
+		}
+	}
+	return issues
+}
+
+// renderConfigIssues collapses a group's issues into a multi-line
+// display value and returns the worst severity. Issues are grouped
+// by category so several missing keys collapse into one "missing:
+// a, b, c" line rather than one line per key. The row glyph in the
+// caller is driven by the returned severity.
+func renderConfigIssues(issues []configIssue) (value string, severity configIssueSeverity) {
+	var missingKeys, invalidEntries []string
+	for _, iss := range issues {
+		if iss.Severity > severity {
+			severity = iss.Severity
+		}
+		switch iss.Category {
+		case "missing":
+			missingKeys = append(missingKeys, iss.Key)
+		case "invalid":
+			invalidEntries = append(invalidEntries, iss.Detail)
+		}
+	}
+
+	var lines []string
+	if len(missingKeys) > 0 {
+		lines = append(lines, "missing: "+strings.Join(missingKeys, ", "))
+	}
+	if len(invalidEntries) > 0 {
+		lines = append(lines, "invalid: "+strings.Join(invalidEntries, ", "))
+	}
+	return strings.Join(lines, "\n"), severity
+}
+
 func runConfigCheck(args []string) error {
 	var groupFilter string
 	if len(args) > 0 {
 		groupFilter = args[0]
 	}
 
-	passed, warned := 0, 0
-	for name, group := range configSchema {
+	// Stable iteration so the output is reproducible — configSchema
+	// is a map, so we collect and sort the keys to lock in order.
+	names := make([]string, 0, len(configSchema))
+	for name := range configSchema {
 		if groupFilter != "" && name != groupFilter {
 			continue
 		}
-		missing := checkGroupCompleteness(name, group)
-		if len(missing) == 0 {
-			ui.Complete(group.Label)
-			passed++
-		} else {
-			ui.Skip(fmt.Sprintf("%s: missing %s", group.Label, strings.Join(missing, ", ")))
-			warned++
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// Pre-compute the title alignment width across every group label
+	// so every row's value separator lines up — same shape as the
+	// doctor command's alignWidth.
+	var alignWidth int
+	for _, name := range names {
+		if w := len(configSchema[name].Label); w > alignWidth {
+			alignWidth = w
 		}
 	}
 
-	parts := []string{fmt.Sprintf("%d passed", passed)}
-	if warned > 0 {
-		parts = append(parts, fmt.Sprintf("%d incomplete", warned))
+	r := ui.Default()
+	passed, warned, failed := 0, 0, 0
+	for _, name := range names {
+		group := configSchema[name]
+		issues := validateGroup(name, group)
+		if len(issues) == 0 {
+			r.Complete(group.Label)
+			passed++
+			continue
+		}
+		value, severity := renderConfigIssues(issues)
+		if severity == configFail {
+			r.FailValue(group.Label, value, alignWidth)
+			failed++
+			continue
+		}
+		r.SkipValue(group.Label, value, alignWidth)
+		warned++
 	}
-	ui.Info("%s", strings.Join(parts, ", "))
+
+	// Summary card — segments ordered ascending by severity so the
+	// last non-zero one drives the rollup glyph color, matching the
+	// doctor command's pattern.
+	total := passed + warned + failed
+	r.Summary(
+		fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+		[]ui.SummarySegment{
+			{Count: passed, Label: "passed", Color: ui.Palette.Success},
+			{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+			{Count: failed, Label: "failed", Color: ui.Palette.Error},
+		},
+	)
 	return nil
 }
 
