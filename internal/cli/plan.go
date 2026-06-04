@@ -74,7 +74,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	// Interactive confirmation gate: show the plan as a CardInput,
 	// run huh confirm. Normal cancel: rewind prompt, show cancelled
 	// card in place. Ctrl+c interrupt: don't rewind, just bail.
-	rewind := ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight().PrintRewindable()
+	rewind := newPlanPendingHeader(plan).PrintRewindable()
 
 	var confirmed bool
 	err := runForm(
@@ -108,6 +108,14 @@ func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 		wrappedActions[i] = a
 	}
 	return pc.RunApply(wrappedActions)
+}
+
+// newPlanPendingHeader builds the title-bar-only card shown above
+// the confirmation form during runPlanCard's interactive gate. Both
+// runPlanCard and the demo snapshot route through this so the
+// pending header can't visually drift from the live render.
+func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
+	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
 }
 
 // isAutoApprove returns true if the --yes or --force flag is set. Commands

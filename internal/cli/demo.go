@@ -147,14 +147,15 @@ func demoCards(cmd *cobra.Command) {
 }
 
 func demoPlanCardStates() {
-	// Static snapshot of the plan confirmation flow — plan card
-	// title + confirm with plan items as its content + buttons.
-	// Routes through snapshotForm so the static rendering matches
-	// what runForm produces when the user actually runs a plan.
+	// Static snapshot of the plan confirmation flow — pending header
+	// card + confirm form with plan items as its content + buttons.
+	// Routes through newPlanPendingHeader and snapshotForm so the
+	// static rendering matches what runPlanCard produces when the
+	// user actually runs a plan.
 	plan := buildDemoPlan()
 	var confirmed bool
 
-	ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight().Print()
+	newPlanPendingHeader(plan).Print()
 
 	snapshotForm(
 		newConfirm().
