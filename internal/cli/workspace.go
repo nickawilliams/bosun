@@ -312,7 +312,6 @@ func newWorkspaceRmCmd() *cobra.Command {
 			name := cc.Workspace
 			repositoryNames := args
 			force, _ := cmd.Flags().GetBool("force")
-			yes, _ := cmd.Flags().GetBool("yes")
 			ctx := cmd.Context()
 
 			mgr, err := newWorkspaceManager()
@@ -330,46 +329,6 @@ func newWorkspaceRmCmd() *cobra.Command {
 				}
 			}
 
-			// Pre-Plan confirmation (separate from the Plan Card gate).
-			// Dry-run skips this — the user just wants to see what
-			// would happen, not commit to removing.
-			if !isDryRun(cmd) && !yes {
-				if !isInteractive() {
-					return fmt.Errorf("refusing to remove repositories from %q non-interactively (pass --yes to confirm)", name)
-				}
-				confirmed, err := promptConfirm(fmt.Sprintf("Remove %d %s from workspace %q?", len(repositoryNames), pluralize(len(repositoryNames), "repository", "repositories"), name), false)
-				if err != nil {
-					return err
-				}
-				if !confirmed {
-					ui.Skip("aborted")
-					return nil
-				}
-			}
-
-			// If we're standing inside one of the worktrees about to be
-			// removed, move the process out so the operation doesn't run
-			// from a directory that's about to disappear, and we can guide
-			// the user back.
-			var movedFrom string
-			projectRoot := config.FindProjectRoot()
-			if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
-				wsRoot := viper.GetString("workspace.root")
-				if !filepath.IsAbs(wsRoot) {
-					wsRoot = filepath.Join(projectRoot, wsRoot)
-				}
-				for _, r := range repositoryNames {
-					wtPath := filepath.Join(wsRoot, name, r)
-					if cwd == wtPath || strings.HasPrefix(cwd+string(os.PathSeparator), wtPath+string(os.PathSeparator)) {
-						if err := os.Chdir(projectRoot); err != nil {
-							return fmt.Errorf("moving to project root: %w", err)
-						}
-						movedFrom = cwd
-						break
-					}
-				}
-			}
-
 			repositories, err := resolveRepositories(repositoryNames)
 			if err != nil {
 				return err
@@ -381,12 +340,33 @@ func newWorkspaceRmCmd() *cobra.Command {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
 			}
 
+			// movedFrom is set inside the apply action if the process is
+			// standing in a worktree about to disappear; surfaced as a
+			// "cd back" hint after the plan finalizes.
+			var movedFrom string
+			projectRoot := config.FindProjectRoot()
 			actions := []PlanAction{func() error {
+				if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
+					wsRoot := viper.GetString("workspace.root")
+					if !filepath.IsAbs(wsRoot) {
+						wsRoot = filepath.Join(projectRoot, wsRoot)
+					}
+					for _, r := range repositoryNames {
+						wtPath := filepath.Join(wsRoot, name, r)
+						if cwd == wtPath || strings.HasPrefix(cwd+string(os.PathSeparator), wtPath+string(os.PathSeparator)) {
+							if err := os.Chdir(projectRoot); err != nil {
+								return fmt.Errorf("moving to project root: %w", err)
+							}
+							movedFrom = cwd
+							break
+						}
+					}
+				}
 				return mgr.RemoveRepositories(ctx, name, wsRepos, repositoryNames, force)
 			}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
-				Confirm: false,
+				Confirm: true,
 				Apply:   !isDryRun(cmd),
 			}); err != nil {
 				return err
@@ -427,24 +407,6 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 			}
 			name := cc.Workspace
 			force, _ := cmd.Flags().GetBool("force")
-			yes, _ := cmd.Flags().GetBool("yes")
-
-			// Pre-Plan confirmation (separate from the Plan Card gate).
-			// Dry-run skips this — the user just wants to see what
-			// would happen, not commit to deleting.
-			if !isDryRun(cmd) && !yes {
-				if !isInteractive() {
-					return fmt.Errorf("refusing to delete workspace %q non-interactively (pass --yes to confirm)", name)
-				}
-				confirmed, err := promptConfirm(fmt.Sprintf("Delete workspace %q?", name), false)
-				if err != nil {
-					return err
-				}
-				if !confirmed {
-					ui.Skip("aborted")
-					return nil
-				}
-			}
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -455,32 +417,31 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 
 			plan := ui.NewPlan()
 			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
 			}
 
-			// If we're standing inside the workspace we're about to delete,
-			// move the process out so it doesn't operate from a directory
-			// that's about to disappear, and we can guide the user back.
+			// movedFrom is set inside the apply action if the process is
+			// standing in the workspace about to disappear; surfaced as a
+			// "cd back" hint after the plan finalizes.
 			var movedFrom string
 			projectRoot := config.FindProjectRoot()
-			if detected, _ := detectWorkspaceFromCWD(); detected == name && projectRoot != "" {
-				cwd, _ := os.Getwd()
-				if err := os.Chdir(projectRoot); err != nil {
-					return fmt.Errorf("moving to project root: %w", err)
-				}
-				movedFrom = cwd
-			}
-
-			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 			actions := []PlanAction{func() error {
+				if detected, _ := detectWorkspaceFromCWD(); detected == name && projectRoot != "" {
+					cwd, _ := os.Getwd()
+					if err := os.Chdir(projectRoot); err != nil {
+						return fmt.Errorf("moving to project root: %w", err)
+					}
+					movedFrom = cwd
+				}
 				return mgr.Remove(cmd.Context(), name, wsRepos, force)
 			}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
-				Confirm: false,
+				Confirm: true,
 				Apply:   !isDryRun(cmd),
 			}); err != nil {
 				return err
