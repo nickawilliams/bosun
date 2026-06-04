@@ -154,7 +154,7 @@ func demoPlanCardStates() {
 	plan := buildDemoPlan()
 	var confirmed bool
 
-	ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().Print()
+	ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight().Print()
 
 	snapshotForm(
 		newConfirm().

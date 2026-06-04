@@ -91,8 +91,8 @@ func (pc *PlanCard) renderWithGlyph(glyph string) string {
 }
 
 // titleWord returns the title word for the current state. The
-// trailing colon is added by Card's titleStyle when a value is set,
-// so it isn't included here.
+// " · " separator before the value is added by Card's title row
+// rendering when a value is set, so it isn't included here.
 func (pc *PlanCard) titleWord() string {
 	switch pc.state {
 	case PlanProposed:
