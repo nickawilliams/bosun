@@ -209,9 +209,9 @@ func TestStatusPreviewRow(t *testing.T) {
 	}{
 		{name: "no env bound → skip", err: preview.ErrNoEnvironment, wantEmpty: true},
 		{name: "other error with no name → skip", err: errors.New("boom"), wantEmpty: true},
-		{name: "alive → ✓ + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, wantGlyph: "✓  ", wantInVal: "brave-falcon"},
-		{name: "indeterminate with name → ?", env: preview.Environment{Name: "brave-falcon", URL: "https://x"}, err: &preview.ProbeError{URL: "https://x"}, wantGlyph: "?  ", wantInVal: "brave-falcon", wantSuffix: "(unverified)"},
-		{name: "unprobable (no URL template) → ◦", env: preview.Environment{Name: "brave-falcon"}, wantGlyph: "◦  ", wantInVal: "brave-falcon"},
+		{name: "alive → ● + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
+		{name: "indeterminate with name → ●", env: preview.Environment{Name: "brave-falcon", URL: "https://x"}, err: &preview.ProbeError{URL: "https://x"}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unverified)"},
+		{name: "unprobable (no URL template) → ●", env: preview.Environment{Name: "brave-falcon"}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,12 +322,12 @@ func TestStatusUpdatedGlyph(t *testing.T) {
 		days      int
 		wantGlyph string
 	}{
-		{name: "today (fresh)", days: 0, wantGlyph: "◦  "},
-		{name: "6 days (fresh)", days: 6, wantGlyph: "◦  "},
-		{name: "7 days (boundary → stale)", days: 7, wantGlyph: "▲  "},
-		{name: "29 days (stale)", days: 29, wantGlyph: "▲  "},
-		{name: "30 days (boundary → very stale)", days: 30, wantGlyph: "✗  "},
-		{name: "100 days (very stale)", days: 100, wantGlyph: "✗  "},
+		{name: "today (fresh)", days: 0, wantGlyph: "●  "},
+		{name: "6 days (fresh)", days: 6, wantGlyph: "●  "},
+		{name: "7 days (boundary → stale)", days: 7, wantGlyph: "●  "},
+		{name: "29 days (stale)", days: 29, wantGlyph: "●  "},
+		{name: "30 days (boundary → very stale)", days: 30, wantGlyph: "●  "},
+		{name: "100 days (very stale)", days: 100, wantGlyph: "●  "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -370,9 +370,9 @@ func TestStatusUpdatedRow(t *testing.T) {
 		wantGlyph string
 	}{
 		{name: "zero time → skip", t: time.Time{}, wantEmpty: true},
-		{name: "fresh (1h ago) → ◦", t: now.Add(-1 * time.Hour), wantGlyph: "◦  "},
-		{name: "stale (10d ago) → ▲", t: now.Add(-10 * 24 * time.Hour), wantGlyph: "▲  "},
-		{name: "very stale (60d ago) → ✗", t: now.Add(-60 * 24 * time.Hour), wantGlyph: "✗  "},
+		{name: "fresh (1h ago) → ●", t: now.Add(-1 * time.Hour), wantGlyph: "●  "},
+		{name: "stale (10d ago) → ●", t: now.Add(-10 * 24 * time.Hour), wantGlyph: "●  "},
+		{name: "very stale (60d ago) → ●", t: now.Add(-60 * 24 * time.Hour), wantGlyph: "●  "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

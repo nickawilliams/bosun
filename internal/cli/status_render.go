@@ -51,21 +51,26 @@ func statusStyledGlyph(glyph string, c color.Color) string {
 	return lipgloss.NewStyle().Foreground(c).Render(glyph)
 }
 
-// statusCardStateColor returns the palette color associated with a
-// resolved aggregate card state — the same hue used by the gutter
-// glyph — so a card's title can be tinted to match.
+// statusCardStateColor returns the palette role color associated
+// with a resolved aggregate card state — the same hue used by the
+// gutter glyph — so a card's title can be tinted to match.
+//
+// State-context call site — see state_grammar.go. CardSuccess maps
+// to RoleDone (purple) because in the status context, CardSuccess
+// represents a terminal-positive resolution (e.g., merged-PR rollup),
+// not just "an action just succeeded".
 func statusCardStateColor(state ui.CardState) color.Color {
 	switch state {
 	case ui.CardSuccess:
-		return ui.Palette.Success
+		return ui.Palette.RoleDone
 	case ui.CardReady:
-		return ui.Palette.Success
+		return ui.Palette.RoleOpen
 	case ui.CardSkipped:
-		return ui.Palette.Warning
+		return ui.Palette.RoleAttention
 	case ui.CardWaiting:
-		return ui.Palette.Info
+		return ui.Palette.RoleInFlight
 	case ui.CardFailed:
-		return ui.Palette.Error
+		return ui.Palette.RoleClosed
 	}
 	return ui.Palette.Primary
 }
@@ -445,17 +450,21 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		return "", ""
 	}
 
+	// State-context call site — see state_grammar.go. All present-env
+	// outcomes are current states (not events), so the row uses ●
+	// colored to role: alive → RoleOpen, indeterminate / unprobable
+	// → RoleNeutral.
 	var probeErr *preview.ProbeError
 	if errors.As(err, &probeErr) {
 		if env.Name == "" {
 			return "", ""
 		}
-		glyph := statusStyledGlyph("?  ", ui.Palette.Muted)
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
 		}
-		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unverified)")
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render("(unverified)")
 		return glyph, v
 	}
 
@@ -465,16 +474,17 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 
 	switch {
 	case env.Probed && env.Alive:
-		glyph := statusStyledGlyph("✓  ", ui.Palette.Success)
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleOpen)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
 		}
 		return glyph, v
 	default:
-		// Unprobable (no URL template): show the name muted so the
-		// reader can see what's bound without implying it's verified.
-		glyph := statusStyledGlyph("◦  ", ui.Palette.Muted)
+		// Unprobable (no URL template): show the name in neutral so
+		// the reader can see what's bound without implying it's
+		// verified.
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -487,20 +497,27 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 // matching the body-row glyph slot width used in workspace cards.
 // Used at project scope for the Repos rollup body row (its glyph
 // echoes the workspace's gutter state).
+//
+// State-context call site — see state_grammar.go. CardSuccess /
+// CardFailed keep their event-shaped glyphs because at the rollup
+// level they encode the same terminal-positive / terminal-negative
+// resolution distinction (all-merged → ✓ RoleDone, all-broken →
+// ✗ RoleClosed). The intermediate states (CardReady / CardSkipped
+// / CardWaiting) collapse to ● colored to role.
 func statusStateGlyph(state ui.CardState) (string, color.Color) {
 	switch state {
 	case ui.CardSuccess:
-		return "✓  ", ui.Palette.Success
+		return "✓  ", ui.Palette.RoleDone
 	case ui.CardReady:
-		return "●  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case ui.CardSkipped:
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	case ui.CardWaiting:
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleInFlight
 	case ui.CardFailed:
-		return "✗  ", ui.Palette.Error
+		return "✗  ", ui.Palette.RoleClosed
 	}
-	return "◦  ", ui.Palette.Muted
+	return "●  ", ui.Palette.RoleNeutral
 }
 
 // lifecycleKeyGlyph maps a bosun lifecycle key (one of the keys in
@@ -529,16 +546,19 @@ func lifecycleKeyGlyph(key string) (string, color.Color) {
 
 // statusUpdatedGlyph buckets a workspace's age-in-days into a
 // freshness glyph for the Updated body row. Fresh (<7 days) reads
-// as muted; stale (7-30 days) warns; very stale (>30 days) treats
-// as broken (cleanup candidate).
+// as healthy; stale (7-30 days) needs attention; very stale (>30
+// days) treats as closed (cleanup candidate).
+//
+// State-context call site — see state_grammar.go. Staleness is a
+// state, not an event outcome, so the row uses ● colored to role.
 func statusUpdatedGlyph(days int) (string, color.Color) {
 	switch {
 	case days >= 30:
-		return "✗  ", ui.Palette.Error
+		return "●  ", ui.Palette.RoleClosed
 	case days >= 7:
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	default:
-		return "◦  ", ui.Palette.Muted
+		return "●  ", ui.Palette.RoleOpen
 	}
 }
 

@@ -440,8 +440,13 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	}
 	styledTitle := lipgloss.NewStyle().Foreground(titleColor).Render(value)
 
+	// State-context card: keep glyph color and title color in sync so
+	// the project-scope workspace row reads consistently with the
+	// workspace-scope meta block. statusCardStateColor already returns
+	// the Role* role color for the resolved CardState.
 	card := ui.NewCard(ws.rollup, title).
 		PreserveCase().
+		GlyphColor(titleColor).
 		TitleColor(titleColor).
 		Value(styledTitle)
 
@@ -482,30 +487,34 @@ func pluralize(n int, singular, plural string) string {
 // workspaceRepoBreakdown composes a colored single-line summary of
 // the workspace's repos. Same vocabulary and color story as the
 // project-level summary, just scoped to one workspace.
+//
+// State-context call site — each label is a state bucket, so colors
+// route through the Role* palette aliases (see state_grammar.go).
 func workspaceRepoBreakdown(c workspaceRepoCounts) string {
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral)
+	doneStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleDone)
+	openStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleOpen)
+	attentionStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleAttention)
+	closedStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleClosed)
+	inFlightStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleInFlight)
 
 	parts := []string{
 		muted.Render(fmt.Sprintf("%d %s", c.repos, pluralize(c.repos, "repository", "repositories"))),
 	}
 	if c.done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", c.done)))
+		parts = append(parts, doneStyle.Render(fmt.Sprintf("%d done", c.done)))
 	}
 	if c.ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", c.ready)))
+		parts = append(parts, openStyle.Render(fmt.Sprintf("%d ready", c.ready)))
 	}
 	if c.blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", c.blocked)))
+		parts = append(parts, attentionStyle.Render(fmt.Sprintf("%d blocked", c.blocked)))
 	}
 	if c.pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", c.pending)))
+		parts = append(parts, inFlightStyle.Render(fmt.Sprintf("%d pending", c.pending)))
 	}
 	if c.broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", c.broken)))
+		parts = append(parts, closedStyle.Render(fmt.Sprintf("%d broken", c.broken)))
 	}
 	return strings.Join(parts, muted.Render(", "))
 }
@@ -534,11 +543,11 @@ func renderProjectSummary(states []workspaceState) {
 	ui.Default().Summary(
 		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "workspace", "workspaces")),
 		[]ui.SummarySegment{
-			{Count: done, Label: "done", Color: ui.Palette.Success},
-			{Count: ready, Label: "ready", Color: ui.Palette.Success},
-			{Count: pending, Label: "pending", Color: ui.Palette.Info},
-			{Count: blocked, Label: "blocked", Color: ui.Palette.Warning},
-			{Count: broken, Label: "broken", Color: ui.Palette.Error},
+			{Count: done, Label: "done", Color: ui.Palette.RoleDone},
+			{Count: ready, Label: "ready", Color: ui.Palette.RoleOpen},
+			{Count: pending, Label: "pending", Color: ui.Palette.RoleInFlight},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.RoleAttention},
+			{Count: broken, Label: "broken", Color: ui.Palette.RoleClosed},
 		},
 	)
 }
@@ -762,11 +771,11 @@ func renderWorkspaceSummary(states []repoState) {
 	ui.Default().Summary(
 		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "repository", "repositories")),
 		[]ui.SummarySegment{
-			{Count: done, Label: "done", Color: ui.Palette.Success},
-			{Count: ready, Label: "ready", Color: ui.Palette.Success},
-			{Count: pending, Label: "pending", Color: ui.Palette.Info},
-			{Count: blocked, Label: "blocked", Color: ui.Palette.Warning},
-			{Count: broken, Label: "broken", Color: ui.Palette.Error},
+			{Count: done, Label: "done", Color: ui.Palette.RoleDone},
+			{Count: ready, Label: "ready", Color: ui.Palette.RoleOpen},
+			{Count: pending, Label: "pending", Color: ui.Palette.RoleInFlight},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.RoleAttention},
+			{Count: broken, Label: "broken", Color: ui.Palette.RoleClosed},
 		},
 	)
 }
