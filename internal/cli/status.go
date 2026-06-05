@@ -151,10 +151,21 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 			wg.Wait()
 			return nil
 		}, func() *ui.Card {
-			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr, updatedAt)
+			return buildWorkspaceStoryCard(detail)
 		})
-		// Drain captured events into the timeline now that the card
-		// has printed.
+		// Order: Story → Workspace → Preview. Story morphs in via
+		// RunCardReplace (its return value doesn't go through
+		// Print(), so any Tight() on it wouldn't fire) — we suppress
+		// the next spacer manually so Workspace lands flush below.
+		// Workspace.Tight() chains the suppression into Preview;
+		// Preview is the last meta card and not Tight, so the
+		// trailing blank line separates the meta block from the
+		// per-repo cards that follow.
+		ui.ClearSpacer()
+		buildWorkspaceBranchCard(wsName, updatedAt).Tight().Print()
+		buildWorkspacePreviewCard(previewEnv, previewErr).Print()
+		// Drain captured events into the timeline now that the meta
+		// block has printed.
 		for _, msg := range infoMessages {
 			ui.NewCard(ui.CardSuccess, msg.action).Value(msg.value).Print()
 		}
@@ -550,45 +561,86 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
-// buildWorkspaceIssueCard constructs the issue header card with a
-// three-section KV body: (1) Type/title + Status — what kind of work
-// and where it is in the lifecycle; (2) Preview — the deployment
-// state; (3) Workspace + Updated — where the code lives and when it
-// was last touched. Sections are separated by blank lines for
-// breathing room. Used as the success-card finalizer for the issue
-// fetch's RunCardReplace.
-func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
-	workspacePath := workspaceFilesystemPath(branch)
-	workspaceValue := branch
-	if workspacePath != "" {
-		workspaceValue = osc8Link("file://"+workspacePath, branch)
-	}
-
-	// Build the title value as "KEY: Title" with the key as a
-	// clickable link to the issue tracker.
-	issueRef := detail.Key
-	if detail.URL != "" {
-		issueRef = osc8Link(detail.URL, detail.Key)
-	}
-	boldTitle := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
-
+// buildWorkspaceStoryCard renders the issue/story meta card. Title
+// is the issue type (Story / Bug / Task / etc., "Issue" if unknown);
+// value is the OSC8-linked issue key + bold title with the tracker
+// status folded into a colored parenthetical at the end — same shape
+// as the PR row, so the card glyph (lifecycle stage) and the parens
+// describe the same signal.
+//
+// Renders as a CardReady (●) with the dot color overridden per
+// lifecycle state — meta cards are state indicators, so they share
+// one glyph shape and let color carry the signal.
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspaceStoryCard(detail issuepkg.Issue) *ui.Card {
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
 	}
+	dotColor := lifecycleKeyDotColor(lifecycleKeyForStatus(detail.Status))
 
-	return ui.NewCard(ui.CardSuccess, "").
-		KV(
-			typeLabel, boldTitle,
-			"Status", detail.Status,
-		).
-		Text("").
-		KV("Preview", statusPreviewValue(previewEnv, previewErr)).
-		Text("").
-		KV(
-			"Workspace", workspaceValue,
-			"Updated", statusUpdatedValue(updatedAt),
-		)
+	issueRef := detail.Key
+	if detail.URL != "" {
+		issueRef = osc8Link(detail.URL, detail.Key)
+	}
+	value := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+
+	if detail.Status != "" {
+		parens := lipgloss.NewStyle().Foreground(dotColor).Render("(" + detail.Status + ")")
+		value += " " + parens
+	}
+
+	return ui.NewCard(ui.CardReady, typeLabel).
+		GlyphColor(dotColor).
+		Value(value).
+		AlignWidth(statusMetaAlignWidth)
+}
+
+// buildWorkspacePreviewCard renders the preview-environment meta
+// card. Title is "Preview"; value is the preview URL/name or a muted
+// "(none)" sentinel produced by statusPreviewValue.
+//
+// Renders as a CardReady (●) with the dot color overridden per
+// preview-probe outcome (see [previewDotColor]).
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspacePreviewCard(env preview.Environment, err error) *ui.Card {
+	dotColor := previewDotColor(env, err)
+	value := statusPreviewValue(env, err)
+	return ui.NewCard(ui.CardReady, "Preview").
+		GlyphColor(dotColor).
+		Value(value).
+		AlignWidth(statusMetaAlignWidth)
+}
+
+// buildWorkspaceBranchCard renders the workspace-branch meta card.
+// Title is "Workspace"; value is the branch name (file:// linked to
+// its worktree path when resolvable) plus a colored age
+// parenthetical at the end — same shape as the Story card's status
+// parens and the PR row.
+//
+// Renders as a CardReady (●) with the dot color overridden per
+// staleness bucket (see [stalenessColor]).
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspaceBranchCard(branch string, updatedAt time.Time) *ui.Card {
+	dotColor := stalenessColor(updatedAt)
+	workspacePath := workspaceFilesystemPath(branch)
+	value := branch
+	if workspacePath != "" {
+		value = osc8Link("file://"+workspacePath, branch)
+	}
+
+	if !updatedAt.IsZero() {
+		parens := lipgloss.NewStyle().Foreground(dotColor).Render("(" + humanizeAge(time.Since(updatedAt)) + ")")
+		value += " " + parens
+	}
+
+	return ui.NewCard(ui.CardReady, "Workspace").
+		GlyphColor(dotColor).
+		Value(value).
+		AlignWidth(statusMetaAlignWidth)
 }
 
 // repoState bundles all the per-repo data fetched during status
@@ -669,7 +721,7 @@ func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card
 
 	branchGlyph, branchValue := statusBranchRow(s.Branch, rs.branchURL, rs.sync, s.Dirty)
 	checksGlyph, checksValue := statusChecksRow(rs.checks, rs.checksURL)
-	prGlyph, prValue := statusPRRow(rs.pr)
+	prGlyph, prValue := statusPRRow(rs.pr, rs.checks)
 
 	return ui.NewCard(state, s.Name).
 		PreserveCase().

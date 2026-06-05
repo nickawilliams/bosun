@@ -20,6 +20,15 @@ import (
 // "Branch", "Checks", "Repos", "PR" — pad to the same width.
 const statusKVWidth = 7
 
+// statusMetaAlignWidth is the Card.AlignWidth value applied to the
+// workspace meta-block cards (Story / Preview / Workspace) so their
+// " · " separator column lines up with the per-repo card body rows'
+// " · " separator. Derived from the repo-row math: the body row has
+// indent + per-row glyph + gap + statusKVWidth-padded label + " ·";
+// the meta-card title row has pad + card glyph + gap + alignWidth
+// + " ·". Matching the two columns gives alignWidth = 13.
+const statusMetaAlignWidth = 13
+
 // statusRowKV composes a body row's content as
 // "<padded muted key> · <value>", mirroring Card.KV's default
 // styling so plan-style rows align on the dot separator. Labels
@@ -172,95 +181,102 @@ func statusBranchRow(branch, branchURL string, sync vcs.BranchSync, dirty bool) 
 // 6-state display label in parens: merged / approved / open /
 // changes_requested / draft / closed (folding review state into
 // "open" subdivisions).
-func statusPRRow(pr code.PullRequest) (string, string) {
+func statusPRRow(pr code.PullRequest, checks code.CheckRollup) (string, string) {
 	if pr.Number == 0 {
 		// No PR exists — muted "(none)".
-		glyph := statusStyledGlyph(statusPRGlyph("", ""))
+		glyph := statusStyledGlyph(statusPRGlyph("", "", "", code.CheckRollup{}))
 		return glyph, lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(none)")
 	}
 
-	glyph := statusStyledGlyph(statusPRGlyph(pr.State, pr.MergeableState))
+	label, col, glyphChar := statusPRDominant(pr.State, pr.MergeableState, pr.Review, checks)
+	glyph := statusStyledGlyph(glyphChar+"  ", col)
 
 	number := fmt.Sprintf("#%d", pr.Number)
 	v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(number)
 	if pr.URL != "" {
 		v = osc8Link(pr.URL, v)
 	}
-	if label := statusPRStatusLabel(pr.State, pr.Review); label != "" {
-		styled := lipgloss.NewStyle().
-			Foreground(statusPRStatusColor(pr.State, pr.Review)).
-			Render("(" + label + ")")
+	if label != "" {
+		styled := lipgloss.NewStyle().Foreground(col).Render("(" + label + ")")
 		v += " " + styled
 	}
 	return glyph, v
 }
 
-// statusPRGlyph returns the 3-cell glyph token for the PR row.
-// Aligns with the 5-state vocab (✓ ● ▲ ⧗ ✗) with a single meta-state
-// exception: `?` for open + unknown mergeable_state.
-func statusPRGlyph(state, mergeState string) (string, color.Color) {
+// statusPRDominant folds state, mergeable_state, review state, and
+// the check rollup into a single dominant condition: a parenthetical
+// label, a palette color, and the bare glyph character. The same
+// condition drives all three, so the glyph color and parenthetical
+// color always agree — "approved" no longer reads green next to a
+// warning glyph because the row is behind base, has changes
+// requested, or is awaiting required checks.
+//
+// The check rollup disambiguates the "blocked" mergeable_state: when
+// at least one required check is still running (no failures yet), the
+// PR is awaiting CI rather than truly blocked, so the row renders as
+// info/pending instead of warning.
+//
+// Precedence for open PRs (high → low):
+//
+//  1. review = changes_requested  → "changes requested" / warning / ▲
+//  2. mergeable = blocked + checks running
+//     → "required checks pending" / info / ⧗
+//  3. mergeable in {dirty, behind, unstable, blocked}
+//     → mapped label / warning / ▲
+//  4. mergeable in {clean, has_hooks} + review = approved
+//     → "approved" / success / ●
+//  5. mergeable = unknown → "unknown" / muted / ?
+//  6. else → "open" / info / ⧗
+func statusPRDominant(state, mergeableState, reviewState string, checks code.CheckRollup) (label string, col color.Color, glyph string) {
 	switch state {
 	case "merged":
-		return "✓  ", ui.Palette.Success
+		return "merged", ui.Palette.Primary, "✓"
+	case "draft":
+		return "draft", ui.Palette.Muted, "⧗"
+	case "closed":
+		return "closed", ui.Palette.Error, "✗"
 	case "open":
-		switch mergeState {
-		case "clean":
-			return "●  ", ui.Palette.Success
-		case "dirty", "behind", "unstable", "blocked":
-			return "▲  ", ui.Palette.Warning
+		if reviewState == "changes_requested" {
+			return "changes requested", ui.Palette.Warning, "▲"
+		}
+		switch mergeableState {
+		case "dirty":
+			return "conflicts", ui.Palette.Warning, "▲"
+		case "behind":
+			return "behind base", ui.Palette.Warning, "▲"
+		case "unstable":
+			return "checks failing", ui.Palette.Warning, "▲"
+		case "blocked":
+			// "blocked" most often means "required check failing or
+			// missing", but it also covers "required check still
+			// running" — same opaque enum either way. If the check
+			// rollup says we're mid-run with nothing failing, surface
+			// that as a pending signal instead of warning.
+			if checks.State == "running" {
+				return "required checks pending", ui.Palette.Info, "⧗"
+			}
+			return "blocked", ui.Palette.Warning, "▲"
 		case "unknown":
-			return "?  ", ui.Palette.Muted
+			return "unknown", ui.Palette.Muted, "?"
+		case "clean", "has_hooks":
+			if reviewState == "approved" {
+				return "approved", ui.Palette.Success, "●"
+			}
+			return "open", ui.Palette.Info, "⧗"
 		}
-		return "⧗  ", ui.Palette.Info
-	case "draft":
-		return "⧗  ", ui.Palette.Info
-	case "closed":
-		return "✗  ", ui.Palette.Error
-	default: // "" (no PR)
-		return "⧗  ", ui.Palette.Info
+		return "open", ui.Palette.Info, "⧗"
 	}
+	// No PR — caller short-circuits before reaching here; provide a
+	// safe pending glyph for the empty-state path.
+	return "", ui.Palette.Info, "⧗"
 }
 
-// statusPRStatusLabel returns the display state for the parenthetical
-// after the PR number. Folds review state into "open" as
-// subdivisions: open + approved → "approved", + changes_requested →
-// "changes requested", else bare "open".
-func statusPRStatusLabel(state, reviewState string) string {
-	switch state {
-	case "merged", "draft", "closed":
-		return state
-	case "open":
-		switch reviewState {
-		case "approved":
-			return "approved"
-		case "changes_requested":
-			return "changes requested"
-		}
-		return "open"
-	}
-	return ""
-}
-
-// statusPRStatusColor returns the palette color for the unified PR
-// display state, echoing GitHub's badge palette.
-func statusPRStatusColor(state, reviewState string) color.Color {
-	switch state {
-	case "merged":
-		return ui.Palette.Primary // indigo, our purple-family
-	case "open":
-		switch reviewState {
-		case "approved":
-			return ui.Palette.Success
-		case "changes_requested":
-			return ui.Palette.Warning
-		}
-		return ui.Palette.Info
-	case "draft":
-		return ui.Palette.Muted
-	case "closed":
-		return ui.Palette.Error
-	}
-	return ui.Palette.Muted
+// statusPRGlyph returns the 3-cell glyph token for the PR row.
+// Thin wrapper over statusPRDominant so the existing call sites
+// (and the glyph unit tests) keep their shape.
+func statusPRGlyph(state, mergeableState, reviewState string, checks code.CheckRollup) (string, color.Color) {
+	_, col, glyph := statusPRDominant(state, mergeableState, reviewState, checks)
+	return glyph + "  ", col
 }
 
 // statusChecksRow returns the (glyph, value) pair for a repo card's
@@ -460,6 +476,81 @@ func statusUpdatedGlyph(days int) (string, color.Color) {
 	default:
 		return "◦  ", ui.Palette.Muted
 	}
+}
+
+// The workspace meta cards (Story, Workspace, Preview) all render as
+// a colored ● dot — they're state indicators, not action results.
+// The dot color carries the semantic; shape stays uniform across the
+// block so the meta row reads as a scannable status strip. The
+// per-aspect color helpers below feed Card.GlyphColor on a CardReady
+// card to produce the dot.
+
+// stalenessColor returns the dot color for the Workspace meta card
+// (and for the age parenthetical in its value). Fresh reads as an
+// active/healthy workspace, stale needs attention, very stale is a
+// terminal "closed/abandoned" signal; an unknown timestamp renders
+// as neutral.
+//
+// State-context call site — see state_grammar.go.
+func stalenessColor(t time.Time) color.Color {
+	if t.IsZero() {
+		return ui.Palette.RoleNeutral
+	}
+	days := int(time.Since(t).Hours() / 24)
+	switch {
+	case days >= 30:
+		return ui.Palette.RoleClosed
+	case days >= 7:
+		return ui.Palette.RoleAttention
+	default:
+		return ui.Palette.RoleOpen
+	}
+}
+
+// lifecycleKeyDotColor returns the dot color for the Story meta
+// card. Done / ready_for_release read as open-healthy (action
+// available or finalized in tracker); blocked needs attention;
+// everything else (in flight) reads as in-flight blue.
+//
+// Note that "done" maps to RoleOpen (green) on the dot, not RoleDone
+// (purple). The "done" lifecycle stage shows as a green ● because
+// the *card glyph itself* is a state-active marker; if we ever
+// promote done to a terminal ✓, that's the place to use RoleDone.
+//
+// State-context call site — see state_grammar.go.
+func lifecycleKeyDotColor(key string) color.Color {
+	switch key {
+	case "done", "ready_for_release":
+		return ui.Palette.RoleOpen
+	case "blocked":
+		return ui.Palette.RoleAttention
+	}
+	return ui.Palette.RoleInFlight
+}
+
+// previewDotColor returns the dot color for the Preview meta card.
+// Probed-alive reads as open-healthy; missing or unverified needs
+// attention; generic error is terminal-closed.
+//
+// State-context call site — see state_grammar.go.
+func previewDotColor(env preview.Environment, err error) color.Color {
+	if errors.Is(err, preview.ErrNoEnvironment) {
+		return ui.Palette.RoleAttention
+	}
+	var probeErr *preview.ProbeError
+	if errors.As(err, &probeErr) {
+		return ui.Palette.RoleAttention
+	}
+	if err != nil {
+		return ui.Palette.RoleClosed
+	}
+	if env.Name == "" {
+		return ui.Palette.RoleAttention
+	}
+	if env.Probed && env.Alive {
+		return ui.Palette.RoleOpen
+	}
+	return ui.Palette.RoleInFlight
 }
 
 // humanizeAge formats a duration into a coarse "N unit ago" label

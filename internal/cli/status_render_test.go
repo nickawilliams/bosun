@@ -116,53 +116,57 @@ func TestCountToken(t *testing.T) {
 	}
 }
 
-func TestStatusPRStatusLabel(t *testing.T) {
+func TestStatusPRDominant(t *testing.T) {
 	cases := []struct {
 		name        string
 		state       string
+		mergeState  string
 		reviewState string
-		want        string
+		checks      code.CheckRollup
+		wantLabel   string
+		wantGlyph   string
 	}{
-		{name: "merged", state: "merged", want: "merged"},
-		{name: "draft", state: "draft", want: "draft"},
-		{name: "closed", state: "closed", want: "closed"},
-		{name: "open + approved → approved", state: "open", reviewState: "approved", want: "approved"},
-		{name: "open + changes_requested → changes requested", state: "open", reviewState: "changes_requested", want: "changes requested"},
-		{name: "open + awaiting → open", state: "open", reviewState: "awaiting", want: "open"},
-		{name: "open + no review → open", state: "open", want: "open"},
-		{name: "no PR → empty", want: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := statusPRStatusLabel(tc.state, tc.reviewState); got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
+		// Terminal states ignore mergeable, review, and checks.
+		{name: "merged", state: "merged", wantLabel: "merged", wantGlyph: "✓"},
+		{name: "draft", state: "draft", wantLabel: "draft", wantGlyph: "⧗"},
+		{name: "closed", state: "closed", wantLabel: "closed", wantGlyph: "✗"},
 
-func TestStatusPRGlyph(t *testing.T) {
-	cases := []struct {
-		name       string
-		state      string
-		mergeState string
-		wantGlyph  string
-	}{
-		{name: "merged", state: "merged", wantGlyph: "✓  "},
-		{name: "open + clean → ready", state: "open", mergeState: "clean", wantGlyph: "●  "},
-		{name: "open + dirty → blocked", state: "open", mergeState: "dirty", wantGlyph: "▲  "},
-		{name: "open + behind → blocked", state: "open", mergeState: "behind", wantGlyph: "▲  "},
-		{name: "open + blocked → blocked", state: "open", mergeState: "blocked", wantGlyph: "▲  "},
-		{name: "open + unstable → blocked", state: "open", mergeState: "unstable", wantGlyph: "▲  "},
-		{name: "open + unknown → meta", state: "open", mergeState: "unknown", wantGlyph: "?  "},
-		{name: "open + empty → pending", state: "open", wantGlyph: "⧗  "},
-		{name: "draft → pending", state: "draft", wantGlyph: "⧗  "},
-		{name: "closed → broken", state: "closed", wantGlyph: "✗  "},
-		{name: "no PR → pending", wantGlyph: "⧗  "},
+		// Happy path: mergeable + approved.
+		{name: "open + clean + approved → ready", state: "open", mergeState: "clean", reviewState: "approved", wantLabel: "approved", wantGlyph: "●"},
+		{name: "open + clean + no review → open", state: "open", mergeState: "clean", wantLabel: "open", wantGlyph: "⧗"},
+		{name: "open + has_hooks + approved → ready", state: "open", mergeState: "has_hooks", reviewState: "approved", wantLabel: "approved", wantGlyph: "●"},
+
+		// changes_requested wins over mergeable state — author needs to act regardless.
+		{name: "open + clean + changes_requested → attention", state: "open", mergeState: "clean", reviewState: "changes_requested", wantLabel: "changes requested", wantGlyph: "▲"},
+		{name: "open + behind + changes_requested → attention (review wins)", state: "open", mergeState: "behind", reviewState: "changes_requested", wantLabel: "changes requested", wantGlyph: "▲"},
+
+		// Mergeable problems surface the specific blocker, color matches glyph.
+		{name: "open + dirty + approved → conflicts (mergeability shadows approval)", state: "open", mergeState: "dirty", reviewState: "approved", wantLabel: "conflicts", wantGlyph: "▲"},
+		{name: "open + behind + approved → behind base", state: "open", mergeState: "behind", reviewState: "approved", wantLabel: "behind base", wantGlyph: "▲"},
+		{name: "open + unstable + approved → checks failing", state: "open", mergeState: "unstable", reviewState: "approved", wantLabel: "checks failing", wantGlyph: "▲"},
+		{name: "open + blocked + approved → blocked", state: "open", mergeState: "blocked", reviewState: "approved", wantLabel: "blocked", wantGlyph: "▲"},
+
+		// Blocked + checks running → pending (info, not warning).
+		{name: "open + blocked + checks running → required checks pending", state: "open", mergeState: "blocked", checks: code.CheckRollup{State: "running", Running: 1}, wantLabel: "required checks pending", wantGlyph: "⧗"},
+		{name: "open + blocked + checks running + approved → required checks pending", state: "open", mergeState: "blocked", reviewState: "approved", checks: code.CheckRollup{State: "running", Running: 2}, wantLabel: "required checks pending", wantGlyph: "⧗"},
+		// changes_requested still wins over the running-checks pending state.
+		{name: "open + blocked + checks running + changes_requested → changes requested", state: "open", mergeState: "blocked", reviewState: "changes_requested", checks: code.CheckRollup{State: "running"}, wantLabel: "changes requested", wantGlyph: "▲"},
+		// Blocked + failing checks → real block (warning), not pending.
+		{name: "open + blocked + checks failing → blocked", state: "open", mergeState: "blocked", checks: code.CheckRollup{State: "failing", Failing: 1}, wantLabel: "blocked", wantGlyph: "▲"},
+
+		// Indeterminate / pending states.
+		{name: "open + unknown → unknown", state: "open", mergeState: "unknown", wantLabel: "unknown", wantGlyph: "?"},
+		{name: "open + empty mergeable → open", state: "open", wantLabel: "open", wantGlyph: "⧗"},
+
+		// No PR.
+		{name: "no PR → empty label, pending glyph", wantLabel: "", wantGlyph: "⧗"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			glyph, _ := statusPRGlyph(tc.state, tc.mergeState)
+			label, _, glyph := statusPRDominant(tc.state, tc.mergeState, tc.reviewState, tc.checks)
+			if label != tc.wantLabel {
+				t.Errorf("label = %q, want %q", label, tc.wantLabel)
+			}
 			if glyph != tc.wantGlyph {
 				t.Errorf("glyph = %q, want %q", glyph, tc.wantGlyph)
 			}
