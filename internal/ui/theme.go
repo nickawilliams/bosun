@@ -13,6 +13,22 @@ import (
 // palette holds the canonical color values for the entire application.
 // Every styled element — output helpers, huh forms, spinners, tables —
 // derives its colors from this struct.
+//
+// Two parallel color vocabularies live here. They alias the same
+// underlying color values; the names communicate intent at the call
+// site, and `grep` finds the right places when you need to audit one
+// context vs the other.
+//
+//	Severity colors (event contexts — Doctor checks, action results):
+//	  Success / Warning / Error / Info / Muted — "what happened"
+//
+//	Resolution-role colors (state contexts — Status rows, lifecycle
+//	indicators):
+//	  RoleOpen / RoleDone / RoleClosed / RoleAttention / RoleInFlight
+//	  / RoleNeutral — "where this aspect is right now"
+//
+// See state_grammar.go for the grammar that ties these to glyph
+// choices and decides which vocabulary applies in which context.
 type palette struct {
 	// Semantic colors.
 	Primary   color.Color // Titles, headings
@@ -27,6 +43,17 @@ type palette struct {
 	Warning  color.Color // Caution, dry-run indicators
 	Muted    color.Color // Secondary text, descriptions
 	NormalFg color.Color // Default foreground
+
+	// Resolution-role colors — for state-context rows (see
+	// state_grammar.go). Alias the severity colors but read as
+	// intent at the call site. Use these when the row describes
+	// "what this aspect currently is", not "what just happened".
+	RoleOpen      color.Color // Active / healthy aspect       (= Success, green)
+	RoleDone      color.Color // Terminal positive resolution  (= Primary, purple)
+	RoleClosed    color.Color // Terminal negative resolution  (= Error, red)
+	RoleAttention color.Color // Needs intervention            (= Warning, yellow)
+	RoleInFlight  color.Color // Transitioning right now       (= Info, blue)
+	RoleNeutral   color.Color // Unknown / unset / not started (= Muted, gray)
 
 	// Chrome colors — structural UI elements.
 	Recessed color.Color // Timeline spine, blurred button bg, help separator
@@ -163,7 +190,7 @@ func lerpColors(a, b color.Color, n int) []color.Color {
 }
 
 func defaultPalette() palette {
-	return palette{
+	p := palette{
 		Primary:   lipgloss.Color("#7571F9"), // Indigo
 		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
 		Brand:      lipgloss.Color("#9997CC"), // Desaturated indigo (app name in breadcrumbs)
@@ -187,10 +214,12 @@ func defaultPalette() palette {
 		Bullet: "•",
 		Dot:    "·",
 	}
+	applyRoleAliases(&p)
+	return p
 }
 
 func ansiPalette() palette {
-	return palette{
+	p := palette{
 		Primary:   lipgloss.BrightBlue,
 		Secondary: lipgloss.Blue,
 		Brand:      lipgloss.Blue,
@@ -210,17 +239,34 @@ func ansiPalette() palette {
 
 		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
+	applyRoleAliases(&p)
+	return p
 }
 
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
-	return palette{
+	p := palette{
 		Primary: nc, Secondary: nc, Brand: nc, LogoTop: nc, LogoBottom: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 
 		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
+	applyRoleAliases(&p)
+	return p
+}
+
+// applyRoleAliases populates the palette's resolution-role color
+// fields from the severity colors. Kept in one place so any future
+// re-wiring (e.g., decoupling RoleDone from Primary) lives in a
+// single spot rather than scattered across each palette constructor.
+func applyRoleAliases(p *palette) {
+	p.RoleOpen = p.Success
+	p.RoleDone = p.Primary
+	p.RoleClosed = p.Error
+	p.RoleAttention = p.Warning
+	p.RoleInFlight = p.Info
+	p.RoleNeutral = p.Muted
 }
 
 // ApplyColorMode sets the active palette based on the given mode string
