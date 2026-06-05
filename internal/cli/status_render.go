@@ -70,12 +70,50 @@ func statusCardStateColor(state ui.CardState) color.Color {
 	return ui.Palette.Primary
 }
 
+// repoCardGlyphVisual returns the (CardState, color) pair used to
+// render a repo card's gutter glyph + title color under the
+// state-context grammar (state_grammar.go). Most states render as ●
+// colored to the appropriate role; the two terminal PR outcomes use
+// their event-shaped glyphs (✓ purple for merged, ✗ red for closed).
+//
+// Kept distinct from resolveRepoCardState below, which retains its
+// 5-bucket CardState distinctions for the workspace and project
+// tally code (CardSuccess / CardReady / CardSkipped / CardWaiting /
+// CardFailed map to done / ready / blocked / pending / broken in
+// the summary). Two functions, two jobs: one for rendering the row,
+// one for categorizing it.
+func repoCardGlyphVisual(branchState string, pr code.PullRequest) (ui.CardState, color.Color) {
+	switch pr.State {
+	case "merged":
+		return ui.CardSuccess, ui.Palette.RoleDone
+	case "closed":
+		return ui.CardFailed, ui.Palette.RoleClosed
+	case "draft":
+		return ui.CardReady, ui.Palette.RoleNeutral
+	}
+	if strings.HasPrefix(branchState, "diverged") || strings.HasPrefix(branchState, "behind") {
+		return ui.CardReady, ui.Palette.RoleAttention
+	}
+	if pr.State == "open" {
+		switch pr.MergeableState {
+		case "clean", "has_hooks":
+			return ui.CardReady, ui.Palette.RoleOpen
+		case "dirty", "behind", "blocked", "unstable":
+			return ui.CardReady, ui.Palette.RoleAttention
+		}
+		return ui.CardReady, ui.Palette.RoleInFlight
+	}
+	return ui.CardReady, ui.Palette.RoleInFlight
+}
+
 // resolveRepoCardState maps a repo's branch + PR state onto the
-// 5-state aggregate vocabulary used at the gutter level. Mirrors the
-// scratchpad's resolveWstatRepoCardState. Precedence: terminal PR
-// states (merged → done, closed → broken) win; then branch problems
-// (diverged / behind) → blocked; then PR mergeability (clean → ready,
-// dirty/behind/blocked/unstable → blocked); else pending.
+// 5-state aggregate vocabulary used by the workspace tally code.
+// Mirrors the scratchpad's resolveWstatRepoCardState. Precedence:
+// terminal PR states (merged → done, closed → broken) win; then
+// branch problems (diverged / behind) → blocked; then PR
+// mergeability (clean → ready, dirty/behind/blocked/unstable →
+// blocked); else pending. Used for counting only — glyph rendering
+// for repo cards goes through repoCardGlyphVisual above.
 func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState {
 	switch pr.State {
 	case "merged":
@@ -123,25 +161,31 @@ func branchStateString(sync vcs.BranchSync) string {
 // 1 char glyph + 2 cells for an optional commit count (single digit
 // + space, "9+" for double-digit, or two spaces when no count
 // applies). Keeps repo cards' glyph columns aligned across the run.
+//
+// State-context call site — see state_grammar.go. The directional
+// glyphs (↕ ↑ ↓ +) are domain-specific state markers that encode
+// info ● can't carry (direction + commit count); the grammar allows
+// these specialized state glyphs. Only "in sync" uses the default
+// ● state glyph since there's no count to carry there.
 func statusBranchGlyph(sync vcs.BranchSync) (string, color.Color) {
 	if !sync.HasRemote {
 		// + means "additions" — N local commits ahead of base, no
 		// remote yet. Pairs cleanly with digits and reads directly
 		// as "N to push."
-		return "+" + countToken(sync.Ahead), ui.Palette.Muted
+		return "+" + countToken(sync.Ahead), ui.Palette.RoleNeutral
 	}
 	switch {
 	case sync.Ahead == 0 && sync.Behind == 0:
-		return "✓  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case sync.Ahead > 0 && sync.Behind > 0:
 		// Sum of ahead + behind — magnitude of divergence, not its
 		// split. The glyph says "two-way", the number says "this
 		// much to reconcile."
-		return "↕" + countToken(sync.Ahead+sync.Behind), ui.Palette.Error
+		return "↕" + countToken(sync.Ahead+sync.Behind), ui.Palette.RoleClosed
 	case sync.Ahead > 0:
-		return "↑" + countToken(sync.Ahead), ui.Palette.Info
+		return "↑" + countToken(sync.Ahead), ui.Palette.RoleInFlight
 	default:
-		return "↓" + countToken(sync.Behind), ui.Palette.Warning
+		return "↓" + countToken(sync.Behind), ui.Palette.RoleAttention
 	}
 }
 
@@ -214,61 +258,73 @@ func statusPRRow(pr code.PullRequest, checks code.CheckRollup) (string, string) 
 // The check rollup disambiguates the "blocked" mergeable_state: when
 // at least one required check is still running (no failures yet), the
 // PR is awaiting CI rather than truly blocked, so the row renders as
-// info/pending instead of warning.
+// in-flight instead of attention.
+//
+// Per the state-context grammar (state_grammar.go), only the two
+// terminal PR outcomes keep their event-shaped glyphs:
+//
+//	merged → ✓ + RoleDone (purple)  — terminal positive resolution
+//	closed → ✗ + RoleClosed (red)   — terminal negative resolution
+//
+// Every other case is a current state, so the row uses ● and the
+// color carries the role (RoleOpen / RoleAttention / RoleInFlight /
+// RoleNeutral). Glyph and color always agree by construction —
+// removing the "approved is green but glyph is yellow" class of
+// inconsistency we hit before.
 //
 // Precedence for open PRs (high → low):
 //
-//  1. review = changes_requested  → "changes requested" / warning / ▲
+//  1. review = changes_requested  → "changes requested" / attention
 //  2. mergeable = blocked + checks running
-//     → "required checks pending" / info / ⧗
+//     → "required checks pending" / in-flight
 //  3. mergeable in {dirty, behind, unstable, blocked}
-//     → mapped label / warning / ▲
+//     → mapped label / attention
 //  4. mergeable in {clean, has_hooks} + review = approved
-//     → "approved" / success / ●
-//  5. mergeable = unknown → "unknown" / muted / ?
-//  6. else → "open" / info / ⧗
+//     → "approved" / open
+//  5. mergeable = unknown → "unknown" / neutral
+//  6. else → "open" / in-flight
 func statusPRDominant(state, mergeableState, reviewState string, checks code.CheckRollup) (label string, col color.Color, glyph string) {
 	switch state {
 	case "merged":
-		return "merged", ui.Palette.Primary, "✓"
+		return "merged", ui.Palette.RoleDone, "✓"
 	case "draft":
-		return "draft", ui.Palette.Muted, "⧗"
+		return "draft", ui.Palette.RoleNeutral, "●"
 	case "closed":
-		return "closed", ui.Palette.Error, "✗"
+		return "closed", ui.Palette.RoleClosed, "✗"
 	case "open":
 		if reviewState == "changes_requested" {
-			return "changes requested", ui.Palette.Warning, "▲"
+			return "changes requested", ui.Palette.RoleAttention, "●"
 		}
 		switch mergeableState {
 		case "dirty":
-			return "conflicts", ui.Palette.Warning, "▲"
+			return "conflicts", ui.Palette.RoleAttention, "●"
 		case "behind":
-			return "behind base", ui.Palette.Warning, "▲"
+			return "behind base", ui.Palette.RoleAttention, "●"
 		case "unstable":
-			return "checks failing", ui.Palette.Warning, "▲"
+			return "checks failing", ui.Palette.RoleAttention, "●"
 		case "blocked":
 			// "blocked" most often means "required check failing or
 			// missing", but it also covers "required check still
 			// running" — same opaque enum either way. If the check
 			// rollup says we're mid-run with nothing failing, surface
-			// that as a pending signal instead of warning.
+			// that as an in-flight signal instead of attention.
 			if checks.State == "running" {
-				return "required checks pending", ui.Palette.Info, "⧗"
+				return "required checks pending", ui.Palette.RoleInFlight, "●"
 			}
-			return "blocked", ui.Palette.Warning, "▲"
+			return "blocked", ui.Palette.RoleAttention, "●"
 		case "unknown":
-			return "unknown", ui.Palette.Muted, "?"
+			return "unknown", ui.Palette.RoleNeutral, "●"
 		case "clean", "has_hooks":
 			if reviewState == "approved" {
-				return "approved", ui.Palette.Success, "●"
+				return "approved", ui.Palette.RoleOpen, "●"
 			}
-			return "open", ui.Palette.Info, "⧗"
+			return "open", ui.Palette.RoleInFlight, "●"
 		}
-		return "open", ui.Palette.Info, "⧗"
+		return "open", ui.Palette.RoleInFlight, "●"
 	}
 	// No PR — caller short-circuits before reaching here; provide a
-	// safe pending glyph for the empty-state path.
-	return "", ui.Palette.Info, "⧗"
+	// safe in-flight glyph for the empty-state path.
+	return "", ui.Palette.RoleInFlight, "●"
 }
 
 // statusPRGlyph returns the 3-cell glyph token for the PR row.
@@ -299,18 +355,21 @@ func statusChecksRow(rollup code.CheckRollup, checksURL string) (string, string)
 }
 
 // statusChecksGlyph maps a checks rollup state onto the 3-cell glyph
-// token. Aligns with the 5-state vocab — passing → ✓, failing → ▲
-// (blocked), running / none → ⧗ (pending).
+// token. All states render as ● colored to severity — checks are an
+// ongoing aspect (new commits can change the result), so the row is
+// always state-context, never terminal.
+//
+// State-context call site — see state_grammar.go.
 func statusChecksGlyph(state string) (string, color.Color) {
 	switch state {
 	case "passing":
-		return "✓  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case "failing":
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	case "running":
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleInFlight
 	default: // "none" or unknown
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleNeutral
 	}
 }
 
@@ -445,22 +504,27 @@ func statusStateGlyph(state ui.CardState) (string, color.Color) {
 }
 
 // lifecycleKeyGlyph maps a bosun lifecycle key (one of the keys in
-// lifecycleStatusKeys, plus "done") onto the 5-state vocab for the
-// Status body row. Keyed on the canonical bosun lifecycle vocab
-// rather than provider-specific workflow strings — callers do the
-// reverse-lookup via lifecycleKeyForStatus first, so user overrides
-// in the `statuses.*` config flow through naturally. Unknown keys
-// (including "" when the status isn't mapped) fall back to pending.
+// lifecycleStatusKeys, plus "done") onto a 3-cell glyph + color.
+// Keyed on the canonical bosun lifecycle vocab rather than
+// provider-specific workflow strings — callers do the reverse-lookup
+// via lifecycleKeyForStatus first, so user overrides in the
+// `statuses.*` config flow through naturally. Unknown keys (including
+// "" when the status isn't mapped) fall back to in-flight.
+//
+// State-context call site — see state_grammar.go. Only "done"
+// uses ✓ (terminal positive resolution, RoleDone/purple); every
+// other lifecycle stage is an active state and renders as ● colored
+// to its role.
 func lifecycleKeyGlyph(key string) (string, color.Color) {
 	switch key {
 	case "done":
-		return "✓  ", ui.Palette.Success
+		return "✓  ", ui.Palette.RoleDone
 	case "ready_for_release":
-		return "●  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case "blocked":
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	}
-	return "⧗  ", ui.Palette.Info
+	return "●  ", ui.Palette.RoleInFlight
 }
 
 // statusUpdatedGlyph buckets a workspace's age-in-days into a

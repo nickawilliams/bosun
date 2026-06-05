@@ -715,9 +715,13 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 // gutter glyph, state-tinted title, and three body rows (Branch /
 // Checks / PR). Used as the success-card finalizer for the per-repo
 // RunCardThen.
+//
+// Gutter glyph + title color come from repoCardGlyphVisual, which
+// applies the state-context grammar (●  for active states colored
+// to role; ✓ purple for terminal merged; ✗ red for terminal closed).
 func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card {
 	branchState := branchStateString(rs.sync)
-	state := resolveRepoCardState(branchState, rs.pr)
+	state, glyphCol := repoCardGlyphVisual(branchState, rs.pr)
 
 	branchGlyph, branchValue := statusBranchRow(s.Branch, rs.branchURL, rs.sync, s.Dirty)
 	checksGlyph, checksValue := statusChecksRow(rs.checks, rs.checksURL)
@@ -725,7 +729,8 @@ func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card
 
 	return ui.NewCard(state, s.Name).
 		PreserveCase().
-		TitleColor(statusCardStateColor(state)).
+		GlyphColor(glyphCol).
+		TitleColor(glyphCol).
 		Item(branchGlyph, statusRowKV("Branch", branchValue)).
 		Item(checksGlyph, statusRowKV("Checks", checksValue)).
 		Item(prGlyph, statusRowKV("PR", prValue))
