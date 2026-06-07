@@ -82,11 +82,7 @@ func (pc *PlanCard) PrintRewindable() func() {
 // same primitive as status repo cards and Plan.Render().
 func (pc *PlanCard) renderWithGlyph(glyph string) string {
 	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
-	widths := pc.plan.columnWidths()
-	for _, item := range pc.plan.items {
-		g, content := planItemParts(item, widths)
-		card.Item(g, content)
-	}
+	pc.plan.AppendItemsToCard(card)
 	return card.renderWithGlyph(glyph)
 }
 

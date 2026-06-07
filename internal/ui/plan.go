@@ -68,12 +68,22 @@ func (p *Plan) Render() string {
 		return ""
 	}
 	card := NewCard(CardInfo, "Plan").Value(p.Summary())
+	p.AppendItemsToCard(card)
+	return card.Render()
+}
+
+// AppendItemsToCard adds one Card.Item row per plan item to the
+// given card and returns the card for chaining. Lets callers
+// compose a card (with their choice of title/state/etc.) and then
+// drop the plan's items into it without reaching into the plan's
+// private column-width or item-formatting helpers.
+func (p *Plan) AppendItemsToCard(c *Card) *Card {
 	widths := p.columnWidths()
 	for _, item := range p.items {
 		glyph, content := planItemParts(item, widths)
-		card.Item(glyph, content)
+		c.Item(glyph, content)
 	}
-	return card.Render()
+	return c
 }
 
 // Print writes the plan to stdout.
