@@ -74,7 +74,15 @@ func resolveCommandContext(cmd *cobra.Command) (CommandContext, error) {
 	}
 
 	// Store on cmd context for retrieval by commandContext(cmd).
-	cmd.SetContext(context.WithValue(cmd.Context(), contextKey{}, cc))
+	// cmd.Context() can be nil when called from an error path before
+	// cobra/fang has dispatched (e.g. HandleError after a flag-parse
+	// failure); fall back to a fresh Background so WithValue doesn't
+	// panic.
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	cmd.SetContext(context.WithValue(parent, contextKey{}, cc))
 
 	return cc, nil
 }

@@ -43,12 +43,19 @@ func SetContext(project, workContext, command string) {
 // before PersistentPreRunE completes (e.g., Cobra flag-parsing
 // errors). No-ops if the header was already rendered or output
 // is raw.
-func EnsureHeader() {
+func EnsureHeader() { EnsureContext("", "", "") }
+
+// EnsureContext is the parameterized form of EnsureHeader: renders
+// the header with the given breadcrumb segments if no header has
+// been rendered yet. Idempotent: no-op when a header is already on
+// screen or output is raw. The leading timeline blank line is owned
+// by the CLI's Bootstrap (so success and error paths produce the
+// same single blank line above the header).
+func EnsureContext(project, workContext, command string) {
 	if headerRendered || IsRaw() {
 		return
 	}
-	BeginTimeline()
-	SetContext("", "", "")
+	SetContext(project, workContext, command)
 }
 
 // ResetContext clears the headerRendered flag so tests starting with a

@@ -15,6 +15,11 @@ type cardReporter struct{}
 
 func newCardReporter() Reporter { return &cardReporter{} }
 
+// NewCardReporter returns a fresh card (non-raw) Reporter. Exposed
+// so tests can restore non-raw rendering after a previous test set
+// the default to a raw reporter via SetDefault.
+func NewCardReporter() Reporter { return newCardReporter() }
+
 // Header emits a CardRoot that opens the timeline for a command run.
 func (r *cardReporter) Header(command string, context ...string) {
 	card := NewCard(CardRoot, command)

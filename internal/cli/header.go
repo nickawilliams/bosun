@@ -13,6 +13,14 @@ import (
 // cmd.Short (which is help text).
 const headerAnnotationTitle = "title"
 
+// headerAnnotationHideOnError, when set to "true", suppresses the
+// command's title segment in the breadcrumb when the invocation
+// terminates via the error path (Args validation failure, flag
+// parse error, etc.). Reserved for hidden commands where revealing
+// the title in an error message would spoil discovery (e.g. easter
+// eggs). Successful runs still render the full breadcrumb.
+const headerAnnotationHideOnError = "title_hide_on_error"
+
 // titleResolvers holds scope-aware title functions for commands whose
 // breadcrumb title depends on the resolved CommandContext (e.g. status
 // renders "Workspace Status" vs "Project Status"). The resolver runs
@@ -36,6 +44,24 @@ func setTitleResolver(cmd *cobra.Command, fn func(CommandContext) string) {
 func initHeader(cmd *cobra.Command, cc CommandContext) {
 	workContext := workContextSegment(cc)
 	ui.SetContext(cc.Project, workContext, commandTitle(cmd, cc))
+}
+
+// renderErrorHeader bootstraps the breadcrumb for HandleError when
+// PersistentPreRunE never rendered one (cobra ValidateArgs failure,
+// fang flag parse failure, etc.). Uses currentCmd — captured by
+// SetCurrentCommand in main() — to recover the command title and
+// resolved context. Commands tagged with headerAnnotationHideOnError
+// fall back to the bare "Bosun" header so the title isn't leaked
+// alongside their error message (used by the captain easter egg).
+// Idempotent: no-op when a header has already been rendered.
+func renderErrorHeader() {
+	cmd := currentCmd
+	if cmd == nil || cmd.Annotations[headerAnnotationHideOnError] == "true" {
+		ui.EnsureHeader()
+		return
+	}
+	cc, _ := resolveCommandContext(cmd)
+	ui.EnsureContext(cc.Project, workContextSegment(cc), commandTitle(cmd, cc))
 }
 
 // workContextSegment chooses the breadcrumb's work-context segment.

@@ -73,6 +73,12 @@ func New(t *testing.T) *Harness {
 
 	t.Cleanup(ui.ResetStreams)
 
+	// Reset cli.Bootstrap's once-per-process guard so each test's
+	// cmd.Execute re-runs config load + UI-mode setup against its
+	// own fresh workspace and viper.
+	cli.ResetBootstrap()
+	t.Cleanup(cli.ResetBootstrap)
+
 	prevServices := cli.GetServices()
 	t.Cleanup(func() { cli.SetServices(prevServices) })
 
