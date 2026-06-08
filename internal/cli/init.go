@@ -254,7 +254,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			if !confirmed {
-				ui.Skip(ig.Label)
+				ui.SkipValue(ig.Label, "skipped")
 				continue
 			}
 
