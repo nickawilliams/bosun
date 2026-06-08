@@ -57,6 +57,18 @@ func EmptyState(msg string, args ...any) {
 	)
 }
 
+// SuccessLine prints a one-line confirmation row in the timeline:
+// success glyph + spacing + the caller's pre-rendered content. Use
+// when the standard CompleteValue / Saved shapes don't fit because
+// the content needs embedded styling across multiple segments (e.g.,
+// a sentence with both a key and a file path emphasized differently).
+// Always renders so piped callers see the line too.
+func SuccessLine(content string) {
+	fmt.Print(spacerPrefix())
+	glyph := lipgloss.NewStyle().Foreground(Palette.Success).Render(Palette.Check)
+	fmt.Printf(" %s  %s\n", glyph, content)
+}
+
 // Bold prints bold text.
 func Bold(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)

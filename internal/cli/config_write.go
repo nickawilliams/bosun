@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -24,8 +26,14 @@ func newConfigSetCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
-			value := args[1]
+			rawValue := args[1]
 			global, _ := cmd.Flags().GetBool("global")
+			format, _ := cmd.Flags().GetString("format")
+
+			value, err := parseConfigValue(rawValue, format)
+			if err != nil {
+				return err
+			}
 
 			configPath, err := resolveConfigPath(global)
 			if err != nil {
@@ -36,15 +44,42 @@ func newConfigSetCmd() *cobra.Command {
 				return err
 			}
 
-			ui.Saved(fmt.Sprintf("set %s = %s", key, value), configPath)
+			printConfigWriteConfirmation("Wrote", key, "to", configPath)
 			return nil
 		},
 	}
 
 	addProjectFlag(cmd)
 	cmd.Flags().BoolP("global", "g", false, "write to global config instead of project config")
+	cmd.Flags().StringP("format", "f", "raw", "interpret <value> as: raw, yaml, json")
 
 	return cmd
+}
+
+// parseConfigValue interprets the positional <value> arg per the -f
+// flag. raw keeps it as a string (current behavior, fine for scalars
+// since viper stringifies on read). yaml / json parse it as a literal
+// in that format so the caller can write a subtree in one shot —
+// mirrors `get -f yaml|json`'s output shape on the input side.
+func parseConfigValue(raw, format string) (any, error) {
+	switch format {
+	case "raw":
+		return raw, nil
+	case "yaml":
+		var v any
+		if err := yaml.Unmarshal([]byte(raw), &v); err != nil {
+			return nil, fmt.Errorf("parsing value as yaml: %w", err)
+		}
+		return v, nil
+	case "json":
+		var v any
+		if err := json.Unmarshal([]byte(raw), &v); err != nil {
+			return nil, fmt.Errorf("parsing value as json: %w", err)
+		}
+		return v, nil
+	default:
+		return nil, fmt.Errorf("unknown format %q (valid: raw, yaml, json)", format)
+	}
 }
 
 func newConfigUnsetCmd() *cobra.Command {
@@ -70,11 +105,11 @@ func newConfigUnsetCmd() *cobra.Command {
 			}
 
 			if !removed {
-				ui.Skip(fmt.Sprintf("%s not set in %s", key, configPath))
+				ui.Skip(fmt.Sprintf("%s not set in %s", key, shortPath(configPath)))
 				return nil
 			}
 
-			ui.Saved(fmt.Sprintf("removed %s", key), configPath)
+			printConfigWriteConfirmation("Removed", key, "from", configPath)
 			return nil
 		},
 	}
@@ -140,13 +175,34 @@ func resolveConfigPath(global bool) (string, error) {
 
 // setConfigValue sets a key in a config file using a fresh viper instance
 // scoped to that file only. Handles dot-separated keys at any depth.
-func setConfigValue(path, key, value string) error {
+// value is `any` so scalar strings, sub-maps, and slices all flow
+// through unchanged — viper handles serialization on WriteConfigAs.
+func setConfigValue(path, key string, value any) error {
 	v := viper.New()
 	v.SetConfigFile(path)
 	_ = v.ReadInConfig() // ignore error — file may not exist yet
 
 	v.Set(key, value)
 	return v.WriteConfigAs(path)
+}
+
+// printConfigWriteConfirmation renders the one-line "<verb> <key>
+// <prep> <file>" confirmation card used by both set and unset.
+// Connector words (verb, prep) recede in muted; the key (bold +
+// Primary) and file (subtle) carry the visual weight so the reader's
+// eye lands on the two pieces of information that matter — what was
+// changed and where.
+func printConfigWriteConfirmation(verb, key, prep, file string) {
+	verbStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary)
+	fileStyle := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
+
+	ui.SuccessLine(fmt.Sprintf("%s %s %s %s",
+		verbStyle.Render(verb),
+		keyStyle.Render(key),
+		verbStyle.Render(prep),
+		fileStyle.Render(shortPath(file)),
+	))
 }
 
 // setConfigMap sets a map value at a key in a config file.

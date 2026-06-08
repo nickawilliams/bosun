@@ -159,3 +159,107 @@ func TestConfigShow(t *testing.T) {
 		}
 	})
 }
+
+// TestConfigSetUnset covers the write-side dispatch: scalar set,
+// subtree set via -f yaml/json, unset success, and the various error
+// paths. Multi-step tests (set then get to verify) share a single
+// harness because each testharness.New gets a fresh temp project +
+// fresh viper, so the set and get would otherwise land on different
+// configs.
+func TestConfigSetUnset(t *testing.T) {
+	t.Run("scalar set writes value and renders confirmation", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(baseConfig)
+
+		if err := h.Run("config", "set", "workspace.root", "workspaces"); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, "Wrote") || !strings.Contains(out, "workspace.root") {
+			t.Errorf("expected 'Wrote workspace.root ...' confirmation; got:\n%s", out)
+		}
+
+		if err := h.Run("config", "get", "workspace.root"); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		// h.Stdout accumulates across Run calls; trim the confirmation
+		// from above and look at the get output appended after.
+		got := strings.TrimSpace(strings.TrimPrefix(h.Stdout(), out))
+		if got != "workspaces" {
+			t.Errorf("get after set = %q, want %q", got, "workspaces")
+		}
+	})
+
+	t.Run("subtree set with -f yaml writes the parsed map", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(baseConfig)
+
+		if err := h.Run("config", "set", "notification",
+			"{provider: slack, channels: [eng, ops]}", "-f", "yaml"); err != nil {
+			t.Fatalf("set: %v\nstdout: %s", err, h.Stdout())
+		}
+		setOut := h.Stdout()
+
+		if err := h.Run("config", "get", "notification.provider"); err != nil {
+			t.Fatalf("get provider: %v", err)
+		}
+		got := strings.TrimSpace(strings.TrimPrefix(h.Stdout(), setOut))
+		if got != "slack" {
+			t.Errorf("notification.provider = %q, want %q", got, "slack")
+		}
+	})
+
+	t.Run("subtree set with -f json writes the parsed map", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(baseConfig)
+
+		if err := h.Run("config", "set", "notification",
+			`{"provider":"discord"}`, "-f", "json"); err != nil {
+			t.Fatalf("set: %v\nstdout: %s", err, h.Stdout())
+		}
+		setOut := h.Stdout()
+
+		if err := h.Run("config", "get", "notification.provider"); err != nil {
+			t.Fatalf("get provider: %v", err)
+		}
+		got := strings.TrimSpace(strings.TrimPrefix(h.Stdout(), setOut))
+		if got != "discord" {
+			t.Errorf("notification.provider = %q, want %q", got, "discord")
+		}
+	})
+
+	t.Run("invalid -f format errors", func(t *testing.T) {
+		_, err := runConfig(t, "set", "foo", "bar", "-f", "xml")
+		if err == nil {
+			t.Fatal("expected error for unknown format")
+		}
+		if !strings.Contains(err.Error(), "xml") {
+			t.Errorf("error %q should mention the bad format", err.Error())
+		}
+	})
+
+	t.Run("malformed json under -f json errors", func(t *testing.T) {
+		_, err := runConfig(t, "set", "foo", "not json", "-f", "json")
+		if err == nil {
+			t.Fatal("expected error for malformed json")
+		}
+		if !strings.Contains(err.Error(), "json") {
+			t.Errorf("error %q should mention json parsing", err.Error())
+		}
+	})
+
+	t.Run("unset removes the key and renders confirmation", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(baseConfig)
+
+		// baseConfig already has issue_tracker.provider set, so unset has
+		// something real to remove.
+		if err := h.Run("config", "unset", "issue_tracker.provider"); err != nil {
+			t.Fatalf("unset: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, "Removed") || !strings.Contains(out, "issue_tracker.provider") {
+			t.Errorf("expected 'Removed issue_tracker.provider ...' confirmation; got:\n%s", out)
+		}
+	})
+}
