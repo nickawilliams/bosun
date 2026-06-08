@@ -271,7 +271,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.NewCard(ui.CardInfo, "next steps").
-		Muted("Run: bosun doctor to verify configuration").
+		Muted("Run: bosun doctor to verify connectivity").
 		Muted("Run: bosun start --issue <issue> to begin work").
 		Print()
 
