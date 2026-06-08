@@ -1,0 +1,147 @@
+package cli_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/nickawilliams/bosun/internal/testharness"
+)
+
+const baseConfig = `
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+display:
+  compact_header: true
+`
+
+// runConfig sets up a fresh harness with baseConfig and runs `config`
+// with the given args. Returns (stdout, runErr) — Run captures the
+// rendered output (both cobra streams and direct os.Stdout writes)
+// via the harness, so h.Stdout() reflects what the user would see.
+func runConfig(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	h := testharness.New(t)
+	h.Workspace.WriteConfig(baseConfig)
+	err := h.Run(append([]string{"config"}, args...)...)
+	return h.Stdout(), err
+}
+
+// TestConfigGet covers the get command's dispatch matrix on
+// (key present?, format, -g?). Each subtest seeds a fresh harness
+// because the bootstrap guard caches viper between cases.
+func TestConfigGet(t *testing.T) {
+	t.Run("scalar key returns raw value", func(t *testing.T) {
+		out, err := runConfig(t, "get", "issue_tracker.provider")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got := strings.TrimSpace(out); got != "jira" {
+			t.Errorf("stdout = %q, want %q", got, "jira")
+		}
+	})
+
+	t.Run("group key without format errors with suggestion", func(t *testing.T) {
+		_, err := runConfig(t, "get", "issue_tracker")
+		if err == nil {
+			t.Fatal("expected error for non-scalar without -f")
+		}
+		if !strings.Contains(err.Error(), "group") || !strings.Contains(err.Error(), "-f") {
+			t.Errorf("error %q should mention \"group\" and \"-f\"", err.Error())
+		}
+	})
+
+	t.Run("group key with -f yaml renders subtree", func(t *testing.T) {
+		out, err := runConfig(t, "get", "issue_tracker", "-f", "yaml")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if !strings.Contains(out, "provider: jira") || !strings.Contains(out, "base_url:") {
+			t.Errorf("yaml output missing expected keys; got:\n%s", out)
+		}
+	})
+
+	t.Run("no key with -f yaml dumps full config", func(t *testing.T) {
+		out, err := runConfig(t, "get", "-f", "yaml")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		// Full effective config includes schema-default groups like branch.
+		if !strings.Contains(out, "issue_tracker:") || !strings.Contains(out, "branch:") {
+			t.Errorf("expected full config dump; got:\n%s", out)
+		}
+	})
+
+	t.Run("no key no format errors", func(t *testing.T) {
+		_, err := runConfig(t, "get")
+		if err == nil {
+			t.Fatal("expected error for bare `config get`")
+		}
+		if !strings.Contains(err.Error(), "specify a key") {
+			t.Errorf("error %q should mention \"specify a key\"", err.Error())
+		}
+	})
+
+	t.Run("missing effective key errors", func(t *testing.T) {
+		_, err := runConfig(t, "get", "nonexistent.key")
+		if err == nil {
+			t.Fatal("expected error for missing key")
+		}
+	})
+
+	t.Run("missing key with -g exits silently", func(t *testing.T) {
+		out, err := runConfig(t, "get", "nonexistent.key", "-g")
+		if err != nil {
+			t.Fatalf("-g miss should be silent success, got: %v", err)
+		}
+		if out != "" {
+			t.Errorf("expected empty stdout, got: %q", out)
+		}
+	})
+
+	t.Run("unknown format errors", func(t *testing.T) {
+		_, err := runConfig(t, "get", "issue_tracker", "-f", "xml")
+		if err == nil {
+			t.Fatal("expected error for unknown format")
+		}
+		if !strings.Contains(err.Error(), "xml") {
+			t.Errorf("error %q should mention the bad format", err.Error())
+		}
+	})
+}
+
+// TestConfigShow covers the show command's smaller surface — just the
+// human tree view, optionally narrowed by group or to global-only.
+func TestConfigShow(t *testing.T) {
+	t.Run("bare show renders effective tree", func(t *testing.T) {
+		out, err := runConfig(t, "show")
+		if err != nil {
+			t.Fatalf("show: %v", err)
+		}
+		if !strings.Contains(out, "issue_tracker") || !strings.Contains(out, "jira") {
+			t.Errorf("tree missing expected content; got:\n%s", out)
+		}
+	})
+
+	t.Run("group filter narrows the tree", func(t *testing.T) {
+		out, err := runConfig(t, "show", "issue_tracker")
+		if err != nil {
+			t.Fatalf("show: %v", err)
+		}
+		if !strings.Contains(out, "issue_tracker") {
+			t.Errorf("expected issue_tracker in output, got:\n%s", out)
+		}
+		// "branch" and "workspace" are other top-level groups; they must
+		// not appear when the filter scopes the tree to issue_tracker.
+		if strings.Contains(out, "○ branch") || strings.Contains(out, "○ workspace") {
+			t.Errorf("filtered tree leaked unrelated groups; got:\n%s", out)
+		}
+	})
+
+	t.Run("-o flag is no longer accepted", func(t *testing.T) {
+		_, err := runConfig(t, "show", "-o", "yaml")
+		if err == nil {
+			t.Fatal("expected -o to be unknown after the refactor")
+		}
+	})
+}

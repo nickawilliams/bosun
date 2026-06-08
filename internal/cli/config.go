@@ -49,10 +49,10 @@ func newConfigCmd() *cobra.Command {
 		newConfigEditCmd(),
 	)
 
-	// Inherit show's flags on the parent so "config --source env" works.
+	// Inherit show's `-g` on the parent so `bosun config -g` works
+	// (matches the parent's bare RunE delegating to runConfigShow).
 	addProjectFlag(cmd)
-	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
-	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
+	cmd.Flags().BoolP("global", "g", false, "show the global config only (skip project, env, and defaults)")
 
 	return cmd
 }
@@ -69,86 +69,30 @@ func newConfigShowCmd() *cobra.Command {
 	}
 
 	addProjectFlag(cmd)
-	cmd.Flags().StringP("output", "o", "", "output format: yaml, json, env")
-	cmd.Flags().StringSlice("source", nil, "filter by source: global, project, env, default (repeatable)")
+	cmd.Flags().BoolP("global", "g", false, "show the global config only (skip project, env, and defaults)")
 
 	return cmd
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) error {
-	outputFmt, _ := cmd.Flags().GetString("output")
-	sourceFilter, _ := cmd.Flags().GetStringSlice("source")
+	globalOnly, _ := cmd.Flags().GetBool("global")
 	var groupFilter string
 	if len(args) > 0 {
 		groupFilter = args[0]
 	}
 
-	// Reject unknown group names up front so a typo'd group renders
-	// the same error in human mode that runConfigShowMachine emits
-	// for JSON/YAML, rather than silently rendering an empty tree.
 	if groupFilter != "" && !isKnownConfigGroup(groupFilter) {
 		return fmt.Errorf("unknown config group %q", groupFilter)
 	}
 
-	// Machine-readable output.
-	if outputFmt != "" {
-		return runConfigShowMachine(outputFmt, sourceFilter, groupFilter)
-	}
-
-	// Human-readable tree display.
 	cs := loadConfigSources()
 
-	tree := buildConfigTree(cs, sourceFilter, groupFilter)
+	tree := buildConfigTree(cs, groupFilter, globalOnly)
 	tree.Print()
 
-	// Sources hint line at the end.
 	fmt.Println()
-	fmt.Println(renderSourcesHint(cs, sourceFilter))
+	fmt.Println(renderSourcesHint(cs, globalOnly))
 
-	return nil
-}
-
-func runConfigShowMachine(format string, sourceFilter []string, groupFilter string) error {
-	cs := loadConfigSources()
-	settings := viper.AllSettings()
-
-	if groupFilter != "" {
-		if sub, ok := settings[groupFilter]; ok {
-			settings = map[string]any{groupFilter: sub}
-		} else {
-			return fmt.Errorf("unknown group %q", groupFilter)
-		}
-	}
-
-	// Apply source filter.
-	if len(sourceFilter) > 0 {
-		flat := flattenMap("", settings)
-		filtered := make(map[string]any)
-		for key, val := range flat {
-			_, src := cs.resolveKeySource(key)
-			if src == "" {
-				// Try schema lookup.
-				if ck, gn, ok := findConfigKey(key); ok {
-					_, src = cs.resolveSource(gn, ck)
-				}
-			}
-			if matchesSourceFilter(src, sourceFilter) {
-				filtered[key] = val
-			}
-		}
-		settings = filtered
-	}
-
-	switch format {
-	case "yaml":
-		printYAML(settings)
-	case "json":
-		printJSON(settings)
-	case "env":
-		printEnv(settings)
-	default:
-		return fmt.Errorf("unknown output format %q (valid: yaml, json, env)", format)
-	}
 	return nil
 }
 
@@ -164,16 +108,24 @@ func isKnownConfigGroup(name string) bool {
 	return ok
 }
 
-func buildConfigTree(cs *configSources, sourceFilter []string, groupFilter string) *ui.Tree {
+func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui.Tree {
 	tree := ui.NewTree()
 
-	// Collect all effective config as a flat map, then inject schema
-	// defaults for keys that aren't explicitly set so the tree shows
-	// the full effective configuration.
-	allSettings := viper.AllSettings()
-	injectSchemaDefaults(allSettings)
+	// Default view shows the effective config: viper's merged result
+	// with schema defaults injected so unset-but-known keys still
+	// render. `-g` narrows the view to what's literally in the global
+	// config file — no project, no env, no defaults.
+	var allSettings map[string]any
+	if globalOnly {
+		if cs.global == nil {
+			return tree
+		}
+		allSettings = cs.global.AllSettings()
+	} else {
+		allSettings = viper.AllSettings()
+		injectSchemaDefaults(allSettings)
+	}
 
-	// Determine which top-level keys are groups (have nested maps).
 	topLevel := make(map[string]bool) // true = group, false = leaf
 	for k, v := range allSettings {
 		if _, ok := v.(map[string]any); ok {
@@ -183,7 +135,6 @@ func buildConfigTree(cs *configSources, sourceFilter []string, groupFilter strin
 		}
 	}
 
-	// Sort keys for stable output.
 	keys := make([]string, 0, len(topLevel))
 	for k := range topLevel {
 		keys = append(keys, k)
@@ -195,19 +146,10 @@ func buildConfigTree(cs *configSources, sourceFilter []string, groupFilter strin
 			continue
 		}
 
-		isGroup := topLevel[key]
-		if isGroup {
-			children := buildGroupChildren(cs, key, allSettings[key].(map[string]any), sourceFilter)
-			if len(children) == 0 && len(sourceFilter) > 0 {
-				continue
-			}
-			group := ui.Group(key, children...)
-			tree.Add(group)
-		} else {
-			node := buildLeafNode(cs, key, sourceFilter)
-			if node == nil {
-				continue
-			}
+		if topLevel[key] {
+			children := buildGroupChildren(cs, key, allSettings[key].(map[string]any))
+			tree.Add(ui.Group(key, children...))
+		} else if node := buildLeafNode(cs, key); node != nil {
 			tree.Add(node)
 		}
 	}
@@ -300,7 +242,7 @@ func nestedKeyExists(m map[string]any, key string) bool {
 	return false
 }
 
-func buildGroupChildren(cs *configSources, groupKey string, m map[string]any, sourceFilter []string) []*ui.TreeNode {
+func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []*ui.TreeNode {
 	var children []*ui.TreeNode
 
 	keys := make([]string, 0, len(m))
@@ -314,24 +256,15 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any, so
 		fk := groupKey + "." + childKey
 
 		if subMap, ok := childVal.(map[string]any); ok {
-			// Nested group.
-			subChildren := buildGroupChildren(cs, fk, subMap, sourceFilter)
-			if len(subChildren) == 0 && len(sourceFilter) > 0 {
-				continue
-			}
-			children = append(children, ui.Group(childKey, subChildren...))
+			children = append(children, ui.Group(childKey, buildGroupChildren(cs, fk, subMap)...))
 			continue
 		}
 
 		// Leaf within group.
 		value, source := resolveKeyWithSchema(cs, fk)
-		if !matchesSourceFilter(source, sourceFilter) {
-			continue
-		}
 		if value == "" {
 			continue
 		}
-		// Mask secrets.
 		if ck, _, ok := findConfigKey(fk); ok && ck.Secret {
 			value = "••••••••"
 		}
@@ -342,11 +275,8 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any, so
 	return children
 }
 
-func buildLeafNode(cs *configSources, key string, sourceFilter []string) *ui.TreeNode {
+func buildLeafNode(cs *configSources, key string) *ui.TreeNode {
 	value, source := resolveKeyWithSchema(cs, key)
-	if !matchesSourceFilter(source, sourceFilter) {
-		return nil
-	}
 	if value == "" {
 		return nil
 	}
@@ -383,7 +313,9 @@ func sourceGlyph(source string) (string, color.Color) {
 
 // renderSourcesHint builds a single-line sources footer styled like
 // huh keyboard hints: glyph label · glyph label · ...
-func renderSourcesHint(cs *configSources, filter []string) string {
+// `globalOnly` mirrors the show command's `-g` flag — when set, only
+// the global row appears so the legend matches the narrowed tree.
+func renderSourcesHint(cs *configSources, globalOnly bool) string {
 	labelStyle := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
 	sepStyle := lipgloss.NewStyle().Foreground(ui.Palette.Recessed)
 	glyphFor := func(c color.Color, g string) string {
@@ -391,16 +323,18 @@ func renderSourcesHint(cs *configSources, filter []string) string {
 	}
 
 	var parts []string
-	if matchesSourceFilter(sourceDefault, filter) {
+	if globalOnly {
+		if cs.globalPath != "" {
+			parts = append(parts, glyphFor(ui.Palette.Primary, glyphGlobal)+" "+labelStyle.Render(shortPath(cs.globalPath)))
+		}
+	} else {
 		parts = append(parts, glyphFor(ui.Palette.Muted, glyphDefault)+" "+labelStyle.Render("defaults"))
-	}
-	if cs.globalPath != "" && matchesSourceFilter(sourceGlobal, filter) {
-		parts = append(parts, glyphFor(ui.Palette.Primary, glyphGlobal)+" "+labelStyle.Render(shortPath(cs.globalPath)))
-	}
-	if cs.projectPath != "" && matchesSourceFilter(sourceProject, filter) {
-		parts = append(parts, glyphFor(ui.Palette.Success, glyphProject)+" "+labelStyle.Render(shortPath(cs.projectPath)))
-	}
-	if matchesSourceFilter(sourceEnv, filter) {
+		if cs.globalPath != "" {
+			parts = append(parts, glyphFor(ui.Palette.Primary, glyphGlobal)+" "+labelStyle.Render(shortPath(cs.globalPath)))
+		}
+		if cs.projectPath != "" {
+			parts = append(parts, glyphFor(ui.Palette.Success, glyphProject)+" "+labelStyle.Render(shortPath(cs.projectPath)))
+		}
 		if envCount := countEnvSources(cs); envCount > 0 {
 			label := fmt.Sprintf("%d var", envCount)
 			if envCount != 1 {
@@ -422,20 +356,6 @@ func shortPath(path string) string {
 		}
 	}
 	return path
-}
-
-// matchesSourceFilter reports whether a source matches the active
-// filter. An empty filter matches everything.
-func matchesSourceFilter(source string, filter []string) bool {
-	if len(filter) == 0 {
-		return true
-	}
-	for _, f := range filter {
-		if f == source {
-			return true
-		}
-	}
-	return false
 }
 
 // formatValue formats a config value for display, handling slices.
@@ -477,27 +397,139 @@ func countEnvSources(cs *configSources) int {
 }
 
 func newConfigGetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get <key>",
+	cmd := &cobra.Command{
+		Use:   "get [key]",
 		Short: "Get a configuration value",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"output": "raw",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			key := args[0]
-			val := viper.Get(key)
-			if val == nil {
-				// Check schema default.
-				if ck, _, ok := findConfigKey(key); ok && ck.Default != "" {
-					fmt.Println(ck.Default)
-					return nil
-				}
-				return fmt.Errorf("key %q not set", key)
-			}
-			fmt.Println(val)
+		RunE: runConfigGet,
+	}
+
+	addProjectFlag(cmd)
+	cmd.Flags().BoolP("global", "g", false, "read from the global config only (skip project, env, and defaults)")
+	cmd.Flags().StringP("format", "f", "raw", "output format: raw, yaml, json, env")
+
+	return cmd
+}
+
+// runConfigGet dispatches on (key, globalOnly, format). The matrix:
+//
+//   - no key + format=raw           → error (need a key or a non-raw format)
+//   - no key + yaml|json|env        → full settings rendered in that format
+//   - key + raw                     → scalar value; error if non-scalar
+//   - key + yaml|json|env           → that key's subtree rendered
+//
+// Effective vs. global-only is governed by `-g`: without it the full
+// viper merge + schema defaults are used (the normal "what does the
+// app see" view); with it only the global config file is consulted,
+// and a key that's missing exits 0 silently — the convention for
+// "scope-aware read returns nothing" scripting patterns.
+func runConfigGet(cmd *cobra.Command, args []string) error {
+	globalOnly, _ := cmd.Flags().GetBool("global")
+	format, _ := cmd.Flags().GetString("format")
+
+	switch format {
+	case "raw", "yaml", "json", "env":
+		// ok
+	default:
+		return fmt.Errorf("unknown format %q (valid: raw, yaml, json, env)", format)
+	}
+
+	settings, ok := getSettings(globalOnly)
+	if !ok {
+		// `-g` with no global file present.
+		if len(args) > 0 && globalOnly && format == "raw" {
+			return nil // silent exit 0 for scope-aware miss
+		}
+		settings = map[string]any{}
+	}
+
+	if len(args) == 0 {
+		if format == "raw" {
+			return fmt.Errorf("specify a key or -f yaml|json|env")
+		}
+		renderSettings(settings, format)
+		return nil
+	}
+
+	key := args[0]
+	val := lookupNested(settings, key)
+	if val == nil {
+		if globalOnly {
+			return nil // silent exit 0 for scope-aware miss
+		}
+		return fmt.Errorf("key %q not set", key)
+	}
+
+	if format == "raw" {
+		if _, isMap := val.(map[string]any); isMap {
+			return fmt.Errorf("%q is a group; use -f yaml|json|env", key)
+		}
+		fmt.Println(val)
+		return nil
+	}
+
+	// Render the subtree under `key` in the requested format. Wrap
+	// scalar values back into a single-entry map so the format
+	// helpers (which expect a map) handle both shapes uniformly.
+	var subtree map[string]any
+	if m, isMap := val.(map[string]any); isMap {
+		subtree = map[string]any{key: m}
+	} else {
+		subtree = map[string]any{key: val}
+	}
+	renderSettings(subtree, format)
+	return nil
+}
+
+// getSettings returns the settings map for the requested scope.
+// Effective scope is viper's merged view with schema defaults applied.
+// Global scope reads only the global config file; ok=false when no
+// global file is present so callers can branch on "scope unreachable".
+func getSettings(globalOnly bool) (settings map[string]any, ok bool) {
+	if !globalOnly {
+		s := viper.AllSettings()
+		injectSchemaDefaults(s)
+		return s, true
+	}
+	cs := loadConfigSources()
+	if cs.global == nil {
+		return nil, false
+	}
+	return cs.global.AllSettings(), true
+}
+
+// lookupNested walks a dot-separated key down into a nested settings
+// map. Returns the leaf value (scalar or sub-map), or nil if any
+// segment is missing.
+func lookupNested(settings map[string]any, key string) any {
+	parts := strings.Split(key, ".")
+	var cur any = settings
+	for _, p := range parts {
+		m, ok := cur.(map[string]any)
+		if !ok {
 			return nil
-		},
+		}
+		cur, ok = m[p]
+		if !ok {
+			return nil
+		}
+	}
+	return cur
+}
+
+// renderSettings dispatches to the right format helper. Caller
+// validates the format string upstream.
+func renderSettings(settings map[string]any, format string) {
+	switch format {
+	case "yaml":
+		printYAML(settings)
+	case "json":
+		printJSON(settings)
+	case "env":
+		printEnv(settings)
 	}
 }
 
