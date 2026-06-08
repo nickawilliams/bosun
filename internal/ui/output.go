@@ -3,9 +3,40 @@ package ui
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 )
+
+// preserveCaseMarker is the invisible sentinel PreserveCase prepends
+// to opt a string out of the cli package's auto title-case transform.
+// U+2060 (word joiner) is zero-width, never combines, and is vanishingly
+// unlikely to occur naturally in a label — so leaking the marker would
+// be both invisible and harmless.
+const preserveCaseMarker = "⁠"
+
+// TitleCase capitalizes the first rune of each space-separated word
+// while leaving words that already contain an uppercase letter
+// untouched. Acronyms ("API", "URL") and brand names ("GitHub") pass
+// through verbatim; only fully-lowercase words get their first rune
+// uppercased. Exposed so the cli layer can apply the same convention
+// to form-field labels that breadcrumbs and card titles already use.
+func TitleCase(s string) string { return titleCase(s) }
+
+// PreserveCase wraps a string with an invisible sentinel so the
+// cli's form-field constructors skip their auto title-case transform.
+// Use for labels with casing that matters and shouldn't be normalized
+// — e.g. ui.PreserveCase("API key") if you want exactly "API key"
+// rather than "API Key". The sentinel is stripped before the string
+// reaches the user.
+func PreserveCase(s string) string { return preserveCaseMarker + s }
+
+// StripPreserveCase removes the PreserveCase sentinel if present and
+// reports whether it was. Form-field constructors use this to decide
+// between applying TitleCase or rendering the label verbatim.
+func StripPreserveCase(s string) (clean string, verbatim bool) {
+	return strings.CutPrefix(s, preserveCaseMarker)
+}
 
 var (
 	errorStyle   = lipgloss.NewStyle().Foreground(Palette.Error)

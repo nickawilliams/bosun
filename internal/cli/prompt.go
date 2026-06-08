@@ -13,6 +13,41 @@ import (
 // formTheme is the shared huh theme derived from the app palette.
 var formTheme = ui.FormTheme()
 
+// transformFieldTitle normalizes a form-field title to the app's
+// title-case convention so labels stay consistent across forms
+// regardless of how the caller wrote them. Wrap a label with
+// ui.PreserveCase to opt out — useful for acronyms, brand names,
+// or other casing that shouldn't be normalized.
+func transformFieldTitle(s string) string {
+	if rest, verbatim := ui.StripPreserveCase(s); verbatim {
+		return rest
+	}
+	return ui.TitleCase(s)
+}
+
+// newInput is the cli's standard huh.Input constructor. Same as
+// huh.NewInput().Title(title) but the title is normalized via
+// transformFieldTitle so casing is consistent across forms. Use
+// instead of huh.NewInput when setting a Title.
+func newInput(title string) *huh.Input {
+	return huh.NewInput().Title(transformFieldTitle(title))
+}
+
+// newText — see newInput.
+func newText(title string) *huh.Text {
+	return huh.NewText().Title(transformFieldTitle(title))
+}
+
+// newSelect — see newInput. Generic over the option value type.
+func newSelect[T comparable](title string) *huh.Select[T] {
+	return huh.NewSelect[T]().Title(transformFieldTitle(title))
+}
+
+// newMultiSelect — see newInput.
+func newMultiSelect[T comparable](title string) *huh.MultiSelect[T] {
+	return huh.NewMultiSelect[T]().Title(transformFieldTitle(title))
+}
+
 // isInteractive returns true when the current input stream supports
 // prompting (real TTY stdin or an injected reader in tests).
 func isInteractive() bool {

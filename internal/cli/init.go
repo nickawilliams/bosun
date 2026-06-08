@@ -123,14 +123,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 			var input *huh.Input
 			input, repoField = newDefaultInput(repoDefault)
 			fields = append(fields, input.
-				Title("Repository patterns").
+				Title(transformFieldTitle("Repository Patterns")).
 				Description("Comma-separated globs, e.g. ./* or ~/Projects/myorg/*"))
 		}
 		if needWS {
 			var input *huh.Input
 			input, wsField = newDefaultInput(wsDefault)
 			fields = append(fields, input.
-				Title("Workspace root").
+				Title(transformFieldTitle("Workspace Root")).
 				Description("Directory where workspaces are created"))
 		}
 
@@ -178,7 +178,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			"Repositories", strings.Join(repositoryGlobs, ", "),
 		)
 		if wsRoot != "" {
-			fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
+			fields = append(fields, ui.Field{Key: "Workspace Root", Value: wsRoot})
 		}
 		ui.Details("", fields)
 		return nil
@@ -222,7 +222,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		"Repositories", repositoryDisplay,
 	)
 	if wsRoot != "" {
-		fields = append(fields, ui.Field{Key: "Workspace root", Value: wsRoot})
+		fields = append(fields, ui.Field{Key: "Workspace Root", Value: wsRoot})
 	}
 	ui.Details(heading, fields)
 
