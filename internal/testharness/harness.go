@@ -3,6 +3,8 @@ package testharness
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,6 +110,14 @@ func (h *Harness) Type(s string) {
 // Run executes the bosun command tree with the given args. The
 // workspace path is injected as --project so commands resolve config
 // from the temp dir without depending on the test's CWD.
+//
+// Both cobra's cmd.OutOrStdout / cmd.ErrOrStderr streams AND the
+// process-wide os.Stdout / os.Stderr file descriptors are captured
+// for the duration of the call. The bosun rendering layer writes
+// directly to os.Stdout via fmt.Print, so capturing only the cobra
+// streams misses everything the user actually sees; tests can rely
+// on h.Stdout() / h.Stderr() returning the full rendered output
+// regardless of which channel each write went through.
 func (h *Harness) Run(args ...string) error {
 	h.t.Helper()
 	cmd := cli.NewRootCmd("test")
@@ -121,13 +131,50 @@ func (h *Harness) Run(args ...string) error {
 	}
 	cmd.SetArgs(final)
 
+	restoreOut := captureFD(h.t, &os.Stdout, h.stdout)
+	defer restoreOut()
+	restoreErr := captureFD(h.t, &os.Stderr, h.stderr)
+	defer restoreErr()
+
 	return cmd.Execute()
 }
 
-// Stdout returns everything written to the cobra command's out stream.
+// captureFD swaps *fd for a pipe whose reads are copied into sink for
+// the duration of the returned restore func. Used to intercept the
+// process-wide os.Stdout / os.Stderr during Run so direct fmt.Print
+// writes from the rendering layer land in the harness's buffers
+// alongside whatever cobra routes through its own streams.
+func captureFD(t *testing.T, fd **os.File, sink io.Writer) func() {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("captureFD pipe: %v", err)
+	}
+	orig := *fd
+	*fd = w
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(sink, r)
+		close(done)
+	}()
+
+	return func() {
+		_ = w.Close()
+		<-done
+		*fd = orig
+		_ = r.Close()
+	}
+}
+
+// Stdout returns everything written to stdout during the most recent
+// Run call — covers both cobra's cmd.OutOrStdout writes and direct
+// fmt.Print writes from the rendering layer.
 func (h *Harness) Stdout() string { return h.stdout.String() }
 
-// Stderr returns everything written to the cobra command's err stream.
+// Stderr returns everything written to stderr during the most recent
+// Run call — covers both cobra's cmd.ErrOrStderr writes and direct
+// fmt.Fprint(os.Stderr, ...) writes from the rendering layer.
 func (h *Harness) Stderr() string { return h.stderr.String() }
 
 // WorktreePath returns the canonical worktree path for a branch under
