@@ -20,7 +20,7 @@ func newConfigSetCmd() *cobra.Command {
 		Short: "Set a configuration value",
 		Args:  cobra.ExactArgs(2),
 		Annotations: map[string]string{
-			headerAnnotationTitle: "set",
+			headerAnnotationTitle: "set value",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
@@ -53,7 +53,7 @@ func newConfigUnsetCmd() *cobra.Command {
 		Short: "Remove a configuration value",
 		Args:  cobra.ExactArgs(1),
 		Annotations: map[string]string{
-			headerAnnotationTitle: "unset",
+			headerAnnotationTitle: "unset value",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
@@ -89,6 +89,9 @@ func newConfigEditCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "edit",
 		Short: "Open configuration in $EDITOR",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "edit file",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			global, _ := cmd.Flags().GetBool("global")
 

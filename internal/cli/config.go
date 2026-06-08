@@ -406,7 +406,8 @@ func newConfigGetCmd() *cobra.Command {
 		Short: "Get a configuration value",
 		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
-			"output": "raw",
+			"output":              "raw",
+			headerAnnotationTitle: "get value",
 		},
 		RunE: runConfigGet,
 	}

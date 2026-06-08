@@ -19,7 +19,7 @@ func newPreviewCmd() *cobra.Command {
 		Use:   "preview",
 		Short: "Deploy to preview environment",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "deploy",
+			headerAnnotationTitle: "deploy preview",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
