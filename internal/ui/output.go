@@ -38,6 +38,21 @@ func Info(msg string, args ...any) { defaultReporter.Info(msg, args...) }
 // Muted prints a dimmed/secondary message.
 func Muted(msg string, args ...any) { defaultReporter.Muted(msg, args...) }
 
+// EmptyState prints a muted "no data" marker as a timeline row —
+// same shape as Tree.Print (leading spacerPrefix, then spine + 2-cell
+// gap + dimmed text). Renders in both TTY and raw modes so callers
+// substituting it for an empty Tree / Card / Plan keep the same
+// visual integration with the timeline either way (unlike ui.Muted,
+// which no-ops in raw). Use for the "the renderer ran but had
+// nothing to show" case; for errors, use Error.
+func EmptyState(msg string, args ...any) {
+	text := fmt.Sprintf(msg, args...)
+	conn := lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
+	subtle := lipgloss.NewStyle().Foreground(Palette.Subtle)
+	fmt.Print(spacerPrefix())
+	fmt.Printf(" %s  %s\n", conn, subtle.Render(text))
+}
+
 // Bold prints bold text.
 func Bold(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
