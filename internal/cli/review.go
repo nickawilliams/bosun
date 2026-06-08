@@ -21,7 +21,7 @@ func newReviewCmd() *cobra.Command {
 		Use:   "review",
 		Short: "Submit issue for code review",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "code review",
+			headerAnnotationTitle: "submit for review",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)

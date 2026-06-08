@@ -14,7 +14,7 @@ func newReleaseCmd() *cobra.Command {
 		Use:   "release",
 		Short: "Deploy to production",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "release",
+			headerAnnotationTitle: "release to production",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)

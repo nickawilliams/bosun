@@ -18,7 +18,7 @@ func newPrereleaseCmd() *cobra.Command {
 		Use:   "prerelease",
 		Short: "Prepare release artifacts",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "pre-release",
+			headerAnnotationTitle: "prepare release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)

@@ -19,7 +19,7 @@ func newCleanupCmd() *cobra.Command {
 		Use:   "cleanup",
 		Short: "Remove workspace and feature branches",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "cleanup",
+			headerAnnotationTitle: "cleanup workspace",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
