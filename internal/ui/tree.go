@@ -66,6 +66,9 @@ func (t *Tree) Add(nodes ...*TreeNode) *Tree {
 	return t
 }
 
+// IsEmpty reports whether the tree has no root-level nodes.
+func (t *Tree) IsEmpty() bool { return len(t.nodes) == 0 }
+
 // ValueColumn requests that leaf values start at the given 1-indexed
 // terminal column. The natural auto-pad still applies as a floor —
 // values are pushed right past the requested column when a key is

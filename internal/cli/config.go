@@ -88,7 +88,17 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	cs := loadConfigSources()
 
 	tree := buildConfigTree(cs, groupFilter, globalOnly)
-	tree.Print()
+	if tree.IsEmpty() {
+		// Match the tree's leading indent and use the same muted
+		// styling as renderSourcesHint so the empty-state reads as
+		// part of the same visual block. fmt.Println (vs. ui.Muted)
+		// so the message renders in raw / non-TTY mode too — same
+		// reliability as tree.Print itself.
+		style := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
+		fmt.Println(" " + style.Render("(no config values to display)"))
+	} else {
+		tree.Print()
+	}
 
 	fmt.Println()
 	fmt.Println(renderSourcesHint(cs, globalOnly))

@@ -144,4 +144,18 @@ func TestConfigShow(t *testing.T) {
 			t.Fatal("expected -o to be unknown after the refactor")
 		}
 	})
+
+	t.Run("empty result renders explicit empty-state marker", func(t *testing.T) {
+		// `workspace` is a known schema group but the test config sets
+		// only `issue_tracker` and `display`, so the global-only view
+		// of `workspace` resolves to nothing — must be loud about it,
+		// not silently render an empty tree.
+		out, err := runConfig(t, "show", "workspace", "-g")
+		if err != nil {
+			t.Fatalf("show: %v", err)
+		}
+		if !strings.Contains(out, "no config values to display") {
+			t.Errorf("expected empty-state marker; got:\n%s", out)
+		}
+	})
 }
