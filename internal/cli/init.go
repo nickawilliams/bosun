@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -270,9 +271,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Style the command portion of each hint distinctly (bold +
+	// primary) so it pops against the muted surrounding wording —
+	// the user's eye lands on what to type before reading why.
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	cmdStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary)
+	hint := func(command, purpose string) string {
+		return mutedStyle.Render("Run ") + cmdStyle.Render(command) + mutedStyle.Render(" "+purpose)
+	}
+
 	ui.NewCard(ui.CardInfo, "next steps").
-		Muted("Run: bosun doctor to verify connectivity").
-		Muted("Run: bosun start --issue <issue> to begin work").
+		Text(hint("bosun doctor", "to verify connectivity")).
+		Text(hint("bosun start --issue <issue>", "to begin work")).
 		Print()
 
 	return nil
