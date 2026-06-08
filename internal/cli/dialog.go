@@ -77,13 +77,18 @@ func (d *Dialog) Default(yes bool) *Dialog {
 // without rendering. Returns ErrCancelled if the user aborts with
 // ctrl+c.
 //
-// On confirmation, the card is rewound so the caller can print the
-// resulting action card in its place. On either cancellation path
-// (negative button or ctrl+c), the question stays visible and the
-// caller (or HandleError) surfaces the cancellation status below.
-// For ctrl+c, huh leaves its form render in place; Dialog pads one
-// extra row so the cancellation card doesn't bump against the form
-// residue.
+// The card rewinds whenever the user gives a clean answer — Yes
+// or No. The caller is expected to emit a result card next (Saved,
+// Skip, Complete, etc.) that carries whatever post-answer context
+// matters; the question itself isn't part of the persisted record.
+// Matches the typeahead / slot pattern: the prompt clears once it's
+// answered, and the result stands alone in its place.
+//
+// Ctrl+c keeps the question visible. The form was interrupted, not
+// answered, so the cancellation card the caller (or HandleError)
+// emits next reads as a response to the question that's still on
+// screen. Dialog requests a spacer so that card lays out cleanly
+// against huh's parked help row.
 func (d *Dialog) Show() (bool, error) {
 	if !isInteractive() {
 		return d.defaultYes, nil
@@ -104,19 +109,15 @@ func (d *Dialog) Show() (bool, error) {
 			Value(&confirmed),
 	)
 
-	if formErr == nil && confirmed {
-		rewind()
-		return true, nil
-	}
-
-	// On ctrl+c, huh leaves its form render in place and runForm
-	// parked the cursor on the form's bottom row (the help line).
-	// Request a spacer so the caller's next card emits a │ connector
-	// that overwrites that row, giving a clean 1-row gap between
-	// huh's residue and the cancellation status.
 	if formErr != nil {
+		// Ctrl+c or other form-level abort — leave the question
+		// visible as context for the cancellation card the caller
+		// emits next, and pad with a spacer so it lays out cleanly
+		// against huh's parked help row.
 		ui.RequestSpacer()
+		return confirmed, formErr
 	}
 
-	return confirmed, formErr
+	rewind()
+	return confirmed, nil
 }
