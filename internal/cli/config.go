@@ -677,11 +677,13 @@ func runConfigCheck(args []string) error {
 			// Passing: one-line leaf with "N/N keys" — tells the user
 			// what was validated even when nothing failed.
 			n := len(group.Keys)
-			tree.Add(ui.Leaf(
+			leaf := ui.Leaf(
 				ui.Palette.Check, ui.Palette.Success,
 				name,
 				fmt.Sprintf("%d/%d keys", n, n),
-			))
+			)
+			leaf.ValueColor = ui.Palette.Success
+			tree.Add(leaf)
 			passed++
 			continue
 		}
@@ -699,7 +701,9 @@ func runConfigCheck(args []string) error {
 		children := make([]*ui.TreeNode, 0, len(issues))
 		for _, iss := range issues {
 			g, c := severityGlyph(iss.Severity)
-			children = append(children, ui.Leaf(g, c, iss.Key, issueDetail(iss)))
+			child := ui.Leaf(g, c, iss.Key, issueDetail(iss))
+			child.ValueColor = c
+			children = append(children, child)
 		}
 		groupNode := ui.Group(name, children...)
 		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(worst)
