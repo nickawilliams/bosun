@@ -27,7 +27,12 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "View and manage bosun configuration",
-		// Bare "config" runs "show".
+		// Bare `bosun config` (with optional flags) runs `show`.
+		// NoArgs rejects positional args so a typo'd subcommand
+		// surfaces as "unknown command" rather than silently being
+		// forwarded to show as a group filter — and so a future
+		// schema group can never shadow a real subcommand name.
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigShow(cmd, args)
 		},
@@ -76,6 +81,13 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	var groupFilter string
 	if len(args) > 0 {
 		groupFilter = args[0]
+	}
+
+	// Reject unknown group names up front so a typo'd group renders
+	// the same error in human mode that runConfigShowMachine emits
+	// for JSON/YAML, rather than silently rendering an empty tree.
+	if groupFilter != "" && !isKnownConfigGroup(groupFilter) {
+		return fmt.Errorf("unknown config group %q", groupFilter)
 	}
 
 	// Machine-readable output.
@@ -138,6 +150,18 @@ func runConfigShowMachine(format string, sourceFilter []string, groupFilter stri
 		return fmt.Errorf("unknown output format %q (valid: yaml, json, env)", format)
 	}
 	return nil
+}
+
+// isKnownConfigGroup reports whether name is a top-level group that
+// the config tree would actually render — either a key present in
+// the effective viper settings or a schema-known group with default/
+// env-derived values injected by injectSchemaDefaults. Mirrors what
+// buildConfigTree iterates so validation and rendering agree.
+func isKnownConfigGroup(name string) bool {
+	settings := viper.AllSettings()
+	injectSchemaDefaults(settings)
+	_, ok := settings[name]
+	return ok
 }
 
 func buildConfigTree(cs *configSources, sourceFilter []string, groupFilter string) *ui.Tree {
