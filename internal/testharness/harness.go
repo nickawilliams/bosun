@@ -120,6 +120,16 @@ func (h *Harness) Type(s string) {
 // regardless of which channel each write went through.
 func (h *Harness) Run(args ...string) error {
 	h.t.Helper()
+
+	// Each Run should behave like a fresh process invocation:
+	// reset viper (so the file is re-read instead of returning cached
+	// values from a prior Run) and reset the bootstrap guard (so
+	// PersistentPreRunE actually runs Bootstrap again). Without this,
+	// a set + get sequence within one test sees the set succeed on
+	// disk but the get returns the pre-set value from the cached viper.
+	viper.Reset()
+	cli.ResetBootstrap()
+
 	cmd := cli.NewRootCmd("test")
 	cmd.SetIn(h.stdin)
 	cmd.SetOut(h.stdout)
