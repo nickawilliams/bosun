@@ -606,40 +606,47 @@ func validateGroup(groupName string, group ConfigGroup) []configIssue {
 				Key:      ck.Key,
 				Severity: severity,
 				Category: "invalid",
-				Detail:   fmt.Sprintf("%s=%q (expected: %s)", ck.Key, value, strings.Join(ck.Options, "|")),
+				// Detail is the value-side context only — the key
+				// itself becomes the leaf label downstream.
+				Detail: fmt.Sprintf("%q (expected: %s)", value, strings.Join(ck.Options, "|")),
 			})
 		}
 	}
 	return issues
 }
 
-// renderConfigIssues collapses a group's issues into a multi-line
-// display value and returns the worst severity. Issues are grouped
-// by category so several missing keys collapse into one "missing:
-// a, b, c" line rather than one line per key. The row glyph in the
-// caller is driven by the returned severity.
-func renderConfigIssues(issues []configIssue) (value string, severity configIssueSeverity) {
-	var missingKeys, invalidEntries []string
-	for _, iss := range issues {
-		if iss.Severity > severity {
-			severity = iss.Severity
-		}
-		switch iss.Category {
-		case "missing":
-			missingKeys = append(missingKeys, iss.Key)
-		case "invalid":
-			invalidEntries = append(invalidEntries, iss.Detail)
-		}
+// severityGlyph maps a configIssueSeverity to its event-context
+// glyph + color per state_grammar.go — ✗ red for fail, ▲ yellow for
+// warn. Used by per-key tree leaves and (for the worst issue in a
+// group) by the group's parent node.
+func severityGlyph(s configIssueSeverity) (glyph string, glyphColor color.Color) {
+	if s == configFail {
+		return ui.Palette.Cross, ui.Palette.Error
 	}
+	return "▲", ui.Palette.Warning
+}
 
-	var lines []string
-	if len(missingKeys) > 0 {
-		lines = append(lines, "missing: "+strings.Join(missingKeys, ", "))
+// issueDetail returns the per-key tree-leaf value for an issue: a
+// short string explaining what's wrong with this specific key. The
+// key itself is the leaf label; this string is the dot-separated
+// value beside it.
+func issueDetail(iss configIssue) string {
+	if iss.Category == "missing" {
+		return "not set"
 	}
-	if len(invalidEntries) > 0 {
-		lines = append(lines, "invalid: "+strings.Join(invalidEntries, ", "))
+	return iss.Detail
+}
+
+// worstSeverity returns the highest severity in issues. Caller has
+// already established len(issues) > 0.
+func worstSeverity(issues []configIssue) configIssueSeverity {
+	worst := issues[0].Severity
+	for _, iss := range issues[1:] {
+		if iss.Severity > worst {
+			worst = iss.Severity
+		}
 	}
-	return strings.Join(lines, "\n"), severity
+	return worst
 }
 
 func runConfigCheck(args []string) error {
@@ -659,41 +666,56 @@ func runConfigCheck(args []string) error {
 	}
 	sort.Strings(names)
 
-	// Pre-compute the title alignment width across every group label
-	// so every row's value separator lines up — same shape as the
-	// doctor command's alignWidth.
-	var alignWidth int
-	for _, name := range names {
-		if w := len(configSchema[name].Label); w > alignWidth {
-			alignWidth = w
-		}
-	}
-
-	r := ui.Default()
+	tree := ui.NewTree()
 	passed, warned, failed := 0, 0, 0
+
 	for _, name := range names {
 		group := configSchema[name]
 		issues := validateGroup(name, group)
+
 		if len(issues) == 0 {
-			r.Complete(group.Label)
+			// Passing: one-line leaf with "N/N keys" — tells the user
+			// what was validated even when nothing failed.
+			n := len(group.Keys)
+			tree.Add(ui.Leaf(
+				ui.Palette.Check, ui.Palette.Success,
+				name,
+				fmt.Sprintf("%d/%d keys", n, n),
+			))
 			passed++
 			continue
 		}
-		value, severity := renderConfigIssues(issues)
-		if severity == configFail {
-			r.FailValue(group.Label, value, alignWidth)
+
+		worst := worstSeverity(issues)
+		if worst == configFail {
 			failed++
-			continue
+		} else {
+			warned++
 		}
-		r.SkipValue(group.Label, value, alignWidth)
-		warned++
+
+		// Failing: expand to per-issue children so each broken key
+		// gets its own row instead of being crammed into a compound
+		// "missing: a, b, c" string.
+		children := make([]*ui.TreeNode, 0, len(issues))
+		for _, iss := range issues {
+			g, c := severityGlyph(iss.Severity)
+			children = append(children, ui.Leaf(g, c, iss.Key, issueDetail(iss)))
+		}
+		groupNode := ui.Group(name, children...)
+		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(worst)
+		tree.Add(groupNode)
 	}
+
+	// ContinuesBelow so the tree's last branch is ├── and the spine
+	// flows into the summary card that follows — keeps the timeline
+	// visually connected through the rollup.
+	tree.ContinuesBelow().Print()
 
 	// Summary card — segments ordered ascending by severity so the
 	// last non-zero one drives the rollup glyph color, matching the
 	// doctor command's pattern.
 	total := passed + warned + failed
-	r.Summary(
+	ui.Default().Summary(
 		fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
 		[]ui.SummarySegment{
 			{Count: passed, Label: "passed", Color: ui.Palette.Success},

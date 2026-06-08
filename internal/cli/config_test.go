@@ -263,3 +263,74 @@ func TestConfigSetUnset(t *testing.T) {
 		}
 	})
 }
+
+// TestConfigCheck covers the tree-shaped check output: passing groups
+// render as "N/N keys" leaves, failing groups expand to per-key
+// children with specific issue details, and the group filter narrows
+// the tree to a single branch.
+func TestConfigCheck(t *testing.T) {
+	t.Run("passing group shows N/N keys leaf", func(t *testing.T) {
+		out, err := runConfig(t, "check", "branch")
+		if err != nil {
+			t.Fatalf("check: %v\nstdout: %s", err, out)
+		}
+		// `branch` group's keys all have schema defaults, so it passes.
+		if !strings.Contains(out, "branch") || !strings.Contains(out, "/") || !strings.Contains(out, "keys") {
+			t.Errorf("expected 'branch · N/N keys' leaf; got:\n%s", out)
+		}
+	})
+
+	t.Run("missing required key expands to per-key leaf", func(t *testing.T) {
+		// baseConfig sets issue_tracker.provider + base_url but not
+		// email or token (both required) — those should each get their
+		// own "not set" leaf under the issue_tracker branch.
+		out, err := runConfig(t, "check", "issue_tracker")
+		if err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		if !strings.Contains(out, "issue_tracker") {
+			t.Errorf("expected issue_tracker branch in output; got:\n%s", out)
+		}
+		if !strings.Contains(out, "not set") {
+			t.Errorf("expected 'not set' leaf for missing required key; got:\n%s", out)
+		}
+	})
+
+	t.Run("invalid option value shows expected list", func(t *testing.T) {
+		h := testharness.New(t)
+		// baseConfig already declares `display:`; can't append another
+		// block under the same key (duplicate-key YAML error). Write a
+		// single composite config with `display.color` set to a value
+		// outside its Options list.
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+display:
+  compact_header: true
+  color: bogus
+`)
+		if err := h.Run("config", "check", "display"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, `"bogus"`) || !strings.Contains(out, "expected:") {
+			t.Errorf("expected '\"bogus\" (expected: ...)' leaf; got:\n%s", out)
+		}
+	})
+
+	t.Run("group filter narrows the tree", func(t *testing.T) {
+		out, err := runConfig(t, "check", "branch")
+		if err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		// Only the filtered group should appear — other top-level
+		// groups like notification / workspace should be absent.
+		if !strings.Contains(out, "branch") {
+			t.Errorf("expected branch in filtered output; got:\n%s", out)
+		}
+		if strings.Contains(out, "notification") || strings.Contains(out, "workspace") {
+			t.Errorf("filtered tree leaked unrelated groups; got:\n%s", out)
+		}
+	})
+}
