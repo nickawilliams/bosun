@@ -271,11 +271,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 // configureIntegration runs the gate form for one integration, then
 // either skips it (SkipValue card) or proceeds with the silent resolve
-// + consolidated card pattern. Integrations with a custom Setup
-// callback (CI/CD) keep their non-silent flow so the callback's
-// per-step cards still appear; the consolidated card is suppressed in
-// that case so it doesn't leave the Setup's saves dangling beneath an
-// out-of-order summary.
+// + consolidated card pattern.
 func configureIntegration(ig initGroup, group ConfigGroup) error {
 	providerKey, providerOK := findGroupProviderKey(group)
 	if !providerOK {
@@ -290,13 +286,7 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 			ui.NewCard(ui.CardSkipped, ig.Label).Muted("(skipped)").Print()
 			return nil
 		}
-		if err := resolveGroupReconfigure(ig.Group, group); err != nil {
-			return err
-		}
-		if ig.Setup != nil {
-			return ig.Setup()
-		}
-		return nil
+		return resolveGroupReconfigure(ig.Group, group)
 	}
 
 	provider, skipped, err := promptIntegrationGate(ig.Label, providerKey)
@@ -318,18 +308,23 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 	providerFK := fullKey(ig.Group, providerKey)
 	viper.Set(providerFK, provider)
 
-	if ig.Setup != nil {
-		// CI/CD path: provider needs to be on disk before the setup
-		// callback's per-step prompts run (they read the config to
-		// decide their flow). Use the standard non-silent resolve
-		// for the rest, then hand off to the callback.
-		if err := saveConfigKeyMode(providerFK, providerKey.Label, provider, true); err != nil {
+	configPath, err := configPathForScope(false)
+	if err != nil {
+		return err
+	}
+
+	if ig.ProviderOnly {
+		// Skip the per-field form; persist just the gate's pick and
+		// render a card scoped to the provider key so the user sees
+		// what landed without phantom rows for keys we didn't ask
+		// about.
+		if err := setConfigValues(configPath, map[string]any{providerFK: provider}); err != nil {
 			return err
 		}
-		if err := resolveGroupReconfigure(ig.Group, group); err != nil {
-			return err
-		}
-		return ig.Setup()
+		providerOnly := group
+		providerOnly.Keys = []ConfigKey{providerKey}
+		emitIntegrationCard(ig.Label, ig.Group, providerOnly, configPath)
+		return nil
 	}
 
 	formLabel := "Configure " + ui.TitleCase(provider)
@@ -344,10 +339,6 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 	// token) still land here because the provider is in kvs.
 	kvs[providerFK] = provider
 
-	configPath, err := configPathForScope(false)
-	if err != nil {
-		return err
-	}
 	if err := setConfigValues(configPath, kvs); err != nil {
 		return err
 	}
@@ -434,9 +425,17 @@ func findGroupProviderKey(group ConfigGroup) (ConfigKey, bool) {
 
 // initGroup describes an optional service group for the init wizard.
 type initGroup struct {
-	Label    string       // Human-readable name for the confirmation prompt.
-	Group    string       // Schema group name (e.g., "issue_tracker").
-	Setup    func() error // Custom setup flow, replaces resolveGroup when set.
+	Label string // Human-readable name for the confirmation prompt.
+	Group string // Schema group name (e.g., "issue_tracker").
+
+	// ProviderOnly captures just the provider at the gate and skips
+	// the per-field form. Use for groups whose follow-up inputs
+	// haven't been designed yet — the gate still records the user's
+	// intent ("we use github_actions") so downstream code can route
+	// accordingly, while the workflow/target/etc. keys stay
+	// configurable via `bosun config set` or direct YAML edits until
+	// init's UX for them lands.
+	ProviderOnly bool
 }
 
 // serviceInitGroups defines the ordered list of optional service groups
@@ -445,7 +444,7 @@ var serviceInitGroups = []initGroup{
 	{Label: "issue tracker", Group: "issue_tracker"},
 	{Label: "code host", Group: "code_host"},
 	{Label: "notifications", Group: "notification"},
-	{Label: "CI/CD", Group: "cicd", Setup: setupGitHubActions},
+	{Label: "CI/CD", Group: "cicd", ProviderOnly: true},
 }
 
 // detectRepositories scans a directory for git repositories: the directory
