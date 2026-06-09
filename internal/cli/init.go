@@ -364,19 +364,34 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 
 // emitIntegrationCard renders the consolidated post-configuration
 // card for an integration: CardSuccess with a KV body listing every
-// set schema key. Secrets render with the masked placeholder; empty
-// optional keys (e.g., a left-blank board_id) are omitted so the
-// card only shows what was actually configured.
+// configured key. Empty optional keys are omitted so the card only
+// shows what was actually set.
+//
+// Secret keys aren't persisted (bosun has no keychain integration —
+// they live in env vars that the user manages outside of bosun), so
+// the card reports the env var's current state instead of a captured
+// value: "•••••••• (from GITHUB_TOKEN)" when set, or "set GITHUB_TOKEN
+// to authenticate" when not. This makes the durable contract — env
+// vars, not the config file — visible at the moment the user is
+// thinking about it.
 func emitIntegrationCard(label, groupName string, group ConfigGroup) {
 	var pairs []string
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
+		if ck.Secret {
+			if ck.EnvVar == "" {
+				continue
+			}
+			if os.Getenv(ck.EnvVar) != "" {
+				pairs = append(pairs, ck.Label, "•••••••• (from "+ck.EnvVar+")")
+			} else {
+				pairs = append(pairs, ck.Label, "set "+ck.EnvVar+" to authenticate")
+			}
+			continue
+		}
 		val := viper.GetString(fk)
 		if val == "" {
 			continue
-		}
-		if ck.Secret {
-			val = "••••••••"
 		}
 		pairs = append(pairs, ck.Label, val)
 	}

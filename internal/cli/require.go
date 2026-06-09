@@ -94,6 +94,16 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 		if ck.Key == "provider" {
 			continue
 		}
+		if ck.Secret {
+			// Secrets live in env vars, not the config file (no
+			// keychain integration yet). Prompting here would be a
+			// UX lie — the value would live only for the current
+			// bosun-init process and disappear on exit, leaving the
+			// next invocation to fail. The consolidated card tells
+			// the user which env var to set; that's the durable
+			// contract.
+			continue
+		}
 		keys = append(keys, ck)
 	}
 	if len(keys) == 0 {
@@ -128,12 +138,6 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 			}
 			fields = append(fields,
 				newSelect[string](ck.Label).Options(opts...).Value(&vals[i]))
-		case ck.Secret && ck.EnvVar != "":
-			fields = append(fields,
-				newInput(ck.Label).
-					Placeholder("set for this session").
-					EchoMode(huh.EchoModePassword).
-					Value(&vals[i]))
 		default:
 			fields = append(fields,
 				newInput(ck.Label).Value(&vals[i]))
@@ -146,11 +150,9 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 	}
 	rewind()
 
-	// Set viper + the process env (for Secret EnvVar keys); collect
-	// disk-bound values into kvs so the caller can merge the gate's
-	// provider pick into the same write. Secrets ride on env vars
-	// only — they're set on the process env and viper for the
-	// session but never written to the project config file.
+	// Set viper for the session and collect disk-bound values into
+	// kvs. Secrets were filtered out above, so every value here is
+	// safe to persist.
 	kvs := make(map[string]any)
 	for i, ck := range keys {
 		val := vals[i]
@@ -159,10 +161,6 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 		}
 		fk := fullKey(groupName, ck)
 		viper.Set(fk, val)
-		if ck.Secret && ck.EnvVar != "" {
-			_ = os.Setenv(ck.EnvVar, val)
-			continue
-		}
 		kvs[fk] = val
 	}
 	return kvs, nil
@@ -322,6 +320,19 @@ func resolveConfigKey(groupName string, ck ConfigKey, silent bool) error {
 	if val == "" {
 		if ck.Required {
 			return fmt.Errorf("%s is required", ck.Label)
+		}
+		return nil
+	}
+
+	// Defensive: any Secret key that reaches this point lacks an
+	// EnvVar (the Secret + EnvVar case returned early above). Set
+	// viper for the session but never write the value to disk —
+	// putting a token into project YAML in cleartext is a footgun
+	// we'd rather lose-the-value-on-exit than silently invite.
+	if ck.Secret {
+		viper.Set(fk, val)
+		if !silent {
+			ui.Saved(ck.Label, "(set for this session)")
 		}
 		return nil
 	}
