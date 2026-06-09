@@ -35,49 +35,87 @@ func newStartCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			// Fetch issue details for branch naming.
+			// Fetch issue details for branch naming. Render the same
+			// Story card shape that `bosun status` workspace mode uses
+			// (type + linked key + bold title + colored status parens)
+			// so a user moving from status → start sees the same
+			// summary of what they're about to work on.
 			var detail issuepkg.Issue
 			tracker, trackerErr := newIssueTracker()
 			if trackerErr == nil {
-				if d, err := fetchIssue(ctx, tracker, issue); err != nil {
-					return fmt.Errorf("fetching issue: %w", err)
-				} else {
-					detail = d
-				}
-			}
-
-			// Resolve slug for branch naming.
-			slugOverride, _ := cmd.Flags().GetString("slug")
-			var slug string
-			if detail.Key != "" {
-				switch {
-				case slugOverride != "":
-					slug = slugify(slugOverride)
-				case isInteractive():
-					suggested := slugify(detail.Title)
-					input, field := newDefaultInput(suggested)
-					slugSlot := ui.NewSlot()
-					slugSlot.Show(ui.NewCard(ui.CardInput, "branch slug").Tight())
-					if err := runForm(input.Title("Slug")); err != nil {
-						return err
+				err := ui.RunCardReplace("", func() error {
+					d, e := tracker.GetIssue(ctx, issue)
+					if e == nil {
+						detail = d
 					}
-					slugSlot.Clear()
-					slug = field.Resolved()
-					if slug != suggested {
-						slug = slugify(slug)
-					}
-					ui.Selected("branch slug", slug)
-				}
-			}
-
-			// Build branch name.
-			branchName := issue
-			if detail.Key != "" {
-				name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
+					return e
+				}, func() *ui.Card {
+					return buildWorkspaceStoryCard(detail)
+				})
 				if err != nil {
-					ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
-				} else {
-					branchName = name
+					return fmt.Errorf("fetching issue: %w", err)
+				}
+			}
+
+			// One workspace per issue: if a workspace already exists
+			// for this issue, reuse its name as the branch name and
+			// skip the slug prompt + buildBranchName entirely. The
+			// per-repo branch/worktree actions below assess each repo
+			// independently and no-op when nothing's needed, so the
+			// "reuse" path lands as setup-checks-only followed by the
+			// tracker transition.
+			//
+			// Where we got the issue (flag / picker / cwd) doesn't
+			// affect this — the issue key is the lookup key.
+			existingWorkspace := ""
+			if mgr, err := newWorkspaceManager(); err == nil {
+				if names, err := mgr.List(); err == nil {
+					for _, name := range names {
+						if extractIssue(filepath.Base(name)) == issue {
+							existingWorkspace = name
+							break
+						}
+					}
+				}
+			}
+
+			var branchName string
+			if existingWorkspace != "" {
+				branchName = existingWorkspace
+			} else {
+				// Resolve slug for branch naming.
+				slugOverride, _ := cmd.Flags().GetString("slug")
+				var slug string
+				if detail.Key != "" {
+					switch {
+					case slugOverride != "":
+						slug = slugify(slugOverride)
+					case isInteractive():
+						suggested := slugify(detail.Title)
+						input, field := newDefaultInput(suggested)
+						slugSlot := ui.NewSlot()
+						slugSlot.Show(ui.NewCard(ui.CardInput, "branch slug").Tight())
+						if err := runForm(input); err != nil {
+							return err
+						}
+						slugSlot.Clear()
+						slug = field.Resolved()
+						if slug != suggested {
+							slug = slugify(slug)
+						}
+						ui.Selected("branch slug", slug)
+					}
+				}
+
+				// Build branch name.
+				branchName = issue
+				if detail.Key != "" {
+					name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
+					if err != nil {
+						ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
+					} else {
+						branchName = name
+					}
 				}
 			}
 
@@ -87,8 +125,12 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
-			// Interactive repository selection.
-			if len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
+			// Interactive repository selection — only for fresh
+			// workspaces. Reusing an existing one shouldn't re-ask the
+			// user to pick repos; the per-repo assess will simply
+			// no-op anything that's already there and apply anything
+			// that's been added to config since.
+			if existingWorkspace == "" && len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
 				opts := make([]huh.Option[string], len(repositories))
 				for i, r := range repositories {
 					opts[i] = huh.NewOption(r.Name, r.Name)
