@@ -46,9 +46,13 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 
 	pc := ui.NewPlanCard(plan)
 
-	// All items are no-ops — nothing to do.
+	// All items are no-ops — nothing to do. PlanVerified is a sibling
+	// of PlanSuccess (same ✓ glyph + success color) with a different
+	// title word — "Success" carries an action-verb feel that misreads
+	// when no work was performed; "Verified" affirms the check happened
+	// and the state already matches what was wanted.
 	if !plan.HasChanges() {
-		pc.SetState(ui.PlanSuccess)
+		pc.SetState(ui.PlanVerified)
 		pc.Print()
 		return nil
 	}

@@ -15,6 +15,7 @@ type PlanCardState int
 
 const (
 	PlanProposed  PlanCardState = iota // ? glyph — awaiting confirmation
+	PlanVerified                       // ✓ — assess found nothing to do; no apply ran
 	PlanApplying                       // spinner — executing actions
 	PlanSuccess                        // ✓ — all actions succeeded
 	PlanPartial                        // ! — some actions failed
@@ -93,6 +94,8 @@ func (pc *PlanCard) titleWord() string {
 	switch pc.state {
 	case PlanProposed:
 		return "Pending"
+	case PlanVerified:
+		return "Verified"
 	case PlanApplying:
 		return "Applying"
 	case PlanSuccess:
@@ -124,6 +127,8 @@ func (pc *PlanCard) glyph() string {
 	switch pc.state {
 	case PlanProposed:
 		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
+	case PlanVerified:
+		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
 	case PlanApplying:
 		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphPending)
 	case PlanSuccess:
