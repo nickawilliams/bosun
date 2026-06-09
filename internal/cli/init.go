@@ -354,27 +354,33 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 
 	// Consolidated KV card shows the user the values they just
 	// entered (the form rewinds on submit, so they need this static
-	// summary), then the Wrote line confirms where on disk the
-	// section landed — same format the project-settings write uses
-	// above and config set/unset use elsewhere.
-	emitIntegrationCard(ig.Label, ig.Group, group)
-	printConfigWriteConfirmation("Wrote", ui.TitleCase(group.Label), "to", configPath)
+	// summary), with the "Wrote to <path>" trailer baked into the
+	// same card so the write confirmation belongs to the section
+	// rather than floating beneath it as a separate intermediary
+	// card.
+	emitIntegrationCard(ig.Label, ig.Group, group, configPath)
 	return nil
 }
 
 // emitIntegrationCard renders the consolidated post-configuration
 // card for an integration: CardSuccess with a KV body listing every
-// configured key. Empty optional keys are omitted so the card only
-// shows what was actually set.
+// configured key, followed by a blank-line spacer and the "Wrote
+// to <path>" confirmation. Empty optional keys are omitted so the
+// card only shows what was actually set.
 //
 // Secret keys aren't persisted (bosun has no keychain integration —
 // they live in env vars that the user manages outside of bosun), so
 // the card reports the env var's current state instead of a captured
-// value: "•••••••• (from GITHUB_TOKEN)" when set, or "set GITHUB_TOKEN
-// to authenticate" when not. This makes the durable contract — env
+// value: "•••••••• (from GITHUB_TOKEN)" when set, or "(none) (from
+// GITHUB_TOKEN)" when not. This makes the durable contract — env
 // vars, not the config file — visible at the moment the user is
 // thinking about it.
-func emitIntegrationCard(label, groupName string, group ConfigGroup) {
+//
+// The "Wrote to" trailer lives inside the card so the write
+// confirmation belongs to the section rather than floating beneath
+// it as a separate intermediary card. Styling matches
+// printConfigWriteConfirmation (muted verb/prep + subtle path).
+func emitIntegrationCard(label, groupName string, group ConfigGroup, configPath string) {
 	var pairs []string
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
@@ -382,11 +388,15 @@ func emitIntegrationCard(label, groupName string, group ConfigGroup) {
 			if ck.EnvVar == "" {
 				continue
 			}
+			var masked string
 			if os.Getenv(ck.EnvVar) != "" {
-				pairs = append(pairs, ck.Label, "•••••••• (from "+ck.EnvVar+")")
+				masked = "••••••••"
 			} else {
-				pairs = append(pairs, ck.Label, "set "+ck.EnvVar+" to authenticate")
+				masked = lipgloss.NewStyle().
+					Foreground(ui.Palette.Muted).
+					Render("(none)")
 			}
+			pairs = append(pairs, ck.Label, masked+" (from "+ck.EnvVar+")")
 			continue
 		}
 		val := viper.GetString(fk)
@@ -398,7 +408,16 @@ func emitIntegrationCard(label, groupName string, group ConfigGroup) {
 	if len(pairs) == 0 {
 		return
 	}
-	ui.NewCard(ui.CardSuccess, label).KV(pairs...).Print()
+
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	pathStyle := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
+	wrote := mutedStyle.Render("Wrote to ") + pathStyle.Render(shortPath(configPath))
+
+	ui.NewCard(ui.CardSuccess, label).
+		KV(pairs...).
+		Text("").
+		Raw(wrote).
+		Print()
 }
 
 // findGroupProviderKey returns the schema's "provider" key for a group
