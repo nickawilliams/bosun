@@ -171,15 +171,22 @@ func newConfirm() *huh.Confirm {
 // promptRequired prompts for a value if stdin is a terminal. If stdin is not
 // a terminal (piped/scripted), returns empty string and the caller should
 // error.
+//
+// Wraps the input in a rewindable CardInput header so the spacer state
+// resets cleanly on submit — passing the label as the form's own Title
+// would orphan the prologue `│` after huh clears its content, leaving a
+// double-spacer above the next card.
 func promptRequired(label string) string {
 	if !isInteractive() {
 		return ""
 	}
 
 	var value string
-	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
+	rewind := ui.NewCard(ui.CardInput, label).Tight().PrintRewindable()
+	if err := runForm(huh.NewInput().Value(&value)); err != nil {
 		return ""
 	}
+	rewind()
 	return value
 }
 
