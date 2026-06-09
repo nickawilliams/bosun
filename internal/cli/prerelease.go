@@ -35,6 +35,8 @@ func newPrereleaseCmd() *cobra.Command {
 
 			// --- Resolve ---
 
+			_ = emitLifecyclePreamble(ctx, issue)
+
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
 			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
 			if err != nil {

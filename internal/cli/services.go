@@ -110,25 +110,40 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 	return repositories, nil
 }
 
-// fetchIssue fetches issue details from the tracker and renders a
-// RunCardReplace card showing issue type, key, and title on success.
-// An optional decorate callback can customize the success card with
-// additional content (e.g., KV pairs) using the fetched detail.
-func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
+// emitLifecyclePreamble fetches the issue and renders the visual
+// preamble shown at the start of every lifecycle command (start,
+// review, preview, prerelease, release, cleanup). Today that's the
+// Story card — the same shape `bosun status` workspace mode uses,
+// so a user moving from status into any lifecycle command sees the
+// same summary of what they're about to act on. Future expansion
+// (Workspace meta card, Preview meta card, etc.) lands here and
+// every command inherits the change.
+//
+// Tolerates a missing tracker (returns zero detail; nothing rendered)
+// and a failed fetch (the Running card morphs into a Failed card via
+// RunCardReplace; zero detail returned; no error surfaced). The
+// uniform "render-and-continue" posture matters because every
+// lifecycle command behaves the same when issue-tracker connectivity
+// is degraded — no command quietly aborts while a sibling carries on.
+// Commands that have a hard dependency on detail fields can still
+// short-circuit by checking `detail.Key == ""`.
+func emitLifecyclePreamble(ctx context.Context, issueKey string) issue.Issue {
 	var detail issue.Issue
-	err := ui.RunCardReplace("", func() error {
-		var e error
-		detail, e = tracker.GetIssue(ctx, issueKey)
-		return e
-	}, func() *ui.Card {
-		card := ui.NewCard(ui.CardSuccess, "").
-			Subtitle(detail.Title)
-		if len(decorate) > 0 {
-			decorate[0](detail, card)
+	tracker, err := newIssueTracker()
+	if err != nil || tracker == nil {
+		return detail
+	}
+	_ = ui.RunCardReplace("", func() error {
+		d, e := tracker.GetIssue(ctx, issueKey)
+		if e != nil {
+			return e
 		}
-		return card
+		detail = d
+		return nil
+	}, func() *ui.Card {
+		return buildWorkspaceStoryCard(detail)
 	})
-	return detail, err
+	return detail
 }
 
 // resolveActiveRepositories resolves repositories scoped to the given

@@ -8,7 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
-	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -38,15 +37,7 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			var detail issuepkg.Issue
-			var err error
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil {
-				detail, err = fetchIssue(ctx, tracker, issue)
-				if err != nil {
-					ui.Skip(fmt.Sprintf("issue details: %v", err))
-				}
-			}
+			detail := emitLifecyclePreamble(ctx, issue)
 
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
 			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
@@ -369,6 +360,7 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			if !draft {
+				tracker, _ := newIssueTracker()
 				if sa, ok := statusAction(tracker, issue, detail.Status, "review"); ok {
 					actions = append(actions, sa)
 				}

@@ -38,6 +38,8 @@ func newCleanupCmd() *cobra.Command {
 			ctx := cmd.Context()
 			g := git.New()
 
+			_ = emitLifecyclePreamble(ctx, issue)
+
 			// --- Pre-flight: dirty check ---
 			wsRoot := viper.GetString("workspace.root")
 			if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {

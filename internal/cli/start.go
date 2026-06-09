@@ -8,7 +8,6 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
-	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
@@ -35,27 +34,11 @@ func newStartCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			// Fetch issue details for branch naming. Render the same
-			// Story card shape that `bosun status` workspace mode uses
-			// (type + linked key + bold title + colored status parens)
-			// so a user moving from status → start sees the same
-			// summary of what they're about to work on.
-			var detail issuepkg.Issue
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil {
-				err := ui.RunCardReplace("", func() error {
-					d, e := tracker.GetIssue(ctx, issue)
-					if e == nil {
-						detail = d
-					}
-					return e
-				}, func() *ui.Card {
-					return buildWorkspaceStoryCard(detail)
-				})
-				if err != nil {
-					return fmt.Errorf("fetching issue: %w", err)
-				}
-			}
+			// Story card + future meta cards via the shared lifecycle
+			// preamble. Tracker outages render a Failed card and
+			// continue with zero detail — start gracefully degrades by
+			// using the issue key as the branch name (no slug prompt).
+			detail := emitLifecyclePreamble(ctx, issue)
 
 			// One workspace per issue: if a workspace already exists
 			// for this issue, reuse its name as the branch name and
@@ -291,6 +274,7 @@ func newStartCmd() *cobra.Command {
 				})
 			}
 
+			tracker, _ := newIssueTracker()
 			if sa, ok := statusAction(tracker, issue, detail.Status, "in_progress"); ok {
 				actions = append(actions, sa)
 			}

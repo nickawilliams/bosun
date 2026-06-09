@@ -32,18 +32,11 @@ func newPreviewCmd() *cobra.Command {
 			issueKey := cc.Issue
 
 			ctx := cmd.Context()
-			tracker, _ := newIssueTracker()
-			var currentStatus, issueTitle, issueType, issueURL string
-			if tracker != nil {
-				if detail, err := fetchIssue(ctx, tracker, issueKey); err != nil {
-					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
-				} else {
-					currentStatus = detail.Status
-					issueTitle = detail.Title
-					issueType = detail.Type
-					issueURL = detail.URL
-				}
-			}
+			detail := emitLifecyclePreamble(ctx, issueKey)
+			currentStatus := detail.Status
+			issueTitle := detail.Title
+			issueType := detail.Type
+			issueURL := detail.URL
 
 			provider, err := newPreviewProvider(cc.Workspace)
 			if err != nil {
@@ -94,6 +87,7 @@ func newPreviewCmd() *cobra.Command {
 				prData = prs
 			}
 
+			tracker, _ := newIssueTracker()
 			if sa, ok := statusAction(tracker, issueKey, currentStatus, "preview"); ok {
 				actions = append(actions, sa)
 			}

@@ -51,15 +51,8 @@ func newReleaseCmd() *cobra.Command {
 
 			// --- Plan + Apply ---
 
-			tracker, _ := newIssueTracker()
-			var currentStatus string
-			if tracker != nil {
-				if detail, err := fetchIssue(ctx, tracker, issue); err != nil {
-					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
-				} else {
-					currentStatus = detail.Status
-				}
-			}
+			detail := emitLifecyclePreamble(ctx, issue)
+			currentStatus := detail.Status
 
 			var actions []Action
 
@@ -94,6 +87,7 @@ func newReleaseCmd() *cobra.Command {
 				}
 			}
 
+			tracker, _ := newIssueTracker()
 			if sa, ok := statusAction(tracker, issue, currentStatus, "done"); ok {
 				actions = append(actions, sa)
 			}
