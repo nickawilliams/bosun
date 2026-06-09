@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -50,7 +49,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(bosunDir); err == nil {
 		reinit = true
 		if !skipConfirm {
-			confirmed, err := promptConfirm("Project already initialized — reconfigure?", false)
+			confirmed, err := NewDialog("Already Initialized").
+				Description("Reconfigure project settings and integrations?").
+				Default(false).
+				Show()
 			if err != nil {
 				return err
 			}
@@ -118,38 +120,42 @@ func runInit(cmd *cobra.Command, args []string) error {
 			wsDefault = existingWSRoot
 		}
 
-		var repoField, wsField *defaultField
-		var fields []huh.Field
+		// Wizard-style: project settings walk the user through each
+		// required value one prompt at a time, with a Saved card per
+		// field. Unlike integrations these settings are required for
+		// bosun to function, so there's no Skip option — the goal is
+		// to make sure the user sees and confirms each one rather than
+		// race past them in a multi-field form.
 		if needRepositories {
-			var input *huh.Input
-			input, repoField = newDefaultInput(repoDefault)
-			fields = append(fields, input.
-				Title(transformFieldTitle("Repository Patterns")).
-				Description("Comma-separated globs, e.g. ./* or ~/Projects/myorg/*"))
-		}
-		if needWS {
-			var input *huh.Input
-			input, wsField = newDefaultInput(wsDefault)
-			fields = append(fields, input.
-				Title(transformFieldTitle("Workspace Root")).
-				Description("Directory where workspaces are created"))
-		}
-
-		rewind := ui.NewCard(ui.CardInput, "project settings").PrintRewindable()
-		if err := runForm(fields...); err != nil {
-			return err
-		}
-		rewind()
-
-		if repoField != nil {
-			for _, g := range strings.Split(repoField.Resolved(), ",") {
+			input, repoField := newDefaultInput(repoDefault)
+			rewind := ui.NewCard(ui.CardInput, "Repository Patterns").Tight().PrintRewindable()
+			if err := runForm(input.
+				Description("Comma-separated globs, e.g. ./* or ~/Projects/myorg/*")); err != nil {
+				return err
+			}
+			rewind()
+			val := repoField.Resolved()
+			for _, g := range strings.Split(val, ",") {
 				if trimmed := strings.TrimSpace(g); trimmed != "" {
 					repositoryGlobs = append(repositoryGlobs, trimmed)
 				}
 			}
+			if val != "" {
+				ui.Saved("Repository Patterns", val)
+			}
 		}
-		if wsField != nil {
+		if needWS {
+			input, wsField := newDefaultInput(wsDefault)
+			rewind := ui.NewCard(ui.CardInput, "Workspace Root").Tight().PrintRewindable()
+			if err := runForm(input.
+				Description("Directory where workspaces are created")); err != nil {
+				return err
+			}
+			rewind()
 			wsRoot = wsField.Resolved()
+			if wsRoot != "" {
+				ui.Saved("Workspace Root", wsRoot)
+			}
 		}
 	}
 
@@ -210,22 +216,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	repositoryDisplay := strings.Join(repositoryGlobs, ", ")
-	if repositoryDisplay == "" {
-		repositoryDisplay = "(none — add repository patterns to .bosun/config.yaml)"
+	// Per-field Saved cards above already told the user what they
+	// set; the Wrote line confirms where the project-settings write
+	// landed, matching the format used by config set / unset and the
+	// per-integration confirmation below.
+	printConfigWriteConfirmation("Wrote", "Project Settings", "to", configPath)
+	if len(repositoryGlobs) == 0 {
+		ui.Skip("no repositories configured — add patterns to " + configPath)
 	}
-	heading := "initialized bosun project"
-	if reinit {
-		heading = "updated project settings"
-	}
-	fields := ui.NewFields(
-		"Config", configPath,
-		"Repositories", repositoryDisplay,
-	)
-	if wsRoot != "" {
-		fields = append(fields, ui.Field{Key: "Workspace Root", Value: wsRoot})
-	}
-	ui.Details(heading, fields)
 
 	// Service configuration wizard — runs unless --yes.
 	if isInteractive() {
@@ -248,25 +246,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			// Full mode: confirm, then prompt for everything with defaults.
-			confirmed, err := promptConfirm(fmt.Sprintf("Configure %s?", ig.Label), false)
-			if err != nil {
+			if err := configureIntegration(ig, group); err != nil {
 				return err
-			}
-			if !confirmed {
-				ui.SkipValue(ig.Label, "skipped")
-				continue
-			}
-
-			if err := resolveGroupReconfigure(ig.Group, group); err != nil {
-				return err
-			}
-
-			// Custom setup for provider-specific flows (e.g., CI/CD workflow wizard).
-			if ig.Setup != nil {
-				if err := ig.Setup(); err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -286,6 +267,135 @@ func runInit(cmd *cobra.Command, args []string) error {
 		Print()
 
 	return nil
+}
+
+// configureIntegration runs the gate form for one integration, then
+// either skips it (SkipValue card) or proceeds with the silent resolve
+// + consolidated card pattern. Integrations with a custom Setup
+// callback (CI/CD) keep their non-silent flow so the callback's
+// per-step cards still appear; the consolidated card is suppressed in
+// that case so it doesn't leave the Setup's saves dangling beneath an
+// out-of-order summary.
+func configureIntegration(ig initGroup, group ConfigGroup) error {
+	providerKey, providerOK := findGroupProviderKey(group)
+	if !providerOK {
+		// No provider key in this group — fall back to the plain
+		// yes/no Dialog. Doesn't apply to any current schema group but
+		// stays defensive against future shape changes.
+		confirmed, err := promptConfirm(fmt.Sprintf("Configure %s?", ig.Label), false)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			ui.NewCard(ui.CardSkipped, ig.Label).Muted("(skipped)").Print()
+			return nil
+		}
+		if err := resolveGroupReconfigure(ig.Group, group); err != nil {
+			return err
+		}
+		if ig.Setup != nil {
+			return ig.Setup()
+		}
+		return nil
+	}
+
+	provider, skipped, err := promptIntegrationGate(ig.Label, providerKey)
+	if err != nil {
+		return err
+	}
+	if skipped {
+		// Title-on-first-line + "skipped" as a muted body line on the
+		// second — same shape ui.Saved uses for confirmation cards.
+		// Reads less compressed than the inline-dot form when sitting
+		// between integration cards that themselves run several lines.
+		ui.NewCard(ui.CardSkipped, ig.Label).Muted("(skipped)").Print()
+		return nil
+	}
+
+	// Stage provider in viper so the form's defaults reflect it; the
+	// actual disk write is deferred until after the form so the
+	// whole integration lands in one read-modify-write pass.
+	providerFK := fullKey(ig.Group, providerKey)
+	viper.Set(providerFK, provider)
+
+	if ig.Setup != nil {
+		// CI/CD path: provider needs to be on disk before the setup
+		// callback's per-step prompts run (they read the config to
+		// decide their flow). Use the standard non-silent resolve
+		// for the rest, then hand off to the callback.
+		if err := saveConfigKeyMode(providerFK, providerKey.Label, provider, true); err != nil {
+			return err
+		}
+		if err := resolveGroupReconfigure(ig.Group, group); err != nil {
+			return err
+		}
+		return ig.Setup()
+	}
+
+	formLabel := "Configure " + ui.TitleCase(provider)
+	kvs, err := resolveGroupAsForm(ig.Group, formLabel, group)
+	if err != nil {
+		return err
+	}
+
+	// Merge the gate's provider pick with whatever the form collected
+	// and persist everything in one write. Groups whose only non-
+	// provider keys are env-only secrets (e.g. code_host with just a
+	// token) still land here because the provider is in kvs.
+	kvs[providerFK] = provider
+
+	configPath, err := configPathForScope(false)
+	if err != nil {
+		return err
+	}
+	if err := setConfigValues(configPath, kvs); err != nil {
+		return err
+	}
+
+	// Consolidated KV card shows the user the values they just
+	// entered (the form rewinds on submit, so they need this static
+	// summary), then the Wrote line confirms where on disk the
+	// section landed — same format the project-settings write uses
+	// above and config set/unset use elsewhere.
+	emitIntegrationCard(ig.Label, ig.Group, group)
+	printConfigWriteConfirmation("Wrote", ui.TitleCase(group.Label), "to", configPath)
+	return nil
+}
+
+// emitIntegrationCard renders the consolidated post-configuration
+// card for an integration: CardSuccess with a KV body listing every
+// set schema key. Secrets render with the masked placeholder; empty
+// optional keys (e.g., a left-blank board_id) are omitted so the
+// card only shows what was actually configured.
+func emitIntegrationCard(label, groupName string, group ConfigGroup) {
+	var pairs []string
+	for _, ck := range group.Keys {
+		fk := fullKey(groupName, ck)
+		val := viper.GetString(fk)
+		if val == "" {
+			continue
+		}
+		if ck.Secret {
+			val = "••••••••"
+		}
+		pairs = append(pairs, ck.Label, val)
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	ui.NewCard(ui.CardSuccess, label).KV(pairs...).Print()
+}
+
+// findGroupProviderKey returns the schema's "provider" key for a group
+// if one exists. The gate form's select widget renders over its
+// Options, and the consolidated card uses its Label.
+func findGroupProviderKey(group ConfigGroup) (ConfigKey, bool) {
+	for _, ck := range group.Keys {
+		if ck.Key == "provider" {
+			return ck, true
+		}
+	}
+	return ConfigKey{}, false
 }
 
 // initGroup describes an optional service group for the init wizard.

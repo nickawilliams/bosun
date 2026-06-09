@@ -205,6 +205,25 @@ func printConfigWriteConfirmation(verb, key, prep, file string) {
 	))
 }
 
+// setConfigValues writes multiple key-value pairs to a config file in
+// a single read-modify-write cycle. Use when init's per-section flow
+// has gathered several keys and wants to persist them atomically —
+// avoids the N round-trips that calling setConfigValue per key would
+// cost, and means a partial-fail leaves the file in either the old
+// or new state, never half-way between.
+func setConfigValues(path string, kvs map[string]any) error {
+	if len(kvs) == 0 {
+		return nil
+	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	_ = v.ReadInConfig() // ignore error — file may not exist yet
+	for k, val := range kvs {
+		v.Set(k, val)
+	}
+	return v.WriteConfigAs(path)
+}
+
 // setConfigMap sets a map value at a key in a config file.
 func setConfigMap(path, key string, values map[string]string) error {
 	v := viper.New()

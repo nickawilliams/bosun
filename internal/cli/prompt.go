@@ -191,6 +191,60 @@ func promptConfirm(label string, defaultVal bool) (bool, error) {
 	return NewDialog(label).Default(defaultVal).Show()
 }
 
+// promptIntegrationGate shows the gate form for one integration: a
+// single Select widget over the provider Options with "Skip" merged
+// in as the first (default-selected) entry. Returns (provider,
+// skipped, err).
+//
+// Merging Skip into the same widget as the provider choices means
+// the form has exactly one input — Skip is the default focus and
+// hitting Enter immediately skips, preserving the fluid "tap Enter
+// through the integrations I don't care about" rhythm. Picking any
+// other option commits to that provider and proceeds to the
+// per-field silent resolve loop. The empty string is used as the
+// Skip sentinel because real provider names are always non-empty.
+//
+// Non-interactive mode returns ("", true, nil) — no prompt to
+// render against, so the safest path is to skip.
+//
+// Ctrl+c surfaces as the underlying form's error (typically
+// ErrCancelled). Form residue stays on screen so the caller's
+// cancellation card reads as a response to the abandoned question.
+func promptIntegrationGate(label string, providerKey ConfigKey) (provider string, skipped bool, err error) {
+	if !isInteractive() {
+		return "", true, nil
+	}
+
+	opts := make([]huh.Option[string], 0, len(providerKey.Options)+1)
+	// "- skip -" with surrounding dashes signals the option as a
+	// meta-action rather than a concrete provider — distinguishes it
+	// from any hypothetical provider that might literally be named
+	// "skip" and reads as a structural choice ("don't configure
+	// this") next to the data-shaped provider rows below it.
+	opts = append(opts, huh.NewOption("- skip -", ""))
+	for _, p := range providerKey.Options {
+		opts = append(opts, huh.NewOption(p, p))
+	}
+
+	choice := "" // Default-select Skip via the empty sentinel.
+
+	rewind := ui.NewCard(ui.CardInput, label).AccentBody().Tight().PrintRewindable()
+	formErr := runForm(
+		huh.NewSelect[string]().Options(opts...).Value(&choice),
+	)
+
+	if formErr != nil {
+		ui.RequestSpacer()
+		return "", false, formErr
+	}
+
+	rewind()
+	if choice == "" {
+		return "", true, nil
+	}
+	return choice, false, nil
+}
+
 // promptValue displays a prompt with a default value.
 // Returns the entered value and any error (including ErrCancelled on ctrl+c).
 func promptValue(label, defaultVal string) (string, error) {

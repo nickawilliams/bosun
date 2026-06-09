@@ -30,7 +30,7 @@ func requireConfig(keys ...string) error {
 			if viper.GetString(fullKey(groupName, ck)) != "" {
 				continue
 			}
-			if err := resolveConfigKey(groupName, ck); err != nil {
+			if err := resolveConfigKey(groupName, ck, false); err != nil {
 				return err
 			}
 			continue
@@ -59,19 +59,120 @@ func requireConfig(keys ...string) error {
 // resolveGroup ensures all required keys in a config group are populated.
 // Keys that already have values are skipped (JIT mode for commands).
 func resolveGroup(groupName string, group ConfigGroup) error {
-	return resolveGroupMode(groupName, group, false)
+	return resolveGroupMode(groupName, group, false, false)
 }
 
 // resolveGroupReconfigure prompts for all keys in a config group, using
 // current values as defaults. Used by the init wizard so the user can
 // review and change existing configuration.
 func resolveGroupReconfigure(groupName string, group ConfigGroup) error {
-	return resolveGroupMode(groupName, group, true)
+	return resolveGroupMode(groupName, group, true, false)
+}
+
+// resolveGroupAsForm prompts the schema group's non-provider keys as
+// a single multi-field huh form, sets each entered value on viper +
+// (for Secret EnvVar keys) the process env, and returns the
+// disk-bound values as a map for the caller to persist. The caller
+// owns the actual file write so it can merge in the provider key
+// the gate captured and emit confirmation cards at a single point.
+// Returns a non-nil map even when empty so callers can unconditionally
+// merge into it.
+//
+// formLabel is the CardInput heading ("Configure Jira" etc.); group
+// keys named "provider" are skipped because the gate already captured
+// the user's pick. Schema-driven Source fields aren't supported here
+// (no current schema key uses Source); add a path when one does.
+//
+// Ctrl+c surfaces as ErrCancelled.
+func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[string]any, error) {
+	if !isInteractive() {
+		return map[string]any{}, nil
+	}
+
+	var keys []ConfigKey
+	for _, ck := range group.Keys {
+		if ck.Key == "provider" {
+			continue
+		}
+		keys = append(keys, ck)
+	}
+	if len(keys) == 0 {
+		return map[string]any{}, nil
+	}
+
+	// Pre-allocate so the per-field Value(&vals[i]) pointers stay
+	// valid through the form's lifecycle — slice grow would
+	// invalidate them.
+	vals := make([]string, len(keys))
+	fields := make([]huh.Field, 0, len(keys))
+
+	for i, ck := range keys {
+		// Default chain: current viper value (so reconfigure shows
+		// existing values pre-filled, Tab through to keep), schema
+		// default, then the example as a hint.
+		current := viper.GetString(fullKey(groupName, ck))
+		defaultVal := current
+		if defaultVal == "" {
+			defaultVal = ck.Default
+		}
+		if defaultVal == "" {
+			defaultVal = ck.Example
+		}
+		vals[i] = defaultVal
+
+		switch {
+		case len(ck.Options) > 0:
+			opts := make([]huh.Option[string], len(ck.Options))
+			for j, o := range ck.Options {
+				opts[j] = huh.NewOption(o, o)
+			}
+			fields = append(fields,
+				newSelect[string](ck.Label).Options(opts...).Value(&vals[i]))
+		case ck.Secret && ck.EnvVar != "":
+			fields = append(fields,
+				newInput(ck.Label).
+					Placeholder("set for this session").
+					EchoMode(huh.EchoModePassword).
+					Value(&vals[i]))
+		default:
+			fields = append(fields,
+				newInput(ck.Label).Value(&vals[i]))
+		}
+	}
+
+	rewind := ui.NewCard(ui.CardInput, formLabel).AccentBody().PrintRewindable()
+	if err := runForm(fields...); err != nil {
+		return nil, err
+	}
+	rewind()
+
+	// Set viper + the process env (for Secret EnvVar keys); collect
+	// disk-bound values into kvs so the caller can merge the gate's
+	// provider pick into the same write. Secrets ride on env vars
+	// only — they're set on the process env and viper for the
+	// session but never written to the project config file.
+	kvs := make(map[string]any)
+	for i, ck := range keys {
+		val := vals[i]
+		if val == "" {
+			continue
+		}
+		fk := fullKey(groupName, ck)
+		viper.Set(fk, val)
+		if ck.Secret && ck.EnvVar != "" {
+			_ = os.Setenv(ck.EnvVar, val)
+			continue
+		}
+		kvs[fk] = val
+	}
+	return kvs, nil
 }
 
 // resolveGroupMode is the shared implementation for group resolution.
 // When forcePrompt is true, every key is prompted even if already set.
-func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt bool) error {
+// When silent is true, per-key feedback cards (ui.Saved) are skipped —
+// the disk + viper writes still happen unconditionally.
+func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt, silent bool) error {
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
@@ -84,7 +185,7 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt bool) err
 		if ck.Source != nil && isInteractive() {
 			picked, err := pickFromSource(ck)
 			if err == nil && picked != "" {
-				if err := saveConfigKey(fk, ck.Label, picked); err != nil {
+				if err := saveConfigKeyMode(fk, ck.Label, picked, silent); err != nil {
 					return err
 				}
 				continue
@@ -103,7 +204,7 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt bool) err
 		}
 
 		// Need to resolve (prompt or error).
-		if err := resolveConfigKey(groupName, ck); err != nil {
+		if err := resolveConfigKey(groupName, ck, silent); err != nil {
 			if errors.Is(err, ErrCancelled) {
 				return err
 			}
@@ -117,8 +218,17 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt bool) err
 	return nil
 }
 
-// saveConfigKey persists a resolved config value to the project config file.
+// saveConfigKey persists a resolved config value to the project config
+// file and emits a ui.Saved confirmation card. Use saveConfigKeyMode
+// directly when the caller needs to suppress the confirmation card
+// (e.g., init's consolidated-card flow).
 func saveConfigKey(fk, label, val string) error {
+	return saveConfigKeyMode(fk, label, val, false)
+}
+
+// saveConfigKeyMode persists the value to disk + viper unconditionally;
+// the silent flag only gates the ui.Saved feedback card.
+func saveConfigKeyMode(fk, label, val string, silent bool) error {
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		viper.Set(fk, val)
@@ -129,13 +239,17 @@ func saveConfigKey(fk, label, val string) error {
 		return nil
 	}
 	viper.Set(fk, val)
-	ui.Saved(label, val)
+	if !silent {
+		ui.Saved(label, val)
+	}
 	return nil
 }
 
 // resolveConfigKey prompts for a single config key using its schema metadata
 // and saves the result to the appropriate config file (or env for secrets).
-func resolveConfigKey(groupName string, ck ConfigKey) error {
+// When silent is true the per-key Saved confirmation card is suppressed;
+// the prompt + disk write still happen unconditionally.
+func resolveConfigKey(groupName string, ck ConfigKey, silent bool) error {
 	fk := fullKey(groupName, ck)
 
 	if !isInteractive() {
@@ -167,7 +281,9 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 		}
 		_ = os.Setenv(ck.EnvVar, val)
 		viper.Set(fk, val)
-		ui.Saved(ck.Label, "(set for this session)")
+		if !silent {
+			ui.Saved(ck.Label, "(set for this session)")
+		}
 		return nil
 	}
 
@@ -225,7 +341,9 @@ func resolveConfigKey(groupName string, ck ConfigKey) error {
 	}
 
 	viper.Set(fk, val)
-	ui.Saved(ck.Label, val)
+	if !silent {
+		ui.Saved(ck.Label, val)
+	}
 
 	return nil
 }
