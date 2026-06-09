@@ -205,11 +205,37 @@ func newStartCmd() *cobra.Command {
 			g := git.New()
 			var actions []Action
 
+			// Per-repo branch name. For an existing workspace, the truth
+			// is what each worktree is actually checked out on — not the
+			// workspace name. Heterogeneous workspaces (the user manually
+			// checked out a different branch in one worktree, or curated
+			// the workspace with per-repo custom branches) need each
+			// repo's actions to key off the repo's real HEAD; otherwise
+			// the branch action sees the workspace-name branch as missing
+			// and creates a dangling sibling. Mirrors cleanup.go's
+			// actualBranch pattern.
+			//
+			// Fresh workspaces (no worktree yet) and any repo whose
+			// branch can't be determined fall back to the workspace name
+			// — the creation-time default.
+			actualBranch := make(map[string]string, len(repositories))
+			for _, r := range repositories {
+				actualBranch[r.Name] = branchName
+				if existingWorkspace == "" {
+					continue
+				}
+				wtPath := filepath.Join(wsRoot, branchName, r.Name)
+				if b, err := g.GetCurrentBranch(ctx, wtPath); err == nil && b != "" {
+					actualBranch[r.Name] = b
+				}
+			}
+
 			// Per-repo branch actions, then worktree actions (order matters:
 			// branches must exist before worktrees can be created).
 			for _, r := range repositories {
 				repoPath := r.Path
 				repoName := r.Name
+				branch := actualBranch[repoName]
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
@@ -217,20 +243,20 @@ func newStartCmd() *cobra.Command {
 					Type:   "repo",
 					Name:   repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
-						exists, err := g.BranchExists(ctx, repoPath, branchName)
+						exists, err := g.BranchExists(ctx, repoPath, branch)
 						if err != nil {
 							return 0, "", err
 						}
 						if exists {
-							return ActionCompleted, branchName, nil
+							return ActionCompleted, branch, nil
 						}
-						return ActionNeeded, branchName, nil
+						return ActionNeeded, branch, nil
 					},
 					Apply: func(ctx context.Context) error {
 						if fromHead {
-							return g.CreateBranchFromHead(ctx, repoPath, branchName)
+							return g.CreateBranchFromHead(ctx, repoPath, branch)
 						}
-						return g.CreateBranch(ctx, repoPath, branchName)
+						return g.CreateBranch(ctx, repoPath, branch)
 					},
 				})
 			}
