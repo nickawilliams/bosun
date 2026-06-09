@@ -125,11 +125,42 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
+			// Reusing an existing workspace: scope to repos already in
+			// it. The configured repo set may have grown since the
+			// workspace was created (new repos added to project
+			// config), but expanding the workspace as a side-effect of
+			// `start` is the wrong verb — that's what `workspace add`
+			// is for. Without this filter, `start` on an existing
+			// workspace silently produces a plan that provisions
+			// branches + worktrees for every newly-configured repo.
+			//
+			// resolveActiveRepositories enforces the --repository
+			// filter against the workspace's actual repo list, so
+			// `bosun start --repository=NotInWorkspace` surfaces as
+			// "no repositories matched filter (workspace repos: …)"
+			// rather than silently adding NotInWorkspace.
+			if existingWorkspace != "" {
+				active, err := resolveActiveRepositories(ctx, existingWorkspace, filterRepositories)
+				if err != nil {
+					return err
+				}
+				activeNames := make(map[string]bool, len(active))
+				for _, a := range active {
+					activeNames[a.Name] = true
+				}
+				filtered := repositories[:0]
+				for _, r := range repositories {
+					if activeNames[r.Name] {
+						filtered = append(filtered, r)
+					}
+				}
+				repositories = filtered
+			}
+
 			// Interactive repository selection — only for fresh
 			// workspaces. Reusing an existing one shouldn't re-ask the
-			// user to pick repos; the per-repo assess will simply
-			// no-op anything that's already there and apply anything
-			// that's been added to config since.
+			// user to pick repos; membership is already settled and
+			// the per-repo assess will no-op the existing entries.
 			if existingWorkspace == "" && len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
 				opts := make([]huh.Option[string], len(repositories))
 				for i, r := range repositories {
