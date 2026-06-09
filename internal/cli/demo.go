@@ -474,7 +474,9 @@ func demoPlanDryRun(cmd *cobra.Command) {
 }
 
 func demoPlanNoWork(cmd *cobra.Command) {
-	// No-work: all items are no-change, plan finalizes as success.
+	// No-work: all items are no-change, plan finalizes as verified
+	// (PlanVerified — the sibling of PlanSuccess for "we checked,
+	// nothing needed doing").
 	ui.Info("no-work branch (all items unchanged)")
 	plan := ui.NewPlan().
 		Add(ui.PlanNoChange, "branch", "repo", "api", "feature/ABC-123").
