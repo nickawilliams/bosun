@@ -281,25 +281,42 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 }
 
 // printAffectedSummary displays the change detection results.
+// Each repo gets a card whose title is the repo name (identifier —
+// PreserveCase) and whose value summarizes the affected state;
+// per-service detail lands as muted Item rows below so service
+// identifiers don't get title-cased into "Project-api" etc.
 func printAffectedSummary(results []AffectedResult) {
 	for _, r := range results {
-		if !r.HasChanges && len(r.Skipped) > 0 {
-			ui.Skip(fmt.Sprintf("%s: no changes, skipping (%s)",
-				r.RepoName, strings.Join(r.Skipped, ", ")))
-			continue
-		}
-		if len(r.Skipped) > 0 {
-			ui.Complete(fmt.Sprintf("%s: %d of %d services affected",
-				r.RepoName, len(r.Services), len(r.Services)+len(r.Skipped)))
+		switch {
+		case !r.HasChanges && len(r.Skipped) > 0:
+			ui.NewCard(ui.CardSkipped, r.RepoName).
+				PreserveCase().
+				Value("no changes").
+				Print()
+			for _, s := range r.Skipped {
+				ui.Item("skip", s)
+			}
+		case len(r.Skipped) > 0:
+			summary := fmt.Sprintf("%d of %d services affected",
+				len(r.Services), len(r.Services)+len(r.Skipped))
+			ui.NewCard(ui.CardSuccess, r.RepoName).
+				PreserveCase().
+				Value(summary).
+				Print()
 			for _, s := range r.Services {
 				ui.Item("deploy", s)
 			}
 			for _, s := range r.Skipped {
 				ui.Item("skip", s)
 			}
-		} else if len(r.Services) > 0 {
-			ui.Complete(fmt.Sprintf("%s: all services affected (%s)",
-				r.RepoName, strings.Join(r.Services, ", ")))
+		case len(r.Services) > 0:
+			ui.NewCard(ui.CardSuccess, r.RepoName).
+				PreserveCase().
+				Value("all services affected").
+				Print()
+			for _, s := range r.Services {
+				ui.Item("deploy", s)
+			}
 		}
 	}
 }
