@@ -309,7 +309,8 @@ func newReviewCmd() *cobra.Command {
 				}
 
 				for _, up := range needsPush {
-					if err := slot.Run(fmt.Sprintf("pushing %s", up.rc.repo.Name), func() error {
+					pushCard := ui.NewCard(ui.CardRunning, "pushing").Value(up.rc.repo.Name)
+					if err := slot.RunCard(pushCard, func() error {
 						return gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch)
 					}); err != nil {
 						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)

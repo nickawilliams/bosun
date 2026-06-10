@@ -35,6 +35,21 @@ func (s *Slot) Run(title string, fn func() error) error {
 	return nil
 }
 
+// RunCard is Run taking a pre-built card so the caller can attach
+// a Value (or other body content) that survives the title-case
+// transform — useful when the per-call name is an identifier like
+// a repo name that must not be mangled.
+func (s *Slot) RunCard(card *Card, fn func() error) error {
+	s.mustBeOpen()
+	s.clear()
+	rewind, err := RunPreparedCardRewindable(card, fn)
+	if err != nil {
+		return err
+	}
+	s.rewind = rewind
+	return nil
+}
+
 // Show replaces the current display with a static card. The card
 // remains rewindable until Clear or Finalize is called.
 func (s *Slot) Show(card *Card) {

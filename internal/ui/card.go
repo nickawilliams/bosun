@@ -985,12 +985,24 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 // the success card, restoring the terminal to its pre-call state.
 // On failure the card is printed normally and a nil rewind is returned.
 func RunCardRewindable(title string, fn func() error) (func(), error) {
+	return RunPreparedCardRewindable(NewCard(CardRunning, title), fn)
+}
+
+// RunPreparedCardRewindable is RunCardRewindable taking a pre-built
+// card. The caller constructs the card with whatever Value /
+// Subtitle / AlignWidth they want visible on the spinner; the
+// state is reset to CardRunning during the call and transitions
+// to CardSuccess (or CardFailed on error) when fn returns. Use
+// when the per-call name is an identifier that must not be
+// title-cased — title-cased identifiers like repo names get
+// mangled, but Value preserves casing.
+func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 	if IsRaw() {
 		err := fn()
 		return func() {}, err
 	}
 
-	card := NewCard(CardRunning, title)
+	card.state = CardRunning
 
 	resultCh := make(chan error, 1)
 	go func() {
