@@ -681,7 +681,7 @@ func renderLifecycleStepper(currentKey string) string {
 	if err != nil {
 		label = currentKey
 	}
-	elbow := strings.Repeat(" ", idx*stepperSlotWidth) + activeStyle.Render("└─ "+label)
+	elbow := strings.Repeat(" ", idx*stepperSlotWidth) + activeStyle.Render("╰─ "+label)
 
 	return track.String() + "\n" + elbow
 }
@@ -712,7 +712,7 @@ func renderLifecycleStepperUnmapped(statusText string) string {
 	if label == "" {
 		label = "(unknown)"
 	}
-	elbow := mutedStyle.Render("└─ " + label)
+	elbow := mutedStyle.Render("╰─ " + label)
 
 	return track.String() + "\n" + elbow
 }
