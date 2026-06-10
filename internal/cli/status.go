@@ -559,19 +559,35 @@ func projectRepos() []projectRepoEntry {
 // buildWorkspaceStatusCard renders the lifecycle-position row at the
 // top of the workspace meta block. Value is the stepper visual — the
 // colored active dot + label is the card's state signal, so the
-// gutter glyph stays a structural ●. When the tracker fetch failed,
-// or the status has no stepper slot (unmapped, or the v1-excluded
-// "acceptance"), the card collapses to a single warning row: ▲ glyph,
-// muted "(unavailable)" value. The row's purpose shifts from state
-// context to event context on failure — "we tried, we couldn't" is
-// an outcome, and the warning (not error) severity says bosun
-// proceeds with degraded info rather than failing the command.
+// gutter glyph stays a structural ●.
+//
+// Three render variants depending on what the tracker gave us:
+//
+//   - Fetch failed (!fetchOK): card collapses to a single warning
+//     row — ▲ glyph, muted "(unavailable)" value. "We tried, we
+//     couldn't"; bosun proceeds with degraded info rather than
+//     failing.
+//
+//   - Fetch succeeded but the status doesn't map to a stepper slot
+//     (unmapped vocabulary, or the v1-excluded "acceptance"): full-
+//     width muted-stepper variant via renderLifecycleStepperUnmapped
+//     — all dots open ○, elbow at slot 0 with the raw status text as
+//     a muted label. "We got something, we don't know where it sits."
+//     Distinct from the fetch-failed case so the user can tell the
+//     two apart.
+//
+//   - Fetch succeeded with a mapped status: full active stepper.
 func buildWorkspaceStatusCard(detail issuepkg.Issue, fetchOK bool) *ui.Card {
-	key := lifecycleKeyForStatus(detail.Status)
-	if !fetchOK || stepperSlotIndex(key) < 0 {
+	if !fetchOK {
 		value := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unavailable)")
 		return ui.NewCard(ui.CardSkipped, "Status").
 			Value(value).
+			AlignWidth(statusMetaAlignWidth)
+	}
+	key := lifecycleKeyForStatus(detail.Status)
+	if stepperSlotIndex(key) < 0 {
+		return ui.NewCard(ui.CardReady, "Status").
+			Value(renderLifecycleStepperUnmapped(detail.Status)).
 			AlignWidth(statusMetaAlignWidth)
 	}
 	return ui.NewCard(ui.CardReady, "Status").

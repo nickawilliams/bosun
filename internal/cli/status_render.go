@@ -686,6 +686,37 @@ func renderLifecycleStepper(currentKey string) string {
 	return track.String() + "\n" + elbow
 }
 
+// renderLifecycleStepperUnmapped renders the default stepper visual
+// for a status the tracker returned but we don't have mapped to a
+// lifecycle slot — every dot stays open ○ (none filled) and the
+// elbow points at slot 0 with the raw status text as its label.
+// Every segment renders muted, so the whole row reads as "we got
+// something, we don't know where it sits."
+//
+// Distinct from buildWorkspaceStatusCard's !fetchOK collapsed row,
+// which uses ▲ + "(unavailable)" to signal "we couldn't fetch at
+// all" — the two cases now look different so the user can tell
+// "tracker is down" from "tracker is fine, this status is novel."
+func renderLifecycleStepperUnmapped(statusText string) string {
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	var track strings.Builder
+	for i := range stepperSlotKeys {
+		if i > 0 {
+			track.WriteString(mutedStyle.Render(" ─── "))
+		}
+		track.WriteString(mutedStyle.Render("○"))
+	}
+
+	label := statusText
+	if label == "" {
+		label = "(unknown)"
+	}
+	elbow := mutedStyle.Render("└─ " + label)
+
+	return track.String() + "\n" + elbow
+}
+
 // humanizeAge formats a duration into a coarse "N unit ago" label
 // suitable for the Updated body row. Buckets: <1m → "just now",
 // <1h → "Nm ago", <1d → "Nh ago", <30d → "Nd ago", <365d →
