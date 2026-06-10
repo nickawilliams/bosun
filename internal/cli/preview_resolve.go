@@ -163,14 +163,27 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 
 	switch {
 	case flagName == "" && metaName == "":
-		// Row 1: unset / unset — generate, optionally prompt.
+		// Row 1: unset / unset — generate and prompt (interactive
+		// only). Matches `bosun start`'s slug prompt: the generated
+		// name shows as the placeholder, empty submit accepts it,
+		// typed input goes through enforceValidName (which loops on
+		// invalid input). Non-interactive falls through promptDefault's
+		// own short-circuit and silently uses the generated name.
 		name := generateEphemeralName()
-		if forceInteractive(cmd) {
+		if isInteractive() {
 			resolved, perr := promptDefault("preview name", name)
 			if perr != nil {
 				return previewResolution{}, perr
 			}
-			name = strings.TrimSpace(resolved)
+			resolved = strings.TrimSpace(resolved)
+			if resolved == "" {
+				resolved = name
+			}
+			validated, verr := enforceValidName(resolved)
+			if verr != nil {
+				return previewResolution{}, verr
+			}
+			name = validated
 		}
 		res.previewName = name
 		res.deployName = name
