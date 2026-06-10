@@ -162,15 +162,12 @@ func demoWorkspaceMeta() {
 		Status: "In Progress",
 		URL:    "https://jira.example.com/browse/EX-1234",
 	}
-	buildWorkspaceStatusCard(detail, true).Tight().Print()
 	buildWorkspaceStoryCard(detail, detail.Key, true).Print()
 
 	blocked := detail
 	blocked.Status = "Blocked"
-	buildWorkspaceStatusCard(blocked, true).Tight().Print()
 	buildWorkspaceStoryCard(blocked, blocked.Key, true).Print()
 
-	buildWorkspaceStatusCard(issuepkg.Issue{}, false).Tight().Print()
 	buildWorkspaceStoryCard(issuepkg.Issue{}, "EX-1234", false).Print()
 }
 

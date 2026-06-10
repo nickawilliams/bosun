@@ -556,54 +556,16 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
-// buildWorkspaceStatusCard renders the lifecycle-position row at the
-// top of the workspace meta block. Value is the stepper visual — the
-// colored active dot + label is the card's state signal, so the
-// gutter glyph stays a structural ●.
-//
-// Three render variants depending on what the tracker gave us:
-//
-//   - Fetch failed (!fetchOK): card collapses to a single warning
-//     row — ▲ glyph, muted "(unavailable)" value. "We tried, we
-//     couldn't"; bosun proceeds with degraded info rather than
-//     failing.
-//
-//   - Fetch succeeded but the status doesn't map to a stepper slot
-//     (unmapped vocabulary, or the v1-excluded "acceptance"): full-
-//     width muted-stepper variant via renderLifecycleStepperUnmapped
-//     — all dots open ○, elbow at slot 0 with the raw status text as
-//     a muted label. "We got something, we don't know where it sits."
-//     Distinct from the fetch-failed case so the user can tell the
-//     two apart.
-//
-//   - Fetch succeeded with a mapped status: full active stepper.
-func buildWorkspaceStatusCard(detail issuepkg.Issue, fetchOK bool) *ui.Card {
-	if !fetchOK {
-		value := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unavailable)")
-		return ui.NewCard(ui.CardSkipped, "Status").
-			Value(value).
-			AlignWidth(statusMetaAlignWidth)
-	}
-	key := lifecycleKeyForStatus(detail.Status)
-	if stepperSlotIndex(key) < 0 {
-		return ui.NewCard(ui.CardReady, "Status").
-			Value(renderLifecycleStepperUnmapped(detail.Status)).
-			AlignWidth(statusMetaAlignWidth)
-	}
-	return ui.NewCard(ui.CardReady, "Status").
-		Value(renderLifecycleStepper(key)).
-		AlignWidth(statusMetaAlignWidth)
-}
-
 // buildWorkspaceStoryCard renders the issue/story meta card. Title
 // is the issue type (Story / Bug / Task / etc., "Issue" if unknown);
-// value is the OSC8-linked issue key + bold title. Identity only —
-// lifecycle state lives in the Status card's stepper above, so the
-// glyph here is a structural ● with no state-color override.
+// title-line value is the OSC8-linked issue key + bold title; the
+// lifecycle stepper appears below as an indented body block, aligned
+// with the value column.
 //
 // When the tracker fetch failed (fetchOK false), the card renders
 // its degraded variant: ▲ warning glyph, issue key (falling back to
-// issueKey when detail is zero) + muted "(title unavailable)".
+// issueKey when detail is zero) + muted "(title unavailable)", no
+// stepper.
 //
 // Layout (Tight, ordering) is the caller's concern.
 func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK bool) *ui.Card {
@@ -631,9 +593,32 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 	}
 	value := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
 
-	return ui.NewCard(ui.CardReady, typeLabel).
+	card := ui.NewCard(ui.CardReady, typeLabel).
 		Value(value).
 		AlignWidth(statusMetaAlignWidth)
+
+	// Stepper folded into the body, indented to land in the same
+	// column as the title-line value. statusMetaAlignWidth + 3
+	// matches Card.Value's continuation-line padding so the dot
+	// track lines up beneath the title text.
+	key := lifecycleKeyForStatus(detail.Status)
+	var stepper string
+	if stepperSlotIndex(key) < 0 {
+		stepper = renderLifecycleStepperUnmapped(detail.Status)
+	} else {
+		stepper = renderLifecycleStepper(key)
+	}
+	indent := strings.Repeat(" ", statusMetaAlignWidth+3)
+	stepperLines := strings.Split(stepper, "\n")
+	indented := make([]string, len(stepperLines))
+	for i, l := range stepperLines {
+		indented[i] = indent + l
+	}
+
+	card.Text("") // blank │ row above the stepper
+	card.Raw(indented...)
+
+	return card
 }
 
 // buildWorkspacePreviewCard renders the preview-environment meta

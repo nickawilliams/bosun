@@ -143,8 +143,8 @@ func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside 
 	}
 
 	// fn always returns nil so RunCardReplace takes the successCard
-	// path on success AND failure — buildWorkspaceStatusCard renders
-	// the designed degraded row instead of the generic failed card.
+	// path on success AND failure — buildWorkspaceStoryCard renders
+	// the designed degraded variant instead of the generic failed card.
 	_ = ui.RunCardReplace("", func() error {
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -158,14 +158,8 @@ func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside 
 		wg.Wait()
 		return nil
 	}, func() *ui.Card {
-		return buildWorkspaceStatusCard(detail, fetchErr == nil)
+		return buildWorkspaceStoryCard(detail, issueKey, fetchErr == nil)
 	})
-
-	// The Status card rendered via RunCardReplace doesn't go through
-	// Print(), so suppress the pending spacer manually to keep the
-	// issue card flush below it.
-	ui.ClearSpacer()
-	buildWorkspaceStoryCard(detail, issueKey, fetchErr == nil).Print()
 
 	return detail
 }
