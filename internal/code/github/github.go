@@ -128,6 +128,15 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		Head     struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
+		RequestedReviewers []struct {
+			Login string `json:"login"`
+		} `json:"requested_reviewers"`
+		RequestedTeams []struct {
+			Slug string `json:"slug"`
+		} `json:"requested_teams"`
+		Assignees []struct {
+			Login string `json:"login"`
+		} `json:"assignees"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
 		return code.PullRequest{}, fmt.Errorf("parsing PR list response: %w", err)
@@ -152,6 +161,15 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		URL:     raw.HTMLURL,
 		State:   state,
 		HeadSHA: raw.Head.SHA,
+	}
+	for _, r := range raw.RequestedReviewers {
+		pr.RequestedReviewers = append(pr.RequestedReviewers, r.Login)
+	}
+	for _, t := range raw.RequestedTeams {
+		pr.RequestedTeams = append(pr.RequestedTeams, t.Slug)
+	}
+	for _, a := range raw.Assignees {
+		pr.Assignees = append(pr.Assignees, a.Login)
 	}
 
 	// Only enrich open PRs (including drafts) — for terminal states

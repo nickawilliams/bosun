@@ -15,6 +15,38 @@ import (
 	"github.com/spf13/viper"
 )
 
+// prState carries per-repo PR discoveries from a pr-action's Assess
+// to its Apply: the existing PR (zero value when none) and the
+// per-axis deltas — reviewers/teams/assignees that are configured
+// but not yet on the PR.
+type prState struct {
+	pr           code.PullRequest
+	missingRevs  []string
+	missingTeams []string
+	missingAsns  []string
+}
+
+// diffCaseInsensitive returns elements of want that don't appear in
+// have, comparing case-insensitively but preserving want's original
+// casing in the result (so GitHub's API gets the value the user
+// configured, not a lowercased echo of theirs).
+func diffCaseInsensitive(want, have []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	haveSet := make(map[string]struct{}, len(have))
+	for _, h := range have {
+		haveSet[strings.ToLower(h)] = struct{}{}
+	}
+	var out []string
+	for _, w := range want {
+		if _, ok := haveSet[strings.ToLower(w)]; !ok {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func newReviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "review",
@@ -311,8 +343,22 @@ func newReviewCmd() *cobra.Command {
 					branch := rc.branch
 					repoDisplayName := rc.repo.Name
 
+					// prOp switches PlanCreate↔PlanModify based on what
+					// Assess discovers: create when the PR is missing,
+					// modify when it exists but reviewers/teams/assignees
+					// need filling in.
+					prOp := ui.PlanCreate
+
+					// state carries the per-repo discoveries from Assess
+					// into Apply. The pr field is non-zero only when the
+					// PR already existed (and we don't need to create
+					// it); the missing* fields are the deltas to apply
+					// regardless of which path Assess took.
+					state := &prState{}
+
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
+						OpRef:  &prOp,
 						Action: "pr",
 						Type:   "repo",
 						Name:   repoDisplayName,
@@ -321,38 +367,79 @@ func newReviewCmd() *cobra.Command {
 							if err != nil {
 								return 0, "", err
 							}
-							if existing.Number > 0 {
-								// Capture existing PR so notifications have data
-								// even when no new PRs are created.
-								prResults = append(prResults, prResult{
-									repo: repoDisplayName, pr: existing,
-									owner: owner, repoName: repoName, branch: branch,
-								})
-								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
+
+							if existing.Number == 0 {
+								// PR doesn't exist — Apply will create
+								// it and apply all requested
+								// reviewers/teams/assignees fresh.
+								state.missingRevs = reviewers
+								state.missingTeams = teamReviewers
+								state.missingAsns = assignees
+								detail := fmt.Sprintf("%s → %s", branch, baseBranch)
+								if draft {
+									detail += " (draft)"
+								}
+								prOp = ui.PlanCreate
+								return ActionNeeded, detail, nil
 							}
-							detail := fmt.Sprintf("%s → %s", branch, baseBranch)
-							if draft {
-								detail += " (draft)"
-							}
-							return ActionNeeded, detail, nil
-						},
-						Apply: func(ctx context.Context) error {
-							pr, err := host.CreatePR(ctx, code.CreatePRRequest{
-								Owner:      owner,
-								Repository: repoName,
-								Head:       branch,
-								Base:       baseBranch,
-								Title:      prTitle,
-								Body:       prBody,
-								Draft:      draft,
-							})
-							if err != nil {
-								return err
-							}
+
+							// PR exists — capture it for downstream
+							// (notify needs prResults) and compute the
+							// reviewer/team/assignee deltas.
+							state.pr = existing
 							prResults = append(prResults, prResult{
-								repo: repoDisplayName, pr: pr,
+								repo: repoDisplayName, pr: existing,
 								owner: owner, repoName: repoName, branch: branch,
 							})
+
+							state.missingRevs = diffCaseInsensitive(reviewers, existing.RequestedReviewers)
+							state.missingTeams = diffCaseInsensitive(teamReviewers, existing.RequestedTeams)
+							state.missingAsns = diffCaseInsensitive(assignees, existing.Assignees)
+
+							total := len(state.missingRevs) + len(state.missingTeams) + len(state.missingAsns)
+							if total == 0 {
+								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
+							}
+							prOp = ui.PlanModify
+							return ActionNeeded, fmt.Sprintf("#%d (+%d)", existing.Number, total), nil
+						},
+						Apply: func(ctx context.Context) error {
+							pr := state.pr
+							if pr.Number == 0 {
+								created, err := host.CreatePR(ctx, code.CreatePRRequest{
+									Owner:      owner,
+									Repository: repoName,
+									Head:       branch,
+									Base:       baseBranch,
+									Title:      prTitle,
+									Body:       prBody,
+									Draft:      draft,
+								})
+								if err != nil {
+									return err
+								}
+								pr = created
+								prResults = append(prResults, prResult{
+									repo: repoDisplayName, pr: created,
+									owner: owner, repoName: repoName, branch: branch,
+								})
+							}
+
+							// Reviewers/assignees are best-effort: the PR
+							// is already created (or pre-existed), so a
+							// failure here shouldn't abort the rest of
+							// the run. Surface failures as Fail cards
+							// and continue.
+							if len(state.missingRevs) > 0 || len(state.missingTeams) > 0 {
+								if err := host.RequestReviewers(ctx, owner, repoName, pr.Number, state.missingRevs, state.missingTeams); err != nil {
+									ui.Fail(fmt.Sprintf("%s: reviewers: %v", repoDisplayName, err))
+								}
+							}
+							if len(state.missingAsns) > 0 {
+								if err := host.AddAssignees(ctx, owner, repoName, pr.Number, state.missingAsns); err != nil {
+									ui.Fail(fmt.Sprintf("%s: assignees: %v", repoDisplayName, err))
+								}
+							}
 							return nil
 						},
 					})
@@ -424,21 +511,6 @@ func newReviewCmd() *cobra.Command {
 					Apply: func(ctx context.Context) error {
 						if len(prResults) == 0 {
 							return nil
-						}
-						// Request reviewers and add assignees (best-effort).
-						if host != nil {
-							for _, r := range prResults {
-								if len(reviewers) > 0 || len(teamReviewers) > 0 {
-									if err := host.RequestReviewers(ctx, r.owner, r.repoName, r.pr.Number, reviewers, teamReviewers); err != nil {
-										ui.Fail(fmt.Sprintf("%s: reviewers: %v", r.repo, err))
-									}
-								}
-								if len(assignees) > 0 {
-									if err := host.AddAssignees(ctx, r.owner, r.repoName, r.pr.Number, assignees); err != nil {
-										ui.Fail(fmt.Sprintf("%s: assignees: %v", r.repo, err))
-									}
-								}
-							}
 						}
 						items := make([]notify.Item, len(prResults))
 						for i, r := range prResults {

@@ -25,6 +25,17 @@ type PullRequest struct {
 	// "clean" | "dirty" | "unstable" | "blocked" | "behind" | "draft"
 	// | "unknown".
 	MergeableState string
+
+	// RequestedReviewers lists user logins currently pending review
+	// (haven't acted yet, OR were re-requested after a review).
+	// Reviewers who already submitted a review move out of this list,
+	// so a stale entry here means "still waiting on them."
+	RequestedReviewers []string
+	// RequestedTeams lists team slugs currently pending review.
+	// Same semantics as RequestedReviewers.
+	RequestedTeams []string
+	// Assignees lists user logins assigned to the PR.
+	Assignees []string
 }
 
 // CheckRollup is the aggregate CI state for a commit's check runs.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -125,6 +126,16 @@ func TestGetPRForBranch(t *testing.T) {
 					"state":     "open",
 					"merged_at": nil,
 					"head":      map[string]any{"sha": "deadbeef"},
+					"requested_reviewers": []map[string]any{
+						{"login": "alice"},
+						{"login": "bob"},
+					},
+					"requested_teams": []map[string]any{
+						{"slug": "backend"},
+					},
+					"assignees": []map[string]any{
+						{"login": "carol"},
+					},
 				},
 			})
 		}
@@ -151,6 +162,15 @@ func TestGetPRForBranch(t *testing.T) {
 	}
 	if pr.Review != "approved" {
 		t.Errorf("Review = %q, want %q", pr.Review, "approved")
+	}
+	if got, want := pr.RequestedReviewers, []string{"alice", "bob"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RequestedReviewers = %v, want %v", got, want)
+	}
+	if got, want := pr.RequestedTeams, []string{"backend"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("RequestedTeams = %v, want %v", got, want)
+	}
+	if got, want := pr.Assignees, []string{"carol"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Assignees = %v, want %v", got, want)
 	}
 }
 
