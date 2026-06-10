@@ -59,8 +59,15 @@ type Reporter interface {
 	Saved(label, value string)
 	// Selected prints feedback that a single value was chosen
 	// interactively. The label is the field title and value is the
-	// user's selection, rendered as a subtitle.
+	// user's selection, rendered as a subtitle. The label is treated
+	// as a heading and gets the default title-case transform applied;
+	// use SelectedIdentifier when the label is an identifier (repo
+	// name, branch name, etc.) whose original casing must survive.
 	Selected(label, value string)
+	// SelectedIdentifier is Selected for cases where the label is an
+	// identifier (repo name, slug, branch) — its original casing is
+	// preserved instead of being title-cased.
+	SelectedIdentifier(label, value string)
 	// SelectedMulti prints feedback that multiple values were chosen
 	// interactively. The label is the field title and values are the
 	// user's selections, rendered as indented detail items.

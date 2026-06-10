@@ -116,9 +116,17 @@ func (r *cardReporter) Saved(label, value string) {
 }
 
 // Selected emits a CardSuccess with the label as title and the chosen
-// value as a subtitle. The label preserves its original casing since
-// it represents a chosen value or identifier, not a heading.
+// value as a subtitle. The label is treated as a heading and gets the
+// default title-case transform — use SelectedIdentifier when the
+// label is an identifier whose casing must be preserved.
 func (r *cardReporter) Selected(label, value string) {
+	NewCard(CardSuccess, label).Subtitle(value).Print()
+}
+
+// SelectedIdentifier is Selected but preserves the label's original
+// casing — for repo names, slugs, branches, and other identifier-
+// shaped labels where titleCase would mangle the value.
+func (r *cardReporter) SelectedIdentifier(label, value string) {
 	NewCard(CardSuccess, label).PreserveCase().Subtitle(value).Print()
 }
 

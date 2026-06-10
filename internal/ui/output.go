@@ -122,6 +122,10 @@ func Saved(label, value string) { defaultReporter.Saved(label, value) }
 // The label is the field title and value is the user's selection.
 func Selected(label, value string) { defaultReporter.Selected(label, value) }
 
+// SelectedIdentifier is Selected for cases where the label is an
+// identifier (repo name, slug, branch) whose casing must be preserved.
+func SelectedIdentifier(label, value string) { defaultReporter.SelectedIdentifier(label, value) }
+
 // SelectedMulti prints feedback that multiple values were chosen interactively.
 // The label is the field title and values are the user's selections.
 func SelectedMulti(label string, values []string) { defaultReporter.SelectedMulti(label, values) }

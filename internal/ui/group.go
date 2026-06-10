@@ -175,15 +175,19 @@ func (g *group) Saved(label, value string) {
 }
 
 func (g *group) Selected(label, value string) {
+	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Subtitle(value))
+}
+
+func (g *group) SelectedIdentifier(label, value string) {
 	g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Subtitle(value))
 }
 
 func (g *group) SelectedMulti(label string, values []string) {
 	if len(values) == 0 {
-		g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Subtitle("(none)"))
+		g.sendChild(CardSuccess, NewCard(CardSuccess, label).Subtitle("(none)"))
 		return
 	}
-	g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Muted(values...))
+	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Muted(values...))
 }
 
 func (g *group) Task(title string, fn func() error) error {

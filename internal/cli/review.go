@@ -81,7 +81,7 @@ func newReviewCmd() *cobra.Command {
 						repo: repo, branch: branch,
 						owner: identity.Owner, repoName: identity.Name,
 					})
-					g.Selected(repo.Name, fmt.Sprintf("%s → %s/%s", branch, identity.Owner, identity.Name))
+					g.SelectedIdentifier(repo.Name, fmt.Sprintf("%s → %s/%s", branch, identity.Owner, identity.Name))
 				}
 			})
 
