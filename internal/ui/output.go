@@ -106,9 +106,16 @@ func Bold(msg string, args ...any) {
 	fmt.Println(boldStyle.Render(text))
 }
 
-// Item prints an indented item with a label and value.
+// Item prints an indented item with a label and value, attached to
+// the timeline spine — the leading " │  " matches a card's body-row
+// prefix so a sequence of Item rows reads as a continuation of the
+// preceding card rather than floating loose. Label and value are
+// rendered as muted-label + primary-value, separated by two spaces
+// for breathing room.
 func Item(label, value string) {
-	fmt.Printf("  %s %s\n",
+	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
+	fmt.Printf(" %s   %s  %s\n",
+		connStyle.Render("│"),
 		mutedStyle.Render(label),
 		primaryStyle.Render(value),
 	)

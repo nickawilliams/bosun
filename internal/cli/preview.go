@@ -329,18 +329,42 @@ func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[str
 	overrides := make(map[string]string)
 	var prs []repoPR
 	for _, r := range reposWithChanges {
-		identity, err := gh.ParseRemote(ctx, r.RepoPath)
-		if err != nil {
-			ui.Fail(fmt.Sprintf("%s: %v", r.RepoName, err))
-			continue
-		}
-		pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
-		if err != nil {
-			ui.Fail(fmt.Sprintf("%s: %v", r.RepoName, err))
-			continue
-		}
-		if pr.Number == 0 {
-			ui.Skip(fmt.Sprintf("%s: no PR for branch %q, skipping", r.RepoName, r.Branch))
+		// Per-repo spinner via RunCardThen so the user sees continuous
+		// feedback during ParseRemote + GetPRForBranch (the GH call
+		// can take a couple of seconds). The success/skip card morphs
+		// in over the spinner; failures show a CardFailed.
+		var (
+			identity gh.RepositoryIdentity
+			pr       code.PullRequest
+			noPR     bool
+		)
+		err := ui.RunCardThen(r.RepoName, func() error {
+			var e error
+			identity, e = gh.ParseRemote(ctx, r.RepoPath)
+			if e != nil {
+				return e
+			}
+			pr, e = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
+			if e != nil {
+				return e
+			}
+			if pr.Number == 0 {
+				noPR = true
+			}
+			return nil
+		}, func() *ui.Card {
+			if noPR {
+				return ui.NewCard(ui.CardSkipped, r.RepoName).
+					PreserveCase().
+					Value(fmt.Sprintf("no PR for branch %q", r.Branch))
+			}
+			return ui.NewCard(ui.CardSuccess, r.RepoName).
+				PreserveCase().
+				Value(fmt.Sprintf("PR #%d → pr-%d", pr.Number, pr.Number))
+		})
+		if err != nil || noPR {
+			// RunCardThen already rendered the failed/skipped card;
+			// nothing more to do for this repo.
 			continue
 		}
 
@@ -348,7 +372,6 @@ func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[str
 		for _, svc := range r.Services {
 			overrides[svc] = tag
 		}
-
 		prs = append(prs, repoPR{
 			RepoName: r.RepoName,
 			Branch:   r.Branch,
@@ -356,8 +379,6 @@ func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[str
 			Repo:     identity.Name,
 			PR:       pr,
 		})
-
-		ui.Complete(fmt.Sprintf("%s: PR #%d → %s", r.RepoName, pr.Number, tag))
 	}
 
 	if len(overrides) == 0 {
