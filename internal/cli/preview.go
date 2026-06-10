@@ -60,7 +60,7 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			if resolution.previewName != "" {
-				ui.NewCard(ui.CardSuccess, "preview").Value(resolution.previewName).Print()
+				ui.Selected("preview", resolution.previewName)
 			}
 
 			// --- Plan + Apply ---
