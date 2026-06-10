@@ -79,50 +79,64 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 	}
 
 	// --- Change detection ---
+	//
+	// ChangedFiles runs a `git fetch` per repo to get an accurate
+	// merge-base, so this loop can hang for seconds on network. Run
+	// it under a spinner; the spinner card rewinds on success so
+	// printAffectedSummary's real cards land in its place.
 
 	var results []AffectedResult
-	for _, r := range repos {
-		services := resolveRepoServiceNames(r.Name)
-		if len(services) == 0 {
-			continue
+	rewind, err := ui.RunCardRewindable("detecting affected services", func() error {
+		for _, r := range repos {
+			services := resolveRepoServiceNames(r.Name)
+			if len(services) == 0 {
+				continue
+			}
+
+			changed, err := g.ChangedFiles(ctx, r.Path)
+			if err != nil {
+				return fmt.Errorf("%s: %w", r.Name, err)
+			}
+
+			branch := repoBranch[r.Name]
+
+			if len(changed) == 0 {
+				results = append(results, AffectedResult{
+					RepoName: r.Name,
+					RepoPath: r.Path,
+					Branch:   branch,
+					Skipped:  services,
+				})
+				continue
+			}
+
+			// Check if per-service path filtering is configured (map form).
+			pathMap := resolveServicePaths(r.Name)
+			if pathMap == nil {
+				// Phase 1: repo has changes → include all services.
+				results = append(results, AffectedResult{
+					RepoName:   r.Name,
+					RepoPath:   r.Path,
+					Branch:     branch,
+					HasChanges: true,
+					Services:   services,
+				})
+				continue
+			}
+
+			// Phase 2: per-service path-prefix matching.
+			result := matchServicePaths(r.Name, services, changed, pathMap)
+			result.RepoPath = r.Path
+			result.Branch = branch
+			results = append(results, result)
 		}
-
-		changed, err := g.ChangedFiles(ctx, r.Path)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", r.Name, err)
-		}
-
-		branch := repoBranch[r.Name]
-
-		if len(changed) == 0 {
-			results = append(results, AffectedResult{
-				RepoName: r.Name,
-				RepoPath: r.Path,
-				Branch:   branch,
-				Skipped:  services,
-			})
-			continue
-		}
-
-		// Check if per-service path filtering is configured (map form).
-		pathMap := resolveServicePaths(r.Name)
-		if pathMap == nil {
-			// Phase 1: repo has changes → include all services.
-			results = append(results, AffectedResult{
-				RepoName:   r.Name,
-				RepoPath:   r.Path,
-				Branch:     branch,
-				HasChanges: true,
-				Services:   services,
-			})
-			continue
-		}
-
-		// Phase 2: per-service path-prefix matching.
-		result := matchServicePaths(r.Name, services, changed, pathMap)
-		result.RepoPath = r.Path
-		result.Branch = branch
-		results = append(results, result)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rewind != nil {
+		rewind()
 	}
 
 	return results, nil
