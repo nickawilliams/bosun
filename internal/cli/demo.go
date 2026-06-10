@@ -8,6 +8,7 @@ import (
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +30,7 @@ func newDemoCmd() *cobra.Command {
 				demoTree()
 				demoGroupsStatic()
 				demoItemCard()
+				demoWorkspaceMeta()
 				demoPlanCardStates()
 				demoFormStatic()
 				return nil
@@ -144,6 +146,32 @@ func demoCards(cmd *cobra.Command) {
 			"second line of error output",
 		).
 		Print()
+}
+
+// demoWorkspaceMeta renders the workspace status meta block's
+// Status (lifecycle stepper) + issue card pair in three variants:
+// happy path, blocked (active dot becomes ✗ yellow), and degraded
+// (tracker fetch failed — both cards collapse to their warning
+// rows). Uses the real builders so the demo stays faithful to what
+// `bosun status` and the lifecycle preambles render.
+func demoWorkspaceMeta() {
+	detail := issuepkg.Issue{
+		Key:    "EX-1234",
+		Title:  "Add login page",
+		Type:   "Story",
+		Status: "In Progress",
+		URL:    "https://jira.example.com/browse/EX-1234",
+	}
+	buildWorkspaceStatusCard(detail, true).Tight().Print()
+	buildWorkspaceStoryCard(detail, detail.Key, true).Print()
+
+	blocked := detail
+	blocked.Status = "Blocked"
+	buildWorkspaceStatusCard(blocked, true).Tight().Print()
+	buildWorkspaceStoryCard(blocked, blocked.Key, true).Print()
+
+	buildWorkspaceStatusCard(issuepkg.Issue{}, false).Tight().Print()
+	buildWorkspaceStoryCard(issuepkg.Issue{}, "EX-1234", false).Print()
 }
 
 func demoPlanCardStates() {

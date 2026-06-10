@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"text/template"
 
@@ -110,40 +111,74 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 	return repositories, nil
 }
 
-// emitLifecyclePreamble fetches the issue and renders the visual
-// preamble shown at the start of every lifecycle command (start,
-// review, preview, prerelease, release, cleanup). Today that's the
-// Story card — the same shape `bosun status` workspace mode uses,
-// so a user moving from status into any lifecycle command sees the
-// same summary of what they're about to act on. Future expansion
-// (Workspace meta card, Preview meta card, etc.) lands here and
-// every command inherits the change.
+// emitWorkspaceIssuePreamble fetches the issue and renders the
+// two-card preamble shared by `bosun status` workspace mode and
+// every lifecycle command: the Status card (lifecycle stepper)
+// followed by the issue card. A single tracker fetch populates both —
+// the Status card morphs in via RunCardReplace (its spinner doubles
+// as the loading affordance for both cards), and the issue card
+// prints once the fetch resolves.
+//
+// alongside, when non-nil, runs inside the spinner concurrently with
+// the issue fetch — status uses it to fold its preview-env and
+// last-activity lookups into the same loading phase. Pass nil when
+// there is nothing else to fetch.
 //
 // Tolerates a missing tracker (returns zero detail; nothing rendered)
-// and a failed fetch (the Running card morphs into a Failed card via
-// RunCardReplace; zero detail returned; no error surfaced). The
-// uniform "render-and-continue" posture matters because every
-// lifecycle command behaves the same when issue-tracker connectivity
-// is degraded — no command quietly aborts while a sibling carries on.
-// Commands that have a hard dependency on detail fields can still
-// short-circuit by checking `detail.Key == ""`.
-func emitLifecyclePreamble(ctx context.Context, issueKey string) issue.Issue {
+// and a failed fetch (both cards render their degraded variants:
+// Status collapses to "(unavailable)", the issue card keeps the key
+// with a muted "(title unavailable)"). The uniform render-and-continue
+// posture matters because every lifecycle command behaves the same
+// when issue-tracker connectivity is degraded — no command quietly
+// aborts while a sibling carries on. Commands that have a hard
+// dependency on detail fields can still short-circuit by checking
+// `detail.Key == ""`.
+func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside func()) issue.Issue {
 	var detail issue.Issue
+	var fetchErr error
+
 	tracker, err := newIssueTracker()
 	if err != nil || tracker == nil {
 		return detail
 	}
+
+	// fn always returns nil so RunCardReplace takes the successCard
+	// path on success AND failure — buildWorkspaceStatusCard renders
+	// the designed degraded row instead of the generic failed card.
 	_ = ui.RunCardReplace("", func() error {
-		d, e := tracker.GetIssue(ctx, issueKey)
-		if e != nil {
-			return e
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			detail, fetchErr = tracker.GetIssue(ctx, issueKey)
+		}()
+		if alongside != nil {
+			alongside()
 		}
-		detail = d
+		wg.Wait()
 		return nil
 	}, func() *ui.Card {
-		return buildWorkspaceStoryCard(detail)
+		return buildWorkspaceStatusCard(detail, fetchErr == nil)
 	})
+
+	// The Status card rendered via RunCardReplace doesn't go through
+	// Print(), so suppress the pending spacer manually to keep the
+	// issue card flush below it.
+	ui.ClearSpacer()
+	buildWorkspaceStoryCard(detail, issueKey, fetchErr == nil).Print()
+
 	return detail
+}
+
+// emitLifecyclePreamble renders the visual preamble shown at the
+// start of every lifecycle command (start, review, preview,
+// prerelease, release, cleanup) — a thin wrapper over
+// emitWorkspaceIssuePreamble with no alongside work, kept as a named
+// symbol so call sites read as intent rather than mechanics. Future
+// expansion of the preamble lands in the shared helper and every
+// command inherits the change.
+func emitLifecyclePreamble(ctx context.Context, issueKey string) issue.Issue {
+	return emitWorkspaceIssuePreamble(ctx, issueKey, nil)
 }
 
 // resolveActiveRepositories resolves repositories scoped to the given

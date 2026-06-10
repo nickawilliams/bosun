@@ -612,29 +612,78 @@ func lifecycleKeyDotColor(key string) color.Color {
 	return ui.Palette.RoleInFlight
 }
 
-// previewDotColor returns the dot color for the Preview meta card.
-// Probed-alive reads as open-healthy; missing or unverified needs
-// attention; generic error is terminal-closed.
+// stepperSlotKeys is the fixed slot order of the workspace Status
+// card's lifecycle stepper — lifecycleStatusKeys minus "acceptance"
+// (excluded in v1; statuses mapped to it render the unavailable
+// fallback) plus the terminal "done".
+var stepperSlotKeys = []string{
+	"ready",
+	"in_progress",
+	"blocked",
+	"review",
+	"preview",
+	"ready_for_release",
+	"done",
+}
+
+// stepperSlotWidth is the column span of one stepper slot: a 1-cell
+// dot plus the 5-cell " ─── " connector that follows it. Used to
+// position the elbow + label under the active dot.
+const stepperSlotWidth = 6
+
+// stepperSlotIndex returns the slot position of a lifecycle key in
+// the stepper track, or -1 when the key has no slot ("" for unmapped
+// statuses, and "acceptance" — the documented v1 exclusion).
+func stepperSlotIndex(key string) int {
+	for i, k := range stepperSlotKeys {
+		if k == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// renderLifecycleStepper renders the 7-slot lifecycle stepper as a
+// two-line string for Card.Value: the dot track on the first line,
+// a colored elbow + status label pointing at the active slot on the
+// second. The active dot, elbow, and label share the lifecycle role
+// color (lifecycleKeyDotColor); inactive slots and connectors stay
+// muted, so the single colored slot is the card's state signal — this
+// row doubles as the color legend for the meta block. Blocked renders
+// its active dot as ✗: the slot is a real column in the sprint-board
+// model, but the work in it is negatively interrupted.
 //
-// State-context call site — see state_grammar.go.
-func previewDotColor(env preview.Environment, err error) color.Color {
-	if errors.Is(err, preview.ErrNoEnvironment) {
-		return ui.Palette.RoleAttention
+// Every segment is styled explicitly (no reliance on the Card value
+// style) so embedded ANSI resets can't bleed the colors. Callers must
+// pass a key with a stepper slot (stepperSlotIndex >= 0);
+// buildWorkspaceStatusCard owns the unavailable fallback.
+func renderLifecycleStepper(currentKey string) string {
+	idx := stepperSlotIndex(currentKey)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	activeStyle := lipgloss.NewStyle().Foreground(lifecycleKeyDotColor(currentKey))
+
+	var track strings.Builder
+	for i, key := range stepperSlotKeys {
+		if i > 0 {
+			track.WriteString(mutedStyle.Render(" ─── "))
+		}
+		switch {
+		case i == idx && key == "blocked":
+			track.WriteString(activeStyle.Render("✗"))
+		case i == idx:
+			track.WriteString(activeStyle.Render("●"))
+		default:
+			track.WriteString(mutedStyle.Render("○"))
+		}
 	}
-	var probeErr *preview.ProbeError
-	if errors.As(err, &probeErr) {
-		return ui.Palette.RoleAttention
-	}
+
+	label, err := resolveStatus(currentKey)
 	if err != nil {
-		return ui.Palette.RoleClosed
+		label = currentKey
 	}
-	if env.Name == "" {
-		return ui.Palette.RoleAttention
-	}
-	if env.Probed && env.Alive {
-		return ui.Palette.RoleOpen
-	}
-	return ui.Palette.RoleInFlight
+	elbow := strings.Repeat(" ", idx*stepperSlotWidth) + activeStyle.Render("└─ "+label)
+
+	return track.String() + "\n" + elbow
 }
 
 // humanizeAge formats a duration into a coarse "N unit ago" label

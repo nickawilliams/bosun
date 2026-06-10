@@ -90,20 +90,17 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 	host, _ := newCodeHost()
 	g := git.New()
 
-	// Issue card — async fetch via RunCardReplace. Spinner shows
-	// chained after the project name; on completion the issue card
-	// (with KV body of facets) absorbs as the next data segment and
-	// renders below the breadcrumb. The preview-env binding and
-	// last-activity timestamp are fetched in parallel so they land
-	// inside the same spinner.
+	// Meta block — the Status + issue cards render inside the shared
+	// preamble helper (single tracker fetch feeds both); the
+	// preview-env binding and last-activity timestamp are fetched
+	// alongside the issue so they land inside the same spinner.
 	//
 	// Provider OnInfo events (stale-metadata cleanup, etc.) buffer
-	// here so they emit after the issue card prints, not racing with
+	// here so they emit after the meta block prints, not racing with
 	// the loading spinner.
 	tracker, _ := newIssueTracker()
 	if tracker != nil && issueKey != "" {
 		var (
-			detail       issuepkg.Issue
 			previewEnv   preview.Environment
 			previewErr   error
 			updatedAt    time.Time
@@ -113,16 +110,8 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 		previewProvider, _ := newPreviewProviderWithInfo(wsName, func(action, value string) {
 			infoMessages = append(infoMessages, previewInfoEvent{action: action, value: value})
 		})
-		_ = ui.RunCardReplace("", func() error {
+		emitWorkspaceIssuePreamble(ctx, issueKey, func() {
 			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				d, e := tracker.GetIssue(ctx, issueKey)
-				if e == nil {
-					detail = d
-				}
-			}()
 			if previewProvider != nil {
 				wg.Add(1)
 				go func() {
@@ -149,21 +138,18 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 				}()
 			}
 			wg.Wait()
-			return nil
-		}, func() *ui.Card {
-			return buildWorkspaceStoryCard(detail)
 		})
-		// Order: Story → Workspace → Preview. Story morphs in via
-		// RunCardReplace (its return value doesn't go through
-		// Print(), so any Tight() on it wouldn't fire) — we suppress
-		// the next spacer manually so Workspace lands flush below.
-		// Workspace.Tight() chains the suppression into Preview;
-		// Preview is the last meta card and not Tight, so the
-		// trailing blank line separates the meta block from the
-		// per-repo cards that follow.
+		// Order: Status → Story → Preview → Workspace. The helper
+		// prints Status and Story; the Story card prints without
+		// Tight (lifecycle commands want the comfy break after it),
+		// so we suppress the pending spacer manually to keep Preview
+		// flush in the meta block. Preview.Tight() chains the
+		// suppression into Workspace; Workspace is the last meta
+		// card and not Tight, so the trailing blank line separates
+		// the meta block from the per-repo cards that follow.
 		ui.ClearSpacer()
-		buildWorkspaceBranchCard(wsName, updatedAt).Tight().Print()
-		buildWorkspacePreviewCard(previewEnv, previewErr).Print()
+		buildWorkspacePreviewCard(previewEnv, previewErr).Tight().Print()
+		buildWorkspaceBranchCard(wsName, updatedAt).Print()
 		// Drain captured events into the timeline now that the meta
 		// block has printed.
 		for _, msg := range infoMessages {
@@ -570,24 +556,58 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
+// buildWorkspaceStatusCard renders the lifecycle-position row at the
+// top of the workspace meta block. Value is the stepper visual — the
+// colored active dot + label is the card's state signal, so the
+// gutter glyph stays a structural ●. When the tracker fetch failed,
+// or the status has no stepper slot (unmapped, or the v1-excluded
+// "acceptance"), the card collapses to a single warning row: ▲ glyph,
+// muted "(unavailable)" value. The row's purpose shifts from state
+// context to event context on failure — "we tried, we couldn't" is
+// an outcome, and the warning (not error) severity says bosun
+// proceeds with degraded info rather than failing the command.
+func buildWorkspaceStatusCard(detail issuepkg.Issue, fetchOK bool) *ui.Card {
+	key := lifecycleKeyForStatus(detail.Status)
+	if !fetchOK || stepperSlotIndex(key) < 0 {
+		value := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unavailable)")
+		return ui.NewCard(ui.CardSkipped, "Status").
+			Value(value).
+			AlignWidth(statusMetaAlignWidth)
+	}
+	return ui.NewCard(ui.CardReady, "Status").
+		Value(renderLifecycleStepper(key)).
+		AlignWidth(statusMetaAlignWidth)
+}
+
 // buildWorkspaceStoryCard renders the issue/story meta card. Title
 // is the issue type (Story / Bug / Task / etc., "Issue" if unknown);
-// value is the OSC8-linked issue key + bold title with the tracker
-// status folded into a colored parenthetical at the end — same shape
-// as the PR row, so the card glyph (lifecycle stage) and the parens
-// describe the same signal.
+// value is the OSC8-linked issue key + bold title. Identity only —
+// lifecycle state lives in the Status card's stepper above, so the
+// glyph here is a structural ● with no state-color override.
 //
-// Renders as a CardReady (●) with the dot color overridden per
-// lifecycle state — meta cards are state indicators, so they share
-// one glyph shape and let color carry the signal.
+// When the tracker fetch failed (fetchOK false), the card renders
+// its degraded variant: ▲ warning glyph, issue key (falling back to
+// issueKey when detail is zero) + muted "(title unavailable)".
 //
 // Layout (Tight, ordering) is the caller's concern.
-func buildWorkspaceStoryCard(detail issuepkg.Issue) *ui.Card {
+func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK bool) *ui.Card {
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
 	}
-	dotColor := lifecycleKeyDotColor(lifecycleKeyForStatus(detail.Status))
+
+	if !fetchOK {
+		key := detail.Key
+		if key == "" {
+			key = issueKey
+		}
+		muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+		value := lipgloss.NewStyle().Bold(true).Render(key) +
+			muted.Render(" · (title unavailable)")
+		return ui.NewCard(ui.CardSkipped, typeLabel).
+			Value(value).
+			AlignWidth(statusMetaAlignWidth)
+	}
 
 	issueRef := detail.Key
 	if detail.URL != "" {
@@ -595,30 +615,21 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue) *ui.Card {
 	}
 	value := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
 
-	if detail.Status != "" {
-		parens := lipgloss.NewStyle().Foreground(dotColor).Render("(" + detail.Status + ")")
-		value += " " + parens
-	}
-
 	return ui.NewCard(ui.CardReady, typeLabel).
-		GlyphColor(dotColor).
 		Value(value).
 		AlignWidth(statusMetaAlignWidth)
 }
 
 // buildWorkspacePreviewCard renders the preview-environment meta
 // card. Title is "Preview"; value is the preview URL/name or a muted
-// "(none)" sentinel produced by statusPreviewValue.
-//
-// Renders as a CardReady (●) with the dot color overridden per
-// preview-probe outcome (see [previewDotColor]).
+// "(none)" sentinel produced by statusPreviewValue. The text carries
+// the existence contrast on its own, so the glyph stays a structural
+// ● with no state-color override.
 //
 // Layout (Tight, ordering) is the caller's concern.
 func buildWorkspacePreviewCard(env preview.Environment, err error) *ui.Card {
-	dotColor := previewDotColor(env, err)
 	value := statusPreviewValue(env, err)
 	return ui.NewCard(ui.CardReady, "Preview").
-		GlyphColor(dotColor).
 		Value(value).
 		AlignWidth(statusMetaAlignWidth)
 }
