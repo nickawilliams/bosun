@@ -941,7 +941,9 @@ func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, sta
 		return nil, err
 	}
 
-	printAffectedSummary(results)
+	// Observation group (no PR resolution — this path only needs the
+	// services list; image overrides are preview's concern).
+	_, _, _ = emitDeploymentSources(ctx, results, false)
 
 	var affected []string
 	for _, r := range results {

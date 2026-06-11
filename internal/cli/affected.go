@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/nickawilliams/bosun/internal/code"
+	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/spf13/viper"
@@ -294,43 +296,130 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 	return false
 }
 
-// printAffectedSummary displays the change detection results.
-// Each repo gets a card whose title is the repo name (identifier —
-// PreserveCase) and whose value summarizes the affected state;
-// per-service detail lands as muted Item rows below so service
-// identifiers don't get title-cased into "Project-api" etc.
-func printAffectedSummary(results []AffectedResult) {
-	for _, r := range results {
-		switch {
-		case !r.HasChanges && len(r.Skipped) > 0:
-			ui.NewCard(ui.CardSkipped, r.RepoName).
-				PreserveCase().
-				Value("no changes").
-				Print()
-			for _, s := range r.Skipped {
-				ui.Item("skip", s)
+// emitDeploymentSources renders the Observe-phase group that
+// precedes the deploy plan: a "Deploying From" parent card with one
+// child per repo explaining why it is — or isn't — part of the
+// deployment. The group title carries the "why are these repos
+// here" context that root-level repo cards couldn't; children are
+// indented under it and roll up into the parent's aggregate glyph.
+//
+// Child shapes:
+//
+//	✓  extracker · PR #2791 → pr-2791     (withPRs; services as
+//	    deploy  tag-api                     continuation lines)
+//	    ...
+//	○  web · no changes
+//	✗  repo · <error>                      (remote/API failure)
+//	○  repo · no PR for branch "x"
+//
+// When withPRs is true each changed repo's child runs under a group
+// spinner while the PR lookup happens, and the returned overrides
+// map (service → "pr-N") + repoPR list feed the deploy action.
+// When false (release path) the child headline is the affected
+// summary and no host calls are made.
+//
+// The repo-level overlap with the plan card that follows is
+// intentional: this section shows the derivation (evidence), the
+// plan asserts the conclusion — same relationship terraform's
+// refresh output has to its plan lines.
+func emitDeploymentSources(ctx context.Context, results []AffectedResult, withPRs bool) (map[string]string, []repoPR, error) {
+	var host code.Host
+	if withPRs {
+		h, err := newCodeHost()
+		if err != nil {
+			return nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
+		}
+		host = h
+	}
+
+	overrides := make(map[string]string)
+	var prs []repoPR
+
+	ui.RunGroup("deploying from", func(g ui.Reporter) {
+		for _, r := range results {
+			label := ui.PreserveCase(r.RepoName)
+
+			if !r.HasChanges {
+				if len(r.Skipped) > 0 {
+					g.SkipValue(label, "no changes")
+				}
+				continue
 			}
-		case len(r.Skipped) > 0:
-			summary := fmt.Sprintf("%d of %d services affected",
+			if len(r.Services) == 0 {
+				g.SkipValue(label, "no services affected")
+				continue
+			}
+
+			if !withPRs {
+				g.CompleteValue(label, affectedValue(r, ""))
+				continue
+			}
+
+			var (
+				identity gh.RepositoryIdentity
+				pr       code.PullRequest
+			)
+			err := g.Spinner(label, func() error {
+				var e error
+				identity, e = gh.ParseRemote(ctx, r.RepoPath)
+				if e != nil {
+					return e
+				}
+				pr, e = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
+				return e
+			})
+			if err != nil {
+				g.FailValue(label, err.Error())
+				continue
+			}
+			if pr.Number == 0 {
+				g.SkipValue(label, fmt.Sprintf("no PR for branch %q", r.Branch))
+				continue
+			}
+
+			tag := fmt.Sprintf("pr-%d", pr.Number)
+			for _, svc := range r.Services {
+				overrides[svc] = tag
+			}
+			prs = append(prs, repoPR{
+				RepoName: r.RepoName,
+				Branch:   r.Branch,
+				Owner:    identity.Owner,
+				Repo:     identity.Name,
+				PR:       pr,
+			})
+
+			g.CompleteValue(label, affectedValue(r, fmt.Sprintf("PR #%d → %s", pr.Number, tag)))
+		}
+	})
+
+	if len(overrides) == 0 {
+		return nil, prs, nil
+	}
+	return overrides, prs, nil
+}
+
+// affectedValue composes the multi-line Card.Value for a deployment-
+// source child: the headline (PR tag when resolved, otherwise the
+// affected-count summary), then one muted continuation line per
+// service. Continuation lines align under the value column via
+// Card.Value's multi-line support.
+func affectedValue(r AffectedResult, headline string) string {
+	if headline == "" {
+		if len(r.Skipped) > 0 {
+			headline = fmt.Sprintf("%d of %d services affected",
 				len(r.Services), len(r.Services)+len(r.Skipped))
-			ui.NewCard(ui.CardSuccess, r.RepoName).
-				PreserveCase().
-				Value(summary).
-				Print()
-			for _, s := range r.Services {
-				ui.Item("deploy", s)
-			}
-			for _, s := range r.Skipped {
-				ui.Item("skip", s)
-			}
-		case len(r.Services) > 0:
-			ui.NewCard(ui.CardSuccess, r.RepoName).
-				PreserveCase().
-				Value("all services affected").
-				Print()
-			for _, s := range r.Services {
-				ui.Item("deploy", s)
-			}
+		} else {
+			headline = "all services affected"
 		}
 	}
+	lines := make([]string, 0, 1+len(r.Services)+len(r.Skipped))
+	lines = append(lines, headline)
+	for _, s := range r.Services {
+		lines = append(lines, "deploy  "+s)
+	}
+	for _, s := range r.Skipped {
+		lines = append(lines, "skip    "+s)
+	}
+	return strings.Join(lines, "\n")
 }

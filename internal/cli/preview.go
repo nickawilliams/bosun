@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -275,8 +274,8 @@ func prDetailActions(prs []repoPR) []Action {
 // resolvePreviewInputs computes the services list, image overrides, and
 // PR data for a deploy. Services come from --service when set, otherwise
 // from affected-service detection. Overrides always derive from affected
-// detection (PR lookups per repo). UI output (printAffectedSummary) fires
-// during plan build, matching today's flow.
+// detection (PR lookups per repo), rendered as the "Deploying From"
+// observation group via emitDeploymentSources.
 func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
 
@@ -287,13 +286,12 @@ func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace str
 	if len(flagServices) > 0 {
 		services = flagServices
 	} else {
-		printAffectedSummary(results)
 		for _, r := range results {
 			services = append(services, r.Services...)
 		}
 	}
 
-	overrides, prs, _ := buildImageOverrides(ctx, results)
+	overrides, prs, _ := emitDeploymentSources(ctx, results, true)
 	return services, overrides, prs
 }
 
@@ -304,86 +302,5 @@ type repoPR struct {
 	Owner    string
 	Repo     string
 	PR       code.PullRequest
-}
-
-// buildImageOverrides looks up the PR number for each affected repo's
-// branch and produces a service → "pr-N" override map plus the resolved
-// PR data for use in notifications. Returns nil map when no repos have
-// changes that resolve to PRs.
-func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[string]string, []repoPR, error) {
-	var reposWithChanges []AffectedResult
-	for _, r := range results {
-		if r.HasChanges && len(r.Services) > 0 {
-			reposWithChanges = append(reposWithChanges, r)
-		}
-	}
-	if len(reposWithChanges) == 0 {
-		return nil, nil, nil
-	}
-
-	host, err := newCodeHost()
-	if err != nil {
-		return nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
-	}
-
-	overrides := make(map[string]string)
-	var prs []repoPR
-	for _, r := range reposWithChanges {
-		// Per-repo spinner via RunCardThen so the user sees continuous
-		// feedback during ParseRemote + GetPRForBranch (the GH call
-		// can take a couple of seconds). The success/skip card morphs
-		// in over the spinner; failures show a CardFailed.
-		var (
-			identity gh.RepositoryIdentity
-			pr       code.PullRequest
-			noPR     bool
-		)
-		err := ui.RunCardThen(r.RepoName, func() error {
-			var e error
-			identity, e = gh.ParseRemote(ctx, r.RepoPath)
-			if e != nil {
-				return e
-			}
-			pr, e = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
-			if e != nil {
-				return e
-			}
-			if pr.Number == 0 {
-				noPR = true
-			}
-			return nil
-		}, func() *ui.Card {
-			if noPR {
-				return ui.NewCard(ui.CardSkipped, r.RepoName).
-					PreserveCase().
-					Value(fmt.Sprintf("no PR for branch %q", r.Branch))
-			}
-			return ui.NewCard(ui.CardSuccess, r.RepoName).
-				PreserveCase().
-				Value(fmt.Sprintf("PR #%d → pr-%d", pr.Number, pr.Number))
-		})
-		if err != nil || noPR {
-			// RunCardThen already rendered the failed/skipped card;
-			// nothing more to do for this repo.
-			continue
-		}
-
-		tag := fmt.Sprintf("pr-%d", pr.Number)
-		for _, svc := range r.Services {
-			overrides[svc] = tag
-		}
-		prs = append(prs, repoPR{
-			RepoName: r.RepoName,
-			Branch:   r.Branch,
-			Owner:    identity.Owner,
-			Repo:     identity.Name,
-			PR:       pr,
-		})
-	}
-
-	if len(overrides) == 0 {
-		return nil, prs, nil
-	}
-	return overrides, prs, nil
 }
 

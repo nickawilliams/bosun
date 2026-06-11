@@ -143,9 +143,15 @@ type cardItem struct {
 	content string
 }
 
-// NewCard creates a card with the given state and title.
+// NewCard creates a card with the given state and title. A title
+// wrapped with ui.PreserveCase keeps its original casing (same
+// sentinel convention the cli's form-field constructors honor) —
+// the escape hatch for identifier-shaped titles (repo names, slugs)
+// flowing through Reporter methods that don't otherwise expose a
+// PreserveCase toggle, e.g. group children via CompleteValue.
 func NewCard(state CardState, title string) *Card {
-	return &Card{state: state, title: title}
+	clean, verbatim := StripPreserveCase(title)
+	return &Card{state: state, title: clean, preserveTitle: verbatim}
 }
 
 // Tight suppresses the comfy-mode timeline padding after this card.

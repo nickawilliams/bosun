@@ -106,21 +106,6 @@ func Bold(msg string, args ...any) {
 	fmt.Println(boldStyle.Render(text))
 }
 
-// Item prints an indented item with a label and value, attached to
-// the timeline spine — the leading " │  " matches a card's body-row
-// prefix so a sequence of Item rows reads as a continuation of the
-// preceding card rather than floating loose. Label and value are
-// rendered as muted-label + primary-value, separated by two spaces
-// for breathing room.
-func Item(label, value string) {
-	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
-	fmt.Printf(" %s   %s  %s\n",
-		connStyle.Render("│"),
-		mutedStyle.Render(label),
-		primaryStyle.Render(value),
-	)
-}
-
 // Saved prints a confirmation that a value was set, styled to match huh form
 // inputs: check + bold primary label on one line, muted value on the next.
 func Saved(label, value string) { defaultReporter.Saved(label, value) }
