@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
@@ -281,40 +284,72 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 	return false
 }
 
-// emitDeploymentSources renders the Observe-phase group that
-// precedes the deploy plan: a "Services" parent card whose children
-// are the flat, alphabetically-sorted list of repo·service pairs
-// feeding the deployment. The group title carries the "why are
-// these here" context that root-level repo cards couldn't; children
-// roll up into the parent's aggregate glyph.
+// sourceRepo bundles one repo's detection + PR-lookup outcome while
+// emitDeploymentSources moves between its phases.
+type sourceRepo struct {
+	res      AffectedResult
+	identity gh.RepositoryIdentity
+	pr       code.PullRequest
+	prErr    error
+}
+
+// detFail records a repo whose change detection errored — rendered
+// as a ✗ row in the final Services card.
+type detFail struct {
+	repo string
+	err  error
+}
+
+// deployable reports whether this repo's services can actually be
+// toggled into a deployment: it has changes + services, and (when PR
+// resolution applies) the PR lookup succeeded.
+func (sr sourceRepo) deployable(withPRs bool) bool {
+	if !sr.res.HasChanges || len(sr.res.Services) == 0 {
+		return false
+	}
+	if withPRs && (sr.prErr != nil || sr.pr.Number == 0) {
+		return false
+	}
+	return true
+}
+
+// emitDeploymentSources renders the Observe-phase "Services" section
+// that precedes the deploy plan, in three phases:
 //
-// Child shapes (sorted by repo, then service):
+//  1. Detection + PR lookup. Each repo runs under a slot spinner
+//     (stable "Services" title, repo name on the muted body line) —
+//     ChangedFiles' per-repo `git fetch` and the GH PR lookup are
+//     the slow parts. Prompts can't run during this phase, which is
+//     why prepareAffectedRepos (push check, dirty warnings) stays a
+//     separate pre-flight step.
 //
-//	✓  extracker · activity-api      (multi-service repo)
-//	✓  host-ui                       (single-service repo — the
-//	                                  service name is usually the
-//	                                  repo name, so repeating it
-//	                                  is noise)
-//	○  extracker · pdfgen            (service excluded by path map)
-//	○  web · no changes
-//	○  repo · no PR for branch "x"
-//	✗  repo · <error>                (remote/API failure)
+//  2. Optional selection form. When interactive, not auto-approved
+//     (-y), and the caller passed no --service values, a multi-select
+//     opens pre-checked to detection's picks — affected services
+//     checked, path-map-skipped services listed but unchecked. One
+//     Enter accepts detection as-is; toggling adjusts what deploys.
+//     Repos without changes or without a resolvable PR aren't
+//     toggleable and appear only in the final list.
 //
-// Change detection (the per-repo `git fetch` for an accurate
-// merge-base) and the PR lookup (when withPRs) both run inside the
-// group, each repo under its own child spinner — one TUI program
-// covers the whole observe phase, so there's no blank-frame seam
-// between a separate detection spinner and the group's first
-// render. Prompts can't run here, which is why prepareAffectedRepos
-// (push check, dirty warnings) stays a separate pre-flight step.
+//  3. Final static card. The flat, alphabetically-sorted repo·service
+//     list (single-service repos show just the repo name), rendered
+//     as one Card with Item rows — a plain print, so there's no TUI
+//     program boundary (and no blank-frame seam) anywhere in the
+//     sequence:
 //
-// Returns the detection results (for the caller's services list),
-// the overrides map (service → "pr-N", withPRs only), and the
-// repoPR list feeding the deploy action. A detection failure
-// renders a ✗ row and surfaces as the returned error (preserving
-// the abort behavior callers had when detection was a standalone
-// step); PR-lookup failures render a ✗ row but stay non-fatal.
-func emitDeploymentSources(ctx context.Context, g vcs.VCS, repos []Repository, repoBranch map[string]string, withPRs bool) ([]AffectedResult, map[string]string, []repoPR, error) {
+//	✓  extracker · activity-api      (deploying)
+//	▲  extracker · pdfgen            (excluded — path map or toggle)
+//	▲  web · no changes
+//	▲  repo · no PR for branch "x"
+//	✗  repo · <error>                (detection or remote failure)
+//
+// Returns the (selection-adjusted) detection results for the caller's
+// services list, the overrides map (service → "pr-N", withPRs only),
+// and the repoPR list feeding the deploy action. A detection failure
+// renders a ✗ row and surfaces as the returned error; PR-lookup
+// failures render a ✗ row but stay non-fatal. Cancelling the form
+// aborts with the form's error.
+func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, repos []Repository, repoBranch map[string]string, withPRs bool) ([]AffectedResult, map[string]string, []repoPR, error) {
 	var host code.Host
 	if withPRs {
 		h, err := newCodeHost()
@@ -324,121 +359,235 @@ func emitDeploymentSources(ctx context.Context, g vcs.VCS, repos []Repository, r
 		host = h
 	}
 
+	// --- Phase 1: detection + PR lookup under per-repo slot spinners ---
+
+	slot := ui.NewSlot()
+	var sources []sourceRepo
+	var detFails []detFail
+	var firstDetErr error
+
+	for _, repo := range repos {
+		spin := ui.NewCard(ui.CardRunning, "services").Muted(repo.Name)
+		var (
+			sr      sourceRepo
+			tracked bool
+			detErr  error
+		)
+		// Errors ride on detErr/prErr rather than the slot's error
+		// path — a failed repo becomes a ✗ row in the final card, not
+		// a permanently-printed failure card mid-sequence.
+		_ = slot.RunCard(spin, func() error {
+			sr.res, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
+			if detErr != nil || !tracked {
+				return nil
+			}
+			if withPRs && sr.res.HasChanges && len(sr.res.Services) > 0 {
+				sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
+				if sr.prErr == nil {
+					sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+				}
+			}
+			return nil
+		})
+		if detErr != nil {
+			if firstDetErr == nil {
+				firstDetErr = detErr
+			}
+			detFails = append(detFails, detFail{repo.Name, detErr})
+			continue
+		}
+		if !tracked {
+			continue
+		}
+		sources = append(sources, sr)
+	}
+
+	// --- Phase 2: optional selection form ---
+
+	type toggle struct {
+		src      int // index into sources
+		svc      string
+		selected bool
+	}
+	var toggles []toggle
+	for i, sr := range sources {
+		if !sr.deployable(withPRs) {
+			continue
+		}
+		for _, svc := range sr.res.Services {
+			toggles = append(toggles, toggle{i, svc, true})
+		}
+		for _, svc := range sr.res.Skipped {
+			toggles = append(toggles, toggle{i, svc, false})
+		}
+	}
+
+	flagServices, _ := cmd.Flags().GetStringSlice("service")
+	if len(toggles) > 0 && len(flagServices) == 0 && isInteractive() && !isAutoApprove(cmd) {
+		sort.SliceStable(toggles, func(i, j int) bool {
+			ri, rj := sources[toggles[i].src].res.RepoName, sources[toggles[j].src].res.RepoName
+			if ri != rj {
+				return ri < rj
+			}
+			return toggles[i].svc < toggles[j].svc
+		})
+
+		opts := make([]huh.Option[string], len(toggles))
+		for i, t := range toggles {
+			r := sources[t.src].res
+			label := r.RepoName
+			if len(r.Services)+len(r.Skipped) > 1 {
+				label = r.RepoName + " · " + t.svc
+			}
+			opts[i] = huh.NewOption(label, strconv.Itoa(i)).Selected(t.selected)
+		}
+
+		var picked []string
+		slot.Show(ui.NewCard(ui.CardInput, "services").Tight())
+		if err := runForm(
+			huh.NewMultiSelect[string]().
+				Options(opts...).
+				Height(min(len(opts)+1, maxSelectHeight)).
+				Value(&picked),
+		); err != nil {
+			ui.RequestSpacer()
+			return nil, nil, nil, err
+		}
+
+		pickedSet := make(map[int]bool, len(picked))
+		for _, p := range picked {
+			if i, err := strconv.Atoi(p); err == nil {
+				pickedSet[i] = true
+			}
+		}
+		// Rebuild each deployable repo's Services/Skipped from the
+		// selection, preserving detection order within each list.
+		chosen := make(map[int]map[string]bool, len(sources))
+		for i, t := range toggles {
+			if chosen[t.src] == nil {
+				chosen[t.src] = make(map[string]bool)
+			}
+			chosen[t.src][t.svc] = pickedSet[i]
+		}
+		for src, sel := range chosen {
+			r := &sources[src].res
+			all := append(append([]string{}, r.Services...), r.Skipped...)
+			r.Services = r.Services[:0]
+			r.Skipped = r.Skipped[:0]
+			for _, svc := range all {
+				if sel[svc] {
+					r.Services = append(r.Services, svc)
+				} else {
+					r.Skipped = append(r.Skipped, svc)
+				}
+			}
+		}
+	}
+
+	// --- Phase 3: final card + outputs ---
+
 	var results []AffectedResult
 	overrides := make(map[string]string)
 	var prs []repoPR
-	var firstDetErr error
-
-	ui.RunGroup("services", func(gr ui.Reporter) {
-		// Collect emit closures while the per-repo spinners run, then
-		// sort and flush so the final list renders alphabetically
-		// regardless of resolution order.
-		type row struct {
-			repo, svc string
-			emit      func()
-		}
-		var rows []row
-
-		for _, repo := range repos {
-			label := ui.PreserveCase(repo.Name)
-
-			var (
-				r        AffectedResult
-				tracked  bool
-				detErr   error
-				prErr    error
-				identity gh.RepositoryIdentity
-				pr       code.PullRequest
-			)
-			_ = gr.Spinner(label, func() error {
-				r, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
-				if detErr != nil || !tracked {
-					return detErr
-				}
-				if withPRs && r.HasChanges && len(r.Services) > 0 {
-					identity, prErr = gh.ParseRemote(ctx, repo.Path)
-					if prErr != nil {
-						return prErr
-					}
-					pr, prErr = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
-					return prErr
-				}
-				return nil
+	for _, sr := range sources {
+		results = append(results, sr.res)
+		if withPRs && sr.deployable(withPRs) && len(sr.res.Services) > 0 {
+			tag := fmt.Sprintf("pr-%d", sr.pr.Number)
+			for _, svc := range sr.res.Services {
+				overrides[svc] = tag
+			}
+			prs = append(prs, repoPR{
+				RepoName: sr.res.RepoName,
+				Branch:   sr.res.Branch,
+				Owner:    sr.identity.Owner,
+				Repo:     sr.identity.Name,
+				PR:       sr.pr,
 			})
-			if detErr != nil {
-				if firstDetErr == nil {
-					firstDetErr = detErr
-				}
-				rows = append(rows, row{repo.Name, "", func() { gr.FailValue(label, detErr.Error()) }})
-				continue
-			}
-			if !tracked {
-				continue
-			}
-			results = append(results, r)
-
-			if !r.HasChanges {
-				if len(r.Skipped) > 0 {
-					rows = append(rows, row{repo.Name, "", func() { gr.SkipValue(label, "no changes") }})
-				}
-				continue
-			}
-			if len(r.Services) == 0 {
-				rows = append(rows, row{repo.Name, "", func() { gr.SkipValue(label, "no services affected") }})
-				continue
-			}
-
-			if withPRs {
-				if prErr != nil {
-					rows = append(rows, row{repo.Name, "", func() { gr.FailValue(label, prErr.Error()) }})
-					continue
-				}
-				if pr.Number == 0 {
-					rows = append(rows, row{repo.Name, "", func() {
-						gr.SkipValue(label, fmt.Sprintf("no PR for branch %q", r.Branch))
-					}})
-					continue
-				}
-
-				tag := fmt.Sprintf("pr-%d", pr.Number)
-				for _, svc := range r.Services {
-					overrides[svc] = tag
-				}
-				prs = append(prs, repoPR{
-					RepoName: r.RepoName,
-					Branch:   r.Branch,
-					Owner:    identity.Owner,
-					Repo:     identity.Name,
-					PR:       pr,
-				})
-			}
-
-			single := len(r.Services) == 1 && len(r.Skipped) == 0
-			for _, svc := range r.Services {
-				if single {
-					rows = append(rows, row{repo.Name, svc, func() { gr.Complete(label) }})
-					continue
-				}
-				rows = append(rows, row{repo.Name, svc, func() { gr.CompleteValue(label, svc) }})
-			}
-			for _, svc := range r.Skipped {
-				rows = append(rows, row{repo.Name, svc, func() { gr.SkipValue(label, svc) }})
-			}
 		}
+	}
 
-		sort.Slice(rows, func(i, j int) bool {
-			if rows[i].repo != rows[j].repo {
-				return rows[i].repo < rows[j].repo
-			}
-			return rows[i].svc < rows[j].svc
-		})
-		for _, row := range rows {
-			row.emit()
-		}
-	})
+	slot.Show(buildServicesCard(sources, detFails, withPRs))
+	slot.Finalize()
 
 	if len(overrides) == 0 {
 		return results, nil, prs, firstDetErr
 	}
 	return results, overrides, prs, firstDetErr
+}
+
+// buildServicesCard composes the final static "Services" card: the
+// flat sorted repo·service list as Item rows, with the card glyph
+// aggregated worst-first (fail > skipped > success) the same way
+// group parents aggregate their children.
+func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *ui.Card {
+	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	glyphSkip := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
+
+	type row struct {
+		repo, svc, glyph, content string
+	}
+	var rows []row
+	var nOK, nSkip, nFail int
+
+	pair := func(r AffectedResult, svc string) string {
+		if len(r.Services)+len(r.Skipped) == 1 {
+			return repoStyle.Render(r.RepoName)
+		}
+		return repoStyle.Render(r.RepoName) + muted.Render(" · "+svc)
+	}
+	note := func(repoName, text string) string {
+		return repoStyle.Render(repoName) + muted.Render(" · "+text)
+	}
+
+	for _, f := range detFails {
+		nFail++
+		rows = append(rows, row{f.repo, "", glyphFail, note(f.repo, f.err.Error())})
+	}
+	for _, sr := range sources {
+		r := sr.res
+		switch {
+		case !r.HasChanges && len(r.Skipped) > 0:
+			nSkip++
+			rows = append(rows, row{r.RepoName, "", glyphSkip, note(r.RepoName, "no changes")})
+		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.prErr != nil:
+			nFail++
+			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
+		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.pr.Number == 0:
+			nSkip++
+			rows = append(rows, row{r.RepoName, "", glyphSkip, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
+		default:
+			for _, svc := range r.Services {
+				nOK++
+				rows = append(rows, row{r.RepoName, svc, glyphOK, pair(r, svc)})
+			}
+			for _, svc := range r.Skipped {
+				nSkip++
+				rows = append(rows, row{r.RepoName, svc, glyphSkip, pair(r, svc)})
+			}
+		}
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].repo != rows[j].repo {
+			return rows[i].repo < rows[j].repo
+		}
+		return rows[i].svc < rows[j].svc
+	})
+
+	state := ui.CardSuccess
+	switch {
+	case nFail > 0:
+		state = ui.CardFailed
+	case nSkip > 0 && nOK == 0:
+		state = ui.CardSkipped
+	}
+
+	card := ui.NewCard(state, "services")
+	for _, r := range rows {
+		card.Item(r.glyph, r.content)
+	}
+	return card
 }

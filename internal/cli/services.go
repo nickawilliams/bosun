@@ -943,7 +943,7 @@ func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, sta
 	if err != nil {
 		return nil, err
 	}
-	results, _, _, err := emitDeploymentSources(ctx, g, repos, repoBranch, false)
+	results, _, _, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, false)
 	if err != nil {
 		return nil, err
 	}

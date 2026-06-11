@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/code"
@@ -80,7 +81,10 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			if resolution.deployName != "" && pipelineErr == nil {
-				deployAction, prs := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
+				deployAction, prs, err := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
+				if err != nil {
+					return err
+				}
 				actions = append(actions, deployAction)
 				actions = append(actions, prDetailActions(prs)...)
 				prData = prs
@@ -222,9 +226,14 @@ func currentAction(name string) Action {
 // buildDeployAction returns a single rolled-up deploy action plus the
 // resolved PR data so callers can reuse it for notifications. The
 // adapter fans out the workflow dispatches across all configured
-// targets internally.
-func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR) {
-	services, overrides, prData := resolvePreviewInputs(cmd, ctx, workspace)
+// targets internally. A non-nil error means input resolution was
+// aborted (e.g. the user cancelled the service-selection form) and
+// the command should stop rather than deploy an empty set.
+func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR, error) {
+	services, overrides, prData, err := resolvePreviewInputs(cmd, ctx, workspace)
+	if err != nil {
+		return Action{}, nil, err
+	}
 
 	deployOp := ui.PlanCreate
 	if resolution.isRedeploy {
@@ -248,7 +257,7 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 			})
 			return err
 		},
-	}, prData
+	}, prData, nil
 }
 
 // prDetailActions renders one PlanDetail row per affected repo's PR
@@ -273,19 +282,24 @@ func prDetailActions(prs []repoPR) []Action {
 
 // resolvePreviewInputs computes the services list, image overrides, and
 // PR data for a deploy. Services come from --service when set, otherwise
-// from affected-service detection. Overrides always derive from affected
-// detection (PR lookups per repo), rendered as the "Services"
-// observation group via emitDeploymentSources.
-func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR) {
+// from affected-service detection (selection-adjusted when the user
+// toggled the form). Overrides always derive from detection's PR
+// lookups, rendered as the "Services" observation section via
+// emitDeploymentSources. A non-nil error means the user cancelled the
+// selection form — callers must abort rather than deploy an empty set.
+func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR, error) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
 
 	g := git.New()
 	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
 	if err != nil {
-		return flagServices, nil, nil
+		return flagServices, nil, nil, nil
 	}
 
-	results, overrides, prs, _ := emitDeploymentSources(ctx, g, repos, repoBranch, true)
+	results, overrides, prs, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, true)
+	if err != nil && errors.Is(err, ErrCancelled) {
+		return nil, nil, nil, err
+	}
 
 	services := flagServices
 	if len(services) == 0 {
@@ -293,7 +307,7 @@ func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace str
 			services = append(services, r.Services...)
 		}
 	}
-	return services, overrides, prs
+	return services, overrides, prs, nil
 }
 
 // repoPR pairs a repository with its resolved pull request.
