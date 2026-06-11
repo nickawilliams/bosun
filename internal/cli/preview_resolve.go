@@ -104,11 +104,17 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// spinner shows even when both names are empty (Row 1) — the work is
 	// near-instant in that case but the initial card frame keeps
 	// feedback consistent across all paths.
+	//
+	// The card keeps the stable "Preview" title through every state —
+	// the transient status text lives on a muted body line, so the
+	// title doesn't morph from "Resolving Preview" to "Preview" between
+	// the spinner and the final confirmation card.
 	var (
 		metaEnv, flagEnv           preview.Environment
 		metaForceURL, flagForceURL string
 	)
-	rewind, probeErr := ui.RunCardRewindable("resolving preview", func() error {
+	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("resolving environment")
+	rewind, probeErr := ui.RunPreparedCardRewindable(spinCard, func() error {
 		env, err := provider.Get(ctx, issueKey)
 		if err != nil {
 			switch {
