@@ -934,16 +934,19 @@ func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, sta
 		return inputs, nil
 	}
 
-	// Change-based detection: diff branches, filter to affected services.
+	// Change-based detection: diff branches, filter to affected
+	// services. Detection runs inside the observation group's per-repo
+	// spinners (no PR resolution — this path only needs the services
+	// list; image overrides are preview's concern).
 	g := git.New()
-	results, err := resolveAffectedServices(ctx, workspace, g)
+	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
 	if err != nil {
 		return nil, err
 	}
-
-	// Observation group (no PR resolution — this path only needs the
-	// services list; image overrides are preview's concern).
-	_, _, _ = emitDeploymentSources(ctx, results, false)
+	results, _, _, err := emitDeploymentSources(ctx, g, repos, repoBranch, false)
+	if err != nil {
+		return nil, err
+	}
 
 	var affected []string
 	for _, r := range results {

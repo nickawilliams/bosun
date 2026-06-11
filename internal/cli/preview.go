@@ -274,24 +274,25 @@ func prDetailActions(prs []repoPR) []Action {
 // resolvePreviewInputs computes the services list, image overrides, and
 // PR data for a deploy. Services come from --service when set, otherwise
 // from affected-service detection. Overrides always derive from affected
-// detection (PR lookups per repo), rendered as the "Deploying From"
+// detection (PR lookups per repo), rendered as the "Services"
 // observation group via emitDeploymentSources.
 func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
 
 	g := git.New()
-	results, _ := resolveAffectedServices(ctx, workspace, g)
+	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
+	if err != nil {
+		return flagServices, nil, nil
+	}
 
-	var services []string
-	if len(flagServices) > 0 {
-		services = flagServices
-	} else {
+	results, overrides, prs, _ := emitDeploymentSources(ctx, g, repos, repoBranch, true)
+
+	services := flagServices
+	if len(services) == 0 {
 		for _, r := range results {
 			services = append(services, r.Services...)
 		}
 	}
-
-	overrides, prs, _ := emitDeploymentSources(ctx, results, true)
 	return services, overrides, prs
 }
 

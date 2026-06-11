@@ -30,17 +30,18 @@ type AffectedResult struct {
 	Skipped    []string // Services excluded (for display).
 }
 
-// resolveAffectedServices determines which services are affected by changes
-// on each repository's current branch relative to the default branch. Repos
-// with no changes have all their services excluded. Repos using the map
-// config form get per-service path-prefix filtering.
-//
-// Pre-flight: checks for unpushed commits and offers to push (interactive)
-// or aborts (non-interactive) so the diff matches what CI has seen.
-func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) ([]AffectedResult, error) {
+// prepareAffectedRepos runs the interactive pre-flight ahead of
+// change detection: resolves the workspace's repos + branches, checks
+// for unpushed commits and offers to push (interactive) or aborts
+// (non-interactive) so the diff matches what CI has seen, and warns
+// about dirty working trees. Detection itself happens inside
+// emitDeploymentSources' group so each repo's `git fetch` runs under
+// a per-repo child spinner — prompts can't run inside the group's
+// TUI program, which is why this half stays separate.
+func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]Repository, map[string]string, error) {
 	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// --- Pre-flight: push check ---
@@ -51,12 +52,12 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 	for _, r := range repos {
 		branch, err := g.GetCurrentBranch(ctx, r.Path)
 		if err != nil {
-			return nil, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
+			return nil, nil, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
 		}
 		repoBranch[r.Name] = branch
 		n, err := g.UnpushedCommits(ctx, r.Path, branch)
 		if err != nil {
-			return nil, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
+			return nil, nil, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
 		}
 		if n != 0 {
 			needsPush = append(needsPush, unpushedRepo{repo: r, branch: branch, count: n})
@@ -65,7 +66,7 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 
 	if len(needsPush) > 0 {
 		if err := promptPushOrAbort(ctx, g, needsPush); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -81,72 +82,51 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 		}
 	}
 
-	// --- Change detection ---
-	//
-	// ChangedFiles runs a `git fetch` per repo to get an accurate
-	// merge-base, so this loop can hang for seconds on network. Run
-	// it under a spinner; the spinner clears on success so the
-	// Services group's real cards land in its place.
+	return repos, repoBranch, nil
+}
 
-	var results []AffectedResult
-	// Stable "Services" title (matching the observation group that
-	// replaces this card) with the transient status on a muted body
-	// line — same title-stability treatment as the Preview card.
-	// Vanish-on-success: the Services group renders immediately after,
-	// so the spinner clears itself atomically instead of flashing a
-	// finished ✓ frame that the caller then erases.
-	spinCard := ui.NewCard(ui.CardRunning, "services").Muted("Detecting affected services...")
-	err = ui.RunCardVanish(spinCard, func() error {
-		for _, r := range repos {
-			services := resolveRepoServiceNames(r.Name)
-			if len(services) == 0 {
-				continue
-			}
-
-			changed, err := g.ChangedFiles(ctx, r.Path)
-			if err != nil {
-				return fmt.Errorf("%s: %w", r.Name, err)
-			}
-
-			branch := repoBranch[r.Name]
-
-			if len(changed) == 0 {
-				results = append(results, AffectedResult{
-					RepoName: r.Name,
-					RepoPath: r.Path,
-					Branch:   branch,
-					Skipped:  services,
-				})
-				continue
-			}
-
-			// Check if per-service path filtering is configured (map form).
-			pathMap := resolveServicePaths(r.Name)
-			if pathMap == nil {
-				// Phase 1: repo has changes → include all services.
-				results = append(results, AffectedResult{
-					RepoName:   r.Name,
-					RepoPath:   r.Path,
-					Branch:     branch,
-					HasChanges: true,
-					Services:   services,
-				})
-				continue
-			}
-
-			// Phase 2: per-service path-prefix matching.
-			result := matchServicePaths(r.Name, services, changed, pathMap)
-			result.RepoPath = r.Path
-			result.Branch = branch
-			results = append(results, result)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+// detectRepoAffected computes the change-detection outcome for one
+// repo. The second return is false when the repo has no services
+// configured (excluded from results entirely). ChangedFiles runs a
+// `git fetch` for an accurate merge-base — callers should run this
+// under a spinner.
+func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch string) (AffectedResult, bool, error) {
+	services := resolveRepoServiceNames(r.Name)
+	if len(services) == 0 {
+		return AffectedResult{}, false, nil
 	}
 
-	return results, nil
+	changed, err := g.ChangedFiles(ctx, r.Path)
+	if err != nil {
+		return AffectedResult{}, false, fmt.Errorf("%s: %w", r.Name, err)
+	}
+
+	if len(changed) == 0 {
+		return AffectedResult{
+			RepoName: r.Name,
+			RepoPath: r.Path,
+			Branch:   branch,
+			Skipped:  services,
+		}, true, nil
+	}
+
+	// Per-service path filtering when configured (map form);
+	// otherwise any change includes all services.
+	pathMap := resolveServicePaths(r.Name)
+	if pathMap == nil {
+		return AffectedResult{
+			RepoName:   r.Name,
+			RepoPath:   r.Path,
+			Branch:     branch,
+			HasChanges: true,
+			Services:   services,
+		}, true, nil
+	}
+
+	result := matchServicePaths(r.Name, services, changed, pathMap)
+	result.RepoPath = r.Path
+	result.Branch = branch
+	return result, true, nil
 }
 
 // promptPushOrAbort prompts to push unpushed repos (interactive) or aborts
@@ -320,71 +300,102 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 //	○  repo · no PR for branch "x"
 //	✗  repo · <error>                (remote/API failure)
 //
-// When withPRs is true each changed repo runs a group child spinner
-// during its PR lookup ("intermediary status" rows that clear once
-// resolved), and the returned overrides map (service → "pr-N") +
-// repoPR list feed the deploy action. When false (release path) no
-// host calls are made. PR tags don't render here — the plan's
-// deploy row asserts that conclusion; this section shows which
-// services the deployment derives from.
-func emitDeploymentSources(ctx context.Context, results []AffectedResult, withPRs bool) (map[string]string, []repoPR, error) {
+// Change detection (the per-repo `git fetch` for an accurate
+// merge-base) and the PR lookup (when withPRs) both run inside the
+// group, each repo under its own child spinner — one TUI program
+// covers the whole observe phase, so there's no blank-frame seam
+// between a separate detection spinner and the group's first
+// render. Prompts can't run here, which is why prepareAffectedRepos
+// (push check, dirty warnings) stays a separate pre-flight step.
+//
+// Returns the detection results (for the caller's services list),
+// the overrides map (service → "pr-N", withPRs only), and the
+// repoPR list feeding the deploy action. A detection failure
+// renders a ✗ row and surfaces as the returned error (preserving
+// the abort behavior callers had when detection was a standalone
+// step); PR-lookup failures render a ✗ row but stay non-fatal.
+func emitDeploymentSources(ctx context.Context, g vcs.VCS, repos []Repository, repoBranch map[string]string, withPRs bool) ([]AffectedResult, map[string]string, []repoPR, error) {
 	var host code.Host
 	if withPRs {
 		h, err := newCodeHost()
 		if err != nil {
-			return nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
+			return nil, nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
 		}
 		host = h
 	}
 
+	var results []AffectedResult
 	overrides := make(map[string]string)
 	var prs []repoPR
+	var firstDetErr error
 
-	ui.RunGroup("services", func(g ui.Reporter) {
-		// Collect emit closures first (PR-lookup spinners run during
-		// this phase), then sort and flush so the final list renders
-		// alphabetically regardless of resolution order.
+	ui.RunGroup("services", func(gr ui.Reporter) {
+		// Collect emit closures while the per-repo spinners run, then
+		// sort and flush so the final list renders alphabetically
+		// regardless of resolution order.
 		type row struct {
 			repo, svc string
 			emit      func()
 		}
 		var rows []row
 
-		for _, r := range results {
-			label := ui.PreserveCase(r.RepoName)
+		for _, repo := range repos {
+			label := ui.PreserveCase(repo.Name)
+
+			var (
+				r        AffectedResult
+				tracked  bool
+				detErr   error
+				prErr    error
+				identity gh.RepositoryIdentity
+				pr       code.PullRequest
+			)
+			_ = gr.Spinner(label, func() error {
+				r, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
+				if detErr != nil || !tracked {
+					return detErr
+				}
+				if withPRs && r.HasChanges && len(r.Services) > 0 {
+					identity, prErr = gh.ParseRemote(ctx, repo.Path)
+					if prErr != nil {
+						return prErr
+					}
+					pr, prErr = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
+					return prErr
+				}
+				return nil
+			})
+			if detErr != nil {
+				if firstDetErr == nil {
+					firstDetErr = detErr
+				}
+				rows = append(rows, row{repo.Name, "", func() { gr.FailValue(label, detErr.Error()) }})
+				continue
+			}
+			if !tracked {
+				continue
+			}
+			results = append(results, r)
 
 			if !r.HasChanges {
 				if len(r.Skipped) > 0 {
-					rows = append(rows, row{r.RepoName, "", func() { g.SkipValue(label, "no changes") }})
+					rows = append(rows, row{repo.Name, "", func() { gr.SkipValue(label, "no changes") }})
 				}
 				continue
 			}
 			if len(r.Services) == 0 {
-				rows = append(rows, row{r.RepoName, "", func() { g.SkipValue(label, "no services affected") }})
+				rows = append(rows, row{repo.Name, "", func() { gr.SkipValue(label, "no services affected") }})
 				continue
 			}
 
 			if withPRs {
-				var (
-					identity gh.RepositoryIdentity
-					pr       code.PullRequest
-				)
-				err := g.Spinner(label, func() error {
-					var e error
-					identity, e = gh.ParseRemote(ctx, r.RepoPath)
-					if e != nil {
-						return e
-					}
-					pr, e = host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
-					return e
-				})
-				if err != nil {
-					rows = append(rows, row{r.RepoName, "", func() { g.FailValue(label, err.Error()) }})
+				if prErr != nil {
+					rows = append(rows, row{repo.Name, "", func() { gr.FailValue(label, prErr.Error()) }})
 					continue
 				}
 				if pr.Number == 0 {
-					rows = append(rows, row{r.RepoName, "", func() {
-						g.SkipValue(label, fmt.Sprintf("no PR for branch %q", r.Branch))
+					rows = append(rows, row{repo.Name, "", func() {
+						gr.SkipValue(label, fmt.Sprintf("no PR for branch %q", r.Branch))
 					}})
 					continue
 				}
@@ -405,13 +416,13 @@ func emitDeploymentSources(ctx context.Context, results []AffectedResult, withPR
 			single := len(r.Services) == 1 && len(r.Skipped) == 0
 			for _, svc := range r.Services {
 				if single {
-					rows = append(rows, row{r.RepoName, svc, func() { g.Complete(label) }})
+					rows = append(rows, row{repo.Name, svc, func() { gr.Complete(label) }})
 					continue
 				}
-				rows = append(rows, row{r.RepoName, svc, func() { g.CompleteValue(label, svc) }})
+				rows = append(rows, row{repo.Name, svc, func() { gr.CompleteValue(label, svc) }})
 			}
 			for _, svc := range r.Skipped {
-				rows = append(rows, row{r.RepoName, svc, func() { g.SkipValue(label, svc) }})
+				rows = append(rows, row{repo.Name, svc, func() { gr.SkipValue(label, svc) }})
 			}
 		}
 
@@ -427,7 +438,7 @@ func emitDeploymentSources(ctx context.Context, results []AffectedResult, withPR
 	})
 
 	if len(overrides) == 0 {
-		return nil, prs, nil
+		return results, nil, prs, firstDetErr
 	}
-	return overrides, prs, nil
+	return results, overrides, prs, firstDetErr
 }
