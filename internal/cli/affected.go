@@ -89,7 +89,11 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 	// printAffectedSummary's real cards land in its place.
 
 	var results []AffectedResult
-	rewind, err := ui.RunCardRewindable("detecting affected services", func() error {
+	// Stable "Services" title (matching the observation group that
+	// replaces this card) with the transient status on a muted body
+	// line — same title-stability treatment as the Preview card.
+	spinCard := ui.NewCard(ui.CardRunning, "services").Muted("Detecting affected services...")
+	rewind, err := ui.RunPreparedCardRewindable(spinCard, func() error {
 		for _, r := range repos {
 			services := resolveRepoServiceNames(r.Name)
 			if len(services) == 0 {
