@@ -108,13 +108,15 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// The card keeps the stable "Preview" title through every state —
 	// the transient status text lives on a muted body line, so the
 	// title doesn't morph from "Resolving Preview" to "Preview" between
-	// the spinner and the final confirmation card.
+	// the spinner and the final confirmation card. Vanish-on-success:
+	// the caller's confirmation card (or a prompt) immediately follows,
+	// so the spinner clears itself rather than flashing a ✓ frame.
 	var (
 		metaEnv, flagEnv           preview.Environment
 		metaForceURL, flagForceURL string
 	)
-	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("resolving environment")
-	rewind, probeErr := ui.RunPreparedCardRewindable(spinCard, func() error {
+	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("Resolving environment...")
+	probeErr := ui.RunCardVanish(spinCard, func() error {
 		env, err := provider.Get(ctx, issueKey)
 		if err != nil {
 			switch {
@@ -148,9 +150,6 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	})
 	if probeErr != nil {
 		return previewResolution{}, probeErr
-	}
-	if rewind != nil {
-		rewind()
 	}
 
 	if metaForceURL != "" {

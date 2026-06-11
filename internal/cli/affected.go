@@ -85,15 +85,18 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 	//
 	// ChangedFiles runs a `git fetch` per repo to get an accurate
 	// merge-base, so this loop can hang for seconds on network. Run
-	// it under a spinner; the spinner card rewinds on success so
-	// printAffectedSummary's real cards land in its place.
+	// it under a spinner; the spinner clears on success so the
+	// Services group's real cards land in its place.
 
 	var results []AffectedResult
 	// Stable "Services" title (matching the observation group that
 	// replaces this card) with the transient status on a muted body
 	// line — same title-stability treatment as the Preview card.
+	// Vanish-on-success: the Services group renders immediately after,
+	// so the spinner clears itself atomically instead of flashing a
+	// finished ✓ frame that the caller then erases.
 	spinCard := ui.NewCard(ui.CardRunning, "services").Muted("Detecting affected services...")
-	rewind, err := ui.RunPreparedCardRewindable(spinCard, func() error {
+	err = ui.RunCardVanish(spinCard, func() error {
 		for _, r := range repos {
 			services := resolveRepoServiceNames(r.Name)
 			if len(services) == 0 {
@@ -141,9 +144,6 @@ func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) (
 	})
 	if err != nil {
 		return nil, err
-	}
-	if rewind != nil {
-		rewind()
 	}
 
 	return results, nil
