@@ -71,7 +71,7 @@ func promptAdopt(name string) (adoptChoice, string, error) {
 	}
 
 	if choice == chooseAnother {
-		newName, err := promptDefault("preview name", generateEphemeralName())
+		newName, err := promptDefault("preview", generateEphemeralName())
 		if err != nil {
 			return cancelAdopt, "", err
 		}
@@ -177,7 +177,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		// own short-circuit and silently uses the generated name.
 		name := generateEphemeralName()
 		if isInteractive() {
-			resolved, perr := promptDefault("preview name", name)
+			resolved, perr := promptDefault("preview", name)
 			if perr != nil {
 				return previewResolution{}, perr
 			}
@@ -289,7 +289,7 @@ func enforceValidName(name string) (string, error) {
 			if !isInteractive() {
 				return "", err
 			}
-			next, perr := promptDefault("preview name", generateEphemeralName())
+			next, perr := promptDefault("preview", generateEphemeralName())
 			if perr != nil {
 				return "", perr
 			}
