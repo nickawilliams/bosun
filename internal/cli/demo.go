@@ -3,7 +3,9 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"image/color"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/huh/v2"
@@ -25,6 +27,7 @@ func newDemoCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !interactive {
+				demoPalette()
 				demoCards(cmd)
 				demoSummary()
 				demoTree()
@@ -93,6 +96,67 @@ func buildDemoPlan() *ui.Plan {
 }
 
 // --- Static sections ---
+
+// demoPalette renders the active color palette as swatch rows, grouped
+// the way the palette struct groups them (semantic / resolution-role /
+// chrome), plus the symbol set. The canonical reference for "which
+// color is which" when designing new components.
+func demoPalette() {
+	swatch := func(name string, col color.Color) string {
+		block := lipgloss.NewStyle().Foreground(col).Render("██")
+		return fmt.Sprintf("%s %-13s", block, name)
+	}
+	rows := func(entries ...string) []string {
+		const perRow = 4
+		var out []string
+		for i := 0; i < len(entries); i += perRow {
+			end := min(i+perRow, len(entries))
+			out = append(out, strings.TrimRight(strings.Join(entries[i:end], " "), " "))
+		}
+		return out
+	}
+	header := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	var body []string
+	body = append(body, header.Render("Semantic"))
+	body = append(body, rows(
+		swatch("Primary", ui.Palette.Primary),
+		swatch("Secondary", ui.Palette.Secondary),
+		swatch("Brand", ui.Palette.Brand),
+		swatch("Accent", ui.Palette.Accent),
+		swatch("Info", ui.Palette.Info),
+		swatch("Success", ui.Palette.Success),
+		swatch("Error", ui.Palette.Error),
+		swatch("Warning", ui.Palette.Warning),
+		swatch("Muted", ui.Palette.Muted),
+		swatch("NormalFg", ui.Palette.NormalFg),
+	)...)
+	body = append(body, "", header.Render("Resolution Roles"))
+	body = append(body, rows(
+		swatch("RoleOpen", ui.Palette.RoleOpen),
+		swatch("RoleDone", ui.Palette.RoleDone),
+		swatch("RoleClosed", ui.Palette.RoleClosed),
+		swatch("RoleAttention", ui.Palette.RoleAttention),
+		swatch("RoleInFlight", ui.Palette.RoleInFlight),
+		swatch("RoleNeutral", ui.Palette.RoleNeutral),
+	)...)
+	body = append(body, "", header.Render("Chrome"))
+	body = append(body, rows(
+		swatch("Recessed", ui.Palette.Recessed),
+		swatch("Border", ui.Palette.Border),
+		swatch("Subtle", ui.Palette.Subtle),
+		swatch("ButtonFg", ui.Palette.ButtonFg),
+		swatch("LogoTop", ui.Palette.LogoTop),
+		swatch("LogoBottom", ui.Palette.LogoBottom),
+	)...)
+	body = append(body, "", header.Render("Symbols"))
+	body = append(body, strings.Join([]string{
+		ui.Palette.Check, ui.Palette.Cross, ui.Palette.Arrow,
+		ui.Palette.Bullet, ui.Palette.Dot,
+	}, "  "))
+
+	ui.NewCard(ui.CardInfo, "palette").Raw(body...).Print()
+}
 
 func demoCards(cmd *cobra.Command) {
 	// Static card — title, subtitle, and body with text, muted,
