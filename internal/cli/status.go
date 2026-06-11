@@ -556,16 +556,17 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
-// buildWorkspaceStoryCard renders the issue/story meta card. Title
-// is the issue type (Story / Bug / Task / etc., "Issue" if unknown);
-// title-line value is the OSC8-linked issue key + bold title; the
-// lifecycle stepper appears below as an indented body block, aligned
-// with the value column.
+// buildWorkspaceStoryCard renders the issue/story meta card in the
+// standard title-plus-body layout: the title row carries the issue
+// type alone (Story / Bug / Task / etc., "Issue" if unknown); the
+// body stacks the bold OSC8-linked issue key + title, a blank
+// spacer, then the lifecycle stepper — all at the standard body
+// indent, no value-column alignment math.
 //
 // When the tracker fetch failed (fetchOK false), the card renders
-// its degraded variant: ▲ warning glyph, issue key (falling back to
-// issueKey when detail is zero) + muted "(title unavailable)", no
-// stepper.
+// its degraded variant: ▲ warning glyph, body line with the issue
+// key (falling back to issueKey when detail is zero) + muted
+// "(title unavailable)", no stepper.
 //
 // Layout (Tight, ordering) is the caller's concern.
 func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK bool) *ui.Card {
@@ -580,27 +581,17 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 			key = issueKey
 		}
 		muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-		value := lipgloss.NewStyle().Bold(true).Render(key) +
+		line := lipgloss.NewStyle().Bold(true).Render(key) +
 			muted.Render(" · (title unavailable)")
-		return ui.NewCard(ui.CardSkipped, typeLabel).
-			Value(value).
-			AlignWidth(statusMetaAlignWidth)
+		return ui.NewCard(ui.CardSkipped, typeLabel).Raw(line)
 	}
 
 	issueRef := detail.Key
 	if detail.URL != "" {
 		issueRef = osc8Link(detail.URL, detail.Key)
 	}
-	value := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+	issueLine := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
 
-	card := ui.NewCard(ui.CardReady, typeLabel).
-		Value(value).
-		AlignWidth(statusMetaAlignWidth)
-
-	// Stepper folded into the body, indented to land in the same
-	// column as the title-line value. statusMetaAlignWidth + 3
-	// matches Card.Value's continuation-line padding so the dot
-	// track lines up beneath the title text.
 	key := lifecycleKeyForStatus(detail.Status)
 	var stepper string
 	if stepperSlotIndex(key) < 0 {
@@ -608,17 +599,12 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 	} else {
 		stepper = renderLifecycleStepper(key)
 	}
-	indent := strings.Repeat(" ", statusMetaAlignWidth+3)
-	stepperLines := strings.Split(stepper, "\n")
-	indented := make([]string, len(stepperLines))
-	for i, l := range stepperLines {
-		indented[i] = indent + l
-	}
 
-	card.Text("") // blank │ row above the stepper
-	card.Raw(indented...)
+	body := make([]string, 0, 4)
+	body = append(body, issueLine, "")
+	body = append(body, strings.Split(stepper, "\n")...)
 
-	return card
+	return ui.NewCard(ui.CardReady, typeLabel).Raw(body...)
 }
 
 // buildWorkspacePreviewCard renders the preview-environment meta
