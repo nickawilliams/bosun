@@ -108,15 +108,18 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// The card keeps the stable "Preview" title through every state —
 	// the transient status text lives on a muted body line, so the
 	// title doesn't morph from "Resolving Preview" to "Preview" between
-	// the spinner and the final confirmation card. Vanish-on-success:
-	// the caller's confirmation card (or a prompt) immediately follows,
-	// so the spinner clears itself rather than flashing a ✓ frame.
+	// the spinner and the final confirmation card. The spinner's final
+	// frame morphs into the "? Preview" prompt header in the SAME
+	// BubbleTea program — the screen never goes blank while huh's form
+	// program boots beneath it. Paths that don't prompt rewind the
+	// header immediately and print their own next card.
 	var (
 		metaEnv, flagEnv           preview.Environment
 		metaForceURL, flagForceURL string
 	)
 	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("Resolving environment...")
-	probeErr := ui.RunCardVanish(spinCard, func() error {
+	headerCard := ui.NewCard(ui.CardInput, "preview").Tight()
+	rewind, probeErr := ui.RunCardMorph(spinCard, headerCard, func() error {
 		env, err := provider.Get(ctx, issueKey)
 		if err != nil {
 			switch {
@@ -152,17 +155,29 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		return previewResolution{}, probeErr
 	}
 
+	metaName := metaEnv.Name
+	metaAlive := metaEnv.Probed && metaEnv.Alive
+	metaUnprobable := metaName != "" && !metaEnv.Probed
+	flagAlive := flagEnv.Probed && flagEnv.Alive
+
+	// The morphed "? Preview" header stays on screen only for the
+	// Row-1 interactive prompt, where huh's form renders directly
+	// beneath it (the morph exists so that boundary never shows a
+	// blank frame). Every other path rewinds it now and prints its
+	// own next card; the rare Row-1-with-force-notice path also
+	// rewinds so the notices don't render below a prompt header.
+	row1Prompt := flagName == "" && metaName == "" && isInteractive() &&
+		metaForceURL == "" && flagForceURL == ""
+	if !row1Prompt {
+		rewind()
+	}
+
 	if metaForceURL != "" {
 		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", metaForceURL))
 	}
 	if flagForceURL != "" {
 		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", flagForceURL))
 	}
-
-	metaName := metaEnv.Name
-	metaAlive := metaEnv.Probed && metaEnv.Alive
-	metaUnprobable := metaName != "" && !metaEnv.Probed
-	flagAlive := flagEnv.Probed && flagEnv.Alive
 
 	res := previewResolution{}
 
@@ -172,10 +187,28 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		// only). Matches `bosun start`'s slug prompt: the generated
 		// name shows as the placeholder, empty submit accepts it,
 		// typed input goes through enforceValidName (which loops on
-		// invalid input). Non-interactive falls through promptDefault's
-		// own short-circuit and silently uses the generated name.
+		// invalid input). Non-interactive silently uses the generated
+		// name.
 		name := generateEphemeralName()
-		if isInteractive() {
+		switch {
+		case row1Prompt:
+			// Header already on screen from the morph — run the form
+			// directly beneath it. ClearSpacer stands in for the
+			// Tight()-on-Print suppression the morphed card never got.
+			input, field := newDefaultInput(name)
+			ui.ClearSpacer()
+			if err := runForm(input); err != nil {
+				return previewResolution{}, err
+			}
+			rewind()
+			validated, verr := enforceValidName(strings.TrimSpace(field.Resolved()))
+			if verr != nil {
+				return previewResolution{}, verr
+			}
+			name = validated
+		case isInteractive():
+			// Force-notice variant: header was rewound so the notices
+			// could print; fall back to the self-contained prompt.
 			resolved, perr := promptDefault("preview", name)
 			if perr != nil {
 				return previewResolution{}, perr
