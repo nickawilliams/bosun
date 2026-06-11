@@ -96,6 +96,10 @@ type groupCounts struct {
 func (g *group) sendChild(state CardState, c *Card) {
 	c.Indent(g.indent)
 	c.tight = true
+	// Children are list entries under the group's bold parent title,
+	// not headings themselves — render their titles without bold so
+	// the parent stays the row that carries the visual weight.
+	c.plainTitle = true
 	g.msgCh <- groupChildMsg{rendered: c.Render(), state: state}
 	switch state {
 	case CardSuccess:
@@ -200,6 +204,7 @@ func (g *group) Task(title string, fn func() error) error {
 
 		card := NewCard(CardSuccess, title).Indent(g.indent)
 		card.tight = true
+		card.plainTitle = true
 		state := CardSuccess
 		if err != nil {
 			card.state = CardFailed
@@ -476,6 +481,7 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 	if node.activeTask != nil {
 		taskCard := NewCard(CardRunning, node.activeTask.title).Indent(node.activeTask.indent)
 		taskCard.tight = true
+		taskCard.plainTitle = true
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))
 	}
 }

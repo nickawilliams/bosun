@@ -105,6 +105,7 @@ type Card struct {
 	tight         bool // suppress comfy spacing (e.g. single-field prompts)
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
+	plainTitle    bool // render the title without bold (group children)
 	alignWidth    int  // pad styled title to this visual width before " · " when Value is set; 0 = natural
 	accentBody    bool // render body-line connectors in Palette.Accent rather than the default Palette.Recessed
 
@@ -449,7 +450,7 @@ func (c *Card) renderInner(glyph string) string {
 	if c.titleColor != nil {
 		titleFg = c.titleColor
 	}
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleFg)
+	titleStyle := lipgloss.NewStyle().Bold(!c.plainTitle).Foreground(titleFg)
 	if !c.preserveTitle {
 		titleStyle = titleStyle.Transform(titleCase)
 	}
