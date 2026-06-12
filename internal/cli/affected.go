@@ -533,11 +533,19 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 // flat sorted repo·service list as Item rows, with the card glyph
 // aggregated worst-first (fail > skipped > success) the same way
 // group parents aggregate their children.
+//
+// Row severity follows what the row means, not just "included or
+// not": excluded services and no-changes repos are a normal,
+// intentional outcome — they render fully de-emphasized (muted ○
+// glyph, muted text), not as warnings. The ▲ warning glyph is
+// reserved for rows the user might *expect* to deploy but that
+// can't (no PR for the branch); ✗ for actual failures.
 func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *ui.Card {
 	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphSkip := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+	glyphOff := muted.Render("○")
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
 	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
 
 	type row struct {
@@ -552,8 +560,20 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 		}
 		return repoStyle.Render(r.RepoName) + muted.Render(" · "+svc)
 	}
+	// pairOff/noteOff: the fully-muted variants for not-included
+	// rows — the repo segment drops its primary color so the whole
+	// row recedes.
+	pairOff := func(r AffectedResult, svc string) string {
+		if len(r.Services)+len(r.Skipped) == 1 {
+			return muted.Render(r.RepoName)
+		}
+		return muted.Render(r.RepoName + " · " + svc)
+	}
 	note := func(repoName, text string) string {
 		return repoStyle.Render(repoName) + muted.Render(" · "+text)
+	}
+	noteOff := func(repoName, text string) string {
+		return muted.Render(repoName + " · " + text)
 	}
 
 	for _, f := range detFails {
@@ -565,13 +585,13 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 		switch {
 		case !r.HasChanges && len(r.Skipped) > 0:
 			nSkip++
-			rows = append(rows, row{r.RepoName, "", glyphSkip, note(r.RepoName, "no changes")})
+			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, "no changes")})
 		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.prErr != nil:
 			nFail++
 			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
 		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.pr.Number == 0:
 			nSkip++
-			rows = append(rows, row{r.RepoName, "", glyphSkip, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
+			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
 		default:
 			for _, svc := range r.Services {
 				nOK++
@@ -579,7 +599,7 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 			}
 			for _, svc := range r.Skipped {
 				nSkip++
-				rows = append(rows, row{r.RepoName, svc, glyphSkip, pair(r, svc)})
+				rows = append(rows, row{r.RepoName, svc, glyphOff, pairOff(r, svc)})
 			}
 		}
 	}
