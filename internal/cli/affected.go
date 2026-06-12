@@ -366,9 +366,12 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	var detFails []detFail
 	var firstDetErr error
 
+	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	for _, repo := range repos {
 		spin := ui.NewCard(ui.CardRunning, "services").
-			Muted("Detecting changes in " + repo.Name + "...")
+			Raw(statusMuted.Render("Detecting changes in ") +
+				ui.Keyword(repo.Name) +
+				statusMuted.Render("..."))
 		var (
 			sr      sourceRepo
 			tracked bool

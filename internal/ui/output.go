@@ -110,6 +110,19 @@ func Bold(msg string, args ...any) {
 // inputs: check + bold primary label on one line, muted value on the next.
 func Saved(label, value string) { defaultReporter.Saved(label, value) }
 
+// Keyword styles an identifier-shaped token (repo name, service,
+// branch, command, config key) so it pops out of surrounding prose:
+// bold + Palette.Keyword. Use for inline emphasis inside muted or
+// normal sentences — compose with Raw bodies, not Muted (Muted wraps
+// the whole line in its own style and an embedded reset would bleed).
+//
+// Not safe inside huh form labels: lipgloss closes with a full SGR
+// reset that wipes huh's selection styling for the rest of the line.
+// Use raw intensity toggles there instead.
+func Keyword(s string) string {
+	return lipgloss.NewStyle().Bold(true).Foreground(Palette.Keyword).Render(s)
+}
+
 // Selected prints feedback that a single value was chosen interactively.
 // The label is the field title and value is the user's selection.
 func Selected(label, value string) { defaultReporter.Selected(label, value) }

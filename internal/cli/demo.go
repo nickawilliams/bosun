@@ -130,6 +130,7 @@ func demoPalette() {
 		swatch("Warning", ui.Palette.Warning),
 		swatch("Muted", ui.Palette.Muted),
 		swatch("NormalFg", ui.Palette.NormalFg),
+		swatch("Keyword", ui.Palette.Keyword),
 	)...)
 	body = append(body, "", header.Render("Resolution Roles"))
 	body = append(body, rows(

@@ -55,6 +55,12 @@ type palette struct {
 	RoleInFlight  color.Color // Transitioning right now       (= Info, blue)
 	RoleNeutral   color.Color // Unknown / unset / not started (= Muted, gray)
 
+	// Keyword marks identifier-shaped tokens that should pop out of
+	// surrounding prose — repo names, service names, branch names,
+	// commands, config keys. Render through ui.Keyword(s) rather
+	// than styling ad hoc so the treatment stays uniform. (= Primary)
+	Keyword color.Color
+
 	// Chrome colors — structural UI elements.
 	Recessed color.Color // Timeline spine, blurred button bg, help separator
 	Border   color.Color // Panel/table borders, input placeholder
@@ -267,6 +273,7 @@ func applyRoleAliases(p *palette) {
 	p.RoleAttention = p.Warning
 	p.RoleInFlight = p.Info
 	p.RoleNeutral = p.Muted
+	p.Keyword = p.Primary
 }
 
 // ApplyColorMode sets the active palette based on the given mode string
