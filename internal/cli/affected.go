@@ -81,7 +81,7 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 			continue
 		}
 		if dirty {
-			ui.Skip(fmt.Sprintf("%s: uncommitted changes won't be reflected", r.Name))
+			ui.SkipValue(ui.PreserveCase(r.Name), "uncommitted changes won't be reflected")
 		}
 	}
 
