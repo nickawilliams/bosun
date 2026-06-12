@@ -432,12 +432,18 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			return toggles[i].svc < toggles[j].svc
 		})
 
+		// Bold the repo segment so it visually separates from the
+		// service name (same color otherwise). Raw SGR bold-on/off
+		// (1/22) rather than a lipgloss render: lipgloss closes with a
+		// full reset, which would wipe huh's own selection/focus
+		// styling for the rest of the line; intensity toggles compose
+		// with whatever foreground huh applies.
 		opts := make([]huh.Option[string], len(toggles))
 		for i, t := range toggles {
 			r := sources[t.src].res
-			label := r.RepoName
+			label := "\x1b[1m" + r.RepoName + "\x1b[22m"
 			if len(r.Services)+len(r.Skipped) > 1 {
-				label = r.RepoName + " · " + t.svc
+				label += " · " + t.svc
 			}
 			opts[i] = huh.NewOption(label, strconv.Itoa(i)).Selected(t.selected)
 		}
