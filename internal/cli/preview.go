@@ -235,6 +235,22 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 		return Action{}, nil, err
 	}
 
+	// Nothing selected to deploy (full deselection in the form, or no
+	// deployable services at all) — render an honest no-op row rather
+	// than a "+ deploy env" that would claim an environment with zero
+	// services behind it.
+	if len(services) == 0 {
+		return Action{
+			Op:     ui.PlanNoChange,
+			Action: "deploy",
+			Type:   "env",
+			Name:   resolution.previewName,
+			Assess: func(_ context.Context) (ActionState, string, error) {
+				return ActionCompleted, "no services selected", nil
+			},
+		}, prData, nil
+	}
+
 	deployOp := ui.PlanCreate
 	if resolution.isRedeploy {
 		deployOp = ui.PlanModify
@@ -293,7 +309,11 @@ func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace str
 	g := git.New()
 	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
 	if err != nil {
-		return flagServices, nil, nil, nil
+		// Pre-flight aborts (declined push, unresolvable workspace)
+		// abort the command — review and release already do; silently
+		// continuing here produced a plan that "deployed" an env with
+		// zero services.
+		return nil, nil, nil, err
 	}
 
 	results, overrides, prs, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, true)
