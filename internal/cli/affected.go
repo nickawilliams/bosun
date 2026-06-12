@@ -454,10 +454,14 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 
 		var picked []string
 		slot.Show(ui.NewCard(ui.CardInput, "services").Tight())
+		// Full height — no viewport cap. The submitted form is
+		// replaced by the final Services card listing the same rows,
+		// so matching the form's height to the list makes the
+		// swap read as in-place rather than an expand/collapse.
 		if err := runForm(
 			huh.NewMultiSelect[string]().
 				Options(opts...).
-				Height(min(len(opts)+1, maxSelectHeight)).
+				Height(len(opts)).
 				Value(&picked),
 		); err != nil {
 			ui.RequestSpacer()
