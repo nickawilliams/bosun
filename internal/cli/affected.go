@@ -367,7 +367,8 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	var firstDetErr error
 
 	for _, repo := range repos {
-		spin := ui.NewCard(ui.CardRunning, "services").Muted(repo.Name)
+		spin := ui.NewCard(ui.CardRunning, "services").
+			Muted("Detecting changes in " + repo.Name + "...")
 		var (
 			sr      sourceRepo
 			tracked bool
