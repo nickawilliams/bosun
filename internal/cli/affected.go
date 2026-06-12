@@ -17,10 +17,15 @@ import (
 	"github.com/spf13/viper"
 )
 
-type unpushedRepo struct {
-	repo   Repository
-	branch string
-	count  int // -1 = never pushed, >0 = commits ahead
+// repoReadiness captures one repo's pre-deploy git state for the
+// "Repo Readiness" section: whether local commits are on the remote
+// and whether the working tree is dirty.
+type repoReadiness struct {
+	repo     Repository
+	branch   string
+	unpushed int  // -1 = never pushed, >0 = commits ahead, 0 = in sync
+	dirty    bool // uncommitted working-tree changes
+	pushed   bool // we pushed it during this run
 }
 
 // AffectedResult holds the change-detection outcome for a single repository.
@@ -47,10 +52,11 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		return nil, nil, err
 	}
 
-	// --- Pre-flight: push check ---
+	// --- Pre-flight: gather per-repo readiness (local git, fast) ---
 
 	repoBranch := make(map[string]string, len(repos))
-	var needsPush []unpushedRepo
+	readiness := make([]repoReadiness, 0, len(repos))
+	anyUnpushed := false
 
 	for _, r := range repos {
 		branch, err := g.GetCurrentBranch(ctx, r.Path)
@@ -62,30 +68,167 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
 		}
+		dirty, _ := g.IsDirty(ctx, r.Path)
 		if n != 0 {
-			needsPush = append(needsPush, unpushedRepo{repo: r, branch: branch, count: n})
+			anyUnpushed = true
 		}
+		readiness = append(readiness, repoReadiness{
+			repo: r, branch: branch, unpushed: n, dirty: dirty,
+		})
 	}
 
-	if len(needsPush) > 0 {
-		if err := promptPush(ctx, g, needsPush); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	// --- Dirty working tree warning ---
-
-	for _, r := range repos {
-		dirty, err := g.IsDirty(ctx, r.Path)
-		if err != nil {
-			continue
-		}
-		if dirty {
-			ui.SkipValue(ui.PreserveCase(r.Name), "uncommitted changes won't be reflected")
-		}
+	if err := emitRepoReadiness(ctx, g, readiness, anyUnpushed); err != nil {
+		return nil, nil, err
 	}
 
 	return repos, repoBranch, nil
+}
+
+// emitRepoReadiness renders the "Repo Readiness" section: the
+// consolidated pre-deploy git state for every workspace repo, with
+// the push offer folded in. Replaces the previous separate pieces
+// (push prompt + per-repo "Pushed" card + per-repo dirty warnings)
+// with one section that follows the Services section's grammar —
+// stable title through prompt/spinners/final card, one row per
+// repo, worst-first aggregate glyph:
+//
+//	✓  extracker                       (in sync, clean)
+//	✓  extracker · pushed 3 commits    (pushed during this run)
+//	▲  legacy-api · 3 unpushed commits, uncommitted changes
+//	▲  host-ui · not yet pushed
+//
+// Pushing is optional: when any repo has unpushed commits and the
+// session is interactive, one combined confirm offers to push them
+// all; declining (or non-interactive) proceeds and the rows carry
+// the caveat. Uncommitted changes are never acted on — the row
+// notes they won't be reflected in the deploy. Only an accepted
+// push that then fails is an error.
+func emitRepoReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
+	slot := ui.NewSlot()
+
+	if anyUnpushed && isInteractive() {
+		mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+		normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
+		var repoLines []string
+		for _, rr := range readiness {
+			if rr.unpushed == 0 {
+				continue
+			}
+			status := "not yet pushed"
+			if rr.unpushed > 0 {
+				status = fmt.Sprintf("%d unpushed commit(s)", rr.unpushed)
+			}
+			repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
+				mutedStyle.Render(rr.repo.Name),
+				mutedStyle.Render(ui.Palette.Dot),
+				normalStyle.Render(status)))
+		}
+
+		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
+			"\n\n" + strings.Join(repoLines, "\n")
+
+		slot.Show(ui.NewCard(ui.CardInput, "repo readiness").Tight())
+		confirmed := true
+		if err := runForm(
+			newConfirm().
+				Title(promptContent).
+				Affirmative("Yes").
+				Negative("No").
+				Value(&confirmed),
+		); err != nil {
+			return err
+		}
+
+		if confirmed {
+			statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+			for i := range readiness {
+				rr := &readiness[i]
+				if rr.unpushed == 0 {
+					continue
+				}
+				spin := ui.NewCard(ui.CardRunning, "repo readiness").
+					Raw(statusMuted.Render("Pushing ") +
+						ui.Keyword(rr.repo.Name) +
+						statusMuted.Render("..."))
+				if err := slot.RunCard(spin, func() error {
+					return g.Push(ctx, rr.repo.Path, rr.branch)
+				}); err != nil {
+					return fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
+				}
+				rr.pushed = true
+			}
+		}
+	}
+
+	slot.Show(buildRepoReadinessCard(readiness))
+	slot.Finalize()
+	return nil
+}
+
+// buildRepoReadinessCard composes the final static "Repo Readiness"
+// card: one Item row per repo, ready rows bare ✓, caveat rows ▲ with
+// the caveats joined into the muted value. Same row vocabulary as
+// buildServicesCard.
+func buildRepoReadinessCard(readiness []repoReadiness) *ui.Card {
+	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+
+	sorted := append([]repoReadiness{}, readiness...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].repo.Name < sorted[j].repo.Name })
+
+	type row struct {
+		glyph, content string
+	}
+	rows := make([]row, 0, len(sorted))
+	state := ui.CardSuccess
+
+	for _, rr := range sorted {
+		var caveats []string
+		if rr.pushed {
+			n := rr.unpushed
+			switch {
+			case n == 1:
+				caveats = append(caveats, "pushed 1 commit")
+			case n > 1:
+				caveats = append(caveats, fmt.Sprintf("pushed %d commits", n))
+			default:
+				caveats = append(caveats, "pushed")
+			}
+		} else if rr.unpushed != 0 {
+			switch {
+			case rr.unpushed < 0:
+				caveats = append(caveats, "not yet pushed")
+			case rr.unpushed == 1:
+				caveats = append(caveats, "1 unpushed commit")
+			default:
+				caveats = append(caveats, fmt.Sprintf("%d unpushed commits", rr.unpushed))
+			}
+		}
+		if rr.dirty {
+			caveats = append(caveats, "uncommitted changes")
+		}
+
+		warn := (rr.unpushed != 0 && !rr.pushed) || rr.dirty
+		glyph := glyphOK
+		if warn {
+			glyph = glyphWarn
+			state = ui.CardSkipped
+		}
+
+		content := repoStyle.Render(rr.repo.Name)
+		if len(caveats) > 0 {
+			content += muted.Render(" · " + strings.Join(caveats, ", "))
+		}
+		rows = append(rows, row{glyph, content})
+	}
+
+	card := ui.NewCard(state, "repo readiness")
+	for _, r := range rows {
+		card.Item(r.glyph, r.content)
+	}
+	return card
 }
 
 // detectRepoAffected computes the change-detection outcome for one
@@ -130,80 +273,6 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 	result.RepoPath = r.Path
 	result.Branch = branch
 	return result, true, nil
-}
-
-// promptPush offers to push unpushed repos before change detection so
-// the deployed images match local commits. Pushing is OPTIONAL —
-// declining (or running non-interactively) proceeds with a warning
-// that the deploy may lag local changes; detection still diffs local
-// HEAD against origin/<default>, so the affected list reflects local
-// state either way. Only a push that was accepted and then failed is
-// an error.
-func promptPush(ctx context.Context, g vcs.VCS, needsPush []unpushedRepo) error {
-	if !isInteractive() {
-		names := make([]string, len(needsPush))
-		for i, up := range needsPush {
-			names[i] = up.repo.Name
-		}
-		ui.Skip(fmt.Sprintf(
-			"unpushed commits in %s — deploy may lag local changes",
-			strings.Join(names, ", "),
-		))
-		return nil
-	}
-
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-	var repoLines []string
-	for _, up := range needsPush {
-		status := "not yet pushed"
-		if up.count > 0 {
-			status = fmt.Sprintf("%d unpushed commit(s)", up.count)
-		}
-		repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-			mutedStyle.Render(up.repo.Name),
-			mutedStyle.Render(ui.Palette.Dot),
-			normalStyle.Render(status)))
-	}
-
-	promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-		"\n\n" + strings.Join(repoLines, "\n")
-
-	slot := ui.NewSlot()
-	slot.Show(ui.NewCard(ui.CardInput, "unpushed commits detected").Tight())
-
-	confirmed := true
-	if err := runForm(
-		newConfirm().
-			Title(promptContent).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirmed),
-	); err != nil {
-		return err
-	}
-	if !confirmed {
-		slot.Show(ui.NewCard(ui.CardSkipped, "push declined").
-			Muted("deploy may lag local changes"))
-		slot.Finalize()
-		return nil
-	}
-
-	for _, up := range needsPush {
-		if err := slot.Run(fmt.Sprintf("pushing %s", up.repo.Name), func() error {
-			return g.Push(ctx, up.repo.Path, up.branch)
-		}); err != nil {
-			return fmt.Errorf("pushing %s: %w", up.repo.Name, err)
-		}
-	}
-	pushedPairs := make([]string, 0, len(needsPush)*2)
-	for _, up := range needsPush {
-		pushedPairs = append(pushedPairs, up.repo.Name, up.branch)
-	}
-	slot.Show(ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...))
-	slot.Finalize()
-
-	return nil
 }
 
 // resolveServicePaths returns the path-prefix map from the services config
