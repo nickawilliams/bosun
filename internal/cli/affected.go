@@ -112,8 +112,7 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 // ErrCancelled. A fully-ready workspace renders the static ✓ card
 // with no gate.
 func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
-	slot := ui.NewSlot()
-
+	pushAccepted := false
 	if anyUnpushed && isInteractive() {
 		mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 		normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
@@ -135,7 +134,7 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
 			"\n\n" + strings.Join(repoLines, "\n")
 
-		slot.Show(ui.NewCard(ui.CardInput, "workspace readiness").Tight())
+		headerRewind := ui.NewCard(ui.CardInput, "workspace readiness").Tight().PrintRewindable()
 		confirmed := true
 		if err := runForm(
 			newConfirm().
@@ -146,44 +145,72 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 		); err != nil {
 			return err
 		}
+		headerRewind()
+		pushAccepted = confirmed
+	}
 
-		if confirmed {
-			statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-			for i := range readiness {
-				rr := &readiness[i]
-				if rr.unpushed == 0 {
-					continue
-				}
-				spin := ui.NewCard(ui.CardRunning, "workspace readiness").
-					Raw(statusMuted.Render("Pushing ") +
-						ui.Keyword(rr.repo.Name) +
-						statusMuted.Render("..."))
-				if err := slot.RunCard(spin, func() error {
-					return g.Push(ctx, rr.repo.Path, rr.branch)
-				}); err != nil {
-					return fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
-				}
-				rr.pushed = true
+	// Accepted pushes run as steps of one spinner program; the
+	// program's final frame morphs into the gate or the static card,
+	// so the per-repo cycle has no blank-frame seams (RunCardSteps).
+	// The no-push paths produce zero steps, which renders the
+	// successor as a plain print — no TUI program at all.
+	var steps []ui.CardStep
+	if pushAccepted {
+		statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+		for i := range readiness {
+			rr := &readiness[i]
+			if rr.unpushed == 0 {
+				continue
+			}
+			spin := ui.NewCard(ui.CardRunning, "workspace readiness").
+				Raw(statusMuted.Render("Pushing ") +
+					ui.Keyword(rr.repo.Name) +
+					statusMuted.Render("..."))
+			steps = append(steps, ui.CardStep{
+				Card: spin,
+				Run: func() error {
+					if err := g.Push(ctx, rr.repo.Path, rr.branch); err != nil {
+						return fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
+					}
+					rr.pushed = true
+					return nil
+				},
+			})
+		}
+	}
+
+	caveatsRemain := func() bool {
+		for _, rr := range readiness {
+			if (rr.unpushed != 0 && !rr.pushed) || rr.dirty {
+				return true
 			}
 		}
+		return false
 	}
+	gateWill := func() bool { return caveatsRemain() && isInteractive() }
 
-	caveats := false
-	for _, rr := range readiness {
-		if (rr.unpushed != 0 && !rr.pushed) || rr.dirty {
-			caveats = true
-			break
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if gateWill() {
+			// Gate variant: rows + a blank connector row above the
+			// Continue/Cancel buttons huh renders beneath.
+			gate := buildWorkspaceReadinessCard(readiness)
+			gate.Text("")
+			return gate.Tight()
 		}
+		return buildWorkspaceReadinessCard(readiness)
+	})
+	if err != nil {
+		// An accepted push failed — the failed step card is already
+		// on screen.
+		return err
 	}
 
-	if caveats && isInteractive() {
-		// Confirmation gate: the readiness rows render with a blank
-		// connector row and Continue/Cancel buttons beneath. Cancel
-		// is focused (proceed must be deliberate).
-		gate := buildWorkspaceReadinessCard(readiness)
-		gate.Text("")
-		slot.Show(gate.Tight())
-
+	if gateWill() {
+		// Confirmation gate: Cancel is focused (proceed must be
+		// deliberate). The gate card was painted by the program's
+		// final frame (or the zero-step plain print), so suppress
+		// the spacer manually the way Tight-on-Print would have.
+		ui.ClearSpacer()
 		proceed := false
 		if err := runForm(
 			newConfirm().
@@ -199,13 +226,9 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 		}
 		// Swap the gate variant (with its trailing spacer row) for
 		// the clean static card.
-		slot.Show(buildWorkspaceReadinessCard(readiness))
-		slot.Finalize()
-		return nil
+		rewind()
+		buildWorkspaceReadinessCard(readiness).Print()
 	}
-
-	slot.Show(buildWorkspaceReadinessCard(readiness))
-	slot.Finalize()
 	return nil
 }
 
@@ -434,11 +457,13 @@ func (sr sourceRepo) prResolved(withPRs bool) bool {
 // emitDeploymentSources renders the Observe-phase "Services" section
 // that precedes the deploy plan, in three phases:
 //
-//  1. Detection + PR lookup. Each repo runs under a slot spinner
-//     (stable "Services" title, repo name on the muted body line) —
-//     ChangedFiles' per-repo `git fetch` and the GH PR lookup are
-//     the slow parts. Prompts can't run during this phase, which is
-//     why prepareAffectedRepos (push check, dirty warnings) stays a
+//  1. Detection + PR lookup. All repos run as steps of ONE spinner
+//     program (RunCardSteps) — stable "Services" title, per-repo
+//     status on the muted body line — whose final frame morphs into
+//     phase 2's form header or phase 3's card, so the whole cycle
+//     has zero TUI program boundaries (no blank-frame seams between
+//     repos). Prompts can't run during this phase, which is why
+//     prepareAffectedRepos (push offer, readiness gate) stays a
 //     separate pre-flight step.
 //
 //  2. Optional selection form. When interactive, not auto-approved
@@ -480,55 +505,55 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		host = h
 	}
 
-	// --- Phase 1: detection + PR lookup under per-repo slot spinners ---
+	// --- Phase 1: detection + PR lookup, one program over all repos ---
 
-	slot := ui.NewSlot()
 	var sources []sourceRepo
 	var detFails []detFail
 	var firstDetErr error
 
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	steps := make([]ui.CardStep, 0, len(repos))
 	for _, repo := range repos {
 		spin := ui.NewCard(ui.CardRunning, "services").
 			Raw(statusMuted.Render("Detecting changes in ") +
 				ui.Keyword(repo.Name) +
 				statusMuted.Render("..."))
-		var (
-			sr      sourceRepo
-			tracked bool
-			detErr  error
-		)
-		// Errors ride on detErr/prErr rather than the slot's error
-		// path — a failed repo becomes a ✗ row in the final card, not
-		// a permanently-printed failure card mid-sequence.
-		_ = slot.RunCard(spin, func() error {
-			sr.res, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
-			if detErr != nil || !tracked {
-				return nil
-			}
-			// PR lookup runs for unchanged repos too — their services
-			// are toggleable in the selection form (redeploy after an
-			// env was externally cleaned up), and a toggled-on service
-			// needs its pr-N tag just like a changed one.
-			if withPRs {
-				sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
-				if sr.prErr == nil {
-					sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+		steps = append(steps, ui.CardStep{
+			Card: spin,
+			// Errors ride on detErr/prErr rather than the step's error
+			// path — a failed repo becomes a ✗ row in the final card
+			// and the sequence continues to the remaining repos.
+			Run: func() error {
+				var (
+					sr      sourceRepo
+					tracked bool
+					detErr  error
+				)
+				sr.res, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
+				if detErr != nil {
+					if firstDetErr == nil {
+						firstDetErr = detErr
+					}
+					detFails = append(detFails, detFail{repo.Name, detErr})
+					return nil
 				}
-			}
-			return nil
+				if !tracked {
+					return nil
+				}
+				// PR lookup runs for unchanged repos too — their services
+				// are toggleable in the selection form (redeploy after an
+				// env was externally cleaned up), and a toggled-on service
+				// needs its pr-N tag just like a changed one.
+				if withPRs {
+					sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
+					if sr.prErr == nil {
+						sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+					}
+				}
+				sources = append(sources, sr)
+				return nil
+			},
 		})
-		if detErr != nil {
-			if firstDetErr == nil {
-				firstDetErr = detErr
-			}
-			detFails = append(detFails, detFail{repo.Name, detErr})
-			continue
-		}
-		if !tracked {
-			continue
-		}
-		sources = append(sources, sr)
 	}
 
 	// --- Phase 2: optional selection form ---
@@ -538,25 +563,49 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		svc      string
 		selected bool
 	}
-	var toggles []toggle
-	for i, sr := range sources {
-		if !sr.prResolved(withPRs) {
-			continue
+	buildToggles := func() []toggle {
+		var toggles []toggle
+		for i, sr := range sources {
+			if !sr.prResolved(withPRs) {
+				continue
+			}
+			// Services = detection's picks (pre-checked); Skipped = the
+			// rest, unchecked but toggleable. For unchanged repos every
+			// service sits in Skipped, so they appear unchecked — checking
+			// one expresses "redeploy this even though nothing changed".
+			for _, svc := range sr.res.Services {
+				toggles = append(toggles, toggle{i, svc, true})
+			}
+			for _, svc := range sr.res.Skipped {
+				toggles = append(toggles, toggle{i, svc, false})
+			}
 		}
-		// Services = detection's picks (pre-checked); Skipped = the
-		// rest, unchecked but toggleable. For unchanged repos every
-		// service sits in Skipped, so they appear unchecked — checking
-		// one expresses "redeploy this even though nothing changed".
-		for _, svc := range sr.res.Services {
-			toggles = append(toggles, toggle{i, svc, true})
-		}
-		for _, svc := range sr.res.Skipped {
-			toggles = append(toggles, toggle{i, svc, false})
-		}
+		return toggles
 	}
 
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
-	if len(toggles) > 0 && len(flagServices) == 0 && isInteractive() && !isAutoApprove(cmd) {
+	formGate := func() bool {
+		return len(buildToggles()) > 0 && len(flagServices) == 0 &&
+			isInteractive() && !isAutoApprove(cmd)
+	}
+
+	// The spinner program's final frame morphs into whatever comes
+	// next — the selection form's header when the form will show, the
+	// final Services card otherwise — so the program's exit paints
+	// content instead of clearing to blank.
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if formGate() {
+			return ui.NewCard(ui.CardInput, "services").Tight()
+		}
+		return buildServicesCard(sources, detFails, withPRs)
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	formShown := formGate()
+	if formShown {
+		toggles := buildToggles()
 		sort.SliceStable(toggles, func(i, j int) bool {
 			ri, rj := sources[toggles[i].src].res.RepoName, sources[toggles[j].src].res.RepoName
 			if ri != rj {
@@ -582,7 +631,10 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		}
 
 		var picked []string
-		slot.Show(ui.NewCard(ui.CardInput, "services").Tight())
+		// The header was painted by the spinner program's final frame
+		// (not via Print), so suppress the spacer manually the way
+		// Tight-on-Print would have.
+		ui.ClearSpacer()
 		// Full height — no viewport cap. The submitted form is
 		// replaced by the final Services card listing the same rows,
 		// so matching the form's height to the list makes the
@@ -649,8 +701,13 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		}
 	}
 
-	slot.Show(buildServicesCard(sources, detFails, withPRs))
-	slot.Finalize()
+	if formShown {
+		// The no-form path's final card was already painted by the
+		// spinner program's final frame; the form path erases its
+		// header and prints the selection-adjusted card.
+		rewind()
+		buildServicesCard(sources, detFails, withPRs).Print()
+	}
 
 	if len(overrides) == 0 {
 		return results, nil, prs, firstDetErr

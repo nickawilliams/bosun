@@ -287,8 +287,7 @@ func newReviewCmd() *cobra.Command {
 				promptContent := mutedStyle.Render("Do you want to push before continuing?") +
 					"\n\n" + strings.Join(repoLines, "\n")
 
-				slot := ui.NewSlot()
-				slot.Show(ui.NewCard(ui.CardInput, "unpushed commits detected").Tight())
+				headerRewind := ui.NewCard(ui.CardInput, "unpushed commits detected").Tight().PrintRewindable()
 
 				confirmed := true
 				if isInteractive() {
@@ -303,25 +302,37 @@ func newReviewCmd() *cobra.Command {
 					}
 				}
 				if !confirmed {
-					slot.Show(ui.NewCard(ui.CardSkipped, "push declined"))
-					slot.Finalize()
+					headerRewind()
+					ui.NewCard(ui.CardSkipped, "push declined").Print()
 					return fmt.Errorf("aborted: unpushed commits")
 				}
+				headerRewind()
 
+				// One spinner program for the whole push cycle
+				// (RunCardSteps) — per-repo slot programs flashed blank
+				// at every program boundary. The final frame morphs
+				// into the pushed-summary card.
+				steps := make([]ui.CardStep, 0, len(needsPush))
 				for _, up := range needsPush {
-					pushCard := ui.NewCard(ui.CardRunning, "pushing").Value(up.rc.repo.Name)
-					if err := slot.RunCard(pushCard, func() error {
-						return gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch)
-					}); err != nil {
-						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
-					}
+					steps = append(steps, ui.CardStep{
+						Card: ui.NewCard(ui.CardRunning, "pushing").Value(up.rc.repo.Name),
+						Run: func() error {
+							if err := gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch); err != nil {
+								return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
+							}
+							return nil
+						},
+					})
 				}
 				pushedPairs := make([]string, 0, len(needsPush)*2)
 				for _, up := range needsPush {
 					pushedPairs = append(pushedPairs, up.rc.repo.Name, up.rc.branch)
 				}
-				slot.Show(ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...))
-				slot.Finalize()
+				if _, err := ui.RunCardSteps(steps, func() *ui.Card {
+					return ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...)
+				}); err != nil {
+					return err
+				}
 			}
 
 			// --- Plan + Apply ---
