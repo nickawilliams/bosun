@@ -68,7 +68,7 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 	}
 
 	if len(needsPush) > 0 {
-		if err := promptPushOrAbort(ctx, g, needsPush); err != nil {
+		if err := promptPush(ctx, g, needsPush); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -132,18 +132,24 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 	return result, true, nil
 }
 
-// promptPushOrAbort prompts to push unpushed repos (interactive) or aborts
-// (non-interactive). Mirrors the push-check pattern from review.go.
-func promptPushOrAbort(ctx context.Context, g vcs.VCS, needsPush []unpushedRepo) error {
+// promptPush offers to push unpushed repos before change detection so
+// the deployed images match local commits. Pushing is OPTIONAL —
+// declining (or running non-interactively) proceeds with a warning
+// that the deploy may lag local changes; detection still diffs local
+// HEAD against origin/<default>, so the affected list reflects local
+// state either way. Only a push that was accepted and then failed is
+// an error.
+func promptPush(ctx context.Context, g vcs.VCS, needsPush []unpushedRepo) error {
 	if !isInteractive() {
 		names := make([]string, len(needsPush))
 		for i, up := range needsPush {
 			names[i] = up.repo.Name
 		}
-		return fmt.Errorf(
-			"unpushed commits in %s — push first or use --service to bypass detection",
+		ui.Skip(fmt.Sprintf(
+			"unpushed commits in %s — deploy may lag local changes",
 			strings.Join(names, ", "),
-		)
+		))
+		return nil
 	}
 
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -177,9 +183,10 @@ func promptPushOrAbort(ctx context.Context, g vcs.VCS, needsPush []unpushedRepo)
 		return err
 	}
 	if !confirmed {
-		slot.Show(ui.NewCard(ui.CardSkipped, "push declined"))
+		slot.Show(ui.NewCard(ui.CardSkipped, "push declined").
+			Muted("deploy may lag local changes"))
 		slot.Finalize()
-		return fmt.Errorf("aborted: unpushed commits")
+		return nil
 	}
 
 	for _, up := range needsPush {
