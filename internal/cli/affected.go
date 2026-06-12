@@ -300,17 +300,15 @@ type detFail struct {
 	err  error
 }
 
-// deployable reports whether this repo's services can actually be
-// toggled into a deployment: it has changes + services, and (when PR
-// resolution applies) the PR lookup succeeded.
-func (sr sourceRepo) deployable(withPRs bool) bool {
-	if !sr.res.HasChanges || len(sr.res.Services) == 0 {
-		return false
-	}
-	if withPRs && (sr.prErr != nil || sr.pr.Number == 0) {
-		return false
-	}
-	return true
+// prResolved reports whether this repo's services can be folded into
+// a deployment when PR resolution applies: the lookup succeeded and a
+// PR exists for the branch. Always true when withPRs is false (the
+// release path needs no image tags). Note this deliberately does NOT
+// require HasChanges — an unchanged repo with a live PR is still
+// deployable, which is what makes redeploy-after-external-cleanup
+// expressible through the selection form.
+func (sr sourceRepo) prResolved(withPRs bool) bool {
+	return !withPRs || (sr.prErr == nil && sr.pr.Number > 0)
 }
 
 // emitDeploymentSources renders the Observe-phase "Services" section
@@ -326,10 +324,13 @@ func (sr sourceRepo) deployable(withPRs bool) bool {
 //  2. Optional selection form. When interactive, not auto-approved
 //     (-y), and the caller passed no --service values, a multi-select
 //     opens pre-checked to detection's picks — affected services
-//     checked, path-map-skipped services listed but unchecked. One
-//     Enter accepts detection as-is; toggling adjusts what deploys.
-//     Repos without changes or without a resolvable PR aren't
-//     toggleable and appear only in the final list.
+//     checked, everything else (path-map skips AND services of
+//     unchanged repos) listed unchecked. Unchanged repos stay
+//     toggleable on purpose: a preview env that was externally
+//     cleaned up needs a redeploy with zero new commits, and the
+//     form is where that intent gets expressed. One Enter accepts
+//     detection as-is. Only repos without a resolvable PR (withPRs)
+//     are excluded from toggling.
 //
 //  3. Final static card. The flat, alphabetically-sorted repo·service
 //     list (single-service repos show just the repo name), rendered
@@ -385,7 +386,11 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			if detErr != nil || !tracked {
 				return nil
 			}
-			if withPRs && sr.res.HasChanges && len(sr.res.Services) > 0 {
+			// PR lookup runs for unchanged repos too — their services
+			// are toggleable in the selection form (redeploy after an
+			// env was externally cleaned up), and a toggled-on service
+			// needs its pr-N tag just like a changed one.
+			if withPRs {
 				sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
 				if sr.prErr == nil {
 					sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
@@ -415,9 +420,13 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	}
 	var toggles []toggle
 	for i, sr := range sources {
-		if !sr.deployable(withPRs) {
+		if !sr.prResolved(withPRs) {
 			continue
 		}
+		// Services = detection's picks (pre-checked); Skipped = the
+		// rest, unchecked but toggleable. For unchanged repos every
+		// service sits in Skipped, so they appear unchecked — checking
+		// one expresses "redeploy this even though nothing changed".
 		for _, svc := range sr.res.Services {
 			toggles = append(toggles, toggle{i, svc, true})
 		}
@@ -505,7 +514,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	var prs []repoPR
 	for _, sr := range sources {
 		results = append(results, sr.res)
-		if withPRs && sr.deployable(withPRs) && len(sr.res.Services) > 0 {
+		if withPRs && sr.prResolved(withPRs) && len(sr.res.Services) > 0 {
 			tag := fmt.Sprintf("pr-%d", sr.pr.Number)
 			for _, svc := range sr.res.Services {
 				overrides[svc] = tag
@@ -583,13 +592,17 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 	for _, sr := range sources {
 		r := sr.res
 		switch {
-		case !r.HasChanges && len(r.Skipped) > 0:
+		case !r.HasChanges && len(r.Services) == 0:
+			// Unchanged and nothing toggled on — one compact receded
+			// row instead of a ○ row per service. When the user DID
+			// toggle services on (redeploy without changes), the
+			// default branch renders the per-service pairs instead.
 			nSkip++
 			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, "no changes")})
-		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.prErr != nil:
+		case withPRs && r.HasChanges && sr.prErr != nil:
 			nFail++
 			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
-		case withPRs && r.HasChanges && len(r.Services)+len(r.Skipped) > 0 && sr.pr.Number == 0:
+		case withPRs && r.HasChanges && sr.pr.Number == 0:
 			nSkip++
 			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
 		default:
