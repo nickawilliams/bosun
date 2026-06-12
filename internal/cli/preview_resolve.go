@@ -258,6 +258,12 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 			// stored name, treat as modify).
 			res.deployName = metaName
 			res.isRedeploy = true
+		default:
+			// Probed and dead — the env was torn down externally
+			// (cleanup job, manual delete). Metadata still points at
+			// the name, so recreate under it. PlanCreate, not
+			// redeploy: there's nothing alive to modify.
+			res.deployName = metaName
 		}
 
 	case flagName != "" && metaName != "" && flagName == metaName:
@@ -275,6 +281,9 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		case metaUnprobable:
 			res.deployName = flagName
 			res.isRedeploy = true
+		default:
+			// Probed and dead — same recreate semantics as Row 3.
+			res.deployName = flagName
 		}
 
 	case flagName != "" && metaName != "" && flagName != metaName:
