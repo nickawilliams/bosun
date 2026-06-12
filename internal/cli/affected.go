@@ -18,7 +18,7 @@ import (
 )
 
 // repoReadiness captures one repo's pre-deploy git state for the
-// "Repo Readiness" section: whether local commits are on the remote
+// "Workspace Readiness" section: whether local commits are on the remote
 // and whether the working tree is dirty.
 type repoReadiness struct {
 	repo     Repository
@@ -77,14 +77,14 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		})
 	}
 
-	if err := emitRepoReadiness(ctx, g, readiness, anyUnpushed); err != nil {
+	if err := emitWorkspaceReadiness(ctx, g, readiness, anyUnpushed); err != nil {
 		return nil, nil, err
 	}
 
 	return repos, repoBranch, nil
 }
 
-// emitRepoReadiness renders the "Repo Readiness" section: the
+// emitWorkspaceReadiness renders the "Workspace Readiness" section: the
 // consolidated pre-deploy git state for every workspace repo, with
 // the push offer folded in. Replaces the previous separate pieces
 // (push prompt + per-repo "Pushed" card + per-repo dirty warnings)
@@ -103,7 +103,15 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 // the caveat. Uncommitted changes are never acted on — the row
 // notes they won't be reflected in the deploy. Only an accepted
 // push that then fails is an error.
-func emitRepoReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
+//
+// When caveats remain after the push offer (declined pushes, dirty
+// trees), the final card doubles as a confirmation gate: the rows
+// render with Continue/Cancel buttons beneath, Cancel focused —
+// proceeding past a deploy that won't include local work should be
+// a deliberate keypress, not the default. Cancel aborts with
+// ErrCancelled. A fully-ready workspace renders the static ✓ card
+// with no gate.
+func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
 	slot := ui.NewSlot()
 
 	if anyUnpushed && isInteractive() {
@@ -127,7 +135,7 @@ func emitRepoReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness
 		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
 			"\n\n" + strings.Join(repoLines, "\n")
 
-		slot.Show(ui.NewCard(ui.CardInput, "repo readiness").Tight())
+		slot.Show(ui.NewCard(ui.CardInput, "workspace readiness").Tight())
 		confirmed := true
 		if err := runForm(
 			newConfirm().
@@ -146,7 +154,7 @@ func emitRepoReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness
 				if rr.unpushed == 0 {
 					continue
 				}
-				spin := ui.NewCard(ui.CardRunning, "repo readiness").
+				spin := ui.NewCard(ui.CardRunning, "workspace readiness").
 					Raw(statusMuted.Render("Pushing ") +
 						ui.Keyword(rr.repo.Name) +
 						statusMuted.Render("..."))
@@ -160,16 +168,52 @@ func emitRepoReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness
 		}
 	}
 
-	slot.Show(buildRepoReadinessCard(readiness))
+	caveats := false
+	for _, rr := range readiness {
+		if (rr.unpushed != 0 && !rr.pushed) || rr.dirty {
+			caveats = true
+			break
+		}
+	}
+
+	if caveats && isInteractive() {
+		// Confirmation gate: the readiness rows render with a blank
+		// connector row and Continue/Cancel buttons beneath. Cancel
+		// is focused (proceed must be deliberate).
+		gate := buildWorkspaceReadinessCard(readiness)
+		gate.Text("")
+		slot.Show(gate.Tight())
+
+		proceed := false
+		if err := runForm(
+			newConfirm().
+				Affirmative("Continue").
+				Negative("Cancel").
+				Value(&proceed),
+		); err != nil {
+			return err
+		}
+		if !proceed {
+			ui.RequestSpacer()
+			return ErrCancelled
+		}
+		// Swap the gate variant (with its trailing spacer row) for
+		// the clean static card.
+		slot.Show(buildWorkspaceReadinessCard(readiness))
+		slot.Finalize()
+		return nil
+	}
+
+	slot.Show(buildWorkspaceReadinessCard(readiness))
 	slot.Finalize()
 	return nil
 }
 
-// buildRepoReadinessCard composes the final static "Repo Readiness"
+// buildWorkspaceReadinessCard composes the final static "Workspace Readiness"
 // card: one Item row per repo, ready rows bare ✓, caveat rows ▲ with
 // the caveats joined into the muted value. Same row vocabulary as
 // buildServicesCard.
-func buildRepoReadinessCard(readiness []repoReadiness) *ui.Card {
+func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
@@ -224,7 +268,7 @@ func buildRepoReadinessCard(readiness []repoReadiness) *ui.Card {
 		rows = append(rows, row{glyph, content})
 	}
 
-	card := ui.NewCard(state, "repo readiness")
+	card := ui.NewCard(state, "workspace readiness")
 	for _, r := range rows {
 		card.Item(r.glyph, r.content)
 	}
