@@ -97,66 +97,82 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 //	▲  legacy-api · 3 unpushed commits, uncommitted changes
 //	▲  host-ui · not yet pushed
 //
-// Pushing is optional: when any repo has unpushed commits and the
-// session is interactive, one combined confirm offers to push them
-// all; declining (or non-interactive) proceeds and the rows carry
-// the caveat. Uncommitted changes are never acted on — the row
-// notes they won't be reflected in the deploy. Only an accepted
-// push that then fails is an error.
+// The section asks at most ONE question. When caveats exist
+// (unpushed commits, dirty trees) and the session is interactive,
+// the readiness rows render as a gate:
 //
-// When caveats remain after the push offer (declined pushes, dirty
-// trees), the final card doubles as a confirmation gate: the rows
-// render with Continue/Cancel buttons beneath, Cancel focused —
-// proceeding past a deploy that won't include local work should be
-// a deliberate keypress, not the default. Cancel aborts with
-// ErrCancelled. A fully-ready workspace renders the static ✓ card
-// with no gate.
+//   - Unpushed commits present → a three-way select beneath the
+//     rows: "push and continue" (default — the safe action: local
+//     work ends up in the deploy), "continue without pushing", and
+//     "cancel". Declining-to-push and confirming-to-proceed used to
+//     be two stacked prompts asking the same thing; the select
+//     collapses them into one decision.
+//   - Dirty trees only → Continue/Cancel confirm, Cancel focused
+//     (proceeding past a deploy that won't include local work must
+//     be deliberate; there's no fix-it action bosun could offer).
+//
+// Uncommitted changes are never acted on — the row notes they won't
+// be reflected. Cancel aborts with ErrCancelled. Non-interactive
+// runs proceed with the static card (warning rows only). A fully-
+// ready workspace renders the static ✓ card with no gate. Only an
+// accepted push that then fails is an error.
 func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
-	pushAccepted := false
-	if anyUnpushed && isInteractive() {
-		mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-		normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-		var repoLines []string
-		for _, rr := range readiness {
-			if rr.unpushed == 0 {
-				continue
-			}
-			status := "not yet pushed"
-			if rr.unpushed > 0 {
-				status = fmt.Sprintf("%d unpushed commit(s)", rr.unpushed)
-			}
-			repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-				mutedStyle.Render(rr.repo.Name),
-				mutedStyle.Render(ui.Palette.Dot),
-				normalStyle.Render(status)))
+	caveats := false
+	for _, rr := range readiness {
+		if rr.unpushed != 0 || rr.dirty {
+			caveats = true
+			break
 		}
+	}
 
-		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-			"\n\n" + strings.Join(repoLines, "\n")
+	if !caveats || !isInteractive() {
+		buildWorkspaceReadinessCard(readiness).Print()
+		return nil
+	}
 
-		headerRewind := ui.NewCard(ui.CardInput, "workspace readiness").Tight().PrintRewindable()
-		confirmed := true
+	// Gate: rows + a blank connector row above the form huh renders
+	// beneath. Tight-on-Print suppresses the spacer between card and
+	// form.
+	gate := buildWorkspaceReadinessCard(readiness)
+	gate.Text("")
+	gateRewind := gate.Tight().PrintRewindable()
+
+	if anyUnpushed {
+		type pushChoice int
+		const (
+			pushAndContinue pushChoice = iota
+			continueNoPush
+			cancelDeploy
+		)
+		choice := pushAndContinue
 		if err := runForm(
-			newConfirm().
-				Title(promptContent).
-				Affirmative("Yes").
-				Negative("No").
-				Value(&confirmed),
+			huh.NewSelect[pushChoice]().
+				Options(
+					huh.NewOption("push and continue", pushAndContinue),
+					huh.NewOption("continue without pushing", continueNoPush),
+					huh.NewOption("cancel", cancelDeploy),
+				).
+				Value(&choice),
 		); err != nil {
 			return err
 		}
-		headerRewind()
-		pushAccepted = confirmed
-	}
 
-	// Accepted pushes run as steps of one spinner program; the
-	// program's final frame morphs into the gate or the static card,
-	// so the per-repo cycle has no blank-frame seams (RunCardSteps).
-	// The no-push paths produce zero steps, which renders the
-	// successor as a plain print — no TUI program at all.
-	var steps []ui.CardStep
-	if pushAccepted {
+		switch choice {
+		case cancelDeploy:
+			ui.RequestSpacer()
+			return ErrCancelled
+		case continueNoPush:
+			gateRewind()
+			buildWorkspaceReadinessCard(readiness).Print()
+			return nil
+		}
+
+		// Push and continue: the pushes run as steps of one spinner
+		// program (RunCardSteps — per-repo programs would flash blank
+		// at every boundary) whose final frame is the updated rows.
+		gateRewind()
 		statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+		var steps []ui.CardStep
 		for i := range readiness {
 			rr := &readiness[i]
 			if rr.unpushed == 0 {
@@ -177,58 +193,34 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 				},
 			})
 		}
-	}
-
-	caveatsRemain := func() bool {
-		for _, rr := range readiness {
-			if (rr.unpushed != 0 && !rr.pushed) || rr.dirty {
-				return true
-			}
-		}
-		return false
-	}
-	gateWill := func() bool { return caveatsRemain() && isInteractive() }
-
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
-		if gateWill() {
-			// Gate variant: rows + a blank connector row above the
-			// Continue/Cancel buttons huh renders beneath.
-			gate := buildWorkspaceReadinessCard(readiness)
-			gate.Text("")
-			return gate.Tight()
-		}
-		return buildWorkspaceReadinessCard(readiness)
-	})
-	if err != nil {
-		// An accepted push failed — the failed step card is already
-		// on screen.
+		_, err := ui.RunCardSteps(steps, func() *ui.Card {
+			return buildWorkspaceReadinessCard(readiness)
+		})
+		// On error the failed step card is already on screen. Note:
+		// choosing "push and continue" already consented to proceed,
+		// so remaining dirty-tree caveats don't re-prompt — the rows
+		// carry them.
 		return err
 	}
 
-	if gateWill() {
-		// Confirmation gate: Cancel is focused (proceed must be
-		// deliberate). The gate card was painted by the program's
-		// final frame (or the zero-step plain print), so suppress
-		// the spacer manually the way Tight-on-Print would have.
-		ui.ClearSpacer()
-		proceed := false
-		if err := runForm(
-			newConfirm().
-				Affirmative("Continue").
-				Negative("Cancel").
-				Value(&proceed),
-		); err != nil {
-			return err
-		}
-		if !proceed {
-			ui.RequestSpacer()
-			return ErrCancelled
-		}
-		// Swap the gate variant (with its trailing spacer row) for
-		// the clean static card.
-		rewind()
-		buildWorkspaceReadinessCard(readiness).Print()
+	// Dirty trees only: Continue/Cancel confirm, Cancel focused.
+	proceed := false
+	if err := runForm(
+		newConfirm().
+			Affirmative("Continue").
+			Negative("Cancel").
+			Value(&proceed),
+	); err != nil {
+		return err
 	}
+	if !proceed {
+		ui.RequestSpacer()
+		return ErrCancelled
+	}
+	// Swap the gate variant (with its trailing spacer row) for the
+	// clean static card.
+	gateRewind()
+	buildWorkspaceReadinessCard(readiness).Print()
 	return nil
 }
 
