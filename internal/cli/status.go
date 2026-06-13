@@ -608,24 +608,21 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 }
 
 // buildWorkspacePreviewCard renders the preview-environment meta
-// card. Title is "Preview"; value is the preview URL/name or a muted
-// "(none)" sentinel produced by statusPreviewValue. The text carries
-// the existence contrast on its own, so the glyph stays a structural
-// ● with no state-color override.
+// card in the standard title-plus-body layout: title "Preview", the
+// preview URL/name (or a muted "(none)" sentinel from
+// statusPreviewValue) on the body line beneath. The text carries the
+// existence contrast on its own, so the glyph stays a structural ●
+// with no state-color override.
 //
 // Layout (Tight, ordering) is the caller's concern.
 func buildWorkspacePreviewCard(env preview.Environment, err error) *ui.Card {
-	value := statusPreviewValue(env, err)
-	return ui.NewCard(ui.CardReady, "Preview").
-		Value(value).
-		AlignWidth(statusMetaAlignWidth)
+	return ui.NewCard(ui.CardReady, "Preview").Raw(statusPreviewValue(env, err))
 }
 
-// buildWorkspaceBranchCard renders the workspace-branch meta card.
-// Title is "Workspace"; value is the branch name (file:// linked to
-// its worktree path when resolvable) plus a colored age
-// parenthetical at the end — same shape as the Story card's status
-// parens and the PR row.
+// buildWorkspaceBranchCard renders the workspace-branch meta card in
+// the standard title-plus-body layout: title "Workspace", and on the
+// body line the branch name (file:// linked to its worktree path when
+// resolvable) plus a colored age parenthetical at the end.
 //
 // Renders as a CardReady (●) with the dot color overridden per
 // staleness bucket (see [stalenessColor]).
@@ -646,8 +643,7 @@ func buildWorkspaceBranchCard(branch string, updatedAt time.Time) *ui.Card {
 
 	return ui.NewCard(ui.CardReady, "Workspace").
 		GlyphColor(dotColor).
-		Value(value).
-		AlignWidth(statusMetaAlignWidth)
+		Raw(value)
 }
 
 // repoState bundles all the per-repo data fetched during status

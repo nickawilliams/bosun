@@ -20,15 +20,6 @@ import (
 // "Branch", "Checks", "Repos", "PR" — pad to the same width.
 const statusKVWidth = 7
 
-// statusMetaAlignWidth is the Card.AlignWidth value applied to the
-// workspace meta-block cards (Story / Preview / Workspace) so their
-// " · " separator column lines up with the per-repo card body rows'
-// " · " separator. Derived from the repo-row math: the body row has
-// indent + per-row glyph + gap + statusKVWidth-padded label + " ·";
-// the meta-card title row has pad + card glyph + gap + alignWidth
-// + " ·". Matching the two columns gives alignWidth = 13.
-const statusMetaAlignWidth = 13
-
 // statusRowKV composes a body row's content as
 // "<padded muted key> · <value>", mirroring Card.KV's default
 // styling so plan-style rows align on the dot separator. Labels
