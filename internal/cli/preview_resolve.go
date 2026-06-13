@@ -189,13 +189,14 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		// typed input goes through enforceValidName (which loops on
 		// invalid input). Non-interactive silently uses the generated
 		// name.
-		name := generateEphemeralName()
+		generated := generateEphemeralName()
+		name := generated
 		switch {
 		case row1Prompt:
 			// Header already on screen from the morph — run the form
 			// directly beneath it. ClearSpacer stands in for the
 			// Tight()-on-Print suppression the morphed card never got.
-			input, field := newDefaultInput(name)
+			input, field := newDefaultInput(generated)
 			ui.ClearSpacer()
 			if err := runForm(input); err != nil {
 				return previewResolution{}, err
@@ -223,6 +224,23 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 			}
 			name = validated
 		}
+
+		// A user-entered name was never probed (only flagName gets the
+		// Inspect during the resolution spinner), so an existing live
+		// env entered here would silently plan as a fresh create.
+		// Route it back through the matrix as if it had been passed
+		// via --name — Row 2 probes it and offers the adopt prompt on
+		// a conflict. Same mechanism handleConflict's "choose another
+		// name" uses. The untouched generated name skips this: it was
+		// just minted, randomly, and an extra probe round-trip per run
+		// would cost more than the collision risk justifies.
+		if name != generated {
+			if err := cmd.Flags().Set("name", name); err != nil {
+				return previewResolution{}, err
+			}
+			return resolvePreview(cmd, ctx, provider, issueKey, stage, force)
+		}
+
 		res.previewName = name
 		res.deployName = name
 
