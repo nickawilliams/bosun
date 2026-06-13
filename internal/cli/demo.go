@@ -330,6 +330,7 @@ func demoFormStatic() {
 	var (
 		summary   string
 		issueType string
+		services  []string
 		confirmed bool
 	)
 
@@ -350,6 +351,18 @@ func demoFormStatic() {
 				huh.NewOption("Task", "Task"),
 			).
 			Value(&issueType),
+		// Multi-select rows share Card.Item's grid (glyph col 6,
+		// content col 9) so the form lines up with the static card
+		// that typically replaces it — compare with the Services
+		// card shape in the preview flow.
+		huh.NewMultiSelect[string]().
+			Title("Services").
+			Options(
+				huh.NewOption("extracker · tag-api", "tag-api").Selected(true),
+				huh.NewOption("extracker · pdfgen", "pdfgen"),
+				huh.NewOption("host-ui", "host-ui").Selected(true),
+			).
+			Value(&services),
 		newConfirm().
 			Affirmative("Apply").
 			Negative("Cancel").

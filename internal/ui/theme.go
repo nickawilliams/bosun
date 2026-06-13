@@ -324,16 +324,24 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 
 	// Align huh's focused form with the card timeline: 1 space of
 	// left margin, a normal-weight │ border in the accent color,
-	// and 2 spaces of inner padding. Callers that want a "?" glyph
+	// and 1 space of inner padding. Callers that want a "?" glyph
 	// on the first row should print a CardInput title card before
 	// invoking the form; the form itself only draws the connector,
 	// which matches the CardInput card's own connector color.
+	//
+	// The 1-space inner padding (not 2) makes multi-select rows land
+	// on Card.Item's grid: gutter ends at col 3, the 2-col cursor
+	// slot occupies cols 4-5 (the card's whitespace), the state
+	// glyph hits col 6 and content col 9 — identical columns to the
+	// static result card that replaces the form on submit. Other
+	// field types compensate with a leading space in their selector
+	// strings where geometry matters.
 	t.Focused.Base = lipgloss.NewStyle().
 		MarginLeft(1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderLeft(true).
 		BorderForeground(Palette.Accent).
-		PaddingLeft(2)
+		PaddingLeft(1)
 	t.Focused.Card = t.Focused.Base
 	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true)
 	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1)
@@ -341,14 +349,22 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Focused.Description = t.Focused.Description.Foreground(Palette.Muted)
 	t.Focused.ErrorIndicator = t.Focused.ErrorIndicator.Foreground(Palette.Error)
 	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(Palette.Error)
-	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(Palette.Accent)
+	// Single-select keeps its pre-shift geometry via a leading space
+	// (the base padding dropped from 2 to 1 for the multi-select grid
+	// below).
+	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(" > ")
 	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(Palette.Accent)
 	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(Palette.Accent)
 	t.Focused.Option = t.Focused.Option.Foreground(Palette.NormalFg)
-	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(Palette.Accent)
+	// Multi-select rows mirror Card.Item's grammar so the form and
+	// the static card that replaces it on submit share one grid:
+	// cursor in cols 4-5 (the card's whitespace), state glyph at
+	// col 6, two-space gap, content at col 9. ○/✓ match the result
+	// card's not-included/deploying vocabulary.
+	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString("> ")
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(Palette.Success)
-	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString("✓ ")
-	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("• ")
+	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString("✓  ")
+	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("○  ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
 		Foreground(Palette.ButtonFg).
