@@ -377,13 +377,25 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" ✓  ")
 	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" ○  ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
+	// Buttons render in a left-aligned row at the base origin (col 3),
+	// which glues the leftmost chip's background to the spine. Indent
+	// the row to ContentCol(0)=5 so the buttons sit off the spine like
+	// every other content row. huh joins the two chips with
+	// JoinHorizontal, so the margin lands on both; drop the chips'
+	// inherited MarginRight to keep the inter-button gap from
+	// widening, leaving one chip's left margin as the only separator.
+	buttonMargin := ContentCol(0) - (LeftPad + 1) - 1 // 5 - 2 - 1 = 2
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
 		Foreground(Palette.ButtonFg).
-		Background(Palette.Accent)
+		Background(Palette.Accent).
+		MarginLeft(buttonMargin).
+		MarginRight(0)
 	t.Focused.Next = t.Focused.FocusedButton
 	t.Focused.BlurredButton = t.Focused.BlurredButton.
 		Foreground(Palette.NormalFg).
-		Background(Palette.Recessed)
+		Background(Palette.Recessed).
+		MarginLeft(buttonMargin).
+		MarginRight(0)
 
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(Palette.Success)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.
