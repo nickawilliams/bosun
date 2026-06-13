@@ -139,16 +139,12 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 			}
 			wg.Wait()
 		})
-		// Order: Status → Story → Preview → Workspace. The helper
-		// prints Status and Story; the Story card prints without
-		// Tight (lifecycle commands want the comfy break after it),
-		// so we suppress the pending spacer manually to keep Preview
-		// flush in the meta block. Preview.Tight() chains the
-		// suppression into Workspace; Workspace is the last meta
-		// card and not Tight, so the trailing blank line separates
-		// the meta block from the per-repo cards that follow.
-		ui.ClearSpacer()
-		buildWorkspacePreviewCard(previewEnv, previewErr).Tight().Print()
+		// Order: Story → Preview → Workspace. Now that each meta card
+		// uses the title-plus-body layout (no inline " · value" to
+		// align), they read better separated than stacked tight — so
+		// none are Tight, and the normal connector break sits between
+		// each, matching the spacing of the per-repo cards below.
+		buildWorkspacePreviewCard(previewEnv, previewErr).Print()
 		buildWorkspaceBranchCard(wsName, updatedAt).Print()
 		// Drain captured events into the timeline now that the meta
 		// block has printed.
