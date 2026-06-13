@@ -688,12 +688,15 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 	case cardBodyRaw:
 		return b.lines
 	case cardBodyItem:
-		// One leading space so the glyph lands at col 6, aligning
-		// with Group child glyphs (which sit one column right of
-		// the parent's │ + 2-space gap).
+		// Item rows are level-1 content. The body connector prefix
+		// (" │  ") already advances to ContentCol(0); this lead then
+		// carries the glyph to GlyphCol(1) and the gap puts content at
+		// ContentCol(1) — the shared L1 grid (see layout.go).
+		lead := strings.Repeat(" ", GlyphCol(1)-ContentCol(0)) // 6-5 = 1
+		gap := strings.Repeat(" ", GlyphGap)
 		out := make([]string, len(b.items))
 		for i, item := range b.items {
-			out[i] = " " + item.glyph + "  " + item.content
+			out[i] = lead + item.glyph + gap + item.content
 		}
 		return out
 	case cardBodyTable:

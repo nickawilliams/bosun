@@ -322,49 +322,60 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// NewTimelineLayout — see form_layout.go for the rationale.
 	t.FieldSeparator = lipgloss.NewStyle().SetString("\n │\n")
 
-	// Align huh's focused form with the card timeline: 1 space of
-	// left margin, a normal-weight │ border in the accent color,
-	// and 1 space of inner padding. Callers that want a "?" glyph
-	// on the first row should print a CardInput title card before
-	// invoking the form; the form itself only draws the connector,
-	// which matches the CardInput card's own connector color.
+	// Align huh's focused form with the card grid (see layout.go).
+	// The form is a card at level 0: 1 space of left margin, then a
+	// normal-weight │ border at GlyphCol(0)=col2 in the accent color,
+	// and ZERO inner padding so a field's leading character lands at
+	// col 3 — GlyphCol(0)+1, the spine-anchored focus-cursor column.
+	// Callers that want a "?" glyph on the first row print a CardInput
+	// title card before the form; the form itself only draws the
+	// connector, matching that card's connector color.
 	//
-	// The 1-space inner padding (not 2) makes multi-select rows land
-	// on Card.Item's grid: gutter ends at col 3, the 2-col cursor
-	// slot occupies cols 4-5 (the card's whitespace), the state
-	// glyph hits col 6 and content col 9 — identical columns to the
-	// static result card that replaces the form on submit. Other
-	// field types compensate with a leading space in their selector
-	// strings where geometry matters.
+	// From the col-3 origin, per-element offsets reach each field's
+	// grid target:
+	//   - Title/description/buttons: MarginLeft(2) → ContentCol(0)=5.
+	//   - Text input / single select: the "> " prompt/selector puts
+	//     ">" at col 3 and the value/option at ContentCol(0)=5.
+	//   - Multi-select: "> " cursor at col 3, then a " ✓  "/" ○  "
+	//     prefix mirroring Card.Item's " glyph  content" cell, landing
+	//     the state glyph at GlyphCol(1)=6 and content at
+	//     ContentCol(1)=9 — identical to the static card that replaces
+	//     the form on submit.
+	// Field titles/descriptions render one column inboard of input and
+	// option rows in huh (the input prompt sits at the base origin;
+	// the title line carries an extra leading column). So the title
+	// compensation to reach ContentCol(0)=5 is one less than an input
+	// row's: titlePad lands the title at col 5, where the value/option
+	// rows already sit via their "> " prompt/selector.
+	titlePad := ContentCol(0) - (LeftPad + 1) - 1 // 5 - 2 - 1 = 2
 	t.Focused.Base = lipgloss.NewStyle().
-		MarginLeft(1).
+		MarginLeft(LeftPad).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderLeft(true).
 		BorderForeground(Palette.Accent).
-		PaddingLeft(1)
+		PaddingLeft(0)
 	t.Focused.Card = t.Focused.Base
-	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true)
-	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1)
+	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true).MarginLeft(titlePad)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1).MarginLeft(titlePad)
 	t.Focused.Directory = t.Focused.Directory.Foreground(Palette.Primary)
-	t.Focused.Description = t.Focused.Description.Foreground(Palette.Muted)
+	t.Focused.Description = t.Focused.Description.Foreground(Palette.Muted).MarginLeft(titlePad)
 	t.Focused.ErrorIndicator = t.Focused.ErrorIndicator.Foreground(Palette.Error)
 	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(Palette.Error)
-	// Single-select keeps its pre-shift geometry via a leading space
-	// (the base padding dropped from 2 to 1 for the multi-select grid
-	// below).
-	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(" > ")
+	// Single-select: "> " cursor at the spine (col 3), option text at
+	// ContentCol(0)=5 — aligned with the field title, since a select
+	// yields one value like a text input.
+	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString("> ")
 	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(Palette.Accent)
 	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(Palette.Accent)
 	t.Focused.Option = t.Focused.Option.Foreground(Palette.NormalFg)
-	// Multi-select rows mirror Card.Item's grammar so the form and
-	// the static card that replaces it on submit share one grid:
-	// cursor in cols 4-5 (the card's whitespace), state glyph at
-	// col 6, two-space gap, content at col 9. ○/✓ match the result
-	// card's not-included/deploying vocabulary.
+	// Multi-select: cursor at the spine (col 3); the prefix's leading
+	// space + glyph + GlyphGap mirrors Card.Item so the state glyph
+	// lands at GlyphCol(1)=6 and content at ContentCol(1)=9. ○/✓ match
+	// the result card's not-included/deploying vocabulary.
 	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString("> ")
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(Palette.Success)
-	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString("✓  ")
-	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("○  ")
+	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" ✓  ")
+	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" ○  ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
 		Foreground(Palette.ButtonFg).
@@ -394,10 +405,7 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 
 	// Help footer: keys + descriptions in recessed muted gray so
 	// the shortcut hints sit quietly beneath the active prompt
-	// without competing with the card timeline above. Indented
-	// with a left margin so it aligns under the prompt content,
-	// matching the 1-space outer pad + 1-col border + 2-col inner
-	// padding used by the focused card.
+	// without competing with the card timeline above.
 	helpKey := lipgloss.NewStyle().Foreground(Palette.Muted)
 	helpDesc := lipgloss.NewStyle().Foreground(Palette.Subtle)
 	helpSep := lipgloss.NewStyle().Foreground(Palette.Recessed)
