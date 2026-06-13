@@ -43,6 +43,15 @@ const (
 	GlyphGap   = 2
 )
 
+// FocusMarker prefixes the focused field in a form — the cursor that
+// pins to GlyphCol(L)+1, flush right of the spine. A single-width
+// glyph plus a trailing space, so a single-value field's content
+// lands at ContentCol(L). Shared by the theme's select selectors
+// (SetString) and the cli's text-input constructors (.Prompt), since
+// lipgloss can't inject the string into the input prompt via the
+// theme without doubling it onto bubbles' default "> ".
+const FocusMarker = "❭ "
+
 // GlyphCol returns the 1-indexed column of a level-L glyph or spine.
 func GlyphCol(level int) int {
 	return LeftPad + 1 + level*IndentUnit

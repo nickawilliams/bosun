@@ -266,7 +266,7 @@ func resolveConfigKey(groupName string, ck ConfigKey, silent bool) error {
 		var val string
 		rewind := ui.NewCard(ui.CardInput, ck.Label).Tight().PrintRewindable()
 		if err := runForm(
-			huh.NewInput().
+			rawInput().
 				Placeholder("set for this session").
 				EchoMode(huh.EchoModePassword).
 				Value(&val),

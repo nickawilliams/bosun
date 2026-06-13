@@ -339,7 +339,7 @@ func demoFormStatic() {
 		Tight().Print()
 
 	snapshotForm(
-		huh.NewInput().
+		rawInput().
 			Title("Summary").
 			Placeholder("add user authentication flow").
 			Value(&summary),
@@ -466,7 +466,7 @@ func demoForms() error {
 	nameTitle := "form: single input"
 	rewind := ui.NewCard(ui.CardInput, nameTitle).Tight().PrintRewindable()
 	if err := runForm(
-		huh.NewInput().
+		rawInput().
 			Description("Used as the worktree directory name").
 			Placeholder("my-workspace").
 			Value(&name),
@@ -504,7 +504,7 @@ func demoForms() error {
 	rewind = ui.NewCard(ui.CardInput, createTitle).Tight().
 		PrintRewindable()
 	if err := runForm(
-		huh.NewInput().
+		rawInput().
 			Title("Summary").
 			Placeholder("Add user authentication flow").
 			Value(&issueSummary),
@@ -643,9 +643,9 @@ func demoSummaryInteractive() error {
 	title := "summary: counts"
 	rewind := ui.NewCard(ui.CardInput, title).Tight().PrintRewindable()
 	if err := runForm(
-		huh.NewInput().Title("Passed").Value(&passedStr),
-		huh.NewInput().Title("Warnings").Value(&warnedStr),
-		huh.NewInput().Title("Failed").Value(&failedStr),
+		rawInput().Title("Passed").Value(&passedStr),
+		rawInput().Title("Warnings").Value(&warnedStr),
+		rawInput().Title("Failed").Value(&failedStr),
 	); err != nil {
 		return err
 	}

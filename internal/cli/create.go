@@ -29,6 +29,7 @@ func newCreateCmd() *cobra.Command {
 				if title == "" {
 					fields = append(fields, huh.NewInput().
 						Title("Title").
+						Prompt(ui.FocusMarker).
 						Value(&title))
 				}
 				if description == "" {

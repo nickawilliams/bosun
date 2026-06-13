@@ -27,10 +27,18 @@ func transformFieldTitle(s string) string {
 
 // newInput is the cli's standard huh.Input constructor. Same as
 // huh.NewInput().Title(title) but the title is normalized via
-// transformFieldTitle so casing is consistent across forms. Use
-// instead of huh.NewInput when setting a Title.
+// transformFieldTitle so casing is consistent across forms, and the
+// prompt uses the shared focus marker. Use instead of huh.NewInput
+// when setting a Title.
 func newInput(title string) *huh.Input {
-	return huh.NewInput().Title(transformFieldTitle(title))
+	return huh.NewInput().Title(transformFieldTitle(title)).Prompt(ui.FocusMarker)
+}
+
+// rawInput is huh.NewInput() with only the shared focus-marker prompt
+// applied — for inputs that don't set a Title through newInput (secret
+// fields, value-only prompts) but still need the consistent cursor.
+func rawInput() *huh.Input {
+	return huh.NewInput().Prompt(ui.FocusMarker)
 }
 
 // newText — see newInput.
@@ -183,7 +191,7 @@ func promptRequired(label string) string {
 
 	var value string
 	rewind := ui.NewCard(ui.CardInput, label).Tight().PrintRewindable()
-	if err := runForm(huh.NewInput().Value(&value)); err != nil {
+	if err := runForm(rawInput().Value(&value)); err != nil {
 		return ""
 	}
 	rewind()
@@ -260,7 +268,7 @@ func promptValue(label, defaultVal string) (string, error) {
 	}
 
 	value := defaultVal
-	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
+	if err := runForm(huh.NewInput().Title(label).Prompt(ui.FocusMarker).Value(&value)); err != nil {
 		return defaultVal, err
 	}
 	return value, nil
@@ -288,7 +296,7 @@ func (f *defaultField) Resolved() string {
 // returned input.
 func newDefaultInput(fallback string) (*huh.Input, *defaultField) {
 	f := &defaultField{fallback: fallback}
-	return huh.NewInput().Placeholder(fallback).Value(&f.value), f
+	return huh.NewInput().Placeholder(fallback).Prompt(ui.FocusMarker).Value(&f.value), f
 }
 
 // promptDefault displays a prompt with a default shown as placeholder text.

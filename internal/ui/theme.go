@@ -364,7 +364,7 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// Single-select: "> " cursor at the spine (col 3), option text at
 	// ContentCol(0)=5 — aligned with the field title, since a select
 	// yields one value like a text input.
-	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString("> ")
+	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(FocusMarker)
 	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(Palette.Accent)
 	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(Palette.Accent)
 	t.Focused.Option = t.Focused.Option.Foreground(Palette.NormalFg)
@@ -372,7 +372,7 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// space + glyph + GlyphGap mirrors Card.Item so the state glyph
 	// lands at GlyphCol(1)=6 and content at ContentCol(1)=9. ○/✓ match
 	// the result card's not-included/deploying vocabulary.
-	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString("> ")
+	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(FocusMarker)
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(Palette.Success)
 	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" ✓  ")
 	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" ○  ")
