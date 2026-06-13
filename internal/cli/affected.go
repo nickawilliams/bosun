@@ -780,16 +780,27 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 	for _, sr := range sources {
 		r := sr.res
 		switch {
+		case withPRs && len(r.Services) == 0 && sr.prErr != nil:
+			// PR lookup failed — surface it regardless of whether the
+			// repo had changes. An unchanged repo whose lookup errored
+			// would otherwise mask as a plain "no changes" row and
+			// silently keep itself out of the selection form (a PR is
+			// what makes a repo selectable). ✗ so the user can retry.
+			nFail++
+			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
 		case !r.HasChanges && len(r.Services) == 0:
 			// Unchanged and nothing toggled on — one compact receded
 			// row instead of a ○ row per service. When the user DID
 			// toggle services on (redeploy without changes), the
 			// default branch renders the per-service pairs instead.
+			// A "no PR" note when the branch has none, since under
+			// PR-backed selection that's why it wasn't offered.
 			nSkip++
-			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, "no changes")})
-		case withPRs && r.HasChanges && sr.prErr != nil:
-			nFail++
-			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
+			msg := "no changes"
+			if withPRs && sr.pr.Number == 0 {
+				msg = "no changes · no PR"
+			}
+			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, msg)})
 		case withPRs && r.HasChanges && sr.pr.Number == 0:
 			nSkip++
 			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
