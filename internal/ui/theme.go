@@ -411,6 +411,17 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Blurred.Card = t.Blurred.Base
 	t.Blurred.NextIndicator = lipgloss.NewStyle()
 	t.Blurred.PrevIndicator = lipgloss.NewStyle()
+	// The accent ">" marker means "this field has focus." Every field
+	// type must drop it when blurred — a select pulls its selector
+	// from the blurred styles (field_select activeStyles), and without
+	// these overrides it would inherit the focused accent and stay
+	// pink while focus moved elsewhere. NormalFg matches the text
+	// input's blurred prompt, so the focus color flips uniformly
+	// (NormalFg when blurred → Accent when focused) across input,
+	// single-select, and multi-select.
+	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(Palette.NormalFg)
+	t.Blurred.MultiSelectSelector = t.Blurred.MultiSelectSelector.Foreground(Palette.NormalFg)
+	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(Palette.NormalFg)
 
 	t.Group.Title = t.Focused.Title
 	t.Group.Description = t.Focused.Description
