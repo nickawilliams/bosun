@@ -52,8 +52,24 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		return nil, nil, err
 	}
 
-	// --- Pre-flight: gather per-repo readiness (local git, fast) ---
+	readiness, repoBranch, anyUnpushed, err := gatherRepoReadiness(ctx, g, repos)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := emitWorkspaceReadiness(ctx, g, readiness, anyUnpushed); err != nil {
+		return nil, nil, err
+	}
 
+	return repos, repoBranch, nil
+}
+
+// gatherRepoReadiness collects each repo's pre-flight git state —
+// current branch, unpushed-commit count, dirty working tree — in one
+// pass (all local git calls, fast). The returned slice feeds
+// emitWorkspaceReadiness; the repoBranch map is a name→branch
+// convenience for callers; anyUnpushed short-circuits the push offer.
+// Shared by the deploy flow (preview/release) and review.
+func gatherRepoReadiness(ctx context.Context, g vcs.VCS, repos []Repository) ([]repoReadiness, map[string]string, bool, error) {
 	repoBranch := make(map[string]string, len(repos))
 	readiness := make([]repoReadiness, 0, len(repos))
 	anyUnpushed := false
@@ -61,12 +77,12 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 	for _, r := range repos {
 		branch, err := g.GetCurrentBranch(ctx, r.Path)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
+			return nil, nil, false, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
 		}
 		repoBranch[r.Name] = branch
 		n, err := g.UnpushedCommits(ctx, r.Path, branch)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
+			return nil, nil, false, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
 		}
 		dirty, _ := g.IsDirty(ctx, r.Path)
 		if n != 0 {
@@ -77,11 +93,16 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		})
 	}
 
-	if err := emitWorkspaceReadiness(ctx, g, readiness, anyUnpushed); err != nil {
-		return nil, nil, err
-	}
+	return readiness, repoBranch, anyUnpushed, nil
+}
 
-	return repos, repoBranch, nil
+// hasRemoteBranch reports whether this repo's branch exists on the
+// remote — true when it was already pushed (unpushed != -1) or got
+// pushed during this run. review uses it to decide whether a PR can
+// be opened: a never-pushed branch has no remote head ref to base a
+// PR on.
+func (rr repoReadiness) hasRemoteBranch() bool {
+	return rr.unpushed != -1 || rr.pushed
 }
 
 // emitWorkspaceReadiness renders the "Workspace Readiness" section: the

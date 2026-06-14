@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -82,10 +81,17 @@ func newReviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("code host: %v", hostErr))
 			}
 
-			// --- Pre-flight: resolve repos, branches, remotes ---
+			// --- Pre-flight: Workspace Readiness + repo identities ---
+			//
+			// Shared readiness section (same as preview/release): one
+			// card per repo with the push offer + dirty gate folded in.
+			// Pushing is optional here too, but with a review-specific
+			// consequence — a never-pushed branch has no remote head
+			// ref, so it can't be the base of a PR. Those repos drop out
+			// of PR creation with a note; pushed-but-behind repos open
+			// PRs that simply lag their local commits.
 
 			gitClient := git.New()
-			r := ui.Default()
 
 			type repoContext struct {
 				repo     Repository
@@ -95,27 +101,33 @@ func newReviewCmd() *cobra.Command {
 			}
 			var resolved []repoContext
 
-			r.Group("resolve repository identities", func(g ui.Reporter) {
-				for _, repo := range repositories {
-					branch, err := gitClient.GetCurrentBranch(ctx, repo.Path)
-					if err != nil {
-						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
-						continue
-					}
+			readiness, _, anyUnpushed, err := gatherRepoReadiness(ctx, gitClient, repositories)
+			if err != nil {
+				return err
+			}
+			if err := emitWorkspaceReadiness(ctx, gitClient, readiness, anyUnpushed); err != nil {
+				return err // ErrCancelled (dirty gate) propagates as a clean abort
+			}
 
-					identity, err := gh.ParseRemote(ctx, repo.Path)
-					if err != nil {
-						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
-						continue
-					}
-
-					resolved = append(resolved, repoContext{
-						repo: repo, branch: branch,
-						owner: identity.Owner, repoName: identity.Name,
-					})
-					g.SelectedIdentifier(repo.Name, fmt.Sprintf("%s → %s/%s", branch, identity.Owner, identity.Name))
+			// Resolve identities for the repos that can actually be
+			// reviewed. A never-pushed-and-not-pushed branch is skipped:
+			// GitHub has no head ref to open a PR against.
+			for i := range readiness {
+				rr := &readiness[i]
+				if !rr.hasRemoteBranch() {
+					ui.SkipValue(ui.PreserveCase(rr.repo.Name), "not pushed — no remote branch to review")
+					continue
 				}
-			})
+				identity, err := gh.ParseRemote(ctx, rr.repo.Path)
+				if err != nil {
+					ui.Fail(fmt.Sprintf("%s: %v", rr.repo.Name, err))
+					continue
+				}
+				resolved = append(resolved, repoContext{
+					repo: rr.repo, branch: rr.branch,
+					owner: identity.Owner, repoName: identity.Name,
+				})
+			}
 
 			// Use first repo's identity for API calls (list endpoints).
 			var apiOwner, apiRepo string
@@ -248,91 +260,6 @@ func newReviewCmd() *cobra.Command {
 					return err
 				}
 				assignees = selected
-			}
-
-			// --- Pre-flight: push check ---
-
-			type unpushedRepo struct {
-				rc    repoContext
-				count int // -1 = never pushed, >0 = commits ahead
-			}
-			var needsPush []unpushedRepo
-
-			for _, rc := range resolved {
-				n, err := gitClient.UnpushedCommits(ctx, rc.repo.Path, rc.branch)
-				if err != nil {
-					ui.Fail(fmt.Sprintf("%s: %v", rc.repo.Name, err))
-					continue
-				}
-				if n != 0 {
-					needsPush = append(needsPush, unpushedRepo{rc: rc, count: n})
-				}
-			}
-
-			if len(needsPush) > 0 {
-				mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-				normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-				var repoLines []string
-				for _, up := range needsPush {
-					status := "not yet pushed"
-					if up.count > 0 {
-						status = fmt.Sprintf("%d unpushed commit(s)", up.count)
-					}
-					repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-						mutedStyle.Render(up.rc.repo.Name),
-						mutedStyle.Render(ui.Palette.Dot),
-						normalStyle.Render(status)))
-				}
-
-				promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-					"\n\n" + strings.Join(repoLines, "\n")
-
-				headerRewind := ui.NewCard(ui.CardInput, "unpushed commits detected").Tight().PrintRewindable()
-
-				confirmed := true
-				if isInteractive() {
-					if err := runForm(
-						newConfirm().
-							Title(promptContent).
-							Affirmative("Yes").
-							Negative("No").
-							Value(&confirmed),
-					); err != nil {
-						return err
-					}
-				}
-				if !confirmed {
-					headerRewind()
-					ui.NewCard(ui.CardSkipped, "push declined").Print()
-					return fmt.Errorf("aborted: unpushed commits")
-				}
-				headerRewind()
-
-				// One spinner program for the whole push cycle
-				// (RunCardSteps) — per-repo slot programs flashed blank
-				// at every program boundary. The final frame morphs
-				// into the pushed-summary card.
-				steps := make([]ui.CardStep, 0, len(needsPush))
-				for _, up := range needsPush {
-					steps = append(steps, ui.CardStep{
-						Card: ui.NewCard(ui.CardRunning, "pushing").Value(up.rc.repo.Name),
-						Run: func() error {
-							if err := gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch); err != nil {
-								return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
-							}
-							return nil
-						},
-					})
-				}
-				pushedPairs := make([]string, 0, len(needsPush)*2)
-				for _, up := range needsPush {
-					pushedPairs = append(pushedPairs, up.rc.repo.Name, up.rc.branch)
-				}
-				if _, err := ui.RunCardSteps(steps, func() *ui.Card {
-					return ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...)
-				}); err != nil {
-					return err
-				}
 			}
 
 			// --- Plan + Apply ---
