@@ -146,7 +146,17 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		return code.PullRequest{}, nil
 	}
 
+	// The query is state=all, so a branch reused after a closed/merged
+	// PR returns multiple results. Prefer an open PR (the active one a
+	// caller cares about — review modifies it, status shows it); fall
+	// back to results[0] (most recent) for closed/merged-only display.
 	raw := results[0]
+	for _, r := range results {
+		if r.State == "open" {
+			raw = r
+			break
+		}
+	}
 	state := raw.State
 	if raw.MergedAt != nil {
 		state = "merged"

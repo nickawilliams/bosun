@@ -200,6 +200,43 @@ func TestGetPRForBranchMerged(t *testing.T) {
 	}
 }
 
+func TestGetPRForBranchPrefersOpen(t *testing.T) {
+	// state=all returns a closed PR (older, listed first) and a newer
+	// open one for the same branch — GetPRForBranch must pick the open.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			_ = json.NewEncoder(w).Encode([]any{})
+		case strings.HasSuffix(r.URL.Path, "/requested_reviewers"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"users": []any{}, "teams": []any{}})
+		case strings.Contains(r.URL.Path, "/pulls/8"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"mergeable_state": "clean"})
+		default:
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"number": 7, "state": "closed", "merged_at": nil,
+					"html_url": "https://github.com/org/repo/pull/7"},
+				{"number": 8, "state": "open", "merged_at": nil,
+					"html_url": "https://github.com/org/repo/pull/8",
+					"head":     map[string]any{"sha": "cafe"}},
+			})
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	pr, err := a.GetPRForBranch(context.Background(), "org", "repo", "branch")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if pr.Number != 8 {
+		t.Errorf("Number = %d, want 8 (the open PR, not the closed #7)", pr.Number)
+	}
+	if pr.State != "open" {
+		t.Errorf("State = %q, want %q", pr.State, "open")
+	}
+}
+
 func TestGetPRForBranchNone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]any{})

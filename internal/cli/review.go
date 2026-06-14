@@ -307,10 +307,16 @@ func newReviewCmd() *cobra.Command {
 								return 0, "", err
 							}
 
-							if existing.Number == 0 {
-								// PR doesn't exist — Apply will create
-								// it and apply all requested
-								// reviewers/teams/assignees fresh.
+							// A closed or merged PR is not an active PR —
+							// the branch can be the head of a fresh one.
+							// Only an open/draft PR is "existing" for the
+							// modify path; anything else means create.
+							active := existing.Number > 0 &&
+								(existing.State == "open" || existing.State == "draft")
+							if !active {
+								// No active PR (none, or only closed/merged)
+								// — Apply creates a new one and applies all
+								// requested reviewers/teams/assignees fresh.
 								state.missingRevs = reviewers
 								state.missingTeams = teamReviewers
 								state.missingAsns = assignees
