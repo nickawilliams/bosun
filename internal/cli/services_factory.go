@@ -18,7 +18,7 @@ type Services struct {
 	CodeHost        func() (code.Host, error)
 	CICD            func() (cicd.CICD, error)
 	Notifier        func() (notify.Notifier, error)
-	PreviewProvider func(workspace string, onInfo func(action, value string)) (preview.Provider, error)
+	PreviewProvider func(workspace string) (preview.Provider, error)
 }
 
 // services is the active factory set. Replaced by SetServices in tests;
@@ -29,7 +29,7 @@ type Services struct {
 // invocations), but the compiler's init-order analysis traces through
 // function bodies regardless of whether they're called. The path
 //
-//	services -> defaultServices -> newPreviewProviderWithInfoImpl ->
+//	services -> defaultServices -> newPreviewProviderImpl ->
 //	    newIssueTracker -> services
 //
 // trips the cycle detector at var-init time. init() defers the
@@ -49,7 +49,7 @@ func defaultServices() *Services {
 		CodeHost:        newCodeHostImpl,
 		CICD:            newCICDImpl,
 		Notifier:        newNotifierImpl,
-		PreviewProvider: newPreviewProviderWithInfoImpl,
+		PreviewProvider: newPreviewProviderImpl,
 	}
 }
 
@@ -79,6 +79,6 @@ func newIssueTracker() (issue.Tracker, error) { return services.IssueTracker() }
 func newCodeHost() (code.Host, error)         { return services.CodeHost() }
 func newCICD() (cicd.CICD, error)             { return services.CICD() }
 func newNotifier() (notify.Notifier, error)   { return services.Notifier() }
-func newPreviewProviderWithInfo(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
-	return services.PreviewProvider(workspace, onInfo)
+func newPreviewProvider(workspace string) (preview.Provider, error) {
+	return services.PreviewProvider(workspace)
 }

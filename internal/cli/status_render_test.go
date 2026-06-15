@@ -210,6 +210,7 @@ func TestStatusPreviewRow(t *testing.T) {
 		{name: "no env bound → skip", err: preview.ErrNoEnvironment, wantEmpty: true},
 		{name: "other error with no name → skip", err: errors.New("boom"), wantEmpty: true},
 		{name: "alive → ● + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
+		{name: "probed dead → ● + unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: false}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unreachable)"},
 		{name: "indeterminate with name → ●", env: preview.Environment{Name: "brave-falcon", URL: "https://x"}, err: &preview.ProbeError{URL: "https://x"}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unverified)"},
 		{name: "unprobable (no URL template) → ●", env: preview.Environment{Name: "brave-falcon"}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
 	}
@@ -247,6 +248,7 @@ func TestStatusPreviewValue(t *testing.T) {
 		{name: "indeterminate with name", env: preview.Environment{Name: "brave-falcon"}, err: &preview.ProbeError{URL: "https://x"}, want: "(unverified)"},
 		{name: "indeterminate empty name → none", err: &preview.ProbeError{URL: "https://x"}, want: "(none)"},
 		{name: "alive", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, want: "brave-falcon"},
+		{name: "probed dead → unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: false}, want: "(unreachable)"},
 		{name: "unprobable", env: preview.Environment{Name: "brave-falcon"}, want: "brave-falcon"},
 	}
 	for _, tc := range cases {

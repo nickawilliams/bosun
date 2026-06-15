@@ -697,29 +697,14 @@ func newCICDImpl() (cicd.CICD, error) {
 	}
 }
 
-// newPreviewProvider creates a preview.Provider with the default
-// OnInfo callback that renders incidental events inline as a success
-// card with a title (the action, title-cased by default) and a muted
-// raw-cased value. Suitable for commands where side-effect notifications
-// can fire immediately alongside other output (e.g., the preview command
-// itself).
-func newPreviewProvider(workspace string) (preview.Provider, error) {
-	return newPreviewProviderWithInfo(workspace, func(action, value string) {
-		ui.NewCard(ui.CardSuccess, action).Value(value).Print()
-	})
-}
-
-// newPreviewProviderWithInfo creates a preview.Provider with a custom
-// OnInfo sink — useful when callers want to buffer side-effect events
-// (e.g., the status command at project scope, which captures
-// per-workspace cleanup notices and prints them after the relevant
-// card so they don't race with the loading spinner).
+// newPreviewProviderImpl creates a preview.Provider for the given
+// workspace.
 //
 // The pipeline and tracker are optional — if either is unavailable,
 // the returned provider still supports the read paths (Get, Inspect)
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
-func newPreviewProviderWithInfoImpl(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
+func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
@@ -755,7 +740,6 @@ func newPreviewProviderWithInfoImpl(workspace string, onInfo func(action, value 
 			return out, nil
 		},
 		InputName: stageInputName,
-		OnInfo:    onInfo,
 	}), nil
 }
 

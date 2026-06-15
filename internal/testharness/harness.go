@@ -227,9 +227,9 @@ func notInstalled[T any](t *testing.T, name string) func() (T, error) {
 }
 
 // notInstalledPreview is the preview-provider variant of notInstalled
-// (the signature differs because PreviewProvider takes parameters).
-func notInstalledPreview(t *testing.T) func(string, func(string, string)) (preview.Provider, error) {
-	return func(_ string, _ func(string, string)) (preview.Provider, error) {
+// (the signature differs because PreviewProvider takes a parameter).
+func notInstalledPreview(t *testing.T) func(string) (preview.Provider, error) {
+	return func(_ string) (preview.Provider, error) {
 		t.Fatalf("test invoked PreviewProvider factory but no fake was installed")
 		return nil, fmt.Errorf("no PreviewProvider fake installed")
 	}

@@ -423,6 +423,12 @@ func statusPreviewValue(env preview.Environment, err error) string {
 	if env.URL != "" {
 		v = osc8Link(env.URL, v)
 	}
+	if env.Probed && !env.Alive {
+		// Bound but the probe got a definitive 404 — torn down, or a
+		// just-triggered deploy still in flight. Surface the binding so
+		// it isn't lost, marked so the reader knows it isn't reachable.
+		v += " " + muted.Render("(unreachable)")
+	}
 	return v
 }
 
@@ -431,10 +437,10 @@ func statusPreviewValue(env preview.Environment, err error) string {
 // decides whether to skip vs render "(none)" based on scope).
 //
 // Render shapes:
-//   - alive (probed + alive)        → ✓ Success, name (linked to URL)
-//   - indeterminate (ProbeError)    → ? Muted, name (linked) + (unverified) muted suffix
-//   - unprobable (no URL template)  → ◦ Muted, name (no link)
-//   - bound but probed dead         → handled by adapter auto-clear; surfaces as no-env
+//   - alive (probed + alive)        → ● RoleOpen, name (linked to URL)
+//   - indeterminate (ProbeError)    → ● RoleNeutral, name (linked) + (unverified) suffix
+//   - bound but probed dead (404)   → ● RoleNeutral, name (linked) + (unreachable) suffix
+//   - unprobable (no URL template)  → ● RoleNeutral, name (no link)
 //   - no env bound (ErrNoEnvironment or any other error) → ("", "") signaling skip
 func statusPreviewRow(env preview.Environment, err error) (string, string) {
 	if errors.Is(err, preview.ErrNoEnvironment) {
@@ -470,6 +476,17 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
 		}
+		return glyph, v
+	case env.Probed && !env.Alive:
+		// Bound but probed dead (definitive 404) — torn down, or a
+		// just-triggered deploy still in flight. Surface the binding so
+		// it isn't lost, marked unreachable.
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
+		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render("(unreachable)")
 		return glyph, v
 	default:
 		// Unprobable (no URL template): show the name in neutral so
