@@ -400,7 +400,18 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(Palette.Success)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.
 		Foreground(Palette.Border)
-	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(Palette.Accent)
+	// Pin the prompt column to a fixed 2-cell width. The prompt sits at
+	// the post-border origin (GlyphCol(0)+1=col3), so a 2-cell prompt
+	// lands content at ContentCol(0)=col5 — aligned with field titles and
+	// option rows. The single-line input's "❭ " prompt is already 2 cells
+	// wide, so Width is a no-op for it; the multi-line textarea's prompt
+	// is forced empty by huh (field_text.go), and without this its lines
+	// would render flush against the spine. Width pads that empty prompt
+	// out to the same 2 cells on every row.
+	promptWidth := ContentCol(0) - (GlyphCol(0) + 1) // 5 - 3 = 2
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.
+		Foreground(Palette.Accent).
+		Width(promptWidth)
 
 	t.Blurred = t.Focused
 	// Blurred (inactive) fields keep a visible left gutter in the
