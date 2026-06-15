@@ -225,10 +225,14 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
 		if anyDirty {
 			// Gate variant: rows + a blank connector row above the
-			// Continue/Cancel buttons huh renders beneath.
+			// Continue/Cancel buttons huh renders beneath. AccentBody so
+			// the per-repo row connectors read pink like the buttons —
+			// the card body and the bare-button form are one
+			// accent-spined prompt (the single-input timeline rule; see
+			// Card.AccentBody).
 			gate := buildWorkspaceReadinessCard(readiness)
 			gate.Text("")
-			return gate.Tight()
+			return gate.AccentBody().Tight()
 		}
 		return buildWorkspaceReadinessCard(readiness)
 	})
