@@ -120,6 +120,37 @@ print a "now run `cd …`" hint.
 - [ ] Combobox-style picker with server-side search (OptionsFunc or custom
   bubbletea model) replacing the current select + manual-entry two-step
 
+### Dialog / Prompt Primitive
+
+A prompt primitive that owns both the heading card and the form together,
+generalizing today's `Dialog` (which only wraps a binary `huh.Confirm`).
+
+**Why:** Two recurring gaps. (1) `huh.Confirm` caps at two buttons, so 3+-button
+prompts aren't expressible — e.g. the preview adopt-conflict prompt wants
+`[Adopt] [New Name] [Cancel]` but currently ships as a binary `[Adopt] [New
+Name]` with ctrl+c standing in for Cancel. (2) The single-input timeline rule
+(when a form has one input, the whole card spine reads accent, not just the
+focused field) is a manual convention: hand-rolled `slot.Show(card)` + `runForm`
+prompts must remember `Card.AccentBody()`, and silently deviate when they don't
+(the preview adopt card regressed this until fixed). The card can't infer it
+because it doesn't know whether a single- or multi-input form follows.
+
+**Scope:**
+- [ ] N-button selector field (horizontal chips using the theme's button styles,
+  left/right + tab + enter, esc/ctrl+c cancel) — or a custom bubbletea model —
+  since huh has no native 3+-button or horizontal-button widget.
+- [ ] Primitive owns the card + form; applies `AccentBody()` automatically for
+  single-input forms and leaves it off for multi-input, so the timeline rule
+  can't be violated by hand-rolling.
+- [ ] Codify button ordering for consistency. Today order is convention only:
+  `huh.Confirm` renders affirmative-left / negative-right, and callers happen to
+  assign the dismiss action (Cancel/Stop/No) to negative so it lands rightmost —
+  but nothing enforces it, and a caller could put Cancel on the left. Decide and
+  enforce a rule (e.g. a dedicated dismiss slot that always renders last) so
+  proceed/dismiss positions are stable across every prompt.
+- [ ] Fold the existing binary `Dialog` into it, and migrate hand-rolled prompts
+  (preview adopt, typeahead helpers) onto it.
+
 ## Future Ideas
 
 - OAuth authentication for Jira (browser-based 3LO flow, refresh token in
