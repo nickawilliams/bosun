@@ -185,11 +185,12 @@ func newPrereleaseCmd() *cobra.Command {
 						},
 						Apply: func(ctx context.Context) error {
 							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
-								Owner:      rt.owner,
-								Repository: rt.repoName,
-								Tag:        rt.nextVersion,
-								Target:     rt.branch,
-								Name:       rt.nextVersion,
+								Owner:         rt.owner,
+								Repository:    rt.repoName,
+								Tag:           rt.nextVersion,
+								Target:        rt.branch,
+								Name:          rt.nextVersion,
+								GenerateNotes: true,
 							})
 							if err != nil {
 								return err

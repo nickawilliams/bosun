@@ -373,6 +373,9 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 		"name":             req.Name,
 		"body":             req.Body,
 	}
+	if req.GenerateNotes {
+		body["generate_release_notes"] = true
+	}
 
 	path := fmt.Sprintf("/repos/%s/%s/releases", req.Owner, req.Repository)
 	resp, err := a.doRequest(ctx, http.MethodPost, path, body)

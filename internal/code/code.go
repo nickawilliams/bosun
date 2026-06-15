@@ -91,6 +91,12 @@ type CreateReleaseRequest struct {
 	Target     string // Branch or commit SHA to tag
 	Name       string // Release title
 	Body       string // Release notes
+
+	// GenerateNotes asks the host to auto-generate release notes — a
+	// changelog from the merged PRs/commits since the previous tag —
+	// into the release body. When Body is also set, the host appends the
+	// generated notes to it.
+	GenerateNotes bool
 }
 
 // Host defines code hosting operations needed by bosun.

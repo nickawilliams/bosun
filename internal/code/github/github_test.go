@@ -261,6 +261,9 @@ func TestCreateRelease(t *testing.T) {
 		if body["tag_name"] != "v1.2.4" {
 			t.Errorf("tag_name = %v, want v1.2.4", body["tag_name"])
 		}
+		if body["generate_release_notes"] != true {
+			t.Errorf("generate_release_notes = %v, want true", body["generate_release_notes"])
+		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": "v1.2.4",
@@ -272,11 +275,12 @@ func TestCreateRelease(t *testing.T) {
 	a := NewWithClient(server.Client(), server.URL, "token")
 
 	rel, err := a.CreateRelease(context.Background(), code.CreateReleaseRequest{
-		Owner:  "org",
-		Repository: "repo",
-		Tag:    "v1.2.4",
-		Target: "main",
-		Name:   "v1.2.4",
+		Owner:         "org",
+		Repository:    "repo",
+		Tag:           "v1.2.4",
+		Target:        "main",
+		Name:          "v1.2.4",
+		GenerateNotes: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateRelease() error: %v", err)
