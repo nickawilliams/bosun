@@ -128,6 +128,9 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		Head     struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
 		RequestedReviewers []struct {
 			Login string `json:"login"`
 		} `json:"requested_reviewers"`
@@ -170,6 +173,7 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		Body:    raw.Body,
 		URL:     raw.HTMLURL,
 		State:   state,
+		BaseRef: raw.Base.Ref,
 		HeadSHA: raw.Head.SHA,
 	}
 	for _, r := range raw.RequestedReviewers {
@@ -504,6 +508,21 @@ func (a *Adapter) ListTeams(ctx context.Context, owner string) ([]string, error)
 	return slugs, nil
 }
 
+func (a *Adapter) EditPR(ctx context.Context, req code.EditPRRequest) error {
+	body := map[string]any{
+		"title": req.Title,
+		"body":  req.Body,
+		"base":  req.Base,
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", req.Owner, req.Repository, req.Number)
+	resp, err := a.doRequest(ctx, http.MethodPatch, path, body)
+	if err != nil {
+		return fmt.Errorf("editing pull request: %w", err)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 func (a *Adapter) RequestReviewers(ctx context.Context, owner, repo string, number int, reviewers, teamReviewers []string) error {
 	body := map[string]any{}
 	if len(reviewers) > 0 {
@@ -521,12 +540,40 @@ func (a *Adapter) RequestReviewers(ctx context.Context, owner, repo string, numb
 	return nil
 }
 
+func (a *Adapter) RemoveReviewers(ctx context.Context, owner, repo string, number int, reviewers, teamReviewers []string) error {
+	body := map[string]any{}
+	if len(reviewers) > 0 {
+		body["reviewers"] = reviewers
+	}
+	if len(teamReviewers) > 0 {
+		body["team_reviewers"] = teamReviewers
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number)
+	resp, err := a.doRequest(ctx, http.MethodDelete, path, body)
+	if err != nil {
+		return fmt.Errorf("removing reviewers: %w", err)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 func (a *Adapter) AddAssignees(ctx context.Context, owner, repo string, number int, assignees []string) error {
 	body := map[string]any{"assignees": assignees}
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number)
 	resp, err := a.doRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return fmt.Errorf("adding assignees: %w", err)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+func (a *Adapter) RemoveAssignees(ctx context.Context, owner, repo string, number int, assignees []string) error {
+	body := map[string]any{"assignees": assignees}
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number)
+	resp, err := a.doRequest(ctx, http.MethodDelete, path, body)
+	if err != nil {
+		return fmt.Errorf("removing assignees: %w", err)
 	}
 	_ = resp.Body.Close()
 	return nil

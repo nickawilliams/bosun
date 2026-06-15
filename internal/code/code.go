@@ -9,6 +9,7 @@ type PullRequest struct {
 	Body    string // Description text.
 	URL     string
 	State   string // "open" | "closed" | "merged"
+	BaseRef string // target branch the PR merges into (e.g., "main")
 	HeadSHA string // commit SHA at the PR's head — used for fetching checks
 
 	// Review is the aggregate review decision derived from per-user
@@ -65,6 +66,17 @@ type CreatePRRequest struct {
 	Draft      bool
 }
 
+// EditPRRequest holds the fields updated on an existing pull request.
+// Title, Body, and Base are overwritten with the given values.
+type EditPRRequest struct {
+	Owner      string // Repository owner (org or user)
+	Repository string // Repository name
+	Number     int    // PR number to edit
+	Title      string
+	Body       string
+	Base       string // Target branch to retarget onto
+}
+
 // Release represents a release/tag on a code hosting platform.
 type Release struct {
 	Tag string // e.g., "v1.2.3"
@@ -91,11 +103,22 @@ type Host interface {
 	// PullRequest with Number==0 if none exists.
 	GetPRForBranch(ctx context.Context, owner, repository, branch string) (PullRequest, error)
 
+	// EditPR overwrites the title, body, and base branch of an existing PR.
+	EditPR(ctx context.Context, req EditPRRequest) error
+
 	// RequestReviewers requests reviews from the given users and/or teams on a PR.
 	RequestReviewers(ctx context.Context, owner, repository string, number int, reviewers, teamReviewers []string) error
 
+	// RemoveReviewers withdraws review requests from the given users and/or
+	// teams on a PR. Only pending (requested) reviews can be withdrawn; a
+	// review already submitted is unaffected.
+	RemoveReviewers(ctx context.Context, owner, repository string, number int, reviewers, teamReviewers []string) error
+
 	// AddAssignees adds assignees to a pull request.
 	AddAssignees(ctx context.Context, owner, repository string, number int, assignees []string) error
+
+	// RemoveAssignees removes assignees from a pull request.
+	RemoveAssignees(ctx context.Context, owner, repository string, number int, assignees []string) error
 
 	// GetAuthenticatedUser returns the login of the authenticated user.
 	GetAuthenticatedUser(ctx context.Context) (string, error)

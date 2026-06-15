@@ -485,6 +485,96 @@ func TestAddAssignees(t *testing.T) {
 	}
 }
 
+func TestEditPR(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	err := a.EditPR(context.Background(), code.EditPRRequest{
+		Owner: "org", Repository: "repo", Number: 42,
+		Title: "New title", Body: "New body", Base: "develop",
+	})
+	if err != nil {
+		t.Fatalf("EditPR() error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/repos/org/repo/pulls/42" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotBody["title"] != "New title" || gotBody["body"] != "New body" || gotBody["base"] != "develop" {
+		t.Errorf("body = %v", gotBody)
+	}
+}
+
+func TestRemoveReviewers(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string][]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	err := a.RemoveReviewers(context.Background(), "org", "repo", 42, []string{"alice"}, []string{"backend"})
+	if err != nil {
+		t.Fatalf("RemoveReviewers() error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/repos/org/repo/pulls/42/requested_reviewers" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(gotBody["reviewers"]) != 1 || gotBody["reviewers"][0] != "alice" {
+		t.Errorf("reviewers = %v", gotBody["reviewers"])
+	}
+	if len(gotBody["team_reviewers"]) != 1 || gotBody["team_reviewers"][0] != "backend" {
+		t.Errorf("team_reviewers = %v", gotBody["team_reviewers"])
+	}
+}
+
+func TestRemoveAssignees(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string][]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	err := a.RemoveAssignees(context.Background(), "org", "repo", 42, []string{"charlie"})
+	if err != nil {
+		t.Fatalf("RemoveAssignees() error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/repos/org/repo/issues/42/assignees" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(gotBody["assignees"]) != 1 || gotBody["assignees"][0] != "charlie" {
+		t.Errorf("body = %v", gotBody)
+	}
+}
+
 func TestGetAuthenticatedUser(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/user" {
