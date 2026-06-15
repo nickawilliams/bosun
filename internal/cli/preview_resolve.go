@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -55,29 +55,46 @@ func promptAdopt(name string) (adoptChoice, string, error) {
 		return cancelAdopt, "", fmt.Errorf("environment %q already exists; pass --force to redeploy or run interactively", name)
 	}
 
-	choice := adoptExisting
-	err := runForm(
-		huh.NewSelect[adoptChoice]().
-			Title(fmt.Sprintf("environment %q already exists", name)).
-			Options(
-				huh.NewOption("adopt existing (skip deploy)", adoptExisting),
-				huh.NewOption("choose another name", chooseAnother),
-				huh.NewOption("cancel", cancelAdopt),
-			).
-			Value(&choice),
-	)
-	if err != nil {
+	// Keep the stable "Preview" card title and carry the conflict notice
+	// as a muted body sentence, with the env name in keyword style to
+	// match how repo names are referenced elsewhere. The trailing blank
+	// line gives the options breathing room beneath the prose; the select
+	// renders titleless under that.
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	notice := muted.Render("Environment ") + ui.Keyword(name) + muted.Render(" already exists.")
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, "preview").
+		Raw(notice, "").
+		AccentBody().
+		Tight())
+
+	// Binary Adopt / New Name buttons, defaulting to New Name so an
+	// accidental Enter picks a fresh name rather than silently adopting
+	// (and skipping the deploy). Ctrl+c (shown in the help footer)
+	// cancels. A dedicated 3+-button dialog primitive would let Cancel be
+	// its own button — left as future work.
+	adopt := false
+	if err := runForm(
+		newConfirm().
+			Affirmative("Adopt").
+			Negative("New Name").
+			Value(&adopt),
+	); err != nil {
+		// Leave the question on screen as context for the caller's
+		// cancellation card; pad so it lays out against huh's help row.
+		ui.RequestSpacer()
 		return cancelAdopt, "", err
 	}
+	slot.Clear()
 
-	if choice == chooseAnother {
+	if !adopt {
 		newName, err := promptDefault("preview", generateEphemeralName())
 		if err != nil {
 			return cancelAdopt, "", err
 		}
 		return chooseAnother, strings.TrimSpace(newName), nil
 	}
-	return choice, "", nil
+	return adoptExisting, "", nil
 }
 
 // resolvePreview implements the --name × stored-metadata resolution matrix.
