@@ -222,16 +222,8 @@ func (a *Adapter) LastCommitTime(ctx context.Context, repositoryPath, branchName
 	return time.Unix(secs, 0), nil
 }
 
-func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error) {
-	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
-	if err != nil {
-		return nil, fmt.Errorf("getting default branch for diff: %w", err)
-	}
-
-	// Fetch latest to ensure accurate merge-base.
-	_ = run(ctx, repositoryPath, "fetch", "origin", defaultBranch)
-
-	out, err := output(ctx, repositoryPath, "diff", "--name-only", "origin/"+defaultBranch+"...HEAD")
+func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath, base string) ([]string, error) {
+	out, err := output(ctx, repositoryPath, "diff", "--name-only", base+"...HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("listing changed files: %w", err)
 	}
@@ -239,6 +231,10 @@ func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]st
 		return nil, nil
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+func (a *Adapter) Fetch(ctx context.Context, repositoryPath, remote, ref string) error {
+	return run(ctx, repositoryPath, "fetch", remote, ref)
 }
 
 // run executes a git command in the given directory.

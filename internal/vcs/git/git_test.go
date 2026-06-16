@@ -184,7 +184,7 @@ func TestChangedFiles(t *testing.T) {
 	ctx := context.Background()
 
 	// No changes on main — should return nil.
-	files, err := a.ChangedFiles(ctx, repo)
+	files, err := a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestChangedFiles(t *testing.T) {
 	_ = run(ctx, repo, "add", "new.txt")
 	_ = run(ctx, repo, "commit", "-m", "add new.txt")
 
-	files, err = a.ChangedFiles(ctx, repo)
+	files, err = a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() on feature branch error: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestChangedFiles(t *testing.T) {
 	_ = run(ctx, repo, "add", "cmd/api/main.go")
 	_ = run(ctx, repo, "commit", "-m", "add cmd/api/main.go")
 
-	files, err = a.ChangedFiles(ctx, repo)
+	files, err = a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() after second commit error: %v", err)
 	}

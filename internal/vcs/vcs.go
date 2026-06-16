@@ -81,10 +81,20 @@ type VCS interface {
 	// to the count of commits ahead of the project's default branch.
 	GetBranchSync(ctx context.Context, repositoryPath, branchName string) (BranchSync, error)
 
-	// ChangedFiles returns the file paths changed on the current branch
-	// relative to the default branch (origin/<default>...HEAD). Paths are
-	// relative to the repository root. Returns nil when no files differ.
-	ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error)
+	// ChangedFiles returns the file paths changed between base and HEAD
+	// (i.e. `git diff <base>...HEAD --name-only`). The base ref is the
+	// caller's policy choice — preview uses `origin/<default-branch>`,
+	// prerelease uses the previous release tag. Paths are relative to
+	// the repository root. Returns nil when no files differ. Callers
+	// that need a fresh remote base should call Fetch first.
+	ChangedFiles(ctx context.Context, repositoryPath, base string) ([]string, error)
+
+	// Fetch updates a remote ref. Best-effort sibling of ChangedFiles
+	// for callers that diff against a remote-tracking branch and want
+	// the latest before computing the merge-base. Returns an error from
+	// the underlying git command, which callers typically swallow since
+	// the diff itself is the load-bearing call.
+	Fetch(ctx context.Context, repositoryPath, remote, ref string) error
 
 	// LastCommitTime returns the commit timestamp of the most recent
 	// commit on branchName. Returns the zero time and an error when

@@ -336,16 +336,23 @@ func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 
 // detectRepoAffected computes the change-detection outcome for one
 // repo. The second return is false when the repo has no services
-// configured (excluded from results entirely). ChangedFiles runs a
-// `git fetch` for an accurate merge-base — callers should run this
-// under a spinner.
+// configured (excluded from results entirely). Resolves the default
+// branch and fetches it for an accurate merge-base, then diffs against
+// it — callers should run this under a spinner.
 func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch string) (AffectedResult, bool, error) {
 	services := resolveRepoServiceNames(r.Name)
 	if len(services) == 0 {
 		return AffectedResult{}, false, nil
 	}
 
-	changed, err := g.ChangedFiles(ctx, r.Path)
+	defaultBranch, err := g.GetDefaultBranch(ctx, r.Path)
+	if err != nil {
+		return AffectedResult{}, false, fmt.Errorf("%s: getting default branch: %w", r.Name, err)
+	}
+	// Fetch latest to ensure an accurate merge-base for the diff.
+	_ = g.Fetch(ctx, r.Path, "origin", defaultBranch)
+
+	changed, err := g.ChangedFiles(ctx, r.Path, "origin/"+defaultBranch)
 	if err != nil {
 		return AffectedResult{}, false, fmt.Errorf("%s: %w", r.Name, err)
 	}
