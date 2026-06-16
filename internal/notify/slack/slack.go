@@ -244,6 +244,22 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
+	// The text path (markdown_text — used by prerelease) always posts
+	// fresh. Two reasons: chat.update rejects markdown_text/markdown
+	// blocks with internal_error in practice (despite the docs listing
+	// them as supported), and the team's #release_coordination convention
+	// is one message per release rather than updating a previous one.
+	// The block path (review/preview's structured notifications) still
+	// upserts — block-based updates work fine on chat.update and those
+	// flows want the existing thread updated as PR state evolves.
+	if !msg.Content.HasBlocks() {
+		_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
+		if err != nil {
+			return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
+		}
+		return notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}, nil
+	}
+
 	// Upsert: update existing message if one exists for this issue.
 	// The findThreadInChannel call is cached, so repeated calls from
 	// Assess → Notify don't hit the API twice.
@@ -452,12 +468,28 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 
 // buildMsgOptions constructs Slack message options from notification content.
 // When block fields are set, it renders Block Kit blocks (not client-editable
-// but richer formatting). When only Text is set, it posts plain mrkdwn
-// (client-editable).
+// but richer formatting). When only Text is set, it sends the text via the
+// top-level `markdown_text` parameter — Slack's native renderer for
+// standard Markdown, which handles headings, bullets, links, and tables
+// that classic mrkdwn in the `text` field doesn't render. We use the
+// parameter rather than wrapping in a Block Kit markdown block because
+// the parameter is documented as supported on both `chat.postMessage`
+// and `chat.update` (the block isn't accepted by `chat.update`, which
+// rejects it with internal_error). Slack derives the notification preview
+// from `markdown_text` directly, so no separate `text` fallback is needed
+// — and the parameter is documented as mutually exclusive with `text`.
 func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 	if !c.HasBlocks() {
+		// markdown_text renders standard CommonMark, where a single `\n`
+		// is a soft break that joins lines into one paragraph. The
+		// generic content layer above us treats each `\n` as a visible
+		// line break (matching classic mrkdwn intuition); convert
+		// non-empty lines to end with the two-space Markdown hard-break
+		// marker so each line renders on its own line, leaving blank
+		// lines intact so paragraph breaks (`\n\n`) survive.
+		text := forceHardLineBreaks(c.Text)
 		return []slackapi.MsgOption{
-			slackapi.MsgOptionText(c.Text, false),
+			slackapi.MsgOptionMarkdownText(text),
 		}
 	}
 
@@ -533,4 +565,21 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 		slackapi.MsgOptionBlocks(blocks...),
 		slackapi.MsgOptionText(fallback, false),
 	}
+}
+
+// forceHardLineBreaks rewrites text so every visible line ends with a
+// Markdown hard-break marker (two trailing spaces). The markdown block
+// renders standard CommonMark, where consecutive non-blank lines join
+// into one paragraph; the generic content layer's intent is "each `\n` is
+// a visible line break" (matching mrkdwn semantics). Appending the marker
+// to non-empty lines makes each render on its own line while leaving
+// blank lines intact, so `\n\n` paragraph breaks survive.
+func forceHardLineBreaks(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = line + "  "
+		}
+	}
+	return strings.Join(lines, "\n")
 }

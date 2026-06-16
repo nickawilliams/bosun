@@ -79,6 +79,86 @@ func TestNotify(t *testing.T) {
 	}
 }
 
+// TestForceHardLineBreaks locks the line-break conversion the markdown
+// block path applies — non-empty lines get a two-space hard-break
+// marker, blank lines are left alone so paragraph breaks (`\n\n`)
+// survive. Matches mrkdwn's "every \n is visible" intuition.
+func TestForceHardLineBreaks(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"single line untouched", "one line", "one line  "},
+		{"two non-empty lines get hard breaks", "a\nb", "a  \nb  "},
+		{"paragraph break preserved", "a\n\nb", "a  \n\nb  "},
+		{
+			name: "release-notes shape",
+			in:   "going out `r`: u\nWhat's Changed\n* item\n\n**Footer**",
+			want: "going out `r`: u  \nWhat's Changed  \n* item  \n\n**Footer**  ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := forceHardLineBreaks(tt.in); got != tt.want {
+				t.Errorf("\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNotifyTextSendsAsMarkdownText confirms that Content.Text (the
+// no-block-fields path) is sent via Slack's top-level `markdown_text`
+// parameter — Slack's native standard-Markdown renderer, supported on
+// both chat.postMessage and chat.update (whereas the Block Kit markdown
+// block is rejected by chat.update). The body is hard-break-converted so
+// each `\n` renders as a visible line break.
+//
+// markdown_text is documented as mutually exclusive with `text` and
+// `blocks`, so neither is set on this path.
+func TestNotifyTextSendsAsMarkdownText(t *testing.T) {
+	var postedMarkdown, postedText, postedBlocks string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C1", "name": "ch"}},
+			})
+		case "/chat.postMessage":
+			postedMarkdown = r.FormValue("markdown_text")
+			postedText = r.FormValue("text")
+			postedBlocks = r.FormValue("blocks")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"channel": "C1",
+				"ts":      "1.1",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("t", slackapi.OptionAPIURL(server.URL+"/"))
+	body := "## What's Changed\n* alpha\n* beta\n\n**Full Changelog**: x...y"
+	_, err := a.Notify(context.Background(), notify.Message{
+		Channel: "ch", Content: notify.Content{Text: body},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+	if postedMarkdown != forceHardLineBreaks(body) {
+		t.Errorf("markdown_text = %q, want hard-break form", postedMarkdown)
+	}
+	if postedText != "" {
+		t.Errorf("text should be empty (mutually exclusive with markdown_text); got %q", postedText)
+	}
+	if postedBlocks != "" {
+		t.Errorf("blocks should be empty; got %q", postedBlocks)
+	}
+}
+
 func TestNotifyChannelNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
