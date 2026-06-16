@@ -387,6 +387,7 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	var result struct {
 		TagName string `json:"tag_name"`
 		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return code.Release{}, fmt.Errorf("parsing release response: %w", err)
@@ -395,6 +396,13 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	return code.Release{
 		Tag: result.TagName,
 		URL: result.HTMLURL,
+		// Prettify GitHub's raw release-notes markdown so PR/issue/compare
+		// URLs and `@username` mentions render as the display-friendly
+		// link text GitHub uses on its own rendered release page. The
+		// transformation happens entirely inside the adapter so the body
+		// crosses the code.Host boundary as generic display-ready
+		// Markdown — every layer above is provider-agnostic.
+		Body: PrettifyReleaseNotes(result.Body),
 	}, nil
 }
 

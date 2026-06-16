@@ -79,8 +79,9 @@ type EditPRRequest struct {
 
 // Release represents a release/tag on a code hosting platform.
 type Release struct {
-	Tag string // e.g., "v1.2.3"
-	URL string
+	Tag  string // e.g., "v1.2.3"
+	URL  string
+	Body string // Release notes body — host-generated when CreateReleaseRequest.GenerateNotes is set.
 }
 
 // CreateReleaseRequest holds the fields needed to create a release.

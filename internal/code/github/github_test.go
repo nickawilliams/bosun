@@ -268,6 +268,7 @@ func TestCreateRelease(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": "v1.2.4",
 			"html_url": "https://github.com/org/repo/releases/tag/v1.2.4",
+			"body":     "## What's Changed\n* something by @alice in https://github.com/org/repo/pull/1",
 		})
 	}))
 	defer server.Close()
@@ -287,6 +288,19 @@ func TestCreateRelease(t *testing.T) {
 	}
 	if rel.Tag != "v1.2.4" {
 		t.Errorf("Tag = %q", rel.Tag)
+	}
+	if !strings.Contains(rel.Body, "What's Changed") {
+		t.Errorf("Body = %q, want host-generated notes", rel.Body)
+	}
+	// CreateRelease runs PrettifyReleaseNotes on the API response so the
+	// body crosses the code.Host boundary display-ready (covered in
+	// detail by TestPrettifyReleaseNotes; smoke-checked here for the
+	// adapter wiring).
+	if !strings.Contains(rel.Body, "[@alice](https://github.com/alice)") {
+		t.Errorf("mention not prettified.\nBody = %q", rel.Body)
+	}
+	if !strings.Contains(rel.Body, "[#1](https://github.com/org/repo/pull/1)") {
+		t.Errorf("PR URL not prettified.\nBody = %q", rel.Body)
 	}
 }
 
