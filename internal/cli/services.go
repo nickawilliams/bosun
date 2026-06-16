@@ -486,14 +486,11 @@ type notifyTemplateData struct {
 	PreviewURL  string        // Rendered preview environment URL.
 }
 
-// Default block templates per notification type.
+// Default block templates per notification type. Used when the type
+// falls through the text-default path below and no map config is set.
 var defaultNotifyTemplates = map[string]map[string]string{
 	"review": {
 		"header":  "Ready for Review",
-		"context": "via bosun",
-	},
-	"release": {
-		"header":  "Release",
 		"context": "via bosun",
 	},
 	"preview": {
@@ -501,20 +498,41 @@ var defaultNotifyTemplates = map[string]map[string]string{
 	},
 }
 
+// Default text templates per notification type. Routes a type through the
+// plain-text Content.Text path (no block fields) when no map config is set
+// — provider-agnostic content rather than a Slack card. Release matches
+// the #release_coordination convention: one block per item with the
+// host-generated notes (CreateReleaseRequest.GenerateNotes) inline.
+// Templates emit standard Markdown; provider adapters render it to their
+// native format (the Slack adapter posts it as a markdown block so
+// headings, bullets, links, and tables all render natively).
+var defaultTextNotifyTemplates = map[string]string{
+	"release": "{{range $i, $item := .Items}}{{if $i}}\n\n{{end}}going out `{{$item.Label}}`: {{$item.URL}}\n{{$item.Body}}{{end}}",
+}
+
 // buildNotifyContent reads the template config for a notification type and
-// renders it with the given data. Supports two config shapes:
+// renders it with the given data. Resolution order:
 //
-//	slack.templates.review: "plain text template"     → Content.Text (no blocks)
-//	slack.templates.review:                           → Content with block fields
-//	  header: "..."
-//	  body: "..."
-//	  context: "..."
+//  1. Config as a string: notification.templates.<type>: "…" → Content.Text
+//  2. Built-in text default (defaultTextNotifyTemplates) → Content.Text
+//  3. Config as a map of block fields, or built-in block default → Block-
+//     shaped Content (header/body/context + per-card sections)
+//
+// The text path keeps content provider-agnostic; the block path is the
+// Slack-shaped escape hatch for richer presentation.
 func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
 	key := "notification.templates." + notifType
 
 	// Check if it's a simple string template.
 	if s := viper.GetString(key); s != "" {
 		return notify.Content{Text: renderTemplate(s, data)}
+	}
+
+	// Built-in text default — overridden by a map config for this type.
+	if s, ok := defaultTextNotifyTemplates[notifType]; ok {
+		if sub := viper.GetStringMapString(key); len(sub) == 0 {
+			return notify.Content{Text: renderTemplate(s, data)}
+		}
 	}
 
 	// Check if it's a map of block fields.

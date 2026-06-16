@@ -243,6 +243,7 @@ func newPrereleaseCmd() *cobra.Command {
 								Label:  r.repo,
 								URL:    r.release.URL,
 								Detail: r.version,
+								Body:   r.release.Body, // host-generated release notes
 							}
 						}
 						_, err := releaseNotifier.Notify(ctx, notify.Message{
