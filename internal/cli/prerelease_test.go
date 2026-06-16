@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"reflect"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestReleaseTargetClassification(t *testing.T) {
@@ -56,4 +60,56 @@ func TestReleaseTargetClassification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSubjectsForRelease(t *testing.T) {
+	repo := Repository{Name: "monorepo", Path: "/tmp/monorepo"}
+
+	t.Run("repo with no services configured → repo name", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		rt := &releaseTarget{repo: repo, currentTag: "v1.0.0"}
+		got := subjectsForRelease(context.Background(), nil, rt)
+		want := []string{"monorepo"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("single-service repo → that service", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		viper.Set("services.monorepo", "api")
+		rt := &releaseTarget{repo: repo, currentTag: "v1.0.0"}
+		got := subjectsForRelease(context.Background(), nil, rt)
+		want := []string{"api"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("first release (no previous tag) → repo name", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		viper.Set("services.monorepo", []string{"api", "worker", "ui"})
+		rt := &releaseTarget{repo: repo, currentTag: ""}
+		got := subjectsForRelease(context.Background(), nil, rt)
+		want := []string{"monorepo"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("multi-service repo without path-map → repo name", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		// List form (no per-service paths) — can't narrow.
+		viper.Set("services.monorepo", []string{"api", "worker"})
+		rt := &releaseTarget{repo: repo, currentTag: "v1.0.0"}
+		got := subjectsForRelease(context.Background(), nil, rt)
+		want := []string{"monorepo"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
 }

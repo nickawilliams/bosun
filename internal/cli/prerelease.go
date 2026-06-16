@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -12,6 +13,7 @@ import (
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
+	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -143,9 +145,10 @@ func newPrereleaseCmd() *cobra.Command {
 			var actions []Action
 
 			type releaseResult struct {
-				repo    string
-				release code.Release
-				version string
+				repo     string
+				subjects []string // services in the release; falls back to [repo]
+				release  code.Release
+				version  string
 			}
 			var releaseResults []releaseResult
 
@@ -171,7 +174,8 @@ func newPrereleaseCmd() *cobra.Command {
 								// plan.
 								if !rt.eligible() && rt.currentTag != "" {
 									releaseResults = append(releaseResults, releaseResult{
-										repo: rt.repo.Name, release: code.Release{Tag: rt.currentTag}, version: rt.currentTag,
+										repo: rt.repo.Name, subjects: []string{rt.repo.Name},
+										release: code.Release{Tag: rt.currentTag}, version: rt.currentTag,
 									})
 									return ActionCompleted, rt.currentTag, nil
 								}
@@ -184,6 +188,12 @@ func newPrereleaseCmd() *cobra.Command {
 							return ActionNeeded, fmt.Sprintf("%s → %s", from, rt.nextVersion), nil
 						},
 						Apply: func(ctx context.Context) error {
+							// Detect affected services BEFORE creating the release —
+							// the diff base is the previous tag (rt.currentTag),
+							// HEAD points at the soon-to-be-tagged commit. After
+							// CreateRelease succeeds the tag exists at HEAD, so
+							// the diff would be empty.
+							subjects := subjectsForRelease(ctx, g, rt)
 							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 								Owner:         rt.owner,
 								Repository:    rt.repoName,
@@ -196,7 +206,8 @@ func newPrereleaseCmd() *cobra.Command {
 								return err
 							}
 							releaseResults = append(releaseResults, releaseResult{
-								repo: rt.repo.Name, release: rel, version: rt.nextVersion,
+								repo: rt.repo.Name, subjects: subjects,
+								release: rel, version: rt.nextVersion,
 							})
 							return nil
 						},
@@ -239,8 +250,17 @@ func newPrereleaseCmd() *cobra.Command {
 						})
 						items := make([]notify.Item, len(releaseResults))
 						for i, r := range releaseResults {
+							// `subjects` carries the affected services (or the
+							// repo name as a fallback). Joined with `` `, ` ``
+							// so the template's surrounding backticks produce
+							// the team's monorepo-friendly shape:
+							//     going out `svc-a`, `svc-b`: <url>
+							label := r.repo
+							if len(r.subjects) > 0 {
+								label = strings.Join(r.subjects, "`, `")
+							}
 							items[i] = notify.Item{
-								Label:  r.repo,
+								Label:  label,
 								URL:    r.release.URL,
 								Detail: r.version,
 								Body:   r.release.Body, // host-generated release notes
@@ -483,4 +503,61 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 		card.Item(r.glyph, r.content)
 	}
 	return card
+}
+
+// subjectsForRelease returns the list of services to name in the release
+// notification's "going out: …" line for one repo. The detection mirrors
+// preview's per-service filtering (`services.<repo>` config + path-map),
+// but diffs against the previous tag rather than the default branch
+// because that's the slice of history this release actually carries.
+//
+// Fallback to the repo name (single-element slice) when any of the
+// following hold, so callers always get something printable:
+//
+//   - No services configured for the repo.
+//   - First release (no previous tag to diff against).
+//   - Path-map not configured AND the repo has more than one service —
+//     "any change → every service" would render every service in the
+//     channel even when only one truly shipped; the repo name is the
+//     honest summary in that case.
+//   - Diff or fetch fails.
+//
+// Single-service repos always return that one service (which is usually
+// the same as the repo name anyway).
+func subjectsForRelease(ctx context.Context, g vcs.VCS, rt *releaseTarget) []string {
+	fallback := []string{rt.repo.Name}
+
+	services := resolveRepoServiceNames(rt.repo.Name)
+	if len(services) == 0 {
+		return fallback
+	}
+	if len(services) == 1 {
+		return services
+	}
+	if rt.currentTag == "" {
+		// First release — no previous tag to diff against; the whole
+		// repo's history is "affected." Repo name is the honest summary.
+		return fallback
+	}
+	pathMap := resolveServicePaths(rt.repo.Name)
+	if pathMap == nil {
+		// Multi-service repo without a path-map → can't narrow.
+		return fallback
+	}
+
+	changed, err := g.ChangedFiles(ctx, rt.repo.Path, rt.currentTag)
+	if err != nil {
+		return fallback
+	}
+	if len(changed) == 0 {
+		// Tagging the same commit as the previous release? Surface the
+		// repo name so the channel still sees a release was cut.
+		return fallback
+	}
+	result := matchServicePaths(rt.repo.Name, services, changed, pathMap)
+	if len(result.Services) == 0 {
+		return fallback
+	}
+	sort.Strings(result.Services)
+	return result.Services
 }
