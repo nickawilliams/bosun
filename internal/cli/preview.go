@@ -59,7 +59,7 @@ func newPreviewCmd() *cobra.Command {
 				return err
 			}
 
-			if resolution.previewName != "" {
+			if resolution.previewName != "" && !resolution.cardPainted {
 				ui.Selected("preview", resolution.previewName)
 			}
 

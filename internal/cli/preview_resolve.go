@@ -36,6 +36,12 @@ type previewResolution struct {
 	// alive (forced redeploy or no url_template fallback). Drives the
 	// PlanModify op for the deploy action.
 	isRedeploy bool
+
+	// cardPainted is true when the resolution morph already rendered the
+	// final "✓ Preview · name" card in-place. The caller skips its own
+	// ui.Selected call to avoid a double-paint (and the rewind/print flash
+	// it would have introduced).
+	cardPainted bool
 }
 
 // adoptChoice represents the user's decision when an env conflict is detected.
@@ -125,48 +131,64 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// The card keeps the stable "Preview" title through every state —
 	// the transient status text lives on a muted body line, so the
 	// title doesn't morph from "Resolving Preview" to "Preview" between
-	// the spinner and the final confirmation card. The spinner's final
-	// frame morphs into the "? Preview" prompt header in the SAME
-	// BubbleTea program — the screen never goes blank while huh's form
-	// program boots beneath it. Paths that don't prompt rewind the
-	// header immediately and print their own next card.
+	// the spinner and the final confirmation card. The morph's final
+	// frame is decided AFTER probing finishes (RunCardSteps' deferred
+	// successor): paths with a definitive outcome land directly on the
+	// "✓ Preview · name" card — no rewind, no flash — while paths that
+	// still need a prompt land on the "? Preview" header that huh's
+	// form sits under in the SAME BubbleTea program so the boundary
+	// stays seamless.
 	var (
 		metaEnv, flagEnv           preview.Environment
 		metaForceURL, flagForceURL string
 	)
 	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("Resolving environment...")
-	headerCard := ui.NewCard(ui.CardInput, "preview").Tight()
-	rewind, probeErr := ui.RunCardMorph(spinCard, headerCard, func() error {
-		env, err := provider.Get(ctx, issueKey)
-		if err != nil {
-			switch {
-			case errors.Is(err, preview.ErrNoEnvironment):
-				// fall through with empty metaEnv
-			case force && isProbeError(err):
-				metaForceURL = probeURL(err)
-			default:
-				return err
-			}
-		} else {
-			metaEnv = env
-		}
-
-		if flagName != "" {
-			env, err := provider.Inspect(ctx, flagName)
+	morphPaintedSuccess := false
+	rewind, probeErr := ui.RunCardSteps([]ui.CardStep{{
+		Card: spinCard,
+		Run: func() error {
+			env, err := provider.Get(ctx, issueKey)
 			if err != nil {
 				switch {
 				case errors.Is(err, preview.ErrNoEnvironment):
-					// fall through with empty flagEnv
+					// fall through with empty metaEnv
 				case force && isProbeError(err):
-					flagForceURL = probeURL(err)
+					metaForceURL = probeURL(err)
 				default:
 					return err
 				}
 			} else {
-				flagEnv = env
+				metaEnv = env
 			}
+
+			if flagName != "" {
+				env, err := provider.Inspect(ctx, flagName)
+				if err != nil {
+					switch {
+					case errors.Is(err, preview.ErrNoEnvironment):
+						// fall through with empty flagEnv
+					case force && isProbeError(err):
+						flagForceURL = probeURL(err)
+					default:
+						return err
+					}
+				} else {
+					flagEnv = env
+				}
+			}
+			return nil
+		},
+	}}, func() *ui.Card {
+		// Definitive single-outcome path: no flag, metadata pointed at
+		// a real env, no force-fallback notice to interleave. Nothing
+		// to prompt, so the morph's last frame IS the final card the
+		// user should see — bypassing the placeholder→rewind→repaint
+		// cycle that produced a visible flash.
+		if flagName == "" && metaEnv.Name != "" && metaForceURL == "" {
+			morphPaintedSuccess = true
+			return ui.NewCard(ui.CardSuccess, "preview").Subtitle(metaEnv.Name)
 		}
-		return nil
+		return ui.NewCard(ui.CardInput, "preview").Tight()
 	})
 	if probeErr != nil {
 		return previewResolution{}, probeErr
@@ -183,9 +205,11 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// blank frame). Every other path rewinds it now and prints its
 	// own next card; the rare Row-1-with-force-notice path also
 	// rewinds so the notices don't render below a prompt header.
+	// When the morph already painted the final success card, there's
+	// nothing to rewind — that's the no-flash path.
 	row1Prompt := flagName == "" && metaName == "" && isInteractive() &&
 		metaForceURL == "" && flagForceURL == ""
-	if !row1Prompt {
+	if !row1Prompt && !morphPaintedSuccess {
 		rewind()
 	}
 
@@ -350,6 +374,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	}
 
 	res.previewURL = renderStageURL(stage, res.previewName)
+	res.cardPainted = morphPaintedSuccess
 	return res, nil
 }
 
