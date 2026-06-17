@@ -479,13 +479,13 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		rt := &targets[row.repoIdx]
 		// Bold the repo segment (raw SGR 1/22 so huh's selection
 		// styling for the rest of the row survives — lipgloss would
-		// close with a full reset).
+		// close with a full reset). The current version intentionally
+		// isn't shown here — the form asks "which services?", and the
+		// version transition belongs on the plan card where the user
+		// is being asked to approve the actual change.
 		label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
 		if row.serviceIdx >= 0 {
 			label += " · " + rt.services[row.serviceIdx]
-		}
-		if note := rt.versionNote(); note != "" {
-			label += " · " + note
 		}
 		key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
 		opts[k] = huh.NewOption(label, key).Selected(row.preselect)
