@@ -215,6 +215,15 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
 			"\n\n" + strings.Join(repoLines, "\n")
 
+		// Gather's bubbletea final frame painted the push-offer card
+		// but didn't run Card.Print, so its Tight flag never cleared
+		// the spacer. Without this, runForm's prologue FlushSpacer
+		// emits a stray │ row between the card title and the prompt
+		// body — and gatherRewind, which only counts the gather's
+		// own lines, can't reach back over that orphan, so it
+		// survives into the static card render below as a doubled
+		// spacer.
+		ui.ClearSpacer()
 		confirmed := true
 		if err := runForm(
 			newConfirm().
