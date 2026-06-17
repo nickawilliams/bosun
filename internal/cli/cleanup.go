@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -23,74 +22,54 @@ func newCleanupCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
-			if err := cc.RequireIssue(); err != nil {
+			if err := cc.RequireWorkspace(); err != nil {
 				return err
 			}
-			issue := cc.Issue
-
-			repositories, err := resolveRepositories(nil)
-			if err != nil {
-				return err
-			}
-
-			branchName := issue
+			workspace := cc.Workspace
 			force, _ := cmd.Flags().GetBool("force")
 			ctx := cmd.Context()
 			g := git.New()
 
-			_ = emitLifecyclePreamble(ctx, issue)
+			_ = emitLifecyclePreamble(ctx, cc.Issue)
 
-			// --- Pre-flight: dirty check ---
-			wsRoot := viper.GetString("workspace.root")
-			if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
-				wsRoot = filepath.Join(projectRoot, wsRoot)
+			// Workspace-scoped repos carry the worktree path on
+			// Repository.Path; readiness uses that for its dirty/unpushed
+			// gather. The main repo path (needed for `git worktree remove`
+			// and `git branch -D`) comes from the project config — looked
+			// up by name into a parallel map.
+			workspaceRepos, err := resolveActiveRepositories(ctx, workspace, nil)
+			if err != nil {
+				return err
+			}
+			projectRepos, err := resolveRepositories(nil)
+			if err != nil {
+				return err
+			}
+			mainPath := make(map[string]string, len(projectRepos))
+			for _, pr := range projectRepos {
+				mainPath[pr.Name] = pr.Path
 			}
 
-			if !force {
-				var dirty []string
-				for _, r := range repositories {
-					wtPath := filepath.Join(wsRoot, branchName, r.Name)
-					if _, err := os.Stat(wtPath); err != nil {
-						continue // worktree doesn't exist, skip
-					}
-					if isDirty, err := g.IsDirty(ctx, wtPath); err == nil && isDirty {
-						dirty = append(dirty, r.Name)
-					}
-				}
-				if len(dirty) > 0 {
-					return fmt.Errorf(
-						"repositories have uncommitted changes: %s (use --force to override)",
-						strings.Join(dirty, ", "),
-					)
-				}
-			}
-
-			// Capture each worktree's actual current branch up-front,
-			// before any RemoveWorktree action runs (which would
-			// invalidate the worktree path). This handles the case
-			// where a worktree has been manually checked out to a
-			// branch other than the issue/workspace name.
-			actualBranch := make(map[string]string, len(repositories))
-			for _, r := range repositories {
-				wtPath := filepath.Join(wsRoot, branchName, r.Name)
-				if _, err := os.Stat(wtPath); err != nil {
-					actualBranch[r.Name] = branchName
-					continue
-				}
-				if b, err := g.GetCurrentBranch(ctx, wtPath); err == nil && b != "" {
-					actualBranch[r.Name] = b
-				} else {
-					actualBranch[r.Name] = branchName
-				}
+			// --- Pre-flight: Workspace Readiness ---
+			//
+			// The readiness section's dirty gate replaces the inline
+			// dirty check this command used to do. The push offer it
+			// folds in is debatable for cleanup (we're about to delete
+			// the branch) but harmless if accepted; punting on splitting
+			// the helper until the awkwardness shows up in practice.
+			readiness, _, err := emitWorkspaceReadiness(ctx, g, workspaceRepos)
+			if err != nil {
+				return err // ErrCancelled (dirty gate) propagates as a clean abort
 			}
 
 			// --- Plan + Apply ---
 			var actions []Action
 
-			for _, r := range repositories {
-				repoPath := r.Path
-				repoName := r.Name
-				worktreePath := filepath.Join(wsRoot, branchName, repoName)
+			for i := range readiness {
+				rr := &readiness[i]
+				repoName := rr.repo.Name
+				worktreePath := rr.repo.Path
+				repoPath := mainPath[repoName]
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
@@ -99,9 +78,9 @@ func newCleanupCmd() *cobra.Command {
 					Name:   repoName,
 					Assess: func(_ context.Context) (ActionState, string, error) {
 						if _, err := os.Stat(worktreePath); err != nil {
-							return ActionCompleted, branchName, nil
+							return ActionCompleted, workspace, nil
 						}
-						return ActionNeeded, branchName, nil
+						return ActionNeeded, workspace, nil
 					},
 					Apply: func(ctx context.Context) error {
 						return g.RemoveWorktree(ctx, repoPath, worktreePath, force)
@@ -109,10 +88,15 @@ func newCleanupCmd() *cobra.Command {
 				})
 			}
 
-			for _, r := range repositories {
-				repoPath := r.Path
-				repoName := r.Name
-				branch := actualBranch[repoName]
+			// Branch deletion uses each worktree's actual checked-out
+			// branch (captured by the readiness gather), which handles
+			// the case where a worktree has been manually checked out to
+			// a branch other than the workspace name.
+			for i := range readiness {
+				rr := &readiness[i]
+				repoName := rr.repo.Name
+				repoPath := mainPath[repoName]
+				branch := rr.branch
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
@@ -140,8 +124,14 @@ func newCleanupCmd() *cobra.Command {
 				return err
 			}
 
-			// Post-apply: clean up workspace directory and empty parents.
-			wsPath := filepath.Join(wsRoot, branchName)
+			// Post-apply: remove the workspace directory and any empty
+			// parents (e.g. "epic/" once the last EX-* workspace under it
+			// is cleaned).
+			wsRoot := viper.GetString("workspace.root")
+			if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
+				wsRoot = filepath.Join(projectRoot, wsRoot)
+			}
+			wsPath := filepath.Join(wsRoot, workspace)
 			if err := os.RemoveAll(wsPath); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("removing workspace directory: %w", err)
 			}
