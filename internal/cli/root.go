@@ -75,6 +75,7 @@ func NewRootCmd(version string) *cobra.Command {
 	// Hidden commands.
 	cmd.AddCommand(newDemoCmd())
 	cmd.AddCommand(newCaptainCmd())
+	cmd.AddCommand(newNotifyTestCmd()) // TEMPORARY — delete with notify_demo.go.
 
 	return cmd
 }
