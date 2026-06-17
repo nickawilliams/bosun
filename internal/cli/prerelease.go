@@ -105,11 +105,8 @@ func newPrereleaseCmd() *cobra.Command {
 			// to tag (it drops out of the release set) and a
 			// pushed-but-behind branch would otherwise tag stale commits.
 			g := git.New()
-			readiness, _, anyUnpushed, err := gatherRepoReadiness(ctx, g, repositories)
+			readiness, _, err := emitWorkspaceReadiness(ctx, g, repositories)
 			if err != nil {
-				return err
-			}
-			if err := emitWorkspaceReadiness(ctx, g, readiness, anyUnpushed); err != nil {
 				return err // ErrCancelled (dirty gate) propagates as a clean abort
 			}
 

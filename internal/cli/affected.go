@@ -52,48 +52,12 @@ func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]R
 		return nil, nil, err
 	}
 
-	readiness, repoBranch, anyUnpushed, err := gatherRepoReadiness(ctx, g, repos)
+	_, repoBranch, err := emitWorkspaceReadiness(ctx, g, repos)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := emitWorkspaceReadiness(ctx, g, readiness, anyUnpushed); err != nil {
 		return nil, nil, err
 	}
 
 	return repos, repoBranch, nil
-}
-
-// gatherRepoReadiness collects each repo's pre-flight git state —
-// current branch, unpushed-commit count, dirty working tree — in one
-// pass (all local git calls, fast). The returned slice feeds
-// emitWorkspaceReadiness; the repoBranch map is a name→branch
-// convenience for callers; anyUnpushed short-circuits the push offer.
-// Shared by the deploy flow (preview/release) and review.
-func gatherRepoReadiness(ctx context.Context, g vcs.VCS, repos []Repository) ([]repoReadiness, map[string]string, bool, error) {
-	repoBranch := make(map[string]string, len(repos))
-	readiness := make([]repoReadiness, 0, len(repos))
-	anyUnpushed := false
-
-	for _, r := range repos {
-		branch, err := g.GetCurrentBranch(ctx, r.Path)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
-		}
-		repoBranch[r.Name] = branch
-		n, err := g.UnpushedCommits(ctx, r.Path, branch)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
-		}
-		dirty, _ := g.IsDirty(ctx, r.Path)
-		if n != 0 {
-			anyUnpushed = true
-		}
-		readiness = append(readiness, repoReadiness{
-			repo: r, branch: branch, unpushed: n, dirty: dirty,
-		})
-	}
-
-	return readiness, repoBranch, anyUnpushed, nil
 }
 
 // hasRemoteBranch reports whether this repo's branch exists on the
@@ -105,12 +69,13 @@ func (rr repoReadiness) hasRemoteBranch() bool {
 	return rr.unpushed != -1 || rr.pushed
 }
 
-// emitWorkspaceReadiness renders the "Workspace Readiness" section: the
-// consolidated pre-deploy git state for every workspace repo, with
-// the push offer folded in. Replaces the previous separate pieces
-// (push prompt + per-repo "Pushed" card + per-repo dirty warnings)
-// with one section that follows the Services section's grammar —
-// stable title through prompt/spinners/final card, one row per
+// emitWorkspaceReadiness gathers each repo's pre-deploy git state
+// (current branch, unpushed-commit count, dirty tree) under a per-repo
+// "Checking …" spinner, then renders the "Workspace Readiness" section
+// — the consolidated state for every workspace repo, with the push
+// offer folded in. The gather and render phases share a single section
+// title so the whole flow follows the Services section's grammar —
+// stable title through gather/prompt/spinners/final card, one row per
 // repo, worst-first aggregate glyph:
 //
 //	✓  extracker                       (in sync, clean)
@@ -138,13 +103,95 @@ func (rr repoReadiness) hasRemoteBranch() bool {
 // runs proceed with the static card (warning rows only). A fully-
 // ready workspace renders the static ✓ card with no prompts. Only
 // an accepted push that then fails is an error.
-func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoReadiness, anyUnpushed bool) error {
+func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) ([]repoReadiness, map[string]string, error) {
+	// --- Phase 0: gather under per-repo spinner ---
+	//
+	// The git calls (GetCurrentBranch, UnpushedCommits, IsDirty) are
+	// fast individually but add up across many repos. Running them
+	// silently produced a multi-second blank gap before the first
+	// prompt or card appeared. RunCardSteps gives one "Checking …"
+	// spinner that morphs through each repo, then exits cleanly so
+	// the existing emit logic below picks up from there.
+	readiness := make([]repoReadiness, len(repos))
+	repoBranch := make(map[string]string, len(repos))
+
+	gatherStatusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	gatherSteps := make([]ui.CardStep, 0, len(repos))
+	for i := range repos {
+		r := repos[i]
+		spin := ui.NewCard(ui.CardRunning, "workspace readiness").
+			Raw(gatherStatusMuted.Render("Checking ") +
+				ui.Keyword(r.Name) +
+				gatherStatusMuted.Render("..."))
+		gatherSteps = append(gatherSteps, ui.CardStep{
+			Card: spin,
+			Run: func() error {
+				branch, err := g.GetCurrentBranch(ctx, r.Path)
+				if err != nil {
+					return fmt.Errorf("%s: getting current branch: %w", r.Name, err)
+				}
+				repoBranch[r.Name] = branch
+				n, err := g.UnpushedCommits(ctx, r.Path, branch)
+				if err != nil {
+					return fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
+				}
+				dirty, _ := g.IsDirty(ctx, r.Path)
+				readiness[i] = repoReadiness{
+					repo: r, branch: branch, unpushed: n, dirty: dirty,
+				}
+				return nil
+			},
+		})
+	}
+	// Successor runs once, after all gather steps complete, and morphs
+	// the spinner's last frame directly into whichever card the next
+	// phase needs — push-offer header, dirty gate, or the static
+	// summary. The flag computation lives here so the outer flow can
+	// branch on the same state without a second pass over readiness.
+	// Suppressed under IsRaw (RunCardSteps skips the successor); the
+	// non-interactive fallback below handles that case.
+	var anyUnpushed, anyDirty bool
+	gatherRewind, err := ui.RunCardSteps(gatherSteps, func() *ui.Card {
+		for _, rr := range readiness {
+			if rr.unpushed != 0 {
+				anyUnpushed = true
+			}
+			if rr.dirty {
+				anyDirty = true
+			}
+		}
+		if anyUnpushed {
+			return ui.NewCard(ui.CardInput, "workspace readiness").Tight()
+		}
+		if anyDirty {
+			gate := buildWorkspaceReadinessCard(readiness)
+			gate.Text("")
+			return gate.AccentBody().Tight()
+		}
+		return buildWorkspaceReadinessCard(readiness)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if !isInteractive() {
+		// Successor was skipped under IsRaw — print the static card
+		// explicitly so non-interactive callers get the same summary.
 		buildWorkspaceReadinessCard(readiness).Print()
-		return nil
+		return readiness, repoBranch, nil
+	}
+
+	// Fully ready — gather's final frame is already the static card.
+	if !anyUnpushed && !anyDirty {
+		return readiness, repoBranch, nil
 	}
 
 	// --- Push offer (unpushed commits only) ---
+	//
+	// Gather morphed into the push-offer header; the form runs under
+	// that header and gatherRewind clears them both together. Skipping
+	// the dedicated PrintRewindable call closes the blank seam between
+	// gather and the prompt.
 
 	pushAccepted := false
 	if anyUnpushed {
@@ -168,7 +215,6 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
 			"\n\n" + strings.Join(repoLines, "\n")
 
-		headerRewind := ui.NewCard(ui.CardInput, "workspace readiness").Tight().PrintRewindable()
 		confirmed := true
 		if err := runForm(
 			newConfirm().
@@ -177,17 +223,42 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 				Negative("No").
 				Value(&confirmed),
 		); err != nil {
-			return err
+			return nil, nil, err
 		}
-		headerRewind()
+		gatherRewind()
 		pushAccepted = confirmed
 	}
 
-	// Accepted pushes run as steps of one spinner program
-	// (RunCardSteps — per-repo programs would flash blank at every
-	// boundary) whose final frame is the gate or the static card.
-	// No-push paths produce zero steps → plain print, no program.
-	var steps []ui.CardStep
+	// Dirty-only path: gather's final frame is already the gate card.
+	// Run the confirm directly underneath it and rewind when done —
+	// no intermediate RunCardSteps needed (which would have re-painted
+	// the same gate, producing a flash).
+	if !anyUnpushed && anyDirty {
+		ui.ClearSpacer()
+		proceed := false
+		if err := runForm(
+			newConfirm().
+				Affirmative("Continue").
+				Negative("Cancel").
+				Value(&proceed),
+		); err != nil {
+			return nil, nil, err
+		}
+		if !proceed {
+			ui.RequestSpacer()
+			return nil, nil, ErrCancelled
+		}
+		gatherRewind()
+		buildWorkspaceReadinessCard(readiness).Print()
+		return readiness, repoBranch, nil
+	}
+
+	// --- Push path (unpushed branch) ---
+	//
+	// Accepted pushes run as one spinner program whose final frame
+	// morphs into the gate or static card. Rejected pushes produce zero
+	// steps → plain print of the final frame, no program.
+	var pushSteps []ui.CardStep
 	if pushAccepted {
 		statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 		for i := range readiness {
@@ -199,7 +270,7 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 				Raw(statusMuted.Render("Pushing ") +
 					ui.Keyword(rr.repo.Name) +
 					statusMuted.Render("..."))
-			steps = append(steps, ui.CardStep{
+			pushSteps = append(pushSteps, ui.CardStep{
 				Card: spin,
 				Run: func() error {
 					if err := g.Push(ctx, rr.repo.Path, rr.branch); err != nil {
@@ -212,24 +283,8 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 		}
 	}
 
-	// --- Continue gate (dirty trees only — unpushed was answered) ---
-
-	anyDirty := false
-	for _, rr := range readiness {
-		if rr.dirty {
-			anyDirty = true
-			break
-		}
-	}
-
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+	pushRewind, err := ui.RunCardSteps(pushSteps, func() *ui.Card {
 		if anyDirty {
-			// Gate variant: rows + a blank connector row above the
-			// Continue/Cancel buttons huh renders beneath. AccentBody so
-			// the per-repo row connectors read pink like the buttons —
-			// the card body and the bare-button form are one
-			// accent-spined prompt (the single-input timeline rule; see
-			// Card.AccentBody).
 			gate := buildWorkspaceReadinessCard(readiness)
 			gate.Text("")
 			return gate.AccentBody().Tight()
@@ -239,13 +294,10 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 	if err != nil {
 		// An accepted push failed — the failed step card is already
 		// on screen.
-		return err
+		return nil, nil, err
 	}
 
 	if anyDirty {
-		// The gate card was painted by the program's final frame (or
-		// the zero-step plain print), so suppress the spacer manually
-		// the way Tight-on-Print would have.
 		ui.ClearSpacer()
 		proceed := false
 		if err := runForm(
@@ -254,18 +306,16 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, readiness []repoRead
 				Negative("Cancel").
 				Value(&proceed),
 		); err != nil {
-			return err
+			return nil, nil, err
 		}
 		if !proceed {
 			ui.RequestSpacer()
-			return ErrCancelled
+			return nil, nil, ErrCancelled
 		}
-		// Swap the gate variant (with its trailing spacer row) for
-		// the clean static card.
-		rewind()
+		pushRewind()
 		buildWorkspaceReadinessCard(readiness).Print()
 	}
-	return nil
+	return readiness, repoBranch, nil
 }
 
 // buildWorkspaceReadinessCard composes the final static "Workspace Readiness"

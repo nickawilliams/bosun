@@ -433,11 +433,8 @@ func newReviewCmd() *cobra.Command {
 
 			var resolved []repoContext
 
-			readiness, _, anyUnpushed, err := gatherRepoReadiness(ctx, gitClient, repositories)
+			readiness, _, err := emitWorkspaceReadiness(ctx, gitClient, repositories)
 			if err != nil {
-				return err
-			}
-			if err := emitWorkspaceReadiness(ctx, gitClient, readiness, anyUnpushed); err != nil {
 				return err // ErrCancelled (dirty gate) propagates as a clean abort
 			}
 
