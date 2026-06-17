@@ -21,9 +21,17 @@ import (
 
 // releaseTarget is one workspace repo resolved for prerelease: its
 // remote identity, the branch to tag, the latest tag and derived next
-// version, and whether the user selected it to cut a release.
-// currentTag/nextVersion/tagErr are filled by selectReleaseTargets; the
-// rest by the identity-resolution loop.
+// version, and the per-service selection that drives the notification.
+//
+// The identity loop fills repo/branch/owner/repoName/tagErr;
+// selectReleaseTargets fills the rest: currentTag, nextVersion, and the
+// service-detection trio (services, affectedServices, subjects).
+//
+// The form is service-granular even when the GitHub release is per-repo:
+// `include` is derived from "any subject selected for this repo" so a
+// user can opt out of an entire repo by unchecking every one of its
+// services. `subjects` is the final list that lands in the notification
+// label.
 type releaseTarget struct {
 	repo     Repository
 	branch   string
@@ -33,7 +41,23 @@ type releaseTarget struct {
 	currentTag  string // latest tag ("" = no tags yet)
 	nextVersion string // derived next version
 	tagErr      error  // identity or tag-fetch failure, surfaced as a ✗ plan row
-	include     bool   // selected to cut a release
+
+	// services is the full configured service list for the repo
+	// (resolveRepoServiceNames). Empty when the repo has no services
+	// config — the fallback row in that case uses the repo name itself
+	// as the synthetic "service."
+	services []string
+	// affectedServices is the detection result narrowed by the
+	// per-service path-map. nil means narrowing wasn't possible (no
+	// path-map / first release / diff failure); the form pre-checks all
+	// services in that case. An empty (non-nil) slice means narrowing
+	// ran and found no affected services — pre-check none.
+	affectedServices []string
+	// subjects is the user's final selection (or applyDefaults' seed).
+	// What we render in the notification label and the result card.
+	subjects []string
+
+	include bool // selected to release; derived from len(subjects) > 0
 }
 
 // eligible reports whether rt is a candidate for a new release: its
@@ -143,7 +167,8 @@ func newPrereleaseCmd() *cobra.Command {
 
 			type releaseResult struct {
 				repo     string
-				subjects []string // services in the release; falls back to [repo]
+				services []string // configured services for the repo
+				subjects []string // user-selected services; formatSubjects collapses to repo when full coverage
 				release  code.Release
 				version  string
 			}
@@ -170,9 +195,17 @@ func newPrereleaseCmd() *cobra.Command {
 								// announced), which distinguishes the two in the
 								// plan.
 								if !rt.eligible() && rt.currentTag != "" {
+									// Already-current row in the notification — use
+									// the configured services + the prior subjects
+									// so the label format stays consistent with the
+									// active-release case (collapses to repo name
+									// when all services were "shipped" previously).
 									releaseResults = append(releaseResults, releaseResult{
-										repo: rt.repo.Name, subjects: []string{rt.repo.Name},
-										release: code.Release{Tag: rt.currentTag}, version: rt.currentTag,
+										repo:     rt.repo.Name,
+										services: rt.services,
+										subjects: rt.subjects,
+										release:  code.Release{Tag: rt.currentTag},
+										version:  rt.currentTag,
 									})
 									return ActionCompleted, rt.currentTag, nil
 								}
@@ -185,12 +218,10 @@ func newPrereleaseCmd() *cobra.Command {
 							return ActionNeeded, fmt.Sprintf("%s → %s", from, rt.nextVersion), nil
 						},
 						Apply: func(ctx context.Context) error {
-							// Detect affected services BEFORE creating the release —
-							// the diff base is the previous tag (rt.currentTag),
-							// HEAD points at the soon-to-be-tagged commit. After
-							// CreateRelease succeeds the tag exists at HEAD, so
-							// the diff would be empty.
-							subjects := subjectsForRelease(ctx, g, rt)
+							// Subjects were already resolved during the spinner
+							// phase of selectReleaseTargets and finalized by the
+							// form (or applyDefaults in the non-interactive
+							// path). Apply just reads them through.
 							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 								Owner:         rt.owner,
 								Repository:    rt.repoName,
@@ -203,8 +234,11 @@ func newPrereleaseCmd() *cobra.Command {
 								return err
 							}
 							releaseResults = append(releaseResults, releaseResult{
-								repo: rt.repo.Name, subjects: subjects,
-								release: rel, version: rt.nextVersion,
+								repo:     rt.repo.Name,
+								services: rt.services,
+								subjects: rt.subjects,
+								release:  rel,
+								version:  rt.nextVersion,
 							})
 							return nil
 						},
@@ -247,17 +281,17 @@ func newPrereleaseCmd() *cobra.Command {
 						})
 						items := make([]notify.Item, len(releaseResults))
 						for i, r := range releaseResults {
-							// `subjects` carries the affected services (or the
-							// repo name as a fallback). Joined with `` `, ` ``
-							// so the template's surrounding backticks produce
-							// the team's monorepo-friendly shape:
+							// formatSubjects collapses to repo name when the
+							// user kept (or seeded) all services, so the team's
+							// "we shipped everything in this repo" announcement
+							// renders as `` `host-ui`: <url> `` rather than a
+							// long comma list. The "`, `" separator lives
+							// between adjacent service names inside the
+							// template's outer backticks, producing
 							//     going out `svc-a`, `svc-b`: <url>
-							label := r.repo
-							if len(r.subjects) > 0 {
-								label = strings.Join(r.subjects, "`, `")
-							}
+							// for the partial-selection case.
 							items[i] = notify.Item{
-								Label:  label,
+								Label:  formatSubjects(r.repo, r.services, r.subjects, "`, `"),
 								URL:    r.release.URL,
 								Detail: r.version,
 								Body:   r.release.Body, // host-generated release notes
@@ -293,22 +327,29 @@ func newPrereleaseCmd() *cobra.Command {
 	return cmd
 }
 
-// selectReleaseTargets fetches each repo's latest tag under a spinner
-// sequence, derives the next version, then — when interactive — offers a
-// multi-select of the eligible repos so the user can choose which get a
-// release cut. Repos already at the target version (or with errors)
-// aren't offered; they appear in the result card and the plan. Mirrors
-// review's selectReviewTargets so the Observe → Select → record arc reads
-// the same across commands. Mutates targets in place: sets
-// currentTag/nextVersion/tagErr on every repo and include on the eligible
-// ones.
+// selectReleaseTargets resolves each repo's release state under a
+// spinner sequence — latest tag, next version, configured services, and
+// detected-affected services — then (when interactive) offers a flat
+// per-service multi-select so the user can choose which services get
+// announced in the release notification. Repos already at the target
+// version (or with errors) aren't offered in the form; they appear in
+// the result card and the plan. Mirrors review's selectReviewTargets so
+// the Observe → Select → record arc reads the same across commands.
+//
+// Mutates targets in place: sets currentTag/nextVersion/tagErr/services/
+// affectedServices on every eligible repo; subjects + include are set by
+// the form (or applyDefaults).
 func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Host, bump string, targets []releaseTarget) error {
 	if host == nil || len(targets) == 0 {
 		return nil
 	}
 
-	// --- Phase 1: latest-tag lookup, one program over all repos ---
-
+	// --- Phase 1: per-repo resolution + service detection ---
+	//
+	// Service detection runs alongside the tag fetch because both happen
+	// per repo, both want spinner feedback, and the detection's diff
+	// base IS the just-fetched currentTag.
+	g := git.New()
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	steps := make([]ui.CardStep, 0, len(targets))
 	for i := range targets {
@@ -335,6 +376,13 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 					return nil
 				}
 				rt.nextVersion = next
+
+				// Service detection: configured set + path-map narrowing.
+				rt.services = resolveRepoServiceNames(rt.repo.Name)
+				if len(rt.services) > 1 {
+					pathMap := resolveServicePaths(rt.repo.Name)
+					rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
+				}
 				return nil
 			},
 		})
@@ -352,13 +400,19 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return false
 	}
 
-	// applyDefaults seeds include from the eligibility policy — used
-	// whenever no form shows (non-interactive, -y, or nothing eligible).
-	// --repository has already narrowed the repo set upstream, so the
-	// default is simply "release every eligible repo in scope."
+	// applyDefaults seeds each eligible repo's subjects + include from
+	// the detection result — used whenever no form shows (non-
+	// interactive, -y, or nothing eligible). Matches the form's
+	// pre-check policy so the rendered notification is identical
+	// whether or not the user saw the form.
 	applyDefaults := func() {
 		for i := range targets {
-			targets[i].include = targets[i].eligible()
+			rt := &targets[i]
+			if !rt.eligible() {
+				continue
+			}
+			rt.subjects = defaultSubjectsFor(rt)
+			rt.include = len(rt.subjects) > 0
 		}
 	}
 
@@ -378,29 +432,63 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return nil
 	}
 
-	// --- Phase 2: selection form over eligible repos ---
+	// --- Phase 2: selection form, one row per service ---
+	//
+	// Rows are flat (`repo · service`) sorted by (repo, service). Repos
+	// without configured services contribute a single fallback row with
+	// the repo name as the synthetic "service." Each option's key
+	// encodes the target index and service index ("i.j") so the form
+	// result maps back unambiguously.
 
-	var idxs []int
+	type optRow struct {
+		repoIdx    int
+		serviceIdx int   // -1 = fallback "no services configured" row
+		preselect  bool
+	}
+	var rows []optRow
 	for i := range targets {
-		if targets[i].eligible() {
-			idxs = append(idxs, i)
+		rt := &targets[i]
+		if !rt.eligible() {
+			continue
+		}
+		// No services configured → single fallback row carrying the
+		// repo name as a synthetic service. applyDefaults / form logic
+		// reads this back as "subjects = [repoName]".
+		if len(rt.services) == 0 {
+			rows = append(rows, optRow{repoIdx: i, serviceIdx: -1, preselect: true})
+			continue
+		}
+		preCheck := preCheckPolicy(rt)
+		for j, svc := range rt.services {
+			_ = svc
+			rows = append(rows, optRow{repoIdx: i, serviceIdx: j, preselect: preCheck[j]})
 		}
 	}
-	sort.SliceStable(idxs, func(a, b int) bool {
-		return targets[idxs[a]].repo.Name < targets[idxs[b]].repo.Name
+	sort.SliceStable(rows, func(a, b int) bool {
+		ra, rb := &targets[rows[a].repoIdx], &targets[rows[b].repoIdx]
+		if ra.repo.Name != rb.repo.Name {
+			return ra.repo.Name < rb.repo.Name
+		}
+		// Stable within a repo: fallback row first (only one), else
+		// services in their config-declared order via serviceIdx.
+		return rows[a].serviceIdx < rows[b].serviceIdx
 	})
 
-	// Bold the repo segment (raw SGR 1/22, not lipgloss, so huh's own
-	// selection styling for the rest of the line survives). The version
-	// transition follows as the row's status.
-	opts := make([]huh.Option[string], len(idxs))
-	for j, i := range idxs {
-		rt := &targets[i]
+	opts := make([]huh.Option[string], len(rows))
+	for k, row := range rows {
+		rt := &targets[row.repoIdx]
+		// Bold the repo segment (raw SGR 1/22 so huh's selection
+		// styling for the rest of the row survives — lipgloss would
+		// close with a full reset).
 		label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
+		if row.serviceIdx >= 0 {
+			label += " · " + rt.services[row.serviceIdx]
+		}
 		if note := rt.versionNote(); note != "" {
 			label += " · " + note
 		}
-		opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rt.preselect())
+		key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
+		opts[k] = huh.NewOption(label, key).Selected(row.preselect)
 	}
 
 	var picked []string
@@ -417,14 +505,27 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return err
 	}
 
-	pickedSet := make(map[int]bool, len(picked))
-	for _, p := range picked {
-		if i, err := strconv.Atoi(p); err == nil {
-			pickedSet[i] = true
+	// Apply the form result: clear subjects on every eligible repo,
+	// then re-populate from the picked keys. include falls out as
+	// "any subject selected for this repo."
+	for i := range targets {
+		if targets[i].eligible() {
+			targets[i].subjects = nil
+			targets[i].include = false
 		}
 	}
-	for _, i := range idxs {
-		targets[i].include = pickedSet[i]
+	for _, p := range picked {
+		ri, si, ok := parseSubjectKey(p)
+		if !ok || ri < 0 || ri >= len(targets) {
+			continue
+		}
+		rt := &targets[ri]
+		if si < 0 {
+			rt.subjects = append(rt.subjects, rt.repo.Name)
+		} else if si < len(rt.services) {
+			rt.subjects = append(rt.subjects, rt.services[si])
+		}
+		rt.include = true
 	}
 
 	// Erase the form header and drop the result card in its place.
@@ -478,7 +579,16 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 			rows = append(rows, row{name, glyphFail, on(name, rt.tagErr.Error())})
 		case rt.include:
 			nOK++
-			rows = append(rows, row{name, glyphOK, on(name, rt.versionNote())})
+			// Append the user-selected subjects in parens when partial;
+			// full-coverage selections render as just the version (same
+			// shape as today). formatSubjects returns the repo name for
+			// the full case, which we strip back out — we don't want to
+			// echo the repo name we already printed at the row start.
+			note := rt.versionNote()
+			if sel := formatSubjects(rt.repo.Name, rt.services, rt.subjects, ", "); sel != rt.repo.Name {
+				note += " (" + sel + ")"
+			}
+			rows = append(rows, row{name, glyphOK, on(name, note)})
 		default:
 			nSkip++
 			rows = append(rows, row{name, glyphOff, off(name, rt.versionNote())})
@@ -502,59 +612,129 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 	return card
 }
 
-// subjectsForRelease returns the list of services to name in the release
-// notification's "going out: …" line for one repo. The detection mirrors
-// preview's per-service filtering (`services.<repo>` config + path-map),
-// but diffs against the previous tag rather than the default branch
-// because that's the slice of history this release actually carries.
+// detectAffectedServices narrows a repo's configured service list down
+// to the services whose files changed between currentTag and HEAD. The
+// detection mirrors preview's per-service path-map filtering, but diffs
+// against the previous tag rather than the default branch because that's
+// the slice of history this release actually carries.
 //
-// Fallback to the repo name (single-element slice) when any of the
-// following hold, so callers always get something printable:
+// Returns nil (not empty) when narrowing isn't possible — the form
+// treats that as "we don't know, pre-check all services." Returns an
+// empty (non-nil) slice only when the diff genuinely found no matching
+// service.
 //
-//   - No services configured for the repo.
+// Cases that return nil ("can't narrow"):
 //   - First release (no previous tag to diff against).
-//   - Path-map not configured AND the repo has more than one service —
-//     "any change → every service" would render every service in the
-//     channel even when only one truly shipped; the repo name is the
-//     honest summary in that case.
-//   - Diff or fetch fails.
+//   - No per-service path-map configured (list form of `services.<repo>`).
+//   - Diff command failure.
+//   - currentTag and HEAD point at the same commit (empty diff).
 //
-// Single-service repos always return that one service (which is usually
-// the same as the repo name anyway).
-func subjectsForRelease(ctx context.Context, g vcs.VCS, rt *releaseTarget) []string {
-	fallback := []string{rt.repo.Name}
-
-	services := resolveRepoServiceNames(rt.repo.Name)
-	if len(services) == 0 {
-		return fallback
+// Single-service repos and repos with no services configured don't reach
+// this function — the caller short-circuits both.
+func detectAffectedServices(ctx context.Context, g vcs.VCS, repoPath string, currentTag string, services []string, pathMap map[string][]string) []string {
+	if currentTag == "" || pathMap == nil {
+		return nil
 	}
-	if len(services) == 1 {
-		return services
+	changed, err := g.ChangedFiles(ctx, repoPath, currentTag)
+	if err != nil || len(changed) == 0 {
+		return nil
 	}
-	if rt.currentTag == "" {
-		// First release — no previous tag to diff against; the whole
-		// repo's history is "affected." Repo name is the honest summary.
-		return fallback
-	}
-	pathMap := resolveServicePaths(rt.repo.Name)
-	if pathMap == nil {
-		// Multi-service repo without a path-map → can't narrow.
-		return fallback
-	}
-
-	changed, err := g.ChangedFiles(ctx, rt.repo.Path, rt.currentTag)
-	if err != nil {
-		return fallback
-	}
-	if len(changed) == 0 {
-		// Tagging the same commit as the previous release? Surface the
-		// repo name so the channel still sees a release was cut.
-		return fallback
-	}
-	result := matchServicePaths(rt.repo.Name, services, changed, pathMap)
-	if len(result.Services) == 0 {
-		return fallback
-	}
+	result := matchServicePaths("", services, changed, pathMap)
 	sort.Strings(result.Services)
 	return result.Services
+}
+
+// formatSubjects renders a service-list display string for a release.
+// Collapses to the repo name when subjects covers ALL configured
+// services (or when no services are configured), because a "we shipped
+// everything" announcement reads cleaner as the repo name than as a
+// long comma list. Otherwise joins subjects with sep so callers can
+// pick a separator that matches their surrounding context (`` `, ` ``
+// inside backticks for the Slack template, `, ` plain for the result
+// card).
+//
+// services may be empty (no services configured) — in that case any
+// non-empty subjects collapse to the repo name, matching the fallback
+// row behavior.
+func formatSubjects(repoName string, services, subjects []string, sep string) string {
+	if len(subjects) == 0 {
+		return repoName
+	}
+	if len(services) == 0 || len(subjects) == len(services) {
+		return repoName
+	}
+	return strings.Join(subjects, sep)
+}
+
+// defaultSubjectsFor returns the initial subject list for an eligible
+// repo before the user has a chance to override — used by both the
+// non-interactive `applyDefaults` path and (transitively) the form's
+// pre-check policy. Behavior matches the form's pre-checks so the
+// interactive and non-interactive paths render the same notification
+// when the user keeps the defaults.
+//
+// Rules (in order):
+//   - No services configured → [repo name] (the synthetic fallback).
+//   - Single service         → [that service].
+//   - Detection narrowed     → the detected subset.
+//   - Detection couldn't narrow → all services (errs toward inclusion).
+//
+// formatSubjects collapses cases where the result equals the full
+// services list back to the repo name in the rendered output, so the
+// "we don't know which" case still announces as the repo name unless
+// the user prunes.
+func defaultSubjectsFor(rt *releaseTarget) []string {
+	if len(rt.services) == 0 {
+		return []string{rt.repo.Name}
+	}
+	if len(rt.services) == 1 {
+		return []string{rt.services[0]}
+	}
+	if rt.affectedServices != nil {
+		out := make([]string, len(rt.affectedServices))
+		copy(out, rt.affectedServices)
+		return out
+	}
+	// Couldn't narrow — include all services.
+	out := make([]string, len(rt.services))
+	copy(out, rt.services)
+	return out
+}
+
+// preCheckPolicy returns a parallel-to-rt.services bool slice indicating
+// which services should be pre-checked in the form. Mirrors
+// defaultSubjectsFor's set so the form's initial selection produces the
+// same subjects an untouched default would.
+func preCheckPolicy(rt *releaseTarget) []bool {
+	checked := make([]bool, len(rt.services))
+	defaults := defaultSubjectsFor(rt)
+	want := make(map[string]struct{}, len(defaults))
+	for _, s := range defaults {
+		want[s] = struct{}{}
+	}
+	for i, s := range rt.services {
+		if _, ok := want[s]; ok {
+			checked[i] = true
+		}
+	}
+	return checked
+}
+
+// parseSubjectKey decodes an "i.j" form-option key back into (repoIdx,
+// serviceIdx). Returns ok=false on malformed input. serviceIdx may be -1
+// to signal the fallback "no services configured" row.
+func parseSubjectKey(key string) (repoIdx, serviceIdx int, ok bool) {
+	dot := strings.IndexByte(key, '.')
+	if dot < 0 {
+		return 0, 0, false
+	}
+	ri, err := strconv.Atoi(key[:dot])
+	if err != nil {
+		return 0, 0, false
+	}
+	si, err := strconv.Atoi(key[dot+1:])
+	if err != nil {
+		return 0, 0, false
+	}
+	return ri, si, true
 }
