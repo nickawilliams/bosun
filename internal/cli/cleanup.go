@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
@@ -16,7 +18,7 @@ import (
 func newCleanupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cleanup",
-		Short: "Remove workspace and feature branches",
+		Short: "Tear down a workspace's previews, branches, and worktrees",
 		Annotations: map[string]string{
 			headerAnnotationTitle: "cleanup workspace",
 		},
@@ -33,10 +35,11 @@ func newCleanupCmd() *cobra.Command {
 			_ = emitLifecyclePreamble(ctx, cc.Issue)
 
 			// Workspace-scoped repos carry the worktree path on
-			// Repository.Path; readiness uses that for its dirty/unpushed
-			// gather. The main repo path (needed for `git worktree remove`
-			// and `git branch -D`) comes from the project config — looked
-			// up by name into a parallel map.
+			// Repository.Path; the safety check uses that for its
+			// dirty / branch-sync / HEAD probes. The main repo path
+			// (needed for `git worktree remove` and `git branch -D`)
+			// comes from the project config — looked up by name into a
+			// parallel map.
 			workspaceRepos, err := resolveActiveRepositories(ctx, workspace, nil)
 			if err != nil {
 				return err
@@ -50,25 +53,53 @@ func newCleanupCmd() *cobra.Command {
 				mainPath[pr.Name] = pr.Path
 			}
 
-			// --- Pre-flight: Workspace Readiness ---
+			wsRoot := viper.GetString("workspace.root")
+			if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
+				wsRoot = filepath.Join(projectRoot, wsRoot)
+			}
+			wsPath := filepath.Join(wsRoot, workspace)
+
+			// --- Pre-flight: Cleanup Safety ---
 			//
-			// The readiness section's dirty gate replaces the inline
-			// dirty check this command used to do. The push offer it
-			// folds in is debatable for cleanup (we're about to delete
-			// the branch) but harmless if accepted; punting on splitting
-			// the helper until the awkwardness shows up in practice.
-			readiness, _, err := emitWorkspaceReadiness(ctx, g, workspaceRepos)
+			// Workspace-specific safety check (parallel to readiness):
+			// classifies each repo + the workspace itself across the
+			// safety matrix and gates on the worst severity. BLOCK
+			// findings (data loss) exit early unless --force; WARN
+			// findings (status mismatches) prompt Continue/Cancel.
+			host, _ := newCodeHost()
+			tracker, _ := newIssueTracker()
+			cleanupRepos, _, err := emitCleanupReadiness(ctx, g, host, tracker, workspaceRepos, wsPath, cc.Issue, force)
 			if err != nil {
-				return err // ErrCancelled (dirty gate) propagates as a clean abort
+				if errors.Is(err, ErrCancelled) {
+					return err
+				}
+				return err
+			}
+
+			// Resolve the actual branch each worktree is checked out on
+			// (handles the "manually checked out a different branch"
+			// case). emitCleanupReadiness already captured these; reuse
+			// them.
+			actualBranch := make(map[string]string, len(cleanupRepos))
+			for _, rc := range cleanupRepos {
+				actualBranch[rc.repo.Name] = rc.branch
 			}
 
 			// --- Plan + Apply ---
 			var actions []Action
 
-			for i := range readiness {
-				rr := &readiness[i]
-				repoName := rr.repo.Name
-				worktreePath := rr.repo.Path
+			// Preview env teardown — first action so the env goes
+			// down before any of the local destruction. Idempotent
+			// when no env is bound.
+			provider, _ := newPreviewProvider(workspace)
+			if provider != nil && cc.Issue != "" {
+				actions = append(actions, cleanupPreviewAction(ctx, provider, cc.Issue))
+			}
+
+			for i := range workspaceRepos {
+				r := workspaceRepos[i]
+				repoName := r.Name
+				worktreePath := r.Path
 				repoPath := mainPath[repoName]
 
 				actions = append(actions, Action{
@@ -88,15 +119,14 @@ func newCleanupCmd() *cobra.Command {
 				})
 			}
 
-			// Branch deletion uses each worktree's actual checked-out
-			// branch (captured by the readiness gather), which handles
-			// the case where a worktree has been manually checked out to
-			// a branch other than the workspace name.
-			for i := range readiness {
-				rr := &readiness[i]
-				repoName := rr.repo.Name
+			for i := range workspaceRepos {
+				r := workspaceRepos[i]
+				repoName := r.Name
 				repoPath := mainPath[repoName]
-				branch := rr.branch
+				branch := actualBranch[repoName]
+				if branch == "" {
+					branch = workspace
+				}
 
 				actions = append(actions, Action{
 					Op:     ui.PlanDestroy,
@@ -125,13 +155,10 @@ func newCleanupCmd() *cobra.Command {
 			}
 
 			// Post-apply: remove the workspace directory and any empty
-			// parents (e.g. "epic/" once the last EX-* workspace under it
-			// is cleaned).
-			wsRoot := viper.GetString("workspace.root")
-			if projectRoot := config.FindProjectRoot(); !filepath.IsAbs(wsRoot) && projectRoot != "" {
-				wsRoot = filepath.Join(projectRoot, wsRoot)
-			}
-			wsPath := filepath.Join(wsRoot, workspace)
+			// parents (e.g. "epic/" once the last EX-* workspace under
+			// it is cleaned). Stray files inside wsPath are gated by
+			// the safety check; by the time we reach here they've been
+			// explicitly acknowledged (--force) and we destroy them.
 			if err := os.RemoveAll(wsPath); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("removing workspace directory: %w", err)
 			}
@@ -150,6 +177,41 @@ func newCleanupCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	addIssueFlag(cmd)
-	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
+	cmd.Flags().Bool("force", false, "bypass cleanup-safety blockers (uncommitted changes, unmerged work, stray files)")
 	return cmd
+}
+
+// cleanupPreviewAction builds the preview-env teardown row in
+// cleanup's action plan. Assess checks whether an env is bound; no
+// env → ActionCompleted (the row still appears, marked as already
+// done). Apply tears down via the provider — idempotent on the
+// adapter side, so a stale registry entry doesn't cause failure.
+func cleanupPreviewAction(_ context.Context, provider preview.Provider, issueKey string) Action {
+	var envName string
+	return Action{
+		Op:     ui.PlanDestroy,
+		Action: "teardown",
+		Type:   "env",
+		Name:   issueKey,
+		Assess: func(ctx context.Context) (ActionState, string, error) {
+			env, err := provider.Get(ctx, issueKey)
+			if err != nil {
+				if errors.Is(err, preview.ErrNoEnvironment) {
+					return ActionCompleted, "(none)", nil
+				}
+				// Probe failure (network, indeterminate) — still
+				// attempt teardown so a registry entry doesn't strand.
+				envName = env.Name
+				if envName == "" {
+					envName = "(unknown)"
+				}
+				return ActionNeeded, envName, nil
+			}
+			envName = env.Name
+			return ActionNeeded, envName, nil
+		},
+		Apply: func(ctx context.Context) error {
+			return provider.Destroy(ctx, issueKey, envName)
+		},
+	}
 }
