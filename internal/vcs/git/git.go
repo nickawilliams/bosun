@@ -237,6 +237,32 @@ func (a *Adapter) Fetch(ctx context.Context, repositoryPath, remote, ref string)
 	return run(ctx, repositoryPath, "fetch", remote, ref)
 }
 
+// IsMergedInto reports whether branch is an ancestor of base.
+// `git merge-base --is-ancestor` exits 0 when branch's tip is reachable
+// from base, exit 1 when it isn't, anything else when the call itself
+// failed (e.g. an unknown ref). The non-binary exit codes have to be
+// surfaced as errors so callers don't mistake "couldn't tell" for
+// "definitely not merged" — that mistake would BLOCK cleanup on a
+// transient git failure.
+func (a *Adapter) IsMergedInto(ctx context.Context, repositoryPath, branch, base string) (bool, error) {
+	err := run(ctx, repositoryPath, "merge-base", "--is-ancestor", branch, base)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+// HeadSHA returns the commit SHA at HEAD for the given path. Works
+// for both bare repos and worktrees (rev-parse traverses the linked
+// .git file).
+func (a *Adapter) HeadSHA(ctx context.Context, repositoryPath string) (string, error) {
+	return output(ctx, repositoryPath, "rev-parse", "HEAD")
+}
+
 // run executes a git command in the given directory.
 func run(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)

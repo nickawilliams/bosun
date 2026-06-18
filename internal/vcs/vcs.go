@@ -100,4 +100,17 @@ type VCS interface {
 	// commit on branchName. Returns the zero time and an error when
 	// the branch doesn't exist or the lookup fails.
 	LastCommitTime(ctx context.Context, repositoryPath, branchName string) (time.Time, error)
+
+	// IsMergedInto reports whether branch's tip is an ancestor of base.
+	// True when every commit on branch is reachable from base (e.g.
+	// merged, fast-forwarded, rebased onto base). Used by the cleanup
+	// safety check to confirm work is preserved in base before allowing
+	// the branch to be deleted. base may be a local or remote-tracking
+	// ref (e.g. "origin/main").
+	IsMergedInto(ctx context.Context, repositoryPath, branch, base string) (bool, error)
+
+	// HeadSHA returns the commit SHA at HEAD for the given repository
+	// or worktree path. Used to compare a worktree's current commit
+	// against a PR's head SHA when classifying cleanup safety.
+	HeadSHA(ctx context.Context, repositoryPath string) (string, error)
 }

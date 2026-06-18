@@ -247,6 +247,85 @@ func TestWorktree(t *testing.T) {
 	}
 }
 
+func TestIsMergedInto(t *testing.T) {
+	repository := initTestRepositoryWithRemote(t)
+	a := New()
+	ctx := context.Background()
+
+	// Branch points at the same commit as main → trivially merged.
+	if err := a.CreateBranchFromHead(ctx, repository, "trivial"); err != nil {
+		t.Fatalf("CreateBranchFromHead() error: %v", err)
+	}
+	merged, err := a.IsMergedInto(ctx, repository, "trivial", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(trivial, main) error: %v", err)
+	}
+	if !merged {
+		t.Error("trivial branch (same commit as main) should report merged")
+	}
+
+	// Branch with new commits past main → not merged.
+	if err := run(ctx, repository, "checkout", "-b", "feature/unmerged"); err != nil {
+		t.Fatalf("checkout -b error: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(repository, "f.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "f.txt")
+	_ = run(ctx, repository, "commit", "-m", "unmerged work")
+
+	merged, err = a.IsMergedInto(ctx, repository, "feature/unmerged", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(feature/unmerged, main) error: %v", err)
+	}
+	if merged {
+		t.Error("feature/unmerged has commits past main; should not be merged")
+	}
+
+	// After merging the feature back into main, it should report merged.
+	_ = run(ctx, repository, "checkout", "main")
+	if err := run(ctx, repository, "merge", "--no-ff", "feature/unmerged", "-m", "merge"); err != nil {
+		t.Fatalf("merge error: %v", err)
+	}
+	merged, err = a.IsMergedInto(ctx, repository, "feature/unmerged", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(feature/unmerged, main) post-merge error: %v", err)
+	}
+	if !merged {
+		t.Error("feature/unmerged after merge to main should report merged")
+	}
+
+	// Unknown ref → error (not a silent false).
+	if _, err := a.IsMergedInto(ctx, repository, "does-not-exist", "main"); err == nil {
+		t.Error("IsMergedInto on unknown ref should return an error")
+	}
+}
+
+func TestHeadSHA(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	sha, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+	if len(sha) != 40 {
+		t.Errorf("HeadSHA() = %q, expected 40-char SHA", sha)
+	}
+
+	// Make a new commit and confirm HEAD moves.
+	_ = os.WriteFile(filepath.Join(repository, "x.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "x.txt")
+	_ = run(ctx, repository, "commit", "-m", "second")
+
+	sha2, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() after second commit error: %v", err)
+	}
+	if sha2 == sha {
+		t.Error("HeadSHA() should change after a new commit")
+	}
+}
+
 // TestCreateWorktree_StaleRegistration covers the case where a worktree
 // directory was deleted on disk (e.g., rm -rf) without `git worktree
 // remove`. Git's worktree admin metadata still references the path, so
