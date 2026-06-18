@@ -261,78 +261,51 @@ func emitCleanupReadiness(
 	probes := make([]repoCleanupProbe, len(repos))
 	var workspaceProbe workspaceCleanupProbe
 
-	gatherStatusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	steps := make([]ui.CardStep, 0, len(repos)+1)
-	for i := range repos {
-		r := repos[i]
-		spin := ui.NewCard(ui.CardRunning, "cleanup readiness").
-			Raw(gatherStatusMuted.Render("Checking ") +
-				ui.Keyword(r.Name) +
-				gatherStatusMuted.Render("..."))
-		steps = append(steps, ui.CardStep{
-			Card: spin,
-			Run: func() error {
-				probes[i] = gatherRepoProbe(ctx, g, host, r)
-				return nil
-			},
-		})
-	}
-
-	// Workspace-scoped gather step — issue + stray files. Runs last so
-	// the spinner cleanly moves through "Checking repo-1...", "...
-	// repo-N...", "Checking workspace...", then morphs into the result.
-	wsSpin := ui.NewCard(ui.CardRunning, "cleanup readiness").
-		Raw(gatherStatusMuted.Render("Checking workspace..."))
-	steps = append(steps, ui.CardStep{
-		Card: wsSpin,
-		Run: func() error {
-			workspaceProbe = gatherWorkspaceProbe(ctx, tracker, repos, wsPath, issueKey)
-			return nil
-		},
-	})
-
-	// The readiness card is always the spinner's final frame, in its
-	// natural severity-styled form. The Continue / Cancel prompt — when
-	// one is needed — lives in a separate Dialog below, matching the
-	// rest of the codebase's Y/N flow (release migration confirm, init
-	// reconfigure, etc.). Dialog rewinds itself on either answer, so
-	// the question card disappears once the user answers and the
-	// readiness card stays as the durable record of what was checked.
-	var (
-		repoResults       []repoCleanup
-		wsFindings        []cleanupFinding
-		worstSeverity     findingSeverity
-		anyBlock, anyWarn bool
-	)
-	_, err := ui.RunCardSteps(steps, func() *ui.Card {
-		repoResults, wsFindings, worstSeverity = classifyAll(probes, workspaceProbe)
-		anyBlock = worstSeverity == findingBlock
-		anyWarn = worstSeverity == findingWarn
-		return buildCleanupReadinessCard(repoResults, wsFindings)
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
+	// Raw / non-interactive mode: no group, no spinners. Gather
+	// sequentially, classify, print the static summary.
 	if !isInteractive() {
-		// In raw mode the successor was skipped — classify and print
-		// the card directly so non-interactive callers get the same
-		// summary.
-		if repoResults == nil {
-			repoResults, wsFindings, worstSeverity = classifyAll(probes, workspaceProbe)
-			anyBlock = worstSeverity == findingBlock
-			anyWarn = worstSeverity == findingWarn
+		for i, r := range repos {
+			probes[i] = gatherRepoProbe(ctx, g, host, r)
 		}
+		workspaceProbe = gatherWorkspaceProbe(ctx, tracker, repos, wsPath, issueKey)
+		repoResults, wsFindings, worstSeverity := classifyAll(probes, workspaceProbe)
 		buildCleanupReadinessCard(repoResults, wsFindings).Print()
-		if anyBlock && !force {
+		if worstSeverity == findingBlock && !force {
 			return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 		}
 		return repoResults, wsFindings, nil
 	}
 
+	// Interactive: one outer card per the workspace-readiness section,
+	// with a child spinner per repo (then one for the workspace as a
+	// whole) that resolves to its result row when the probe finishes.
+	// Pattern mirrors doctor.go's check groups — the user watches each
+	// repo's outcome appear in real time instead of seeing a single
+	// "Checking X..." that flicks through every name.
+	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
+		for i := range repos {
+			r := repos[i]
+			_ = grp.Spinner(r.Name, func() error {
+				probes[i] = gatherRepoProbe(ctx, g, host, r)
+				return nil
+			})
+			emitProbeRows(grp, ui.PreserveCase(r.Name), classifyRepo(probes[i]))
+		}
+		_ = grp.Spinner("workspace", func() error {
+			workspaceProbe = gatherWorkspaceProbe(ctx, tracker, repos, wsPath, issueKey)
+			return nil
+		})
+		emitProbeRows(grp, "workspace", classifyWorkspace(workspaceProbe))
+	})
+
+	// Group is closed; the readiness card is on screen with its rows
+	// resolved. Re-run classify so the return value and gate decision
+	// have the canonical data structures (classify is pure + cheap).
+	repoResults, wsFindings, worstSeverity := classifyAll(probes, workspaceProbe)
+	anyBlock := worstSeverity == findingBlock
+	anyWarn := worstSeverity == findingWarn
+
 	// Hard BLOCK path — no prompt, exit with an actionable error.
-	// HandleError will render the trailing "user cancelled" / error
-	// card; we just need to surface the actionable message.
 	if anyBlock && !force {
 		return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 	}
@@ -343,10 +316,8 @@ func emitCleanupReadiness(
 	}
 
 	// WARN (or --force with BLOCKs) → Continue / Cancel via Dialog.
-	// Title is a generic "Please Confirm" so the same wording can be
-	// reused across every readiness gate once the pattern propagates;
-	// the description carries the situational detail. Default to
-	// Cancel so an accidental Enter doesn't proceed past warnings.
+	// Dialog rewinds itself on either answer; the readiness card stays
+	// as the durable record of what was checked.
 	confirmed, err := NewDialog("Warning").
 		Description("Not all readiness checks passed, continue anyway?").
 		Affirmative("Continue").
@@ -360,6 +331,28 @@ func emitCleanupReadiness(
 		return nil, nil, ErrCancelled
 	}
 	return repoResults, wsFindings, nil
+}
+
+// emitProbeRows renders one row per finding (or a single ✓ row if
+// none) under a parent group. The row's severity drives the reporter
+// method: BLOCK → FailValue (✗), WARN → SkipValue (▲), anything else
+// → CompleteValue (✓ with detail). A no-findings probe emits a bare
+// ✓ <label> row.
+func emitProbeRows(grp ui.Reporter, label string, findings []cleanupFinding) {
+	if len(findings) == 0 {
+		grp.Complete(label)
+		return
+	}
+	for _, f := range findings {
+		switch f.severity {
+		case findingBlock:
+			grp.FailValue(label, f.message)
+		case findingWarn:
+			grp.SkipValue(label, f.message)
+		default:
+			grp.CompleteValue(label, f.message)
+		}
+	}
 }
 
 // gatherRepoProbe fans out the per-repo probes concurrently. Each
