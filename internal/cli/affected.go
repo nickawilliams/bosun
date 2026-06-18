@@ -161,13 +161,17 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 			}
 		}
 		if anyUnpushed {
+			// Push offer still uses the morphed CardInput-header
+			// pattern — the form's huh.Title carries the question
+			// body and the per-repo list, with the header providing
+			// the section anchor above it. Dialog isn't a natural
+			// fit for "do you want to push?" because Cancel here
+			// means "skip the push and continue," not "abort."
 			return ui.NewCard(ui.CardInput, "workspace readiness").Tight()
 		}
-		if anyDirty {
-			gate := buildWorkspaceReadinessCard(readiness)
-			gate.Text("")
-			return gate.AccentBody().Tight()
-		}
+		// Dirty (without unpushed) gates via Dialog below — the
+		// readiness card prints in its natural severity-styled form
+		// and the Dialog asks the proceed/abort question separately.
 		return buildWorkspaceReadinessCard(readiness)
 	})
 	if err != nil {
@@ -238,27 +242,21 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 		pushAccepted = confirmed
 	}
 
-	// Dirty-only path: gather's final frame is already the gate card.
-	// Run the confirm directly underneath it and rewind when done —
-	// no intermediate RunCardSteps needed (which would have re-painted
-	// the same gate, producing a flash).
+	// Dirty-only path: gather's final frame is the static readiness
+	// card. Dialog handles the proceed/abort question underneath.
 	if !anyUnpushed && anyDirty {
-		ui.ClearSpacer()
-		proceed := false
-		if err := runForm(
-			newConfirm().
-				Affirmative("Continue").
-				Negative("Cancel").
-				Value(&proceed),
-		); err != nil {
+		confirmed, err := NewDialog("Warning").
+			Description("Not all readiness checks passed, continue anyway?").
+			Affirmative("Continue").
+			Negative("Cancel").
+			Default(false).
+			Show()
+		if err != nil {
 			return nil, nil, err
 		}
-		if !proceed {
-			ui.RequestSpacer()
+		if !confirmed {
 			return nil, nil, ErrCancelled
 		}
-		gatherRewind()
-		buildWorkspaceReadinessCard(readiness).Print()
 		return readiness, repoBranch, nil
 	}
 
@@ -292,12 +290,7 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 		}
 	}
 
-	pushRewind, err := ui.RunCardSteps(pushSteps, func() *ui.Card {
-		if anyDirty {
-			gate := buildWorkspaceReadinessCard(readiness)
-			gate.Text("")
-			return gate.AccentBody().Tight()
-		}
+	_, err = ui.RunCardSteps(pushSteps, func() *ui.Card {
 		return buildWorkspaceReadinessCard(readiness)
 	})
 	if err != nil {
@@ -306,23 +299,23 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 		return nil, nil, err
 	}
 
+	// Same Dialog as the dirty-only path above. Reached when the
+	// workspace had both unpushed commits AND dirty trees: the push
+	// offer answered the unpushed half, this Dialog answers the dirty
+	// half.
 	if anyDirty {
-		ui.ClearSpacer()
-		proceed := false
-		if err := runForm(
-			newConfirm().
-				Affirmative("Continue").
-				Negative("Cancel").
-				Value(&proceed),
-		); err != nil {
+		confirmed, err := NewDialog("Warning").
+			Description("Not all readiness checks passed, continue anyway?").
+			Affirmative("Continue").
+			Negative("Cancel").
+			Default(false).
+			Show()
+		if err != nil {
 			return nil, nil, err
 		}
-		if !proceed {
-			ui.RequestSpacer()
+		if !confirmed {
 			return nil, nil, ErrCancelled
 		}
-		pushRewind()
-		buildWorkspaceReadinessCard(readiness).Print()
 	}
 	return readiness, repoBranch, nil
 }
