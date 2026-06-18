@@ -291,26 +291,24 @@ func emitCleanupReadiness(
 		},
 	})
 
-	// Classification is cheap and pure; defer to the successor closure
-	// so we have results before the spinner morphs.
+	// The readiness card is always the spinner's final frame, in its
+	// natural severity-styled form. The Continue / Cancel prompt — when
+	// one is needed — lives in a separate Dialog below, matching the
+	// rest of the codebase's Y/N flow (release migration confirm, init
+	// reconfigure, etc.). Dialog rewinds itself on either answer, so
+	// the question card disappears once the user answers and the
+	// readiness card stays as the durable record of what was checked.
 	var (
-		repoResults    []repoCleanup
-		wsFindings     []cleanupFinding
-		worstSeverity  findingSeverity
+		repoResults       []repoCleanup
+		wsFindings        []cleanupFinding
+		worstSeverity     findingSeverity
 		anyBlock, anyWarn bool
 	)
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+	_, err := ui.RunCardSteps(steps, func() *ui.Card {
 		repoResults, wsFindings, worstSeverity = classifyAll(probes, workspaceProbe)
 		anyBlock = worstSeverity == findingBlock
 		anyWarn = worstSeverity == findingWarn
-
-		card := buildCleanupReadinessCard(repoResults, wsFindings)
-		// Tight when a prompt will sit underneath; otherwise let the
-		// normal trailing spacer follow the static card.
-		if (anyBlock && !force) || anyWarn || (anyBlock && force) {
-			return card.Tight()
-		}
-		return card
+		return buildCleanupReadinessCard(repoResults, wsFindings)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -322,49 +320,45 @@ func emitCleanupReadiness(
 		// summary.
 		if repoResults == nil {
 			repoResults, wsFindings, worstSeverity = classifyAll(probes, workspaceProbe)
+			anyBlock = worstSeverity == findingBlock
+			anyWarn = worstSeverity == findingWarn
 		}
 		buildCleanupReadinessCard(repoResults, wsFindings).Print()
-		if worstSeverity == findingBlock && !force {
+		if anyBlock && !force {
 			return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 		}
 		return repoResults, wsFindings, nil
 	}
 
 	// Hard BLOCK path — no prompt, exit with an actionable error.
+	// HandleError will render the trailing "user cancelled" / error
+	// card; we just need to surface the actionable message.
 	if anyBlock && !force {
-		ui.RequestSpacer()
 		return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 	}
 
-	// SAFE path — the card already painted as the spinner's final
-	// frame. Nothing to gate.
+	// SAFE path — readiness card already on screen, nothing to gate.
 	if !anyBlock && !anyWarn {
 		return repoResults, wsFindings, nil
 	}
 
-	// WARN (or --force with BLOCKs) → Continue/Cancel underneath the
-	// card. Tight final frame means no spacer between card and form;
-	// ClearSpacer before runForm so its prologue FlushSpacer doesn't
-	// emit a stray │ row (same fix as the push-confirm form).
-	ui.ClearSpacer()
-	proceed := false
-	if err := runForm(
-		newConfirm().
-			Affirmative("Continue").
-			Negative("Cancel").
-			Value(&proceed),
-	); err != nil {
+	// WARN (or --force with BLOCKs) → Continue / Cancel via Dialog.
+	// Title is a generic "Please Confirm" so the same wording can be
+	// reused across every readiness gate once the pattern propagates;
+	// the description carries the situational detail. Default to
+	// Cancel so an accidental Enter doesn't proceed past warnings.
+	confirmed, err := NewDialog("Warning").
+		Description("Not all readiness checks passed, continue anyway?").
+		Affirmative("Continue").
+		Negative("Cancel").
+		Default(false).
+		Show()
+	if err != nil {
 		return nil, nil, err
 	}
-	if !proceed {
-		ui.RequestSpacer()
+	if !confirmed {
 		return nil, nil, ErrCancelled
 	}
-	// Rewind the gated card and reprint the static version so the
-	// final post-prompt layout has the normal trailing spacer (matches
-	// the dirty-gate handling in emitWorkspaceReadiness).
-	rewind()
-	buildCleanupReadinessCard(repoResults, wsFindings).Print()
 	return repoResults, wsFindings, nil
 }
 
