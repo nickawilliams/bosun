@@ -59,7 +59,7 @@ func newCleanupCmd() *cobra.Command {
 			}
 			wsPath := filepath.Join(wsRoot, workspace)
 
-			// --- Pre-flight: Cleanup Safety ---
+			// --- Pre-flight: Cleanup Readiness ---
 			//
 			// Workspace-specific safety check (parallel to readiness):
 			// classifies each repo + the workspace itself across the
@@ -177,7 +177,7 @@ func newCleanupCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	addIssueFlag(cmd)
-	cmd.Flags().Bool("force", false, "bypass cleanup-safety blockers (uncommitted changes, unmerged work, stray files)")
+	cmd.Flags().Bool("force", false, "bypass cleanup-readiness blockers (uncommitted changes, unmerged work, stray files)")
 	return cmd
 }
 

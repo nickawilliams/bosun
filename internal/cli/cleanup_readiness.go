@@ -17,9 +17,9 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
-// cleanupSafetyProbeTimeout caps the duration of optional probes
+// cleanupReadinessProbeTimeout caps the duration of optional probes
 // (issue tracker) so a flaky source doesn't dominate the gather phase.
-const cleanupSafetyProbeTimeout = 3 * time.Second
+const cleanupReadinessProbeTimeout = 3 * time.Second
 
 // findingSeverity ranks safety findings worst-first (highest int = most
 // severe). Used to aggregate per-repo and per-workspace findings into a
@@ -265,7 +265,7 @@ func emitCleanupReadiness(
 	steps := make([]ui.CardStep, 0, len(repos)+1)
 	for i := range repos {
 		r := repos[i]
-		spin := ui.NewCard(ui.CardRunning, "cleanup safety").
+		spin := ui.NewCard(ui.CardRunning, "cleanup readiness").
 			Raw(gatherStatusMuted.Render("Checking ") +
 				ui.Keyword(r.Name) +
 				gatherStatusMuted.Render("..."))
@@ -281,7 +281,7 @@ func emitCleanupReadiness(
 	// Workspace-scoped gather step — issue + stray files. Runs last so
 	// the spinner cleanly moves through "Checking repo-1...", "...
 	// repo-N...", "Checking workspace...", then morphs into the result.
-	wsSpin := ui.NewCard(ui.CardRunning, "cleanup safety").
+	wsSpin := ui.NewCard(ui.CardRunning, "cleanup readiness").
 		Raw(gatherStatusMuted.Render("Checking workspace..."))
 	steps = append(steps, ui.CardStep{
 		Card: wsSpin,
@@ -325,7 +325,7 @@ func emitCleanupReadiness(
 		}
 		buildCleanupReadinessCard(repoResults, wsFindings).Print()
 		if worstSeverity == findingBlock && !force {
-			return repoResults, wsFindings, fmt.Errorf("cleanup safety: blocking findings present; re-run with --force to override")
+			return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 		}
 		return repoResults, wsFindings, nil
 	}
@@ -333,7 +333,7 @@ func emitCleanupReadiness(
 	// Hard BLOCK path — no prompt, exit with an actionable error.
 	if anyBlock && !force {
 		ui.RequestSpacer()
-		return repoResults, wsFindings, fmt.Errorf("cleanup safety: blocking findings present; re-run with --force to override")
+		return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
 	}
 
 	// SAFE path — the card already painted as the spinner's final
@@ -479,7 +479,7 @@ func gatherWorkspaceProbe(ctx context.Context, tracker issue.Tracker, repos []Re
 	// bottleneck the gather. Timeout / error → emit nothing; the
 	// issue check is the softest signal and a missing one is fine.
 	if tracker != nil && issueKey != "" {
-		issueCtx, cancel := context.WithTimeout(ctx, cleanupSafetyProbeTimeout)
+		issueCtx, cancel := context.WithTimeout(ctx, cleanupReadinessProbeTimeout)
 		defer cancel()
 		if detail, err := tracker.GetIssue(issueCtx, issueKey); err == nil {
 			p.issueStatus = detail.Status
@@ -514,7 +514,7 @@ func classifyAll(probes []repoCleanupProbe, ws workspaceCleanupProbe) ([]repoCle
 	return results, wsFindings, worst
 }
 
-// buildCleanupReadinessCard renders the Cleanup Safety card: one Item
+// buildCleanupReadinessCard renders the Cleanup Readiness card: one Item
 // row per finding, sorted by severity (worst first), within severity
 // sorted by source (workspace first, then repo name). Repos with no
 // findings collapse to a single SAFE row each.
@@ -592,7 +592,7 @@ func buildCleanupReadinessCard(repos []repoCleanup, wsFindings []cleanupFinding)
 		}
 	}
 
-	card := ui.NewCard(state, "cleanup safety")
+	card := ui.NewCard(state, "cleanup readiness")
 	for _, r := range rows {
 		card.Item(r.glyph, r.content)
 	}
