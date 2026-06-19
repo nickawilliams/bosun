@@ -319,6 +319,47 @@ display:
 		}
 	})
 
+	t.Run("required key set via BOSUN_* env var counts as set", func(t *testing.T) {
+		// baseConfig omits issue_tracker.email + issue_tracker.token
+		// (both required) — without env vars they'd be "missing".
+		// Setting them via the automatic BOSUN_* names should
+		// satisfy the check: ✓ N/N keys, not a ✗ leaf per key.
+		t.Setenv("BOSUN_ISSUE_TRACKER_EMAIL", "user@example.com")
+		t.Setenv("BOSUN_ISSUE_TRACKER_TOKEN", "tok-from-env")
+		out, err := runConfig(t, "check", "issue_tracker")
+		if err != nil {
+			t.Fatalf("check: %v\nstdout: %s", err, out)
+		}
+		if strings.Contains(out, "not set") {
+			t.Errorf("env-provided required keys should not be 'not set'; got:\n%s", out)
+		}
+	})
+
+	t.Run("required key set via explicit EnvVar counts as set", func(t *testing.T) {
+		// code_host.token's schema declares EnvVar: "GITHUB_TOKEN" —
+		// neither the file nor BOSUN_CODE_HOST_TOKEN sets it, but
+		// GITHUB_TOKEN should be honored by validateGroup.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+  email: user@example.com
+  token: tok
+code_host:
+  provider: github
+  owner: example
+`)
+		t.Setenv("GITHUB_TOKEN", "tok-from-explicit-env")
+		if err := h.Run("config", "check", "code_host"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		out := h.Stdout()
+		if strings.Contains(out, "not set") {
+			t.Errorf("GITHUB_TOKEN should satisfy code_host.token (EnvVar override); got:\n%s", out)
+		}
+	})
+
 	t.Run("group filter narrows the tree", func(t *testing.T) {
 		out, err := runConfig(t, "check", "branch")
 		if err != nil {

@@ -585,10 +585,17 @@ type configIssue struct {
 func validateGroup(groupName string, group ConfigGroup) []configIssue {
 	var issues []configIssue
 	for _, ck := range group.Keys {
-		fk := fullKey(groupName, ck)
-		value := viper.GetString(fk)
+		// resolveConfigValue honors env vars (explicit EnvVar +
+		// automatic BOSUN_*) in addition to viper's merged file
+		// state. Previously this used bare viper.GetString, which
+		// missed both the explicit-EnvVar tier and the BOSUN_*
+		// computed names (viper's AutomaticEnv has no
+		// `.`→`_` key replacer, so BOSUN_JIRA_TOKEN never
+		// matched `jira.token`). A schema-required value provided
+		// via env was therefore reported as "missing".
+		value := resolveConfigValue(groupName, ck)
 
-		if ck.Required && value == "" && ck.Default == "" {
+		if ck.Required && value == "" {
 			issues = append(issues, configIssue{
 				Key:      ck.Key,
 				Severity: configFail,
@@ -731,15 +738,16 @@ func runConfigCheck(args []string) error {
 }
 
 // checkGroupCompleteness returns the names of missing required keys
-// in a config group.
+// in a config group. Uses resolveConfigValue so env-provided values
+// (explicit EnvVar or automatic BOSUN_*) count as "set" — same fix
+// as validateGroup; doctor uses this for issue-tracker completeness.
 func checkGroupCompleteness(groupName string, group ConfigGroup) []string {
 	var missing []string
 	for _, ck := range group.Keys {
 		if !ck.Required {
 			continue
 		}
-		fk := fullKey(groupName, ck)
-		if viper.GetString(fk) == "" && ck.Default == "" {
+		if resolveConfigValue(groupName, ck) == "" {
 			missing = append(missing, ck.Key)
 		}
 	}
