@@ -887,11 +887,15 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 			// sweep-up. We want the lowest-semver containing
 			// release (the one that first shipped this work), so
 			// sort ascending before walking.
+			//
+			// Note: we do NOT filter out rt.currentTag here.
+			// currentTag is "the current latest release on the host"
+			// (from GetLatestTag) — which IS the sweep-up tag in
+			// the common case where the merge has already been
+			// released. Filtering it out would skip the correct
+			// answer and pick a stale tag-without-release instead.
 			candidates := make([]string, 0, len(tags))
 			for _, t := range tags {
-				if t == rt.currentTag {
-					continue // The workspace's base tag — not a sweep-up.
-				}
 				if !releaseTagPattern.MatchString(t) {
 					continue
 				}
