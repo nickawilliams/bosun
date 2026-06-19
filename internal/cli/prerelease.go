@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,25 @@ type releaseTarget struct {
 	subjects []string
 
 	include bool // selected to release; derived from len(subjects) > 0
+
+	// containingRelease is set when our workspace's HEAD is already
+	// reachable from an existing release tag (sweep-up case: another
+	// user cut a release whose range included our work). Non-nil →
+	// not eligible for a new release; the existing release stands in.
+	containingRelease *code.Release
+
+	// extraPRs lists PRs merged into the default branch in the
+	// release range that aren't part of the workspace's own work.
+	// Surfaced in the result card and notification so the user sees
+	// "this release also ships PRs from other contributors."
+	extraPRs []code.PullRequest
+
+	// workspacePRNumber is the workspace's own PR for this repo, when
+	// one is found via GetPRForBranch. Used to exclude it from
+	// extraPRs and to label the workspace-branch context. Zero when
+	// no PR exists (e.g. never pushed) — the extras list then
+	// includes every merged PR in the range.
+	workspacePRNumber int
 }
 
 // eligible reports whether rt is a candidate for a new release: its
@@ -65,6 +85,12 @@ type releaseTarget struct {
 // tag. Repos already at the target version (or with errors) are not
 // offered in the selection form.
 func (rt *releaseTarget) eligible() bool {
+	if rt.containingRelease != nil {
+		// Another release already contains our work — don't cut a
+		// duplicate. The notify path handles announcing it if Slack
+		// doesn't already know.
+		return false
+	}
 	return rt.tagErr == nil && rt.nextVersion != "" && rt.nextVersion != rt.currentTag
 }
 
@@ -171,6 +197,18 @@ func newPrereleaseCmd() *cobra.Command {
 				subjects []string // user-selected services; formatSubjects collapses to repo when full coverage
 				release  code.Release
 				version  string
+
+				// isExisting is true when this result represents a
+				// release another user cut whose tag already contains
+				// our work (sweep-up case). Notify Apply consults
+				// HasAnnouncement before re-posting and skips when an
+				// announcement is already in the channel.
+				isExisting bool
+
+				// extraPRs carries the "this release also includes
+				// work by these contributors" list, surfaced in both
+				// the result card and the notification.
+				extraPRs []code.PullRequest
 			}
 			var releaseResults []releaseResult
 
@@ -187,6 +225,28 @@ func newPrereleaseCmd() *cobra.Command {
 								return 0, "", rt.tagErr
 							}
 							if !rt.include {
+								// Containing-release: another user already
+								// cut a release whose tag contains our work
+								// (sweep-up). Capture it as a result so the
+								// notify path can check Slack and announce
+								// if missing. Render as "in v1.2.4" (the
+								// existing tag).
+								if rt.containingRelease != nil {
+									releaseResults = append(releaseResults, releaseResult{
+										repo:       rt.repo.Name,
+										services:   rt.services,
+										subjects:   rt.subjects,
+										release:    *rt.containingRelease,
+										version:    rt.containingRelease.Tag,
+										isExisting: true,
+										extraPRs:   rt.extraPRs,
+									})
+									detail := "in " + rt.containingRelease.Tag
+									if rt.containingRelease.AuthorLogin != "" {
+										detail += " (by @" + rt.containingRelease.AuthorLogin + ")"
+									}
+									return ActionCompleted, detail, nil
+								}
 								// Already at a release version — capture it so
 								// notifications still list the repo, and render
 								// an unchanged row (the = glyph already reads as
@@ -239,6 +299,7 @@ func newPrereleaseCmd() *cobra.Command {
 								subjects: rt.subjects,
 								release:  rel,
 								version:  rt.nextVersion,
+								extraPRs: rt.extraPRs,
 							})
 							return nil
 						},
@@ -279,8 +340,22 @@ func newPrereleaseCmd() *cobra.Command {
 						sort.Slice(releaseResults, func(i, j int) bool {
 							return releaseResults[i].repo < releaseResults[j].repo
 						})
-						items := make([]notify.Item, len(releaseResults))
-						for i, r := range releaseResults {
+						items := make([]notify.Item, 0, len(releaseResults))
+						for _, r := range releaseResults {
+							// Containing-release rows (sweep-up): another
+							// user cut the release. Skip the item when
+							// Slack already has an announcement for that
+							// URL — avoids duplicate posts when multiple
+							// users run prerelease for overlapping work.
+							// Soft-fail on HasAnnouncement errors: post
+							// conservatively so we never silently miss
+							// an announcement on a transient lookup hiccup.
+							if r.isExisting {
+								found, _ := releaseNotifier.HasAnnouncement(ctx, releaseChannel, r.release.URL)
+								if found {
+									continue
+								}
+							}
 							// formatSubjects collapses to repo name when the
 							// user kept (or seeded) all services, so the team's
 							// "we shipped everything in this repo" announcement
@@ -290,12 +365,18 @@ func newPrereleaseCmd() *cobra.Command {
 							// template's outer backticks, producing
 							//     going out `svc-a`, `svc-b`: <url>
 							// for the partial-selection case.
-							items[i] = notify.Item{
+							items = append(items, notify.Item{
 								Label:  formatSubjects(r.repo, r.services, r.subjects, "`, `"),
 								URL:    r.release.URL,
 								Detail: r.version,
 								Body:   r.release.Body, // host-generated release notes
-							}
+							})
+						}
+						if len(items) == 0 {
+							// Everything was already announced — nothing to
+							// post. Returning nil here lets the action card
+							// finalize as Completed without sending.
+							return nil
 						}
 						_, err := releaseNotifier.Notify(ctx, notify.Message{
 							Channel:  releaseChannel,
@@ -383,6 +464,13 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 					pathMap := resolveServicePaths(rt.repo.Name)
 					rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
 				}
+
+				// Multi-user awareness: detect whether someone else
+				// already cut a release whose range includes our HEAD,
+				// and enumerate any "extra" PRs (work by other
+				// contributors) that will get swept into a release we
+				// create. See ROADMAP / plan for the framing.
+				resolveMultiUserContext(ctx, g, host, rt)
 				return nil
 			},
 		})
@@ -577,6 +665,16 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 		case rt.tagErr != nil:
 			nFail++
 			rows = append(rows, row{name, glyphFail, on(name, rt.tagErr.Error())})
+		case rt.containingRelease != nil:
+			// Sweep-up: another release already contains our work.
+			// Render as a skipped row with "in <tag>" + author so the
+			// user sees who shipped it.
+			nSkip++
+			note := "in " + rt.containingRelease.Tag
+			if rt.containingRelease.AuthorLogin != "" {
+				note += " (by @" + rt.containingRelease.AuthorLogin + ")"
+			}
+			rows = append(rows, row{name, glyphOff, off(name, note)})
 		case rt.include:
 			nOK++
 			// Append the user-selected subjects in parens when partial;
@@ -606,10 +704,124 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "releases")
+	// Build a sorted lookup so extras-continuation rows land
+	// immediately under each repo's primary row, preserving the
+	// alphabetical sort the rows already follow.
+	extrasByRepo := make(map[string]string, len(targets))
+	for i := range targets {
+		rt := &targets[i]
+		if line := formatExtrasNote(rt.extraPRs); line != "" {
+			extrasByRepo[rt.repo.Name] = line
+		}
+	}
+	extrasGlyph := muted.Render("+")
 	for _, r := range rows {
 		card.Item(r.glyph, r.content)
+		if extras, ok := extrasByRepo[r.repo]; ok {
+			card.Item(extrasGlyph, muted.Render(extras))
+		}
 	}
 	return card
+}
+
+// formatExtrasNote composes the muted continuation row shown under a
+// repo when other PRs are bundled into the release range. Empty
+// result → no continuation row. Truncates to keep the line readable.
+func formatExtrasNote(prs []code.PullRequest) string {
+	if len(prs) == 0 {
+		return ""
+	}
+	const limit = 3
+	parts := make([]string, 0, limit)
+	for i, pr := range prs {
+		if i >= limit {
+			break
+		}
+		entry := fmt.Sprintf("#%d", pr.Number)
+		if pr.AuthorLogin != "" {
+			entry += " @" + pr.AuthorLogin
+		}
+		parts = append(parts, entry)
+	}
+	out := "also " + strings.Join(parts, ", ")
+	if len(prs) > limit {
+		out += fmt.Sprintf(", and %d more", len(prs)-limit)
+	}
+	return out
+}
+
+// releaseTagPattern matches release-shaped tags so resolveMultiUserContext
+// can ignore non-release tags (feature flags, infra refs, etc.) when
+// walking TagsContaining results. Same shape as the GitHub adapter's
+// semver match — kept local since this is a filter, not a parser.
+var releaseTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
+
+// resolveMultiUserContext checks for sweep-up / containing-release
+// scenarios and enumerates "extra" PRs in the release range that
+// aren't the workspace's own work. Populates rt.containingRelease,
+// rt.extraPRs, and rt.workspacePRNumber as a side effect. Failures
+// (network errors, etc.) are swallowed — multi-user awareness is a
+// nice-to-have, not load-bearing for the release itself.
+func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt *releaseTarget) {
+	// Look up the workspace's own PR for this repo so we can exclude
+	// it from the extras list (and use it as a marker that the branch
+	// has a tracked PR — never-pushed repos return PR.Number == 0).
+	if pr, err := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch); err == nil {
+		rt.workspacePRNumber = pr.Number
+	}
+
+	// Refresh tags so containing-release detection sees anything
+	// pushed by other users in the last few minutes. Best-effort —
+	// a fetch failure just means we work with whatever's local.
+	_ = g.FetchTags(ctx, rt.repo.Path, "origin")
+
+	// Find the workspace branch's HEAD SHA, then look up tags
+	// containing it. A tag NEWER than rt.currentTag that contains
+	// our HEAD is, by definition, a release that already includes
+	// our work — someone else cut it (sweep-up case, or a
+	// concurrent race).
+	headSHA, err := g.HeadSHA(ctx, rt.repo.Path)
+	if err == nil && headSHA != "" {
+		tags, err := g.TagsContaining(ctx, rt.repo.Path, headSHA)
+		if err == nil {
+			var match string
+			for _, t := range tags {
+				if t == rt.currentTag {
+					continue // The workspace's base tag — not a sweep-up.
+				}
+				if !releaseTagPattern.MatchString(t) {
+					continue
+				}
+				match = t
+				break
+			}
+			if match != "" {
+				if rel, err := host.GetReleaseByTag(ctx, rt.owner, rt.repoName, match); err == nil {
+					rt.containingRelease = &rel
+				}
+			}
+		}
+	}
+
+	// Enumerate extras: PRs merged into the default branch in the
+	// release range that aren't the workspace's own PR. Skip when no
+	// currentTag exists (first release — there's nothing to compare
+	// against; the whole history would show as "extras", which isn't
+	// useful framing).
+	if rt.currentTag == "" {
+		return
+	}
+	var exclude []int
+	if rt.workspacePRNumber > 0 {
+		exclude = []int{rt.workspacePRNumber}
+	}
+	headRef := rt.branch
+	if rt.containingRelease != nil {
+		headRef = rt.containingRelease.Tag
+	}
+	if prs, err := host.PRsInRange(ctx, rt.owner, rt.repoName, rt.currentTag, headRef, exclude); err == nil {
+		rt.extraPRs = prs
+	}
 }
 
 // detectAffectedServices narrows a repo's configured service list down

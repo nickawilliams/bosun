@@ -3,7 +3,10 @@ package cli
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/nickawilliams/bosun/internal/code"
 )
 
 func TestReleaseTargetClassification(t *testing.T) {
@@ -34,6 +37,21 @@ func TestReleaseTargetClassification(t *testing.T) {
 			wantEligible:  false,
 			wantPreselect: false,
 			wantNote:      "v2.0.0",
+		},
+		{
+			name: "containing release pins eligibility to false",
+			// Even when nextVersion would be a bump, a release tag
+			// containing our HEAD means we should NOT cut a new one
+			// — eligible() flips to false; the notify path handles
+			// the existing release.
+			target: releaseTarget{
+				currentTag:        "v1.2.3",
+				nextVersion:       "v1.2.4",
+				containingRelease: &code.Release{Tag: "v1.2.4", AuthorLogin: "alice"},
+			},
+			wantEligible:  false,
+			wantPreselect: false,
+			wantNote:      "v1.2.3",
 		},
 		{
 			name:          "lookup error",
@@ -170,6 +188,75 @@ func TestFormatSubjects(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatExtrasNote(t *testing.T) {
+	tests := []struct {
+		name string
+		prs  []code.PullRequest
+		want string
+	}{
+		{
+			name: "empty list → empty string",
+			prs:  nil,
+			want: "",
+		},
+		{
+			name: "single PR",
+			prs:  []code.PullRequest{{Number: 42, AuthorLogin: "alice"}},
+			want: "also #42 @alice",
+		},
+		{
+			name: "two PRs",
+			prs: []code.PullRequest{
+				{Number: 42, AuthorLogin: "alice"},
+				{Number: 43, AuthorLogin: "bob"},
+			},
+			want: "also #42 @alice, #43 @bob",
+		},
+		{
+			name: "three PRs inline",
+			prs: []code.PullRequest{
+				{Number: 42, AuthorLogin: "alice"},
+				{Number: 43, AuthorLogin: "bob"},
+				{Number: 44, AuthorLogin: "carol"},
+			},
+			want: "also #42 @alice, #43 @bob, #44 @carol",
+		},
+		{
+			name: "more than three truncates with count",
+			prs: []code.PullRequest{
+				{Number: 42, AuthorLogin: "alice"},
+				{Number: 43, AuthorLogin: "bob"},
+				{Number: 44, AuthorLogin: "carol"},
+				{Number: 45, AuthorLogin: "dave"},
+				{Number: 46, AuthorLogin: "eve"},
+			},
+			want: "also #42 @alice, #43 @bob, #44 @carol, and 2 more",
+		},
+		{
+			name: "PR without author renders just the number",
+			prs:  []code.PullRequest{{Number: 50}},
+			want: "also #50",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatExtrasNote(tt.prs)
+			if got != tt.want {
+				t.Errorf("formatExtrasNote() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// Sanity: the truncated form preserves the "and N more" phrasing
+	// regardless of truncation count.
+	suffix := strings.HasSuffix(formatExtrasNote([]code.PullRequest{
+		{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4},
+	}), "and 1 more")
+	if !suffix {
+		t.Errorf("expected truncation suffix 'and 1 more'")
 	}
 }
 
