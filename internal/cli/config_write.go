@@ -140,7 +140,16 @@ func newConfigEditCmd() *cobra.Command {
 				editor = "vi"
 			}
 
-			c := exec.Command(editor, configPath)
+			// Split EDITOR on whitespace so multi-word values work:
+			// `mate -w`, `code --wait`, `vim -p`, etc. Go's exec.Command
+			// treats its first argument as the literal binary name (no
+			// shell splitting), so without this `EDITOR="mate -w"`
+			// looks for a binary called "mate -w" — quoting the space
+			// into the executable name. strings.Fields handles the
+			// common cases; truly exotic EDITOR values (quoted paths
+			// with spaces) would need shell parsing, which we punt on.
+			parts := strings.Fields(editor)
+			c := exec.Command(parts[0], append(parts[1:], configPath)...)
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
