@@ -79,6 +79,15 @@ type releaseTarget struct {
 	// no PR exists (e.g. never pushed) — the extras list then
 	// includes every merged PR in the range.
 	workspacePRNumber int
+
+	// workspaceMergeSHA is the squash/merge commit on the default
+	// branch produced when the workspace's PR was merged. Populated
+	// alongside workspacePRNumber when the PR is in "merged" state.
+	// Used as CreateRelease's Target so GitHub's
+	// generate_release_notes can trace PRs from a commit that's
+	// actually on the default branch — the workspace branch's HEAD
+	// (pre-squash) isn't on main and can't seed a useful changelog.
+	workspaceMergeSHA string
 }
 
 // eligible reports whether rt is a candidate for a new release: its
@@ -283,11 +292,24 @@ func newPrereleaseCmd() *cobra.Command {
 							// phase of selectReleaseTargets and finalized by the
 							// form (or applyDefaults in the non-interactive
 							// path). Apply just reads them through.
+							// Tag the merge commit on the default branch when the
+							// workspace's PR has been merged — the workspace
+							// branch's HEAD is the local pre-squash commit, which
+							// isn't on main and would leave generate_release_notes
+							// with no PRs to trace, producing an empty "What's
+							// Changed" body. The merge commit IS on main and seeds
+							// the changelog correctly. Falls back to the workspace
+							// branch when no merge SHA is available (unmerged
+							// workspace cutting a pre-merge release).
+							target := rt.branch
+							if rt.workspaceMergeSHA != "" {
+								target = rt.workspaceMergeSHA
+							}
 							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 								Owner:         rt.owner,
 								Repository:    rt.repoName,
 								Tag:           rt.nextVersion,
-								Target:        rt.branch,
+								Target:        target,
 								Name:          rt.nextVersion,
 								GenerateNotes: true,
 							})
@@ -852,6 +874,9 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	if pr, err := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch); err == nil {
 		workspacePR = pr
 		rt.workspacePRNumber = pr.Number
+		if pr.State == "merged" {
+			rt.workspaceMergeSHA = pr.MergeCommitSHA
+		}
 	}
 
 	// Refresh tags so containing-release detection sees anything
