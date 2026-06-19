@@ -113,4 +113,19 @@ type VCS interface {
 	// or worktree path. Used to compare a worktree's current commit
 	// against a PR's head SHA when classifying cleanup safety.
 	HeadSHA(ctx context.Context, repositoryPath string) (string, error)
+
+	// TagsContaining returns every tag whose history reaches sha.
+	// Wraps `git tag --contains <sha>` — a single local syscall, no
+	// network. Used by prerelease to detect when a workspace's HEAD
+	// is already in an existing release tag (so we can skip the
+	// CreateRelease call and surface the containing release in the
+	// result card). Empty slice means no tag contains the commit.
+	TagsContaining(ctx context.Context, repositoryPath, sha string) ([]string, error)
+
+	// FetchTags refreshes tag refs from remote (`git fetch <remote>
+	// --tags --quiet`). Used before TagsContaining so tags pushed by
+	// other users in the last few minutes are visible locally —
+	// without this the contains check is only as fresh as the user's
+	// last manual fetch.
+	FetchTags(ctx context.Context, repositoryPath, remote string) error
 }

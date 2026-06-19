@@ -153,6 +153,96 @@ func TestGetDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestTagsContaining(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	// HEAD here is the initial commit; tag it v0.0.1.
+	if err := run(ctx, repository, "tag", "v0.0.1"); err != nil {
+		t.Fatalf("tag v0.0.1: %v", err)
+	}
+	initialSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	// Add a commit + tag v0.1.0; the new tag contains the initial
+	// commit, and v0.0.1 still also contains it.
+	_ = os.WriteFile(filepath.Join(repository, "a.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "a.txt")
+	_ = run(ctx, repository, "commit", "-m", "add a.txt")
+	if err := run(ctx, repository, "tag", "v0.1.0"); err != nil {
+		t.Fatalf("tag v0.1.0: %v", err)
+	}
+	secondSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	// Initial commit is in both tags.
+	tags, err := a.TagsContaining(ctx, repository, initialSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(initial) error: %v", err)
+	}
+	if len(tags) != 2 || !contains(tags, "v0.0.1") || !contains(tags, "v0.1.0") {
+		t.Errorf("TagsContaining(initial) = %v, want both v0.0.1 and v0.1.0", tags)
+	}
+
+	// Second commit is only in v0.1.0.
+	tags, err = a.TagsContaining(ctx, repository, secondSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(second) error: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "v0.1.0" {
+		t.Errorf("TagsContaining(second) = %v, want [v0.1.0]", tags)
+	}
+
+	// A new commit past every tag → no containing tags.
+	_ = os.WriteFile(filepath.Join(repository, "b.txt"), []byte("y"), 0o644)
+	_ = run(ctx, repository, "add", "b.txt")
+	_ = run(ctx, repository, "commit", "-m", "add b.txt")
+	thirdSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	tags, err = a.TagsContaining(ctx, repository, thirdSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(third) error: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Errorf("TagsContaining(third) = %v, want empty (no tag reaches the new commit)", tags)
+	}
+}
+
+func TestFetchTags(t *testing.T) {
+	repository := initTestRepositoryWithRemote(t)
+	a := New()
+	ctx := context.Background()
+
+	// initTestRepositoryWithRemote sets up origin already. A fresh
+	// FetchTags should be a no-op (nothing new to fetch) and return
+	// nil; that's enough to lock in the wiring without exercising
+	// "remote has new tags" behavior which requires a more involved
+	// fixture.
+	if err := a.FetchTags(ctx, repository, "origin"); err != nil {
+		t.Fatalf("FetchTags() error: %v", err)
+	}
+}
+
+// contains reports whether a slice contains an exact-match string.
+// Local helper for tag-containment tests where slice order is
+// implementation-defined.
+func contains(s []string, target string) bool {
+	for _, v := range s {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIsDirty(t *testing.T) {
 	repository :=initTestRepository(t)
 	a := New()

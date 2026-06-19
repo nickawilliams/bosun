@@ -263,6 +263,29 @@ func (a *Adapter) HeadSHA(ctx context.Context, repositoryPath string) (string, e
 	return output(ctx, repositoryPath, "rev-parse", "HEAD")
 }
 
+// TagsContaining wraps `git tag --contains <sha>`. Returns each tag
+// (one per line on stdout) whose history reaches sha, in
+// implementation-defined order. Empty input → empty slice (not an
+// error).
+func (a *Adapter) TagsContaining(ctx context.Context, repositoryPath, sha string) ([]string, error) {
+	out, err := output(ctx, repositoryPath, "tag", "--contains", sha)
+	if err != nil {
+		return nil, fmt.Errorf("listing tags containing %s: %w", sha, err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// FetchTags refreshes tag refs from remote. The --quiet flag drops
+// the per-ref progress lines so this can run in the gather phase
+// without spamming stderr; --tags pulls every tag (including ones
+// not reachable from any local branch).
+func (a *Adapter) FetchTags(ctx context.Context, repositoryPath, remote string) error {
+	return run(ctx, repositoryPath, "fetch", remote, "--tags", "--quiet")
+}
+
 // run executes a git command in the given directory.
 func run(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
