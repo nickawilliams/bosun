@@ -304,7 +304,8 @@ func TestParseSubjectKey(t *testing.T) {
 	}{
 		{"0.0", 0, 0, true},
 		{"3.2", 3, 2, true},
-		{"5.-1", 5, -1, true}, // fallback row marker
+		{"5.-1", 5, -1, true}, // fallback row marker (no services configured)
+		{"7.-2", 7, -2, true}, // info-only row marker (containing-release; pick is ignored)
 		{"", 0, 0, false},
 		{"3", 0, 0, false},
 		{"a.b", 0, 0, false},

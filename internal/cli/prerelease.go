@@ -531,12 +531,23 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 
 	type optRow struct {
 		repoIdx    int
-		serviceIdx int   // -1 = fallback "no services configured" row
+		serviceIdx int  // -1 = fallback "no services configured" row; -2 = containing-release info row
 		preselect  bool
 	}
+	const infoOnlyServiceIdx = -2
 	var rows []optRow
 	for i := range targets {
 		rt := &targets[i]
+		// Containing-release repos surface as info-only rows in the
+		// form: visible (so the user sees we considered them) with
+		// the containing tag appended, but inert — any toggle is
+		// ignored at parse time below. Keeps the picker self-contained
+		// rather than pushing the user to look at two places for the
+		// release plan.
+		if rt.containingRelease != nil {
+			rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
+			continue
+		}
 		if !rt.eligible() {
 			continue
 		}
@@ -573,7 +584,18 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		// version transition belongs on the plan card where the user
 		// is being asked to approve the actual change.
 		label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
-		if row.serviceIdx >= 0 {
+		switch {
+		case row.serviceIdx == infoOnlyServiceIdx:
+			// Containing-release row: append the tag (and author if
+			// known) so the user sees where the work was already
+			// shipped. The pick is parsed back to a no-op below.
+			tag := rt.containingRelease.Tag
+			suffix := " · in " + tag
+			if rt.containingRelease.AuthorLogin != "" {
+				suffix += " (by @" + rt.containingRelease.AuthorLogin + ")"
+			}
+			label += suffix
+		case row.serviceIdx >= 0:
 			label += " · " + rt.services[row.serviceIdx]
 		}
 		key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
@@ -609,6 +631,12 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 			continue
 		}
 		rt := &targets[ri]
+		// Info-only rows (containing-release repos) are shown in the
+		// form for visibility but can't be selected for release —
+		// silently no-op any toggle the user makes on them.
+		if si == infoOnlyServiceIdx || rt.containingRelease != nil {
+			continue
+		}
 		if si < 0 {
 			rt.subjects = append(rt.subjects, rt.repo.Name)
 		} else if si < len(rt.services) {
