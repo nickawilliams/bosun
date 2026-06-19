@@ -432,6 +432,153 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 	return "", nil
 }
 
+// GetReleaseByTag fetches a release by its tag name. Returns
+// code.ErrNotFound when GitHub responds 404 (the tag may exist as a
+// plain git tag without a corresponding release record). The body is
+// run through PrettifyReleaseNotes so consumers see the same
+// display-ready Markdown that CreateRelease returns.
+func (a *Adapter) GetReleaseByTag(ctx context.Context, owner, repository, tag string) (code.Release, error) {
+	path := fmt.Sprintf("/repos/%s/%s/releases/tags/%s", owner, repository, tag)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		if isNotFound(err) {
+			return code.Release{}, code.ErrNotFound
+		}
+		return code.Release{}, fmt.Errorf("fetching release for tag %s: %w", tag, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+		Author  struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return code.Release{}, fmt.Errorf("parsing release response: %w", err)
+	}
+
+	return code.Release{
+		Tag:         result.TagName,
+		URL:         result.HTMLURL,
+		Body:        PrettifyReleaseNotes(result.Body),
+		AuthorLogin: result.Author.Login,
+	}, nil
+}
+
+// PRsInRange lists PRs whose commits fall in (baseRef, headRef] for
+// the given repository. Implementation: call the compare endpoint
+// to get the commit list, then call /commits/{sha}/pulls for each
+// commit to find the associated PRs. Deduplicated by PR number.
+// excludeNumbers (typically the workspace's own PR numbers) is
+// filtered out of the result.
+//
+// API cost: 1 compare call + N per-commit lookups, where N is the
+// number of commits in the range. For typical release ranges (a
+// handful of squash-merged PRs) this stays well under quota.
+func (a *Adapter) PRsInRange(ctx context.Context, owner, repository, baseRef, headRef string, excludeNumbers []int) ([]code.PullRequest, error) {
+	excluded := make(map[int]bool, len(excludeNumbers))
+	for _, n := range excludeNumbers {
+		excluded[n] = true
+	}
+
+	comparePath := fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repository, baseRef, headRef)
+	resp, err := a.doRequest(ctx, http.MethodGet, comparePath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("comparing %s...%s: %w", baseRef, headRef, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var compareResp struct {
+		Commits []struct {
+			SHA string `json:"sha"`
+		} `json:"commits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&compareResp); err != nil {
+		return nil, fmt.Errorf("parsing compare response: %w", err)
+	}
+
+	seen := make(map[int]bool)
+	var out []code.PullRequest
+	for _, c := range compareResp.Commits {
+		prs, err := a.prsForCommit(ctx, owner, repository, c.SHA)
+		if err != nil {
+			// Single-commit lookup failures aren't fatal — a 404 on a
+			// rebased commit just means "no PR associated", and a
+			// transient network error on one of N commits shouldn't
+			// hide the rest. Skip and continue.
+			continue
+		}
+		for _, pr := range prs {
+			if seen[pr.Number] || excluded[pr.Number] {
+				continue
+			}
+			seen[pr.Number] = true
+			out = append(out, pr)
+		}
+	}
+	return out, nil
+}
+
+// prsForCommit wraps GET /repos/{o}/{r}/commits/{sha}/pulls. Returns
+// the (typically one) PR associated with the commit. Used by
+// PRsInRange to walk a commit list and attribute each commit to its
+// originating PR.
+func (a *Adapter) prsForCommit(ctx context.Context, owner, repository, sha string) ([]code.PullRequest, error) {
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/pulls", owner, repository, sha)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var raw []struct {
+		Number         int    `json:"number"`
+		Title          string `json:"title"`
+		HTMLURL        string `json:"html_url"`
+		State          string `json:"state"`
+		MergeCommitSHA string `json:"merge_commit_sha"`
+		User           struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("parsing commit pulls response: %w", err)
+	}
+
+	out := make([]code.PullRequest, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, code.PullRequest{
+			Number:         r.Number,
+			Title:          r.Title,
+			URL:            r.HTMLURL,
+			State:          r.State,
+			BaseRef:        r.Base.Ref,
+			HeadSHA:        r.Head.SHA,
+			MergeCommitSHA: r.MergeCommitSHA,
+			AuthorLogin:    r.User.Login,
+		})
+	}
+	return out, nil
+}
+
+// isNotFound returns true when err carries the marker text our
+// doRequest uses for 404 responses. Kept as a local helper since the
+// adapter's error wrapping doesn't preserve a typed 404 sentinel —
+// upgrading doRequest to surface status codes structurally is a
+// broader cleanup; this string-check is the minimum-viable bridge.
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
 func (a *Adapter) ListBranches(ctx context.Context, owner, repository string) ([]string, error) {
 	var names []string
 	path := fmt.Sprintf("/repos/%s/%s/branches?per_page=100", owner, repository)

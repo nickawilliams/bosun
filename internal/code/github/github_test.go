@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -302,6 +303,139 @@ func TestCreateRelease(t *testing.T) {
 	if !strings.Contains(rel.Body, "[#1](https://github.com/org/repo/pull/1)") {
 		t.Errorf("PR URL not prettified.\nBody = %q", rel.Body)
 	}
+}
+
+func TestGetReleaseByTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/releases/tags/v1.2.4" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v1.2.4",
+			"html_url": "https://github.com/org/repo/releases/tag/v1.2.4",
+			"body":     "## What's Changed\n* feat by @alice in https://github.com/org/repo/pull/1",
+			"author":   map[string]any{"login": "alice"},
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	rel, err := a.GetReleaseByTag(context.Background(), "org", "repo", "v1.2.4")
+	if err != nil {
+		t.Fatalf("GetReleaseByTag() error: %v", err)
+	}
+	if rel.Tag != "v1.2.4" {
+		t.Errorf("Tag = %q", rel.Tag)
+	}
+	if rel.AuthorLogin != "alice" {
+		t.Errorf("AuthorLogin = %q, want alice", rel.AuthorLogin)
+	}
+	if !strings.Contains(rel.Body, "[@alice](https://github.com/alice)") {
+		t.Errorf("body not prettified: %q", rel.Body)
+	}
+}
+
+func TestGetReleaseByTagNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	_, err := a.GetReleaseByTag(context.Background(), "org", "repo", "missing")
+	if !errors.Is(err, code.ErrNotFound) {
+		t.Errorf("err = %v, want code.ErrNotFound", err)
+	}
+}
+
+func TestPRsInRange(t *testing.T) {
+	// /compare returns two commits; /commits/{sha}/pulls returns the
+	// associated PR for each. PRsInRange should dedupe by PR number
+	// (here both commits belong to the same PR — squash-merge with
+	// the same merge SHA can be returned by multiple lookups in real
+	// data) and filter out exclude numbers.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/repos/org/repo/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"commits": []map[string]any{
+					{"sha": "aaa111"},
+					{"sha": "bbb222"},
+					{"sha": "ccc333"},
+				},
+			})
+		case r.URL.Path == "/repos/org/repo/commits/aaa111/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number":   42,
+					"title":    "Add foo",
+					"html_url": "https://github.com/org/repo/pull/42",
+					"state":    "closed",
+					"user":     map[string]any{"login": "alice"},
+					"base":     map[string]any{"ref": "main"},
+					"head":     map[string]any{"sha": "aaa111"},
+				},
+			})
+		case r.URL.Path == "/repos/org/repo/commits/bbb222/pulls":
+			// Same PR as aaa111 — dedup expected.
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number":   42,
+					"title":    "Add foo",
+					"html_url": "https://github.com/org/repo/pull/42",
+					"state":    "closed",
+					"user":     map[string]any{"login": "alice"},
+					"base":     map[string]any{"ref": "main"},
+					"head":     map[string]any{"sha": "aaa111"},
+				},
+			})
+		case r.URL.Path == "/repos/org/repo/commits/ccc333/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number":   43,
+					"title":    "Fix bar",
+					"html_url": "https://github.com/org/repo/pull/43",
+					"state":    "closed",
+					"user":     map[string]any{"login": "bob"},
+					"base":     map[string]any{"ref": "main"},
+					"head":     map[string]any{"sha": "ccc333"},
+				},
+			})
+		default:
+			t.Errorf("unexpected path: %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	t.Run("dedupes by PR number", func(t *testing.T) {
+		prs, err := a.PRsInRange(context.Background(), "org", "repo", "v1.0.0", "v1.1.0", nil)
+		if err != nil {
+			t.Fatalf("PRsInRange() error: %v", err)
+		}
+		if len(prs) != 2 {
+			t.Fatalf("PRsInRange() = %d PRs, want 2 (#42 dedup'd)", len(prs))
+		}
+		if prs[0].Number != 42 || prs[0].AuthorLogin != "alice" {
+			t.Errorf("first PR = %+v", prs[0])
+		}
+		if prs[1].Number != 43 || prs[1].AuthorLogin != "bob" {
+			t.Errorf("second PR = %+v", prs[1])
+		}
+	})
+
+	t.Run("respects exclude set", func(t *testing.T) {
+		prs, err := a.PRsInRange(context.Background(), "org", "repo", "v1.0.0", "v1.1.0", []int{42})
+		if err != nil {
+			t.Fatalf("PRsInRange() error: %v", err)
+		}
+		if len(prs) != 1 || prs[0].Number != 43 {
+			t.Errorf("PRsInRange() with #42 excluded = %+v, want only #43", prs)
+		}
+	})
 }
 
 func TestGetLatestTag(t *testing.T) {

@@ -1,6 +1,15 @@
 package code
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNotFound is returned by Get-style methods when the requested
+// resource doesn't exist on the host (e.g. GetReleaseByTag for a tag
+// that has no release). Callers should branch on errors.Is rather
+// than treating it as a fatal error.
+var ErrNotFound = errors.New("code: not found")
 
 // PullRequest represents a pull request on a code hosting platform.
 type PullRequest struct {
@@ -37,6 +46,18 @@ type PullRequest struct {
 	RequestedTeams []string
 	// Assignees lists user logins assigned to the PR.
 	Assignees []string
+
+	// AuthorLogin is the login of the user who opened the PR.
+	// Populated by listing-style queries (PRsInRange) so callers can
+	// attribute extra contributions in release ranges. May be empty
+	// for endpoints that don't return author info.
+	AuthorLogin string
+
+	// MergeCommitSHA is the commit SHA that landed on the base
+	// branch when the PR merged. Populated by listing-style queries
+	// so callers can correlate PRs to git-log entries. Empty for
+	// open or never-merged PRs.
+	MergeCommitSHA string
 }
 
 // CheckRollup is the aggregate CI state for a commit's check runs.
@@ -79,9 +100,10 @@ type EditPRRequest struct {
 
 // Release represents a release/tag on a code hosting platform.
 type Release struct {
-	Tag  string // e.g., "v1.2.3"
-	URL  string
-	Body string // Release notes body — host-generated when CreateReleaseRequest.GenerateNotes is set.
+	Tag         string // e.g., "v1.2.3"
+	URL         string
+	Body        string // Release notes body — host-generated when CreateReleaseRequest.GenerateNotes is set.
+	AuthorLogin string // Login of the user who cut the release (when known).
 }
 
 // CreateReleaseRequest holds the fields needed to create a release.
@@ -145,6 +167,21 @@ type Host interface {
 	// GetLatestTag returns the most recent semver tag for a repository,
 	// or empty string if no tags exist.
 	GetLatestTag(ctx context.Context, owner, repository string) (string, error)
+
+	// GetReleaseByTag fetches the release published at the given tag.
+	// Returns ErrNotFound when no release exists for that tag (the
+	// tag may exist as a plain git tag without a corresponding
+	// release record).
+	GetReleaseByTag(ctx context.Context, owner, repository, tag string) (Release, error)
+
+	// PRsInRange lists PRs whose merge commits land in (baseRef,
+	// headRef] on the host. Used by prerelease to enumerate the
+	// "extras" — PRs that will be swept into a release range
+	// beyond the workspace's own contributions. Each returned
+	// PullRequest has Number, Title, AuthorLogin, MergeCommitSHA,
+	// and URL populated. excludeNumbers (typically the workspace's
+	// own PR numbers) are filtered out of the result.
+	PRsInRange(ctx context.Context, owner, repository, baseRef, headRef string, excludeNumbers []int) ([]PullRequest, error)
 
 	// GetChecks returns the aggregate check status for a commit ref
 	// (e.g., a PR head SHA or a branch HEAD). Returns CheckRollup
