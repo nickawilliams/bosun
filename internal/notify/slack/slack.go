@@ -389,6 +389,53 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	return result, nil
 }
 
+// HasAnnouncement searches the channel's recent history for any
+// message containing query (typically a release URL). Reuses the
+// same GetConversationHistory pull that FindThread uses — no
+// search.messages call, so no extra scope requirements.
+//
+// Soft-fail policy: errors return (false, err) so callers can choose
+// to log and proceed; a false result on error means "we don't know,
+// announce conservatively." Empty query → (false, nil) without a
+// network call (defensive — nothing useful to match against).
+func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query string) (bool, error) {
+	if query == "" {
+		return false, nil
+	}
+	channelID, err := a.resolveChannelID(ctx, channel)
+	if err != nil {
+		return false, err
+	}
+
+	params := &slackapi.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Limit:     200,
+	}
+	resp, err := a.client.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("fetching channel history: %w", err)
+	}
+
+	for _, msg := range resp.Messages {
+		if strings.Contains(msg.Text, query) {
+			return true, nil
+		}
+		for _, block := range msg.Blocks.BlockSet {
+			if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
+				if strings.Contains(section.Text.Text, query) {
+					return true, nil
+				}
+			}
+			if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
+				if strings.Contains(header.Text.Text, query) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 const metadataEventType = "bosun_notification"
 
 // bosunMetadata builds the Slack message metadata for a bosun notification.

@@ -267,6 +267,64 @@ func TestFindThreadNotFound(t *testing.T) {
 	}
 }
 
+func TestHasAnnouncement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
+			})
+		case "/conversations.history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{"text": "going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.4", "ts": "111.111"},
+					{"text": "unrelated chatter", "ts": "222.222"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	t.Run("URL present in channel history → true", func(t *testing.T) {
+		found, err := a.HasAnnouncement(context.Background(), "release-coordination",
+			"https://github.com/org/repo/releases/tag/v1.2.4")
+		if err != nil {
+			t.Fatalf("HasAnnouncement() error: %v", err)
+		}
+		if !found {
+			t.Error("expected true (URL is in the first message)")
+		}
+	})
+
+	t.Run("URL absent → false", func(t *testing.T) {
+		found, err := a.HasAnnouncement(context.Background(), "release-coordination",
+			"https://github.com/org/repo/releases/tag/v9.9.9")
+		if err != nil {
+			t.Fatalf("HasAnnouncement() error: %v", err)
+		}
+		if found {
+			t.Error("expected false (URL is not in any message)")
+		}
+	})
+
+	t.Run("empty query → (false, nil) without a network call", func(t *testing.T) {
+		found, err := a.HasAnnouncement(context.Background(), "release-coordination", "")
+		if err != nil {
+			t.Fatalf("HasAnnouncement(empty) error: %v", err)
+		}
+		if found {
+			t.Error("expected false on empty query")
+		}
+	})
+}
+
 func TestReplyToThread(t *testing.T) {
 	var postedChannel, postedThreadTS string
 

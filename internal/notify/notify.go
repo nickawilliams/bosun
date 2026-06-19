@@ -105,6 +105,16 @@ type Notifier interface {
 	// containing the issue key. Returns a zero ThreadRef if not found.
 	FindThread(ctx context.Context, channel, issueKey string) (ThreadRef, error)
 
+	// HasAnnouncement searches a channel for any recent message
+	// containing query (typically a release URL). Returns true when
+	// at least one match is found in the channel's recent history.
+	// Used by prerelease to detect whether a release-cut-by-someone-
+	// else has already been announced before posting a duplicate.
+	// Failures (missing scopes, network errors) return false + the
+	// error so callers can soft-fail; a false result on error keeps
+	// the announcement path conservative ("post when in doubt").
+	HasAnnouncement(ctx context.Context, channel, query string) (bool, error)
+
 	// ReplyToThread sends a reply to an existing notification thread.
 	ReplyToThread(ctx context.Context, ref ThreadRef, msg Message) error
 
