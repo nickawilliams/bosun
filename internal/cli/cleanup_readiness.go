@@ -276,13 +276,18 @@ func emitCleanupReadiness(
 		return repoResults, wsFindings, nil
 	}
 
-	// Interactive: one outer card per the workspace-readiness section,
-	// with a child spinner per repo (then one for the workspace as a
-	// whole) that resolves to its result row when the probe finishes.
-	// Pattern mirrors doctor.go's check groups — the user watches each
-	// repo's outcome appear in real time instead of seeing a single
-	// "Checking X..." that flicks through every name.
+	// Interactive: one outer card with the workspace probe first
+	// (rendered with a non-keyword title color so it reads visually
+	// distinct from the identifier-shaped repo rows that follow),
+	// then a child spinner per repo that resolves to its result
+	// row(s) when the probe finishes.
 	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
+		_ = grp.Spinner("workspace", func() error {
+			workspaceProbe = gatherWorkspaceProbe(ctx, tracker, repos, wsPath, issueKey)
+			return nil
+		})
+		emitWorkspaceRows(grp, classifyWorkspace(workspaceProbe))
+
 		for i := range repos {
 			r := repos[i]
 			_ = grp.Spinner(r.Name, func() error {
@@ -291,11 +296,6 @@ func emitCleanupReadiness(
 			})
 			emitProbeRows(grp, ui.PreserveCase(r.Name), classifyRepo(probes[i]))
 		}
-		_ = grp.Spinner("workspace", func() error {
-			workspaceProbe = gatherWorkspaceProbe(ctx, tracker, repos, wsPath, issueKey)
-			return nil
-		})
-		emitProbeRows(grp, "workspace", classifyWorkspace(workspaceProbe))
 	})
 
 	// Group is closed; the readiness card is on screen with its rows
@@ -353,6 +353,17 @@ func emitProbeRows(grp ui.Reporter, label string, findings []cleanupFinding) {
 			grp.CompleteValue(label, f.message)
 		}
 	}
+}
+
+// emitWorkspaceRows renders the workspace probe's findings as group
+// children. The label is "<workspace>" with angle-brackets so the row
+// reads as a category-umbrella marker, not another identifier-shaped
+// repo row, while keeping the same visual styling as its sibling rows
+// (uniform bold purple title across the list). Wrapped with
+// PreserveCase so the brackets and lowercase survive titleCase.
+func emitWorkspaceRows(grp ui.Reporter, findings []cleanupFinding) {
+	label := ui.PreserveCase("<workspace>")
+	emitProbeRows(grp, label, findings)
 }
 
 // gatherRepoProbe fans out the per-repo probes concurrently. Each
