@@ -79,27 +79,29 @@ func TestClassifyRepo(t *testing.T) {
 			wantCodes: []string{"unmerged-work"},
 		},
 		{
-			name: "block: post-merge unpushed commits (remote still present)",
+			name: "block: post-merge commits — HEAD past merged PR head, remote still present",
 			probe: repoCleanupProbe{
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 2},
 				pr:            merged,
+				headSHA:       "xyz",
 				isMerged:      true,
 				isMergedKnown: true,
 			},
 			wantCodes: []string{"post-merge-commits"},
 		},
 		{
-			name: "block: post-merge commits with remote auto-deleted",
+			name: "block: post-merge commits — HEAD past merged PR head, remote auto-deleted",
 			probe: repoCleanupProbe{
 				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 1},
 				pr:            merged,
+				headSHA:       "xyz",
 				isMerged:      true,
 				isMergedKnown: true,
 			},
 			wantCodes: []string{"post-merge-commits"},
 		},
 		{
-			name: "block: local HEAD diverges from merged PR HeadSHA (no Ahead)",
+			name: "block: post-merge commits — HEAD diverges with Ahead == 0 (reset/amend)",
 			probe: repoCleanupProbe{
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
 				pr:            merged,
@@ -108,6 +110,35 @@ func TestClassifyRepo(t *testing.T) {
 				isMergedKnown: true,
 			},
 			wantCodes: []string{"post-merge-commits"},
+		},
+		{
+			// Regression: squash-merge with auto-deleted remote and no
+			// post-merge local work. IsMergedInto returns false because
+			// the squash commit doesn't share history with the branch's
+			// commits, and Ahead-vs-base is non-zero for the same
+			// reason. The HEAD-vs-PR.HeadSHA check is the only signal
+			// that's correct here — they match, so this is SAFE.
+			name: "safe: squash-merge — auto-deleted remote, HEAD matches PR head",
+			probe: repoCleanupProbe{
+				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 3},
+				pr:            merged,
+				headSHA:       "abc", // matches merged.HeadSHA
+				isMerged:      false, // squash doesn't preserve history
+				isMergedKnown: true,
+			},
+			wantCodes: nil,
+		},
+		{
+			// Same shape but with the remote branch still present.
+			name: "safe: squash-merge — remote present, HEAD matches PR head",
+			probe: repoCleanupProbe{
+				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
+				pr:            merged,
+				headSHA:       "abc",
+				isMerged:      false,
+				isMergedKnown: true,
+			},
+			wantCodes: nil,
 		},
 		{
 			name: "warn: open PR",

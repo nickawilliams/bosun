@@ -126,37 +126,23 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 		})
 	}
 
-	// Post-merge work — local commits past the merged PR's head.
-	// Ahead > 0 catches the common case; the HEAD/HeadSHA mismatch
-	// branch catches the rare "user reset/amended HEAD" case where
-	// the Ahead count is 0 but the local SHA still differs.
-	if prMerged {
-		switch {
-		case p.branchSync.HasRemote && p.branchSync.Ahead > 0:
-			out = append(out, cleanupFinding{
-				severity: findingBlock,
-				code:     "post-merge-commits",
-				message:  fmt.Sprintf("%s past merged PR; would be lost", commitNoun(p.branchSync.Ahead)),
-			})
-		case !p.branchSync.HasRemote && p.branchSync.Ahead > 0:
-			// Remote auto-deleted on merge, but the local branch has
-			// commits past base. Either post-merge experiments or
-			// commits the merge missed (e.g. squash).
-			out = append(out, cleanupFinding{
-				severity: findingBlock,
-				code:     "post-merge-commits",
-				message:  fmt.Sprintf("%s past base after merged PR; would be lost", commitNoun(p.branchSync.Ahead)),
-			})
-		case p.pr.HeadSHA != "" && p.headSHA != "" && p.pr.HeadSHA != p.headSHA:
-			// Ahead == 0 but HEAD diverges from what was merged. This
-			// is the reset/amend case — the user destroyed the prior
-			// HEAD locally and we can't tell where it went.
-			out = append(out, cleanupFinding{
-				severity: findingBlock,
-				code:     "post-merge-commits",
-				message:  "local HEAD is past the merged PR's head commit",
-			})
-		}
+	// Post-merge work — local HEAD diverges from what GitHub merged.
+	// Use the HEAD vs PR.HeadSHA comparison as the canonical signal
+	// rather than `commits ahead of base`: squash and rebase merges
+	// produce a base that doesn't share history with the branch's
+	// pre-merge commits, so Ahead-vs-base would mark every squash-
+	// merged branch with auto-deleted remote as "post-merge work"
+	// even when the user did nothing locally. The HeadSHA equality
+	// check is the only signal that's correct across merge methods —
+	// if the local HEAD is the exact commit GitHub merged, the work
+	// is fully captured by the PR no matter how the integration
+	// happened; if HEAD has moved past it, those new commits aren't.
+	if prMerged && p.pr.HeadSHA != "" && p.headSHA != "" && p.pr.HeadSHA != p.headSHA {
+		out = append(out, cleanupFinding{
+			severity: findingBlock,
+			code:     "post-merge-commits",
+			message:  "local HEAD has commits past the merged PR; deleting the branch would lose them",
+		})
 	}
 
 	// WARN findings — status mismatches that don't lose data.
@@ -227,12 +213,6 @@ func strayFilesMessage(files []string) string {
 		len(files), strings.Join(files[:limit], ", "), len(files)-limit)
 }
 
-func commitNoun(n int) string {
-	if n == 1 {
-		return "1 local commit"
-	}
-	return fmt.Sprintf("%d local commits", n)
-}
 
 // emitCleanupReadiness gathers each repo's safety signals + workspace-
 // scoped signals under one spinner, classifies them via the safety
