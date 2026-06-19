@@ -104,205 +104,118 @@ func (rr repoReadiness) hasRemoteBranch() bool {
 // ready workspace renders the static ✓ card with no prompts. Only
 // an accepted push that then fails is an error.
 func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) ([]repoReadiness, map[string]string, error) {
-	// --- Phase 0: gather under per-repo spinner ---
-	//
-	// The git calls (GetCurrentBranch, UnpushedCommits, IsDirty) are
-	// fast individually but add up across many repos. Running them
-	// silently produced a multi-second blank gap before the first
-	// prompt or card appeared. RunCardSteps gives one "Checking …"
-	// spinner that morphs through each repo, then exits cleanly so
-	// the existing emit logic below picks up from there.
 	readiness := make([]repoReadiness, len(repos))
 	repoBranch := make(map[string]string, len(repos))
 
-	gatherStatusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	gatherSteps := make([]ui.CardStep, 0, len(repos))
-	for i := range repos {
-		r := repos[i]
-		spin := ui.NewCard(ui.CardRunning, "workspace readiness").
-			Raw(gatherStatusMuted.Render("Checking ") +
-				ui.Keyword(r.Name) +
-				gatherStatusMuted.Render("..."))
-		gatherSteps = append(gatherSteps, ui.CardStep{
-			Card: spin,
-			Run: func() error {
-				branch, err := g.GetCurrentBranch(ctx, r.Path)
-				if err != nil {
-					return fmt.Errorf("%s: getting current branch: %w", r.Name, err)
-				}
-				repoBranch[r.Name] = branch
-				n, err := g.UnpushedCommits(ctx, r.Path, branch)
-				if err != nil {
-					return fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
-				}
-				dirty, _ := g.IsDirty(ctx, r.Path)
-				readiness[i] = repoReadiness{
-					repo: r, branch: branch, unpushed: n, dirty: dirty,
-				}
-				return nil
-			},
-		})
-	}
-	// Successor runs once, after all gather steps complete, and morphs
-	// the spinner's last frame directly into whichever card the next
-	// phase needs — push-offer header, dirty gate, or the static
-	// summary. The flag computation lives here so the outer flow can
-	// branch on the same state without a second pass over readiness.
-	// Suppressed under IsRaw (RunCardSteps skips the successor); the
-	// non-interactive fallback below handles that case.
-	var anyUnpushed, anyDirty bool
-	gatherRewind, err := ui.RunCardSteps(gatherSteps, func() *ui.Card {
-		for _, rr := range readiness {
-			if rr.unpushed != 0 {
-				anyUnpushed = true
-			}
-			if rr.dirty {
-				anyDirty = true
-			}
-		}
-		if anyUnpushed {
-			// Push offer still uses the morphed CardInput-header
-			// pattern — the form's huh.Title carries the question
-			// body and the per-repo list, with the header providing
-			// the section anchor above it. Dialog isn't a natural
-			// fit for "do you want to push?" because Cancel here
-			// means "skip the push and continue," not "abort."
-			return ui.NewCard(ui.CardInput, "workspace readiness").Tight()
-		}
-		// Dirty (without unpushed) gates via Dialog below — the
-		// readiness card prints in its natural severity-styled form
-		// and the Dialog asks the proceed/abort question separately.
-		return buildWorkspaceReadinessCard(readiness)
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
+	// Raw / non-interactive mode: gather sequentially, print the
+	// static summary, return. No spinners, no prompts.
 	if !isInteractive() {
-		// Successor was skipped under IsRaw — print the static card
-		// explicitly so non-interactive callers get the same summary.
+		for i := range repos {
+			r := repos[i]
+			if rr, err := gatherRepoReadiness(ctx, g, r); err != nil {
+				return nil, nil, err
+			} else {
+				readiness[i] = rr
+				repoBranch[r.Name] = rr.branch
+			}
+		}
 		buildWorkspaceReadinessCard(readiness).Print()
 		return readiness, repoBranch, nil
 	}
 
-	// Fully ready — gather's final frame is already the static card.
+	// Interactive: RunGroup with a per-repo Spinner child that resolves
+	// to a result row showing the repo's branch state. Mirrors the
+	// cleanup-readiness pattern.
+	var gatherErr error
+	ui.RunGroup("workspace readiness", func(grp ui.Reporter) {
+		for i := range repos {
+			r := repos[i]
+			err := grp.Spinner(r.Name, func() error {
+				rr, err := gatherRepoReadiness(ctx, g, r)
+				if err != nil {
+					return err
+				}
+				readiness[i] = rr
+				repoBranch[r.Name] = rr.branch
+				return nil
+			})
+			if err != nil {
+				if gatherErr == nil {
+					gatherErr = err
+				}
+				grp.FailValue(ui.PreserveCase(r.Name), err.Error())
+				continue
+			}
+			emitReadinessRow(grp, ui.PreserveCase(r.Name), readiness[i])
+		}
+	})
+	if gatherErr != nil {
+		return nil, nil, gatherErr
+	}
+
+	var anyUnpushed, anyDirty bool
+	for _, rr := range readiness {
+		if rr.unpushed != 0 {
+			anyUnpushed = true
+		}
+		if rr.dirty {
+			anyDirty = true
+		}
+	}
 	if !anyUnpushed && !anyDirty {
 		return readiness, repoBranch, nil
 	}
 
-	// --- Push offer (unpushed commits only) ---
-	//
-	// Gather morphed into the push-offer header; the form runs under
-	// that header and gatherRewind clears them both together. Skipping
-	// the dedicated PrintRewindable call closes the blank seam between
-	// gather and the prompt.
-
+	// Push offer via Dialog — interventional, but Dialog fits because
+	// the question reduces to "perform this action, yes/no?". Default
+	// to Push (the safer answer: local work ends up on the remote).
 	pushAccepted := false
 	if anyUnpushed {
-		mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-		normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-		var repoLines []string
-		for _, rr := range readiness {
-			if rr.unpushed == 0 {
-				continue
-			}
-			status := "not yet pushed"
-			if rr.unpushed > 0 {
-				status = fmt.Sprintf("%d unpushed commit(s)", rr.unpushed)
-			}
-			repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-				mutedStyle.Render(rr.repo.Name),
-				mutedStyle.Render(ui.Palette.Dot),
-				normalStyle.Render(status)))
-		}
-
-		promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-			"\n\n" + strings.Join(repoLines, "\n")
-
-		// Gather's bubbletea final frame painted the push-offer card
-		// but didn't run Card.Print, so its Tight flag never cleared
-		// the spacer. Without this, runForm's prologue FlushSpacer
-		// emits a stray │ row between the card title and the prompt
-		// body — and gatherRewind, which only counts the gather's
-		// own lines, can't reach back over that orphan, so it
-		// survives into the static card render below as a doubled
-		// spacer.
-		ui.ClearSpacer()
-		confirmed := true
-		if err := runForm(
-			newConfirm().
-				Title(promptContent).
-				Affirmative("Yes").
-				Negative("No").
-				Value(&confirmed),
-		); err != nil {
-			return nil, nil, err
-		}
-		gatherRewind()
-		pushAccepted = confirmed
-	}
-
-	// Dirty-only path: gather's final frame is the static readiness
-	// card. Dialog handles the proceed/abort question underneath.
-	if !anyUnpushed && anyDirty {
-		confirmed, err := NewDialog("Warning").
-			Description("Not all readiness checks passed, continue anyway?").
-			Affirmative("Continue").
-			Negative("Cancel").
-			Default(false).
+		confirmed, err := NewDialog("Push to remote?").
+			Description("Some branches have unpushed commits. Push them before continuing?").
+			Affirmative("Push").
+			Negative("Skip").
+			Default(true).
 			Show()
 		if err != nil {
 			return nil, nil, err
 		}
-		if !confirmed {
-			return nil, nil, ErrCancelled
-		}
-		return readiness, repoBranch, nil
+		pushAccepted = confirmed
 	}
 
-	// --- Push path (unpushed branch) ---
-	//
-	// Accepted pushes run as one spinner program whose final frame
-	// morphs into the gate or static card. Rejected pushes produce zero
-	// steps → plain print of the final frame, no program.
-	var pushSteps []ui.CardStep
+	// Push action runs as its own RunGroup so each repo's push gets a
+	// per-repo spinner-then-result row alongside the gather group.
 	if pushAccepted {
-		statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-		for i := range readiness {
-			rr := &readiness[i]
-			if rr.unpushed == 0 {
-				continue
-			}
-			spin := ui.NewCard(ui.CardRunning, "workspace readiness").
-				Raw(statusMuted.Render("Pushing ") +
-					ui.Keyword(rr.repo.Name) +
-					statusMuted.Render("..."))
-			pushSteps = append(pushSteps, ui.CardStep{
-				Card: spin,
-				Run: func() error {
-					if err := g.Push(ctx, rr.repo.Path, rr.branch); err != nil {
-						return fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
+		var pushErr error
+		ui.RunGroup("pushing", func(grp ui.Reporter) {
+			for i := range readiness {
+				rr := &readiness[i]
+				if rr.unpushed == 0 {
+					continue
+				}
+				err := grp.Spinner(rr.repo.Name, func() error {
+					return g.Push(ctx, rr.repo.Path, rr.branch)
+				})
+				label := ui.PreserveCase(rr.repo.Name)
+				if err != nil {
+					if pushErr == nil {
+						pushErr = fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
 					}
-					rr.pushed = true
-					return nil
-				},
-			})
+					grp.FailValue(label, err.Error())
+					continue
+				}
+				rr.pushed = true
+				grp.Complete(label)
+			}
+		})
+		if pushErr != nil {
+			return nil, nil, pushErr
 		}
 	}
 
-	_, err = ui.RunCardSteps(pushSteps, func() *ui.Card {
-		return buildWorkspaceReadinessCard(readiness)
-	})
-	if err != nil {
-		// An accepted push failed — the failed step card is already
-		// on screen.
-		return nil, nil, err
-	}
-
-	// Same Dialog as the dirty-only path above. Reached when the
-	// workspace had both unpushed commits AND dirty trees: the push
-	// offer answered the unpushed half, this Dialog answers the dirty
-	// half.
+	// Dirty Dialog runs whenever any worktree is dirty — independent
+	// of whether a push happened. The push offer never asked about
+	// dirty trees, so this gate stands on its own.
 	if anyDirty {
 		confirmed, err := NewDialog("Warning").
 			Description("Not all readiness checks passed, continue anyway?").
@@ -318,6 +231,67 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 		}
 	}
 	return readiness, repoBranch, nil
+}
+
+// gatherRepoReadiness runs the per-repo git probes that the readiness
+// gather phase needs: current branch, unpushed commit count, dirty
+// worktree state. Pulled out so both the raw-mode and interactive
+// paths share one probe implementation.
+func gatherRepoReadiness(ctx context.Context, g vcs.VCS, r Repository) (repoReadiness, error) {
+	branch, err := g.GetCurrentBranch(ctx, r.Path)
+	if err != nil {
+		return repoReadiness{}, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
+	}
+	n, err := g.UnpushedCommits(ctx, r.Path, branch)
+	if err != nil {
+		return repoReadiness{}, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
+	}
+	dirty, _ := g.IsDirty(ctx, r.Path)
+	return repoReadiness{repo: r, branch: branch, unpushed: n, dirty: dirty}, nil
+}
+
+// emitReadinessRow renders one repo's readiness state into a parent
+// group: ✓ when clean, ▲ with a comma-joined caveat list otherwise.
+// Shape mirrors buildWorkspaceReadinessCard's per-row logic so the
+// raw-mode card and the interactive group rows stay consistent.
+func emitReadinessRow(grp ui.Reporter, label string, rr repoReadiness) {
+	caveats := readinessCaveats(rr)
+	if len(caveats) == 0 {
+		grp.Complete(label)
+		return
+	}
+	grp.SkipValue(label, strings.Join(caveats, ", "))
+}
+
+// readinessCaveats composes the muted-value caveat list shown next to
+// a repo's readiness row when its state isn't clean. Shared between
+// the interactive group emission and buildWorkspaceReadinessCard.
+func readinessCaveats(rr repoReadiness) []string {
+	var caveats []string
+	if rr.pushed {
+		n := rr.unpushed
+		switch {
+		case n == 1:
+			caveats = append(caveats, "pushed 1 commit")
+		case n > 1:
+			caveats = append(caveats, fmt.Sprintf("pushed %d commits", n))
+		default:
+			caveats = append(caveats, "pushed")
+		}
+	} else if rr.unpushed != 0 {
+		switch {
+		case rr.unpushed < 0:
+			caveats = append(caveats, "not yet pushed")
+		case rr.unpushed == 1:
+			caveats = append(caveats, "1 unpushed commit")
+		default:
+			caveats = append(caveats, fmt.Sprintf("%d unpushed commits", rr.unpushed))
+		}
+	}
+	if rr.dirty {
+		caveats = append(caveats, "uncommitted changes")
+	}
+	return caveats
 }
 
 // buildWorkspaceReadinessCard composes the final static "Workspace Readiness"
@@ -340,30 +314,7 @@ func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 	state := ui.CardSuccess
 
 	for _, rr := range sorted {
-		var caveats []string
-		if rr.pushed {
-			n := rr.unpushed
-			switch {
-			case n == 1:
-				caveats = append(caveats, "pushed 1 commit")
-			case n > 1:
-				caveats = append(caveats, fmt.Sprintf("pushed %d commits", n))
-			default:
-				caveats = append(caveats, "pushed")
-			}
-		} else if rr.unpushed != 0 {
-			switch {
-			case rr.unpushed < 0:
-				caveats = append(caveats, "not yet pushed")
-			case rr.unpushed == 1:
-				caveats = append(caveats, "1 unpushed commit")
-			default:
-				caveats = append(caveats, fmt.Sprintf("%d unpushed commits", rr.unpushed))
-			}
-		}
-		if rr.dirty {
-			caveats = append(caveats, "uncommitted changes")
-		}
+		caveats := readinessCaveats(rr)
 
 		warn := (rr.unpushed != 0 && !rr.pushed) || rr.dirty
 		glyph := glyphOK
