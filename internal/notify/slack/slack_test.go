@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -294,7 +295,7 @@ func TestHasAnnouncement(t *testing.T) {
 
 	t.Run("URL present in channel history → true", func(t *testing.T) {
 		found, err := a.HasAnnouncement(context.Background(), "release-coordination",
-			"https://github.com/org/repo/releases/tag/v1.2.4")
+			"https://github.com/org/repo/releases/tag/v1.2.4", "")
 		if err != nil {
 			t.Fatalf("HasAnnouncement() error: %v", err)
 		}
@@ -305,7 +306,7 @@ func TestHasAnnouncement(t *testing.T) {
 
 	t.Run("URL absent → false", func(t *testing.T) {
 		found, err := a.HasAnnouncement(context.Background(), "release-coordination",
-			"https://github.com/org/repo/releases/tag/v9.9.9")
+			"https://github.com/org/repo/releases/tag/v9.9.9", "")
 		if err != nil {
 			t.Fatalf("HasAnnouncement() error: %v", err)
 		}
@@ -315,7 +316,7 @@ func TestHasAnnouncement(t *testing.T) {
 	})
 
 	t.Run("empty query → (false, nil) without a network call", func(t *testing.T) {
-		found, err := a.HasAnnouncement(context.Background(), "release-coordination", "")
+		found, err := a.HasAnnouncement(context.Background(), "release-coordination", "", "")
 		if err != nil {
 			t.Fatalf("HasAnnouncement(empty) error: %v", err)
 		}
@@ -362,5 +363,100 @@ func TestReplyToThread(t *testing.T) {
 	}
 	if postedThreadTS != "2222222222.222222" {
 		t.Errorf("thread_ts = %q, want %q", postedThreadTS, "2222222222.222222")
+	}
+}
+
+// TestNotifyUpsertDeleteFallback locks the prerelease re-run flow:
+// when a prior announcement exists and chat.update fails (in practice
+// Slack returns internal_error for markdown_text updates, despite the
+// docs listing it as supported), the adapter falls back to
+// chat.delete + chat.postMessage so the upsert still completes. The
+// caller gets back the NEW message's timestamp, not the deleted one.
+func TestNotifyUpsertDeleteFallback(t *testing.T) {
+	var (
+		updateCalled bool
+		deleteCalled bool
+		deletedTS    string
+		postCount    int
+		postedText   string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
+			})
+		case "/conversations.history":
+			// Existing message keyed on bosun metadata for PROJ-123.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{
+						// Text contains the issue key so the second-pass
+						// fallback matches it (Slack metadata deserialization
+						// from httptest fixtures is brittle in slack-go).
+						"text": "PROJ-123 going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.3",
+						"ts":   "1111111111.111111",
+					},
+				},
+			})
+		case "/chat.update":
+			updateCalled = true
+			// Mimic the markdown_text-on-update failure that motivates the fallback.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":    false,
+				"error": "internal_error",
+			})
+		case "/chat.delete":
+			deleteCalled = true
+			deletedTS = r.FormValue("ts")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": deletedTS, "channel": "C123"})
+		case "/chat.postMessage":
+			postCount++
+			postedText = r.FormValue("markdown_text")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"channel": "C123",
+				"ts":      "9999999999.999999",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	ref, err := a.Notify(context.Background(), notify.Message{
+		Channel:  "release-coordination",
+		IssueKey: "PROJ-123",
+		Content: notify.Content{
+			Text: "going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.4",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+
+	if !updateCalled {
+		t.Error("expected chat.update to be attempted first")
+	}
+	if !deleteCalled {
+		t.Error("expected chat.delete fallback after update failure")
+	}
+	if deletedTS != "1111111111.111111" {
+		t.Errorf("deleted ts = %q, want the existing message's ts", deletedTS)
+	}
+	if postCount != 1 {
+		t.Errorf("expected exactly one post-fresh call, got %d", postCount)
+	}
+	if !strings.Contains(postedText, "v1.2.4") {
+		t.Errorf("posted body missing new version, got %q", postedText)
+	}
+	if ref.Timestamp != "9999999999.999999" {
+		t.Errorf("returned Timestamp = %q, want the new post's ts", ref.Timestamp)
 	}
 }

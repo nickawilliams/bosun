@@ -244,25 +244,18 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
-	// The text path (markdown_text — used by prerelease) always posts
-	// fresh. Two reasons: chat.update rejects markdown_text/markdown
-	// blocks with internal_error in practice (despite the docs listing
-	// them as supported), and the team's #release_coordination convention
-	// is one message per release rather than updating a previous one.
-	// The block path (review/preview's structured notifications) still
-	// upserts — block-based updates work fine on chat.update and those
-	// flows want the existing thread updated as PR state evolves.
-	if !msg.Content.HasBlocks() {
-		_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
-		if err != nil {
-			return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
-		}
-		return notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}, nil
-	}
-
-	// Upsert: update existing message if one exists for this issue.
-	// The findThreadInChannel call is cached, so repeated calls from
-	// Assess → Notify don't hit the API twice.
+	// Upsert: update an existing message if one exists for this
+	// issue. The findThreadInChannel call is cached, so repeated
+	// calls from Assess → Notify don't hit the API twice.
+	//
+	// Two update strategies depending on what the API accepts:
+	//   - Block content (review/preview): chat.update works cleanly.
+	//   - markdown_text content (prerelease): chat.update rejects
+	//     markdown_text with internal_error in practice (despite the
+	//     docs listing it as supported). When chat.update fails we
+	//     fall back to chat.delete + chat.postMessage so the upsert
+	//     still succeeds. Subscribers see a re-notification — that's
+	//     desirable for "the announcement was updated, look again".
 	if msg.IssueKey != "" {
 		cacheKey := channelID + ":" + msg.IssueKey
 		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
@@ -281,11 +274,18 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 				a.cache.threads[cacheKey] = existing
 				return existing, nil
 			}
-			// Message was deleted — invalidate cache and fall through to post.
 			if strings.Contains(err.Error(), "message_not_found") {
+				// Already gone — invalidate cache and fall through to post.
 				delete(a.cache.threads, cacheKey)
 			} else {
-				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
+				// chat.update failed (typically internal_error for
+				// markdown_text). Delete the old message and let the
+				// post-fresh path below complete the upsert.
+				if _, _, derr := a.client.DeleteMessageContext(ctx, channelID, existing.Timestamp); derr != nil &&
+					!strings.Contains(derr.Error(), "message_not_found") {
+					return notify.ThreadRef{}, fmt.Errorf("updating message (delete fallback after %v): %w", err, derr)
+				}
+				delete(a.cache.threads, cacheKey)
 			}
 		}
 	}
@@ -394,11 +394,16 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 // same GetConversationHistory pull that FindThread uses — no
 // search.messages call, so no extra scope requirements.
 //
+// excludeIssueKey scopes the dedup: messages whose bosun metadata
+// names that issue key are NOT counted as matches, so same-workspace
+// re-runs fall through to Notify (which upserts). Empty string means
+// "any message matches."
+//
 // Soft-fail policy: errors return (false, err) so callers can choose
 // to log and proceed; a false result on error means "we don't know,
 // announce conservatively." Empty query → (false, nil) without a
 // network call (defensive — nothing useful to match against).
-func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query string) (bool, error) {
+func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query, excludeIssueKey string) (bool, error) {
 	if query == "" {
 		return false, nil
 	}
@@ -408,15 +413,27 @@ func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query string) (b
 	}
 
 	params := &slackapi.GetConversationHistoryParameters{
-		ChannelID: channelID,
-		Limit:     200,
+		ChannelID:          channelID,
+		Limit:              200,
+		IncludeAllMetadata: excludeIssueKey != "",
 	}
 	resp, err := a.client.GetConversationHistoryContext(ctx, params)
 	if err != nil {
 		return false, fmt.Errorf("fetching channel history: %w", err)
 	}
 
+	isOwn := func(msg slackapi.Message) bool {
+		if excludeIssueKey == "" || msg.Metadata.EventType != metadataEventType {
+			return false
+		}
+		key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+		return key == excludeIssueKey
+	}
+
 	for _, msg := range resp.Messages {
+		if isOwn(msg) {
+			continue
+		}
 		if strings.Contains(msg.Text, query) {
 			return true, nil
 		}

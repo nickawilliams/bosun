@@ -374,7 +374,11 @@ func newPrereleaseCmd() *cobra.Command {
 							// conservatively so we never silently miss
 							// an announcement on a transient lookup hiccup.
 							if r.isExisting {
-								found, _ := releaseNotifier.HasAnnouncement(ctx, releaseChannel, r.release.URL)
+								// excludeIssueKey lets re-runs in this
+								// workspace fall through to Notify (which
+								// upserts our own prior message); only a
+								// different user's announcement skips.
+								found, _ := releaseNotifier.HasAnnouncement(ctx, releaseChannel, r.release.URL, issue)
 								if found {
 									continue
 								}
