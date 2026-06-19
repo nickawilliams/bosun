@@ -191,6 +191,41 @@ func TestFormatSubjects(t *testing.T) {
 	}
 }
 
+func TestCompareSemverTag(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int // -1, 0, +1 normalized to sign
+	}{
+		{"v0.4.582", "v0.4.583", -1}, // patch differs
+		{"v0.4.583", "v0.4.582", 1},
+		{"v0.4.583", "v0.4.583", 0},
+		{"v1.0.0", "v0.99.99", 1},   // major dominates
+		{"v0.5.0", "v0.4.999", 1},   // minor dominates
+		{"v0.4.2", "v0.4.10", -1},   // numeric compare, not lexicographic
+		{"0.4.5", "v0.4.5", 0},      // optional v prefix
+		{"junk", "v1.0.0", 1},       // non-semver sorts after
+		{"junk", "junk2", -1},       // both non-semver → string compare
+	}
+	for _, tt := range tests {
+		t.Run(tt.a+" vs "+tt.b, func(t *testing.T) {
+			got := compareSemverTag(tt.a, tt.b)
+			// Normalize Compare-style result (any negative / any positive)
+			// to the test's sign convention so out-of-the-ordinary returns
+			// (e.g. strings.Compare can return -42) don't false-fail.
+			sign := 0
+			switch {
+			case got < 0:
+				sign = -1
+			case got > 0:
+				sign = 1
+			}
+			if sign != tt.want {
+				t.Errorf("compareSemverTag(%q, %q) = %d, want sign %d", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatExtrasNote(t *testing.T) {
 	tests := []struct {
 		name string

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -752,9 +753,57 @@ func formatExtrasNote(prs []code.PullRequest) string {
 
 // releaseTagPattern matches release-shaped tags so resolveMultiUserContext
 // can ignore non-release tags (feature flags, infra refs, etc.) when
-// walking TagsContaining results. Same shape as the GitHub adapter's
-// semver match — kept local since this is a filter, not a parser.
-var releaseTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
+// walking TagsContaining results. Capture groups expose the
+// major/minor/patch components for compareSemverTag's ordering.
+var releaseTagPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
+// compareSemverTag orders two release-shaped tags by their
+// (major, minor, patch) triple. Returns -1 if a < b, 0 if equal,
+// 1 if a > b. Non-matches sort to the end (treated as -1, -1, -1).
+// Used to find the lowest-semver containing release (the one that
+// first shipped a given commit) when multiple tags match.
+func compareSemverTag(a, b string) int {
+	parse := func(s string) (int, int, int, bool) {
+		m := releaseTagPattern.FindStringSubmatch(s)
+		if m == nil {
+			return 0, 0, 0, false
+		}
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		patch, _ := strconv.Atoi(m[3])
+		return major, minor, patch, true
+	}
+	aM, am, ap, aok := parse(a)
+	bM, bm, bp, bok := parse(b)
+	if !aok && !bok {
+		return strings.Compare(a, b)
+	}
+	if !aok {
+		return 1
+	}
+	if !bok {
+		return -1
+	}
+	if aM != bM {
+		if aM < bM {
+			return -1
+		}
+		return 1
+	}
+	if am != bm {
+		if am < bm {
+			return -1
+		}
+		return 1
+	}
+	if ap != bp {
+		if ap < bp {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
 
 // resolveMultiUserContext checks for sweep-up / containing-release
 // scenarios and enumerates "extra" PRs in the release range that
@@ -800,7 +849,17 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	if probeSHA != "" {
 		tags, err := g.TagsContaining(ctx, rt.repo.Path, probeSHA)
 		if err == nil {
-			var match string
+			// A repo can have semver tags WITHOUT a corresponding
+			// GitHub release record (e.g. a tag pushed without a
+			// release, or the release was deleted). Walk every
+			// release-shaped containing tag and pick the first one
+			// that resolves to an actual published release —
+			// otherwise a tag-without-release shadows a release
+			// that ALSO contains the work and we'd miss the
+			// sweep-up. We want the lowest-semver containing
+			// release (the one that first shipped this work), so
+			// sort ascending before walking.
+			candidates := make([]string, 0, len(tags))
 			for _, t := range tags {
 				if t == rt.currentTag {
 					continue // The workspace's base tag — not a sweep-up.
@@ -808,13 +867,24 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 				if !releaseTagPattern.MatchString(t) {
 					continue
 				}
-				match = t
-				break
+				candidates = append(candidates, t)
 			}
-			if match != "" {
-				if rel, err := host.GetReleaseByTag(ctx, rt.owner, rt.repoName, match); err == nil {
+			sort.Slice(candidates, func(i, j int) bool {
+				return compareSemverTag(candidates[i], candidates[j]) < 0
+			})
+			for _, t := range candidates {
+				rel, err := host.GetReleaseByTag(ctx, rt.owner, rt.repoName, t)
+				if err == nil {
 					rt.containingRelease = &rel
+					break
 				}
+				if !errors.Is(err, code.ErrNotFound) {
+					// Non-404 errors (network, auth) are surfaceable —
+					// but multi-user awareness is best-effort, so log
+					// silently by bailing without setting the field.
+					break
+				}
+				// 404 on this tag — keep trying the next candidate.
 			}
 		}
 	}
