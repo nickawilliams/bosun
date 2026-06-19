@@ -153,7 +153,22 @@ func newConfigEditCmd() *cobra.Command {
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
-			return c.Run()
+			if err := c.Run(); err != nil {
+				return err
+			}
+
+			// Editor exited cleanly. Re-read the config so the in-
+			// process viper reflects the saved edits (the load that
+			// happened at Bootstrap is now stale), then run the check
+			// so the user sees validation feedback without having to
+			// type a second command. A YAML-parse failure here is
+			// surfaced as the command's error — the file was saved
+			// but bosun can't load it, which the user needs to know.
+			viper.Reset()
+			if err := config.Load(); err != nil {
+				return fmt.Errorf("re-reading config after edit: %w", err)
+			}
+			return runConfigCheck(nil)
 		},
 	}
 
