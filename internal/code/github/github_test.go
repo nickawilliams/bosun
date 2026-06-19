@@ -180,11 +180,13 @@ func TestGetPRForBranchMerged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
-				"number":    10,
-				"title":     "Merged PR",
-				"html_url":  "https://github.com/org/repo/pull/10",
-				"state":     "closed",
-				"merged_at": merged,
+				"number":            10,
+				"title":             "Merged PR",
+				"html_url":          "https://github.com/org/repo/pull/10",
+				"state":             "closed",
+				"merged_at":         merged,
+				"merge_commit_sha":  "sq11122",
+				"user":              map[string]any{"login": "alice"},
 			},
 		})
 	}))
@@ -198,6 +200,16 @@ func TestGetPRForBranchMerged(t *testing.T) {
 	}
 	if pr.State != "merged" {
 		t.Errorf("State = %q, want %q", pr.State, "merged")
+	}
+	// MergeCommitSHA is required by prerelease's sweep-up detection
+	// for squash-merged PRs (local HEAD differs from the squash
+	// commit on main; without this we'd never find a containing
+	// release).
+	if pr.MergeCommitSHA != "sq11122" {
+		t.Errorf("MergeCommitSHA = %q, want %q", pr.MergeCommitSHA, "sq11122")
+	}
+	if pr.AuthorLogin != "alice" {
+		t.Errorf("AuthorLogin = %q, want %q", pr.AuthorLogin, "alice")
 	}
 }
 
@@ -439,24 +451,70 @@ func TestPRsInRange(t *testing.T) {
 }
 
 func TestGetLatestTag(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]string{
-			{"name": "release-2024"},
-			{"name": "v1.5.2"},
-			{"name": "v1.5.1"},
-		})
-	}))
-	defer server.Close()
+	t.Run("prefers /releases/latest when present", func(t *testing.T) {
+		// /releases/latest is the authoritative signal — it respects
+		// the marked-as-latest flag maintainers can set. When this
+		// endpoint succeeds, the /tags fallback isn't consulted.
+		var tagsCalled bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/repos/org/repo/releases/latest":
+				_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": "v2.5.0"})
+			case strings.HasPrefix(r.URL.Path, "/repos/org/repo/tags"):
+				tagsCalled = true
+				_ = json.NewEncoder(w).Encode([]map[string]string{{"name": "v9.9.9"}})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
 
-	a := NewWithClient(server.Client(), server.URL, "token")
+		a := NewWithClient(server.Client(), server.URL, "token")
+		tag, err := a.GetLatestTag(context.Background(), "org", "repo")
+		if err != nil {
+			t.Fatalf("GetLatestTag() error: %v", err)
+		}
+		if tag != "v2.5.0" {
+			t.Errorf("Tag = %q, want %q (from /releases/latest)", tag, "v2.5.0")
+		}
+		if tagsCalled {
+			t.Error("/tags should not have been called when /releases/latest succeeded")
+		}
+	})
 
-	tag, err := a.GetLatestTag(context.Background(), "org", "repo")
-	if err != nil {
-		t.Fatalf("GetLatestTag() error: %v", err)
-	}
-	if tag != "v1.5.2" {
-		t.Errorf("Tag = %q, want %q (should skip non-semver)", tag, "v1.5.2")
-	}
+	t.Run("falls back to /tags with semver-highest pick when no latest release", func(t *testing.T) {
+		// Regression: GitHub's /tags returns tags in creation order,
+		// not semver order. The old code returned whatever came
+		// first in the response, which let a stale manually-pushed
+		// tag shadow the actual highest version. Sort by semver and
+		// pick the highest regardless of API order.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/repos/org/repo/releases/latest":
+				w.WriteHeader(http.StatusNotFound)
+			case strings.HasPrefix(r.URL.Path, "/repos/org/repo/tags"):
+				// API returns v0.4.2399 FIRST (creation-order),
+				// then v0.4.2510 — the real latest by semver.
+				_ = json.NewEncoder(w).Encode([]map[string]string{
+					{"name": "v0.4.2399"},
+					{"name": "v0.4.2510"},
+					{"name": "release-2024"}, // non-semver, skipped
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		a := NewWithClient(server.Client(), server.URL, "token")
+		tag, err := a.GetLatestTag(context.Background(), "org", "repo")
+		if err != nil {
+			t.Fatalf("GetLatestTag() error: %v", err)
+		}
+		if tag != "v0.4.2510" {
+			t.Errorf("Tag = %q, want %q (highest semver wins, not API order)", tag, "v0.4.2510")
+		}
+	})
 }
 
 func TestGetLatestTagEmpty(t *testing.T) {

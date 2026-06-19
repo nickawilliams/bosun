@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,14 +119,18 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 	defer func() { _ = resp.Body.Close() }()
 
 	var results []struct {
-		Number   int     `json:"number"`
-		Title    string  `json:"title"`
-		Body     string  `json:"body"`
-		HTMLURL  string  `json:"html_url"`
-		State    string  `json:"state"`
-		Draft    bool    `json:"draft"`
-		MergedAt *string `json:"merged_at"`
-		Head     struct {
+		Number         int     `json:"number"`
+		Title          string  `json:"title"`
+		Body           string  `json:"body"`
+		HTMLURL        string  `json:"html_url"`
+		State          string  `json:"state"`
+		Draft          bool    `json:"draft"`
+		MergedAt       *string `json:"merged_at"`
+		MergeCommitSHA string  `json:"merge_commit_sha"`
+		User           struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Head struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 		Base struct {
@@ -168,13 +173,15 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 	}
 
 	pr := code.PullRequest{
-		Number:  raw.Number,
-		Title:   raw.Title,
-		Body:    raw.Body,
-		URL:     raw.HTMLURL,
-		State:   state,
-		BaseRef: raw.Base.Ref,
-		HeadSHA: raw.Head.SHA,
+		Number:         raw.Number,
+		Title:          raw.Title,
+		Body:           raw.Body,
+		URL:            raw.HTMLURL,
+		State:          state,
+		BaseRef:        raw.Base.Ref,
+		HeadSHA:        raw.Head.SHA,
+		MergeCommitSHA: raw.MergeCommitSHA,
+		AuthorLogin:    raw.User.Login,
 	}
 	for _, r := range raw.RequestedReviewers {
 		pr.RequestedReviewers = append(pr.RequestedReviewers, r.Login)
@@ -406,30 +413,76 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	}, nil
 }
 
-var semverTag = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
+var semverTag = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
 
+// GetLatestTag returns the most recent semver tag for a repository.
+// Resolution order:
+//   1. GitHub's /releases/latest endpoint — respects the
+//      marked-as-latest flag maintainers can set, and defaults to
+//      the highest-semver release when unset. This is the
+//      authoritative answer for "what's the current released version?"
+//   2. Fall back to walking /tags and picking the highest-semver
+//      tag, for repos that have tags but no releases (or where
+//      /releases/latest 404s for an unrelated reason). Order-by-
+//      semver, NOT the order the API returns — GitHub's /tags
+//      endpoint sorts by creation time, which can put a stale,
+//      manually-pushed tag ahead of the actual latest release.
+//
+// Returns empty string if neither path yields a semver-shaped tag.
 func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (string, error) {
-	path := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repository)
-	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	// Marked-as-latest release is the authoritative signal.
+	latestPath := fmt.Sprintf("/repos/%s/%s/releases/latest", owner, repository)
+	resp, err := a.doRequest(ctx, http.MethodGet, latestPath, nil)
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+		var latest struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&latest); err == nil && latest.TagName != "" {
+			return latest.TagName, nil
+		}
+	}
+	// 404 (no releases) or decode failure falls through to the tag
+	// walk — repos that tag but don't publish releases still have
+	// a meaningful "latest" via semver ordering.
+
+	// /tags returns 200 + [] for a repo with no tags, and 404 only
+	// when the repo itself doesn't exist — so a 404 here is a real
+	// error, not a "no tags yet" signal. Bubble it up so callers
+	// (and the existing TestAPIError contract) see the failure.
+	tagsPath := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repository)
+	tagsResp, err := a.doRequest(ctx, http.MethodGet, tagsPath, nil)
 	if err != nil {
 		return "", fmt.Errorf("fetching tags: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = tagsResp.Body.Close() }()
 
 	var tags []struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+	if err := json.NewDecoder(tagsResp.Body).Decode(&tags); err != nil {
 		return "", fmt.Errorf("parsing tags response: %w", err)
 	}
 
+	best := ""
+	bestParts := [3]int{-1, -1, -1}
 	for _, t := range tags {
-		if semverTag.MatchString(t.Name) {
-			return t.Name, nil
+		m := semverTag.FindStringSubmatch(t.Name)
+		if m == nil {
+			continue
+		}
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		patch, _ := strconv.Atoi(m[3])
+		parts := [3]int{major, minor, patch}
+		if best == "" || parts[0] > bestParts[0] ||
+			(parts[0] == bestParts[0] && parts[1] > bestParts[1]) ||
+			(parts[0] == bestParts[0] && parts[1] == bestParts[1] && parts[2] > bestParts[2]) {
+			best = t.Name
+			bestParts = parts
 		}
 	}
-
-	return "", nil
+	return best, nil
 }
 
 // GetReleaseByTag fetches a release by its tag name. Returns

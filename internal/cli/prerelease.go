@@ -763,10 +763,17 @@ var releaseTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
 // (network errors, etc.) are swallowed — multi-user awareness is a
 // nice-to-have, not load-bearing for the release itself.
 func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt *releaseTarget) {
-	// Look up the workspace's own PR for this repo so we can exclude
-	// it from the extras list (and use it as a marker that the branch
-	// has a tracked PR — never-pushed repos return PR.Number == 0).
+	// Look up the workspace's own PR for this repo. We need:
+	//   - its Number, to exclude from extras
+	//   - its MergeCommitSHA, to drive containing-release detection
+	//     when the PR was squash-merged (the merge commit is on
+	//     main; the local branch's commits aren't — `git tag
+	//     --contains <localHEAD>` returns nothing useful, but
+	//     `--contains <mergeCommitSHA>` finds tags that include the
+	//     merged work).
+	var workspacePR code.PullRequest
 	if pr, err := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch); err == nil {
+		workspacePR = pr
 		rt.workspacePRNumber = pr.Number
 	}
 
@@ -775,14 +782,23 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	// a fetch failure just means we work with whatever's local.
 	_ = g.FetchTags(ctx, rt.repo.Path, "origin")
 
-	// Find the workspace branch's HEAD SHA, then look up tags
-	// containing it. A tag NEWER than rt.currentTag that contains
-	// our HEAD is, by definition, a release that already includes
-	// our work — someone else cut it (sweep-up case, or a
-	// concurrent race).
-	headSHA, err := g.HeadSHA(ctx, rt.repo.Path)
-	if err == nil && headSHA != "" {
-		tags, err := g.TagsContaining(ctx, rt.repo.Path, headSHA)
+	// Choose the SHA to ask "what release tag contains this?". Order
+	// of preference:
+	//   1. The workspace PR's MergeCommitSHA when the PR is merged.
+	//      Required for squash- and rebase-merge cases where the
+	//      committed-on-main SHA differs from any commit on the local
+	//      branch — without this we'd miss the sweep-up.
+	//   2. Local HEAD, for unmerged branches (preview / staging
+	//      scenarios where the workspace is mid-flight).
+	probeSHA := ""
+	if workspacePR.State == "merged" && workspacePR.MergeCommitSHA != "" {
+		probeSHA = workspacePR.MergeCommitSHA
+	} else if headSHA, err := g.HeadSHA(ctx, rt.repo.Path); err == nil {
+		probeSHA = headSHA
+	}
+
+	if probeSHA != "" {
+		tags, err := g.TagsContaining(ctx, rt.repo.Path, probeSHA)
 		if err == nil {
 			var match string
 			for _, t := range tags {
