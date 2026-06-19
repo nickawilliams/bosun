@@ -305,6 +305,12 @@ func newPrereleaseCmd() *cobra.Command {
 							if rt.workspaceMergeSHA != "" {
 								target = rt.workspaceMergeSHA
 							}
+							// Pin the changelog baseline to the tag we
+							// resolved as "latest" — GitHub's own pick uses
+							// /releases/latest, which can miss intermediate
+							// tags that weren't marked latest and produce
+							// nonsense ranges like v4.19.130...v4.19.142 with
+							// an empty body.
 							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
 								Owner:         rt.owner,
 								Repository:    rt.repoName,
@@ -312,6 +318,7 @@ func newPrereleaseCmd() *cobra.Command {
 								Target:        target,
 								Name:          rt.nextVersion,
 								GenerateNotes: true,
+								PreviousTag:   rt.currentTag,
 							})
 							if err != nil {
 								return err

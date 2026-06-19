@@ -382,6 +382,13 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	}
 	if req.GenerateNotes {
 		body["generate_release_notes"] = true
+		if req.PreviousTag != "" {
+			// Pin the baseline so GitHub doesn't fall back to its
+			// /releases/latest pick, which can lag behind the actual
+			// most-recent tag when interim releases weren't marked
+			// "latest" (or weren't created as releases at all).
+			body["previous_tag_name"] = req.PreviousTag
+		}
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/releases", req.Owner, req.Repository)

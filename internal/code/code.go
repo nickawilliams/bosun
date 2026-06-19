@@ -120,6 +120,15 @@ type CreateReleaseRequest struct {
 	// into the release body. When Body is also set, the host appends the
 	// generated notes to it.
 	GenerateNotes bool
+
+	// PreviousTag pins the baseline for auto-generated notes. When
+	// empty, the host picks its own previous tag (GitHub uses the
+	// "latest" release, which can be wrong when newer tags exist
+	// that aren't marked latest — e.g. legacy-api v4.19.142 picked
+	// v4.19.130 because v4.19.141 wasn't the marked-latest release,
+	// producing nonsense ranges and empty changelogs). Only honored
+	// when GenerateNotes is also true.
+	PreviousTag string
 }
 
 // Host defines code hosting operations needed by bosun.
