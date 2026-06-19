@@ -395,11 +395,12 @@ func TestNotifyUpsertDeleteFallback(t *testing.T) {
 				"ok": true,
 				"messages": []map[string]any{
 					{
-						// Text contains the issue key so the second-pass
-						// fallback matches it (Slack metadata deserialization
-						// from httptest fixtures is brittle in slack-go).
-						"text": "PROJ-123 going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.3",
+						"text": "going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.3",
 						"ts":   "1111111111.111111",
+						"metadata": map[string]any{
+							"event_type":    "bosun_notification",
+							"event_payload": map[string]any{"issue_key": "PROJ-123"},
+						},
 					},
 				},
 			})
@@ -455,6 +456,79 @@ func TestNotifyUpsertDeleteFallback(t *testing.T) {
 	}
 	if !strings.Contains(postedText, "v1.2.4") {
 		t.Errorf("posted body missing new version, got %q", postedText)
+	}
+	if ref.Timestamp != "9999999999.999999" {
+		t.Errorf("returned Timestamp = %q, want the new post's ts", ref.Timestamp)
+	}
+}
+
+// TestNotifyIgnoresUnownedMessages locks the metadata-only upsert
+// match. A message in the channel that mentions the issue key in its
+// text but has no bosun metadata is NOT touched — we don't risk a
+// cant_update_message / cant_delete_message on a stale text match.
+// Notify posts fresh; the unrelated message stays untouched.
+func TestNotifyIgnoresUnownedMessages(t *testing.T) {
+	var (
+		updateCalled bool
+		deleteCalled bool
+		postCount    int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
+			})
+		case "/conversations.history":
+			// A message mentioning the issue key but WITHOUT bosun
+			// metadata — could be a manual post, a reply, or another
+			// tool. The upsert path must not touch it.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{"text": "anything about PROJ-123 here", "ts": "1111111111.111111"},
+				},
+			})
+		case "/chat.update":
+			updateCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "cant_update_message"})
+		case "/chat.delete":
+			deleteCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "cant_delete_message"})
+		case "/chat.postMessage":
+			postCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "channel": "C123", "ts": "9999999999.999999",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	ref, err := a.Notify(context.Background(), notify.Message{
+		Channel:  "release-coordination",
+		IssueKey: "PROJ-123",
+		Content: notify.Content{
+			Text: "going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.4",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+	if updateCalled {
+		t.Error("expected no chat.update for unowned message")
+	}
+	if deleteCalled {
+		t.Error("expected no chat.delete for unowned message")
+	}
+	if postCount != 1 {
+		t.Errorf("expected exactly one post-fresh call, got %d", postCount)
 	}
 	if ref.Timestamp != "9999999999.999999" {
 		t.Errorf("returned Timestamp = %q, want the new post's ts", ref.Timestamp)

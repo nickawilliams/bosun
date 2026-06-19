@@ -244,9 +244,14 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
-	// Upsert: update an existing message if one exists for this
-	// issue. The findThreadInChannel call is cached, so repeated
-	// calls from Assess → Notify don't hit the API twice.
+	// Upsert: update an existing message only when it was created by
+	// bosun (matched on metadata.event_type — see findOwnThread).
+	// Text/block-content fallback matching is intentionally NOT used
+	// here: it can match unrelated messages that happen to mention
+	// the issue key, and a stale match leads to attempts to update or
+	// delete messages we don't own (cant_update_message,
+	// cant_delete_message). Better to post a duplicate (easy to
+	// manually delete) than skip on a false positive.
 	//
 	// Two update strategies depending on what the API accepts:
 	//   - Block content (review/preview): chat.update works cleanly.
@@ -256,9 +261,13 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	//     fall back to chat.delete + chat.postMessage so the upsert
 	//     still succeeds. Subscribers see a re-notification — that's
 	//     desirable for "the announcement was updated, look again".
+	//
+	// If both update AND delete fail (rare — we own the message via
+	// metadata match), swallow and post fresh. An orphaned message is
+	// better than a hard failure on the announcement path.
 	if msg.IssueKey != "" {
-		cacheKey := channelID + ":" + msg.IssueKey
-		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
+		cacheKey := channelID + ":own:" + msg.IssueKey
+		existing, _ := a.findOwnThread(ctx, channelID, msg.IssueKey)
 		if existing.Timestamp != "" {
 			// Skip update if content hasn't changed.
 			if existing.ContentHash == hash {
@@ -274,19 +283,13 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 				a.cache.threads[cacheKey] = existing
 				return existing, nil
 			}
-			if strings.Contains(err.Error(), "message_not_found") {
-				// Already gone — invalidate cache and fall through to post.
-				delete(a.cache.threads, cacheKey)
-			} else {
+			if !strings.Contains(err.Error(), "message_not_found") {
 				// chat.update failed (typically internal_error for
-				// markdown_text). Delete the old message and let the
-				// post-fresh path below complete the upsert.
-				if _, _, derr := a.client.DeleteMessageContext(ctx, channelID, existing.Timestamp); derr != nil &&
-					!strings.Contains(derr.Error(), "message_not_found") {
-					return notify.ThreadRef{}, fmt.Errorf("updating message (delete fallback after %v): %w", err, derr)
-				}
-				delete(a.cache.threads, cacheKey)
+				// markdown_text). Try delete; if that also fails,
+				// orphan the old message and post fresh anyway.
+				_, _, _ = a.client.DeleteMessageContext(ctx, channelID, existing.Timestamp)
 			}
+			delete(a.cache.threads, cacheKey)
 		}
 	}
 
@@ -315,6 +318,53 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 	}
 
 	return a.findThreadInChannel(ctx, channelID, issueKey)
+}
+
+// findOwnThread is the strict variant of findThreadInChannel used by
+// the Notify upsert path: it only matches messages bearing bosun's own
+// metadata (so we never try to update/delete a message we don't own).
+// Text/block-content fallback is intentionally omitted; the cost of a
+// duplicate post on a metadata gap (e.g. xoxc- user tokens that can't
+// write metadata) is lower than the cost of a stale-match
+// cant_update_message / cant_delete_message error.
+func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
+	cacheKey := channelID + ":own:" + issueKey
+	if !notify.NoCache(ctx) {
+		if ref, ok := a.cache.threads[cacheKey]; ok {
+			return ref, nil
+		}
+	}
+
+	params := &slackapi.GetConversationHistoryParameters{
+		ChannelID:          channelID,
+		Limit:              200,
+		IncludeAllMetadata: true,
+	}
+
+	resp, err := a.client.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		return notify.ThreadRef{}, fmt.Errorf("fetching channel history: %w", err)
+	}
+
+	var result notify.ThreadRef
+	for _, msg := range resp.Messages {
+		if msg.Metadata.EventType != metadataEventType {
+			continue
+		}
+		key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+		if key != issueKey {
+			continue
+		}
+		hash, _ := msg.Metadata.EventPayload["content_hash"].(string)
+		result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp, ContentHash: hash}
+		break
+	}
+
+	if a.cache.threads == nil {
+		a.cache.threads = make(map[string]notify.ThreadRef)
+	}
+	a.cache.threads[cacheKey] = result
+	return result, nil
 }
 
 // findThreadInChannel searches recent messages in a resolved channel ID for
