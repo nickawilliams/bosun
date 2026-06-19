@@ -84,6 +84,41 @@ piped invocations still get styled chrome.
 - Consider a `--output {auto,text,yaml,json}` convention so users can opt into
   structured output explicitly even from a TTY.
 
+### Help Output in Shared UI Language
+
+`--help` and `bosun help <command>` currently render through fang's default help
+template, palette-mapped via `FangColorScheme` (`internal/cli/help.go`) but
+laid out in fang's own grammar — a different visual program from `bosun status`
+or any other interactive command. The header logo box, breadcrumb, timeline
+spine, glyphs, and card vocabulary all stay behind for help.
+
+**Why:** Visual consistency across the whole CLI. A user typing `bosun --help`
+should see the same chrome as `bosun status` — same logo, same breadcrumb, same
+spine, same card patterns. Today they read as two different programs that
+happen to share a color palette.
+
+**Scope:**
+- [ ] Custom `cmd.SetHelpFunc` on root (cascades to subcommands); takes
+  precedence over fang's auto-generated help.
+- [ ] Breadcrumb routing: `Bosun › Help` for root, `Bosun › Help › Status` for
+  subcommands, via `headerAnnotationTitle` or a synthetic title resolver.
+- [ ] Section renderers mapped onto bosun's card vocabulary:
+  description / usage / examples / commands / flags / footer, with one `Item`
+  row per subcommand or flag (keyword-styled name + muted description), columns
+  aligned via existing `Card.AlignWidth`.
+- [ ] Raw-mode fallback (`ui.IsRaw()`) returns plain text — help under `--raw`
+  must stay greppable.
+- [ ] Preserve fang's other surfaces (error handling, version output,
+  manpage-disable). Trim `FangColorScheme` to just the colors still consumed.
+
+**Decisions to make before starting:** width strategy (logo-box width vs full
+terminal); glyph for command/flag rows (`▸` is the natural pick); how to handle
+hidden commands (keep them hidden, same as today); whether to inline the short
+description into the header subtitle or give it its own card.
+
+**Estimate:** 1–2 days of focused work. Not on the path of anything functional
+— polish item, defer until the lifecycle commands themselves stabilize.
+
 ### Man Pages and Shell Completions
 
 - [ ] Man page generation (`tools/gen-man/`)
