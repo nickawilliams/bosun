@@ -476,14 +476,15 @@ func buildPRBody(data prTemplateData) string {
 
 // notifyTemplateData holds the fields available to notification templates.
 type notifyTemplateData struct {
-	IssueKey    string
-	IssueTitle  string
-	IssueType   string        // e.g., "Story", "Bug".
-	IssueURL    string
-	IconURL     string        // Avatar or icon URL for card blocks.
-	Items       []notify.Item // Per-repository items (PRs, releases, etc.).
-	PreviewName string        // Ephemeral environment name (e.g., "brave-falcon").
-	PreviewURL  string        // Rendered preview environment URL.
+	IssueKey         string
+	IssueTitle       string
+	IssueType        string        // e.g., "Story", "Bug".
+	IssueURL         string
+	IssueDescription string        // Issue body text, plain. Empty when tracker has none.
+	IconURL          string        // Avatar or icon URL for card blocks.
+	Items            []notify.Item // Per-repository items (PRs, releases, etc.).
+	PreviewName      string        // Ephemeral environment name (e.g., "brave-falcon").
+	PreviewURL       string        // Rendered preview environment URL.
 }
 
 // Default block templates per notification type. Used when the type
@@ -571,6 +572,7 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		sections = append(sections, notify.Section{
 			Text:     ":jira: " + title,
 			Subtitle: issueType,
+			Body:     descriptionOrPlaceholder(data.IssueDescription),
 			Buttons:  buttons,
 		})
 	}
@@ -622,7 +624,7 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		sections = append(sections, notify.Section{
 			Text:     title,
 			Subtitle: subtitle,
-			Body:     item.Body,
+			Body:     descriptionOrPlaceholder(item.Body),
 			IconURL:  data.IconURL,
 			Buttons:  buttons,
 		})
@@ -634,6 +636,17 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		Sections: sections,
 		Context:  renderTemplate(get("context"), data),
 	}
+}
+
+// descriptionOrPlaceholder returns body when non-empty, otherwise an
+// italicized "no description" placeholder. Italics render as a softer
+// muted style in Slack mrkdwn, signalling "this slot is intentionally
+// empty" rather than "the field is missing entirely."
+func descriptionOrPlaceholder(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return "_no description_"
+	}
+	return body
 }
 
 // renderTemplate parses and executes a Go text/template. Returns empty

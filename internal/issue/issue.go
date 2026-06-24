@@ -7,12 +7,13 @@ import (
 
 // Issue represents an issue from a tracker.
 type Issue struct {
-	Key      string // e.g., "PROJ-123"
-	Title    string
-	Status   string // Current status name (e.g., "In Progress")
-	StatusID string // Provider status ID (e.g., "10219")
-	Type     string // e.g., "Story", "Bug"
-	URL      string // Web link to the issue
+	Key         string // e.g., "PROJ-123"
+	Title       string
+	Description string // Plain-text issue body. Empty when the tracker has none.
+	Status      string // Current status name (e.g., "In Progress")
+	StatusID    string // Provider status ID (e.g., "10219")
+	Type        string // e.g., "Story", "Bug"
+	URL         string // Web link to the issue
 }
 
 // BoardColumn represents a column on an agile board.

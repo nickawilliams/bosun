@@ -870,12 +870,13 @@ func newReviewCmd() *cobra.Command {
 						// full open-PR set — compare hashes to detect a real
 						// change.
 						content := buildNotifyContent("review", notifyTemplateData{
-							IssueKey:   issue,
-							IssueTitle: detail.Title,
-							IssueType:  detail.Type,
-							IssueURL:   detail.URL,
-							IconURL:    avatarURL,
-							Items:      notifyItems(),
+							IssueKey:         issue,
+							IssueTitle:       detail.Title,
+							IssueType:        detail.Type,
+							IssueURL:         detail.URL,
+							IssueDescription: detail.Description,
+							IconURL:          avatarURL,
+							Items:            notifyItems(),
 						})
 						hash := notify.ContentHash(content)
 						if ref.ContentHash == hash {
@@ -897,12 +898,13 @@ func newReviewCmd() *cobra.Command {
 							IssueURL: detail.URL,
 							Items:    items,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:   issue,
-								IssueTitle: detail.Title,
-								IssueType:  detail.Type,
-								IssueURL:   detail.URL,
-								IconURL:    avatarURL,
-								Items:      items,
+								IssueKey:         issue,
+								IssueTitle:       detail.Title,
+								IssueType:        detail.Type,
+								IssueURL:         detail.URL,
+								IssueDescription: detail.Description,
+								IconURL:          avatarURL,
+								Items:            items,
 							}),
 						})
 						return err

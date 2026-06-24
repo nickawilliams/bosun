@@ -137,14 +137,15 @@ func newPreviewCmd() *cobra.Command {
 							Channel:  channel,
 							IssueKey: issueKey,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:    issueKey,
-								IssueTitle:  issueTitle,
-								IssueType:   issueType,
-								IssueURL:    issueURL,
-								IconURL:     iconURL,
-								PreviewName: resolution.previewName,
-								PreviewURL:  resolution.previewURL,
-								Items:       items,
+								IssueKey:         issueKey,
+								IssueTitle:       issueTitle,
+								IssueType:        issueType,
+								IssueURL:         issueURL,
+								IssueDescription: detail.Description,
+								IconURL:          iconURL,
+								PreviewName:      resolution.previewName,
+								PreviewURL:       resolution.previewURL,
+								Items:            items,
 							}),
 						})
 						return err

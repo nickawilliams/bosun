@@ -69,7 +69,7 @@ func (a *Adapter) CreateIssue(ctx context.Context, req issue.CreateRequest) (iss
 }
 
 func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, error) {
-	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,status,issuetype", issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,status,issuetype,description", issueKey)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, err)
@@ -79,9 +79,10 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	var result struct {
 		Key    string `json:"key"`
 		Fields struct {
-			Summary   string `json:"summary"`
-			Status    struct{ Name string } `json:"status"`
-			IssueType struct{ Name string } `json:"issuetype"`
+			Summary     string                 `json:"summary"`
+			Description map[string]any         `json:"description"`
+			Status      struct{ Name string }  `json:"status"`
+			IssueType   struct{ Name string }  `json:"issuetype"`
 		} `json:"fields"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -89,11 +90,12 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	}
 
 	return issue.Issue{
-		Key:    result.Key,
-		Title:  result.Fields.Summary,
-		Status: result.Fields.Status.Name,
-		Type:   result.Fields.IssueType.Name,
-		URL:    a.baseURL + "/browse/" + result.Key,
+		Key:         result.Key,
+		Title:       result.Fields.Summary,
+		Description: adfPlainText(result.Fields.Description),
+		Status:      result.Fields.Status.Name,
+		Type:        result.Fields.IssueType.Name,
+		URL:         a.baseURL + "/browse/" + result.Key,
 	}, nil
 }
 
@@ -391,6 +393,44 @@ func jiraIssueType(t string) string {
 		return "Task"
 	default:
 		return "Story"
+	}
+}
+
+// adfPlainText extracts readable plain text from an ADF (Atlassian Document
+// Format) document. Walks the node tree, concatenating "text" nodes and
+// inserting paragraph breaks between block-level nodes. Lossy by design —
+// notification cards need a short readable summary, not faithful markup.
+func adfPlainText(doc map[string]any) string {
+	if len(doc) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	adfWalk(doc, &b)
+	return strings.TrimSpace(b.String())
+}
+
+func adfWalk(node map[string]any, b *strings.Builder) {
+	switch node["type"] {
+	case "text":
+		if t, ok := node["text"].(string); ok {
+			b.WriteString(t)
+		}
+		return
+	case "hardBreak":
+		b.WriteString("\n")
+		return
+	}
+
+	content, _ := node["content"].([]any)
+	for _, child := range content {
+		if m, ok := child.(map[string]any); ok {
+			adfWalk(m, b)
+		}
+	}
+
+	switch node["type"] {
+	case "paragraph", "heading", "bulletList", "orderedList", "listItem", "blockquote", "codeBlock":
+		b.WriteString("\n")
 	}
 }
 
