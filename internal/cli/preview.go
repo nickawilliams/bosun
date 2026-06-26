@@ -142,6 +142,7 @@ func newPreviewCmd() *cobra.Command {
 								IssueType:        issueType,
 								IssueURL:         issueURL,
 								IssueDescription: detail.Description,
+								IssueIconURL:     detail.TypeIconURL,
 								IconURL:          iconURL,
 								PreviewName:      resolution.previewName,
 								PreviewURL:       resolution.previewURL,

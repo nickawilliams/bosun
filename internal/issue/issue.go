@@ -13,6 +13,7 @@ type Issue struct {
 	Status      string // Current status name (e.g., "In Progress")
 	StatusID    string // Provider status ID (e.g., "10219")
 	Type        string // e.g., "Story", "Bug"
+	TypeIconURL string // Issue-type icon image URL. Empty when none.
 	URL         string // Web link to the issue
 }
 

@@ -478,9 +478,10 @@ func buildPRBody(data prTemplateData) string {
 type notifyTemplateData struct {
 	IssueKey         string
 	IssueTitle       string
-	IssueType        string        // e.g., "Story", "Bug".
+	IssueType        string // e.g., "Story", "Bug".
 	IssueURL         string
 	IssueDescription string        // Issue body text, plain. Empty when tracker has none.
+	IssueIconURL     string        // Issue-type icon URL for the Jira card. Empty falls back to a glyph.
 	IconURL          string        // Avatar or icon URL for card blocks.
 	Items            []notify.Item // Per-repository items (PRs, releases, etc.).
 	PreviewName      string        // Ephemeral environment name (e.g., "brave-falcon").
@@ -569,10 +570,19 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 				Style: "primary",
 			})
 		}
+		// Prefer the real issue-type icon (e.g. the Story/Bug avatar) as
+		// the card image, mirroring the GitHub avatar on PR cards. When
+		// unavailable, fall back to the :jira: glyph prefixed on the title
+		// so the card still reads as a Jira ticket.
+		text := title
+		if data.IssueIconURL == "" {
+			text = ":jira: " + title
+		}
 		sections = append(sections, notify.Section{
-			Text:     ":jira: " + title,
+			Text:     text,
 			Subtitle: issueType,
 			Body:     descriptionOrPlaceholder(data.IssueDescription),
+			IconURL:  data.IssueIconURL,
 			Buttons:  buttons,
 		})
 	}
@@ -998,4 +1008,3 @@ func renderStageURL(stage, name string) string {
 	}
 	return buf.String()
 }
-

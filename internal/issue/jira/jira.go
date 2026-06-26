@@ -45,9 +45,9 @@ func NewWithClient(client *http.Client, baseURL, email, token string) *Adapter {
 func (a *Adapter) CreateIssue(ctx context.Context, req issue.CreateRequest) (issue.Issue, error) {
 	body := map[string]any{
 		"fields": map[string]any{
-			"project":   map[string]string{"key": req.Project},
-			"summary":   req.Title,
-			"issuetype": map[string]string{"name": jiraIssueType(req.Type)},
+			"project":     map[string]string{"key": req.Project},
+			"summary":     req.Title,
+			"issuetype":   map[string]string{"name": jiraIssueType(req.Type)},
 			"description": adfDocument(req.Description),
 		},
 	}
@@ -79,10 +79,13 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	var result struct {
 		Key    string `json:"key"`
 		Fields struct {
-			Summary     string                 `json:"summary"`
-			Description map[string]any         `json:"description"`
-			Status      struct{ Name string }  `json:"status"`
-			IssueType   struct{ Name string }  `json:"issuetype"`
+			Summary     string                `json:"summary"`
+			Description map[string]any        `json:"description"`
+			Status      struct{ Name string } `json:"status"`
+			IssueType   struct {
+				Name    string `json:"name"`
+				IconURL string `json:"iconUrl"`
+			} `json:"issuetype"`
 		} `json:"fields"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -95,6 +98,7 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 		Description: adfPlainText(result.Fields.Description),
 		Status:      result.Fields.Status.Name,
 		Type:        result.Fields.IssueType.Name,
+		TypeIconURL: result.Fields.IssueType.IconURL,
 		URL:         a.baseURL + "/browse/" + result.Key,
 	}, nil
 }

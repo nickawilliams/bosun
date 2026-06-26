@@ -66,13 +66,27 @@ func TestCreateIssue(t *testing.T) {
 }
 
 func TestGetIssue(t *testing.T) {
+	iconURL := "https://example.atlassian.net/icon/story.png?size=medium"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"key": "PROJ-123",
 			"fields": map[string]any{
-				"summary":   "Add widget",
-				"status":    map[string]string{"name": "In Progress"},
-				"issuetype": map[string]string{"name": "Story"},
+				"summary": "Add widget",
+				"status":  map[string]string{"name": "In Progress"},
+				"issuetype": map[string]string{
+					"name":    "Story",
+					"iconUrl": iconURL,
+				},
+				"description": map[string]any{
+					"type":    "doc",
+					"version": 1,
+					"content": []map[string]any{{
+						"type": "paragraph",
+						"content": []map[string]any{
+							{"type": "text", "text": "Build the widget."},
+						},
+					}},
+				},
 			},
 		})
 	}))
@@ -92,6 +106,12 @@ func TestGetIssue(t *testing.T) {
 	}
 	if got.URL != server.URL+"/browse/PROJ-123" {
 		t.Errorf("URL = %q, want suffix /browse/PROJ-123", got.URL)
+	}
+	if got.TypeIconURL != iconURL {
+		t.Errorf("TypeIconURL = %q, want %q", got.TypeIconURL, iconURL)
+	}
+	if got.Description != "Build the widget." {
+		t.Errorf("Description = %q, want %q", got.Description, "Build the widget.")
 	}
 }
 

@@ -875,6 +875,7 @@ func newReviewCmd() *cobra.Command {
 							IssueType:        detail.Type,
 							IssueURL:         detail.URL,
 							IssueDescription: detail.Description,
+							IssueIconURL:     detail.TypeIconURL,
 							IconURL:          avatarURL,
 							Items:            notifyItems(),
 						})
@@ -903,6 +904,7 @@ func newReviewCmd() *cobra.Command {
 								IssueType:        detail.Type,
 								IssueURL:         detail.URL,
 								IssueDescription: detail.Description,
+								IssueIconURL:     detail.TypeIconURL,
 								IconURL:          avatarURL,
 								Items:            items,
 							}),
