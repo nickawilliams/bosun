@@ -71,6 +71,62 @@ func TestReleaseStringConfigOverridesDefault(t *testing.T) {
 	}
 }
 
+// TestSizedJiraIcon confirms the Jira issue-type icon URL is normalized
+// to the shared card-icon size: the `size` query param is rewritten when
+// present, and URLs without one (SVG system icons, custom external icons)
+// are left untouched.
+func TestSizedJiraIcon(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{
+			"universal_avatar bumps size",
+			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
+			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=" + cardIconJiraSize,
+		},
+		{
+			"no size param left untouched",
+			"https://x.atlassian.net/images/icons/issuetypes/story.svg",
+			"https://x.atlassian.net/images/icons/issuetypes/story.svg",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sizedJiraIcon(tc.in); got != tc.want {
+				t.Errorf("sizedJiraIcon(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReviewJiraCardIconResized confirms the Jira card's icon is emitted
+// at the shared card-icon size (not the raw URL's default) on the block
+// path, with no :jira: glyph when a real icon is present.
+func TestReviewJiraCardIconResized(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	c := buildNotifyContent("review", notifyTemplateData{
+		IssueKey:     "PROJ-1",
+		IssueTitle:   "Add widget",
+		IssueIconURL: "https://x.atlassian.net/avatar/10315?size=medium",
+	})
+	if len(c.Sections) == 0 {
+		t.Fatal("no sections rendered")
+	}
+	card := c.Sections[0]
+	wantIcon := "https://x.atlassian.net/avatar/10315?size=" + cardIconJiraSize
+	if card.IconURL != wantIcon {
+		t.Errorf("IconURL = %q, want %q", card.IconURL, wantIcon)
+	}
+	if strings.Contains(card.Text, ":jira:") {
+		t.Errorf("Text = %q, want no :jira: glyph when an icon is present", card.Text)
+	}
+}
+
 // TestReleaseMapConfigEntersBlockPath confirms a map config on
 // notification.templates.release reopens the structured-block escape
 // hatch even though the type now defaults to text.

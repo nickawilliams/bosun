@@ -129,7 +129,7 @@ func newPreviewCmd() *cobra.Command {
 						var iconURL string
 						if host, err := newCodeHost(); err == nil {
 							if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-								iconURL = fmt.Sprintf("https://github.com/%s.png?size=36", user)
+								iconURL = githubAvatarURL(user)
 							}
 						}
 

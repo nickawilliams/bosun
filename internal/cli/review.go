@@ -811,7 +811,7 @@ func newReviewCmd() *cobra.Command {
 			var avatarURL string
 			if host != nil {
 				if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-					avatarURL = fmt.Sprintf("https://github.com/%s.png?size=36", user)
+					avatarURL = githubAvatarURL(user)
 				}
 			}
 

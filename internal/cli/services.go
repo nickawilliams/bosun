@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -474,6 +475,49 @@ func buildPRBody(data prTemplateData) string {
 	return result
 }
 
+// Card icons render at a fixed display size in Slack, so these govern
+// source crispness (and relative footprint), not on-screen dimensions.
+// We request one shared size from every source so GitHub avatars and
+// Jira issue-type icons sit at the same scale on a card.
+const (
+	// cardIconPixels is the source resolution requested for raster card
+	// icons that accept a pixel size (GitHub avatars).
+	cardIconPixels = 48
+	// cardIconJiraSize is the Jira universal_avatar named size closest to
+	// cardIconPixels — Jira's avatar endpoint takes named sizes
+	// (xsmall/small/medium/large/xlarge), not pixel counts.
+	cardIconJiraSize = "large"
+)
+
+// githubAvatarURL builds the avatar image URL for a GitHub login at the
+// shared card-icon size.
+func githubAvatarURL(user string) string {
+	return fmt.Sprintf("https://github.com/%s.png?size=%d", user, cardIconPixels)
+}
+
+// sizedJiraIcon normalizes a Jira issue-type icon URL to the shared
+// card-icon size. Jira's universal_avatar URLs carry a `size` query
+// param (defaulting to "medium"); we bump it to cardIconJiraSize so the
+// icon matches the GitHub avatar's footprint. URLs without a `size`
+// param — fixed-path SVG system icons, custom external icons — are
+// returned unchanged, since we can't safely resize them.
+func sizedJiraIcon(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	if !q.Has("size") {
+		return rawURL
+	}
+	q.Set("size", cardIconJiraSize)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // notifyTemplateData holds the fields available to notification templates.
 type notifyTemplateData struct {
 	IssueKey         string
@@ -582,7 +626,7 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 			Text:     text,
 			Subtitle: issueType,
 			Body:     descriptionOrPlaceholder(data.IssueDescription),
-			IconURL:  data.IssueIconURL,
+			IconURL:  sizedJiraIcon(data.IssueIconURL),
 			Buttons:  buttons,
 		})
 	}
