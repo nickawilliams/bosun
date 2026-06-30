@@ -75,7 +75,17 @@ func NewRootCmd(version string) *cobra.Command {
 	// Hidden commands.
 	cmd.AddCommand(newDemoCmd())
 	cmd.AddCommand(newCaptainCmd())
-	cmd.AddCommand(newNotifyTestCmd()) // TEMPORARY — delete with notify_demo.go.
+
+	// extraCommands holds locally-registered, out-of-tree commands (e.g.
+	// the untracked notify_demo.go sample-data command). The tracked tree
+	// builds with this empty; local files append via init().
+	cmd.AddCommand(extraCommands...)
 
 	return cmd
 }
+
+// extraCommands is appended to the root command after the built-in set.
+// It exists so untracked, local-only command files (kept out of version
+// control) can register themselves via init() without modifying this
+// tracked file. Empty in a clean checkout.
+var extraCommands []*cobra.Command

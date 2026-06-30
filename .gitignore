@@ -3,3 +3,7 @@
 .env
 .out
 /bosun
+
+# Local-only sample-data command for iterating on notification card
+# format. Registers itself via the root extraCommands seam (see root.go).
+/internal/cli/notify_demo.go
