@@ -183,12 +183,23 @@ func truncate(s string, max int) string {
 type Adapter struct {
 	client *slackapi.Client
 	cache  apiCache
+	self   selfIdentity
+}
+
+// selfIdentity caches the authenticated identity (resolved once via
+// auth.test). Used to recognize bosun's own messages when matching by
+// author — the upsert fallback for xoxc/user tokens, which can't persist
+// readable message metadata.
+type selfIdentity struct {
+	resolved bool
+	userID   string
+	botID    string
 }
 
 // apiCache stores results from Slack API calls to avoid redundant requests
 // within a single command invocation. No TTL — the adapter is short-lived.
 type apiCache struct {
-	channels map[string]string          // channel name → ID
+	channels map[string]string           // channel name → ID
 	threads  map[string]notify.ThreadRef // "channelID:issueKey" → ThreadRef
 }
 
@@ -224,7 +235,6 @@ func (a *Adapter) Close() {
 	saveCache(a.cache)
 }
 
-
 func (a *Adapter) AuthTest(ctx context.Context) (string, error) {
 	resp, err := a.client.AuthTestContext(ctx)
 	if err != nil {
@@ -240,18 +250,17 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	}
 
 	hash := notify.ContentHash(msg.Content)
-	meta := bosunMetadata(msg.IssueKey)
+	meta := bosunMetadata(msg.IssueKey, hash)
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
-	// Upsert: update an existing message only when it was created by
-	// bosun (matched on metadata.event_type — see findOwnThread).
-	// Text/block-content fallback matching is intentionally NOT used
-	// here: it can match unrelated messages that happen to mention
-	// the issue key, and a stale match leads to attempts to update or
-	// delete messages we don't own (cant_update_message,
-	// cant_delete_message). Better to post a duplicate (easy to
-	// manually delete) than skip on a false positive.
+	// Upsert: update an existing message only when bosun owns it —
+	// matched on bosun metadata, or (for xoxc/user tokens that can't
+	// persist readable metadata) on a message bosun itself authored that
+	// mentions the issue key. See findOwnThread. The author scope is what
+	// keeps this safe: we never update/delete a message we don't own, so
+	// a stale text match on someone else's message can't trigger
+	// cant_update_message / cant_delete_message.
 	//
 	// Two update strategies depending on what the API accepts:
 	//   - Block content (review/preview): chat.update works cleanly.
@@ -298,14 +307,15 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
 	}
 
-	// Cache the new message with its content hash.
+	// Cache the new message under the same key findOwnThread reads
+	// (":own:"), so a subsequent upsert in this session finds the message
+	// we just posted instead of re-posting a duplicate.
 	ref := notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}
-	cacheKey := channelID + ":" + msg.IssueKey
 	if msg.IssueKey != "" {
 		if a.cache.threads == nil {
 			a.cache.threads = make(map[string]notify.ThreadRef)
 		}
-		a.cache.threads[cacheKey] = ref
+		a.cache.threads[channelID+":own:"+msg.IssueKey] = ref
 	}
 
 	return ref, nil
@@ -320,13 +330,13 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 	return a.findThreadInChannel(ctx, channelID, issueKey)
 }
 
-// findOwnThread is the strict variant of findThreadInChannel used by
-// the Notify upsert path: it only matches messages bearing bosun's own
-// metadata (so we never try to update/delete a message we don't own).
-// Text/block-content fallback is intentionally omitted; the cost of a
-// duplicate post on a metadata gap (e.g. xoxc- user tokens that can't
-// write metadata) is lower than the cost of a stale-match
-// cant_update_message / cant_delete_message error.
+// findOwnThread locates a bosun-owned notification for the upsert path.
+// It matches on bosun metadata first (exact, app tokens). When that
+// finds nothing — the xoxc/user-token case, where Slack does not persist
+// readable message metadata — it falls back to a message authored by the
+// authenticated identity that mentions the issue key. The author scope is
+// what keeps the upsert safe: we only ever update/delete a message bosun
+// itself posted, never a stale text match on someone else's message.
 func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
 	cacheKey := channelID + ":own:" + issueKey
 	if !notify.NoCache(ctx) {
@@ -347,6 +357,8 @@ func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string)
 	}
 
 	var result notify.ThreadRef
+
+	// Metadata pass — exact, reliable (app tokens).
 	for _, msg := range resp.Messages {
 		if msg.Metadata.EventType != metadataEventType {
 			continue
@@ -360,11 +372,66 @@ func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string)
 		break
 	}
 
+	// Author-scoped fallback — xoxc/user tokens can't persist readable
+	// metadata, so recognize our own prior message by author + mention.
+	if result.Timestamp == "" {
+		if selfUser, selfBot := a.resolveSelf(ctx); selfUser != "" || selfBot != "" {
+			for _, msg := range resp.Messages {
+				if messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, issueKey) {
+					result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+					break
+				}
+			}
+		}
+	}
+
 	if a.cache.threads == nil {
 		a.cache.threads = make(map[string]notify.ThreadRef)
 	}
 	a.cache.threads[cacheKey] = result
 	return result, nil
+}
+
+// resolveSelf returns the authenticated identity's user and bot IDs,
+// resolved once via auth.test and cached for the adapter's lifetime.
+// Returns empty strings when auth.test fails (the author-scoped fallback
+// then no-ops, leaving metadata matching as the only path).
+func (a *Adapter) resolveSelf(ctx context.Context) (userID, botID string) {
+	if a.self.resolved {
+		return a.self.userID, a.self.botID
+	}
+	a.self.resolved = true
+	if resp, err := a.client.AuthTestContext(ctx); err == nil {
+		a.self.userID = resp.UserID
+		a.self.botID = resp.BotID
+	}
+	return a.self.userID, a.self.botID
+}
+
+// messageAuthoredBy reports whether msg was posted by the given identity.
+func messageAuthoredBy(msg slackapi.Message, userID, botID string) bool {
+	return (userID != "" && msg.User == userID) || (botID != "" && msg.BotID == botID)
+}
+
+// messageMentions reports whether issueKey appears in the message's
+// fallback text or its section/header blocks.
+func messageMentions(msg slackapi.Message, issueKey string) bool {
+	if strings.Contains(msg.Text, issueKey) {
+		return true
+	}
+	for _, block := range msg.Blocks.BlockSet {
+		switch b := block.(type) {
+		case *slackapi.SectionBlock:
+			if b.Text != nil && strings.Contains(b.Text.Text, issueKey) {
+				return true
+			}
+		case *slackapi.HeaderBlock:
+			if b.Text != nil && strings.Contains(b.Text.Text, issueKey) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findThreadInChannel searches recent messages in a resolved channel ID for
@@ -406,25 +473,8 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	// sent before metadata was added, or by other tools).
 	if result.Timestamp == "" {
 		for _, msg := range resp.Messages {
-			if strings.Contains(msg.Text, issueKey) {
+			if messageMentions(msg, issueKey) {
 				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-				break
-			}
-			for _, block := range msg.Blocks.BlockSet {
-				if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
-					if strings.Contains(section.Text.Text, issueKey) {
-						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-						break
-					}
-				}
-				if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
-					if strings.Contains(header.Text.Text, issueKey) {
-						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-						break
-					}
-				}
-			}
-			if result.Timestamp != "" {
 				break
 			}
 		}
@@ -505,18 +555,20 @@ func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query, excludeIs
 
 const metadataEventType = "bosun_notification"
 
-// bosunMetadata builds the Slack message metadata for a bosun notification.
-// Note: metadata is only readable with app tokens, not xoxc- user tokens.
-// The text-search fallback in findThreadInChannel handles xoxc- tokens.
-func bosunMetadata(issueKey string) slackapi.SlackMetadata {
+// bosunMetadata builds the Slack message metadata for a bosun
+// notification. The content_hash lets the upsert skip an unchanged
+// message without re-rendering. Note: metadata is only readable with app
+// tokens, not xoxc- user tokens — for those, findOwnThread falls back to
+// matching bosun's own authored message by issue-key mention.
+func bosunMetadata(issueKey, contentHash string) slackapi.SlackMetadata {
 	return slackapi.SlackMetadata{
 		EventType: metadataEventType,
 		EventPayload: map[string]any{
-			"issue_key": issueKey,
+			"issue_key":    issueKey,
+			"content_hash": contentHash,
 		},
 	}
 }
-
 
 func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg notify.Message) error {
 	opts := buildMsgOptions(msg.Content)

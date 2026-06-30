@@ -462,11 +462,11 @@ func TestNotifyUpsertDeleteFallback(t *testing.T) {
 	}
 }
 
-// TestNotifyIgnoresUnownedMessages locks the metadata-only upsert
-// match. A message in the channel that mentions the issue key in its
-// text but has no bosun metadata is NOT touched — we don't risk a
-// cant_update_message / cant_delete_message on a stale text match.
-// Notify posts fresh; the unrelated message stays untouched.
+// TestNotifyIgnoresUnownedMessages locks the author-scoped upsert match.
+// A message that mentions the issue key but was authored by someone other
+// than bosun (and has no bosun metadata) is NOT touched — we don't risk a
+// cant_update_message / cant_delete_message on a stale text match. Notify
+// posts fresh; the unrelated message stays untouched.
 func TestNotifyIgnoresUnownedMessages(t *testing.T) {
 	var (
 		updateCalled bool
@@ -477,19 +477,21 @@ func TestNotifyIgnoresUnownedMessages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		switch r.URL.Path {
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user_id": "USELF"})
 		case "/conversations.list":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok":       true,
 				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
 			})
 		case "/conversations.history":
-			// A message mentioning the issue key but WITHOUT bosun
-			// metadata — could be a manual post, a reply, or another
-			// tool. The upsert path must not touch it.
+			// A message mentioning the issue key but authored by someone
+			// else (UOTHER) and WITHOUT bosun metadata. The upsert path
+			// must not touch it.
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"messages": []map[string]any{
-					{"text": "anything about PROJ-123 here", "ts": "1111111111.111111"},
+					{"text": "anything about PROJ-123 here", "ts": "1111111111.111111", "user": "UOTHER"},
 				},
 			})
 		case "/chat.update":
@@ -532,5 +534,68 @@ func TestNotifyIgnoresUnownedMessages(t *testing.T) {
 	}
 	if ref.Timestamp != "9999999999.999999" {
 		t.Errorf("returned Timestamp = %q, want the new post's ts", ref.Timestamp)
+	}
+}
+
+// TestNotifyUpsertsOwnMessageWithoutMetadata locks the xoxc/user-token
+// path: bosun's own prior message (authored by the authenticated
+// identity, mentioning the issue key) has no readable metadata, yet the
+// upsert finds it by author and updates it in place rather than posting a
+// duplicate.
+func TestNotifyUpsertsOwnMessageWithoutMetadata(t *testing.T) {
+	var (
+		updatedTS string
+		postCount int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user_id": "USELF"})
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "bb-prs"}},
+			})
+		case "/conversations.history":
+			// bosun's own prior post: authored by USELF, mentions the
+			// issue key, but carries no bosun metadata (xoxc token).
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{"text": "Ready for Review — PROJ-123", "ts": "1111111111.111111", "user": "USELF"},
+				},
+			})
+		case "/chat.update":
+			updatedTS = r.FormValue("ts")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C123", "ts": updatedTS})
+		case "/chat.postMessage":
+			postCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C123", "ts": "9999999999.999999"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	ref, err := a.Notify(context.Background(), notify.Message{
+		Channel:  "bb-prs",
+		IssueKey: "PROJ-123",
+		Content:  notify.Content{Header: "Ready for Review", Body: "PROJ-123 details"},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+	if updatedTS != "1111111111.111111" {
+		t.Errorf("chat.update ts = %q, want the own message's ts", updatedTS)
+	}
+	if postCount != 0 {
+		t.Errorf("expected no fresh post (in-place update), got %d", postCount)
+	}
+	if ref.Timestamp != "1111111111.111111" {
+		t.Errorf("returned Timestamp = %q, want the updated message's ts", ref.Timestamp)
 	}
 }
