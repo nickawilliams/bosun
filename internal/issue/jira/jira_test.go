@@ -66,14 +66,14 @@ func TestCreateIssue(t *testing.T) {
 }
 
 func TestGetIssue(t *testing.T) {
-	iconURL := "https://example.atlassian.net/icon/story.png?size=medium"
+	iconURL := "https://example.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"key": "PROJ-123",
 			"fields": map[string]any{
 				"summary": "Add widget",
 				"status":  map[string]string{"name": "In Progress"},
-				"issuetype": map[string]string{
+				"issuetype": map[string]any{
 					"name":    "Story",
 					"iconUrl": iconURL,
 				},
@@ -107,11 +107,36 @@ func TestGetIssue(t *testing.T) {
 	if got.URL != server.URL+"/browse/PROJ-123" {
 		t.Errorf("URL = %q, want suffix /browse/PROJ-123", got.URL)
 	}
+	// The adapter passes iconUrl through verbatim; Slack-specific
+	// normalization (format=png, sizing) happens in the cli layer.
 	if got.TypeIconURL != iconURL {
 		t.Errorf("TypeIconURL = %q, want %q", got.TypeIconURL, iconURL)
 	}
 	if got.Description != "Build the widget." {
 		t.Errorf("Description = %q, want %q", got.Description, "Build the widget.")
+	}
+}
+
+func TestTypeIconURL(t *testing.T) {
+	a := New("https://x.atlassian.net", "e", "t")
+
+	// Legacy built-in icon is upgraded to its default universal_avatar.
+	gotEpic := a.typeIconURL("https://x.atlassian.net/images/icons/issuetypes/epic.svg")
+	wantEpic := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10307"
+	if gotEpic != wantEpic {
+		t.Errorf("epic: got %q, want %q", gotEpic, wantEpic)
+	}
+
+	// A type already pointing at a universal_avatar is left untouched.
+	uni := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium"
+	if got := a.typeIconURL(uni); got != uni {
+		t.Errorf("universal_avatar passthrough: got %q, want %q", got, uni)
+	}
+
+	// An unknown legacy icon (no default mapping) is left as-is.
+	custom := "https://x.atlassian.net/images/icons/issuetypes/custom_thing.svg"
+	if got := a.typeIconURL(custom); got != custom {
+		t.Errorf("unknown legacy passthrough: got %q, want %q", got, custom)
 	}
 }
 
@@ -198,7 +223,7 @@ func TestAuthHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"key":    "PROJ-1",
+			"key": "PROJ-1",
 			"fields": map[string]any{
 				"summary":   "x",
 				"status":    map[string]string{"name": "Ready"},

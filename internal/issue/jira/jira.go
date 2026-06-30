@@ -98,9 +98,43 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 		Description: adfPlainText(result.Fields.Description),
 		Status:      result.Fields.Status.Name,
 		Type:        result.Fields.IssueType.Name,
-		TypeIconURL: result.Fields.IssueType.IconURL,
+		TypeIconURL: a.typeIconURL(result.Fields.IssueType.IconURL),
 		URL:         a.baseURL + "/browse/" + result.Key,
 	}, nil
+}
+
+// jiraDefaultIssueTypeAvatars maps Jira's built-in issue types to their
+// platform-default universal_avatar IDs. Built-in types (always Epic, and
+// on older instances Story/Task/Bug/Sub-task) expose only a legacy
+// /images/icons/issuetypes/<name>.svg icon with no avatar record. These
+// IDs are Jira Cloud platform defaults — stable across instances, each
+// verified against the live avatar endpoint — used to upgrade the small
+// legacy icon to the full-size avatar.
+var jiraDefaultIssueTypeAvatars = map[string]string{
+	"epic":     "10307",
+	"story":    "10315",
+	"task":     "10318",
+	"bug":      "10303",
+	"subtask":  "10316",
+	"sub-task": "10316",
+}
+
+// typeIconURL upgrades a legacy issue-type icon to its full-size
+// universal_avatar when the type is a known Jira built-in. Most issue
+// types already point iconUrl at a universal_avatar (returned unchanged);
+// only the legacy /images/icons/issuetypes/<name>.svg system icons —
+// which are a fixed ~16px and have no avatar record — are remapped.
+func (a *Adapter) typeIconURL(iconURL string) string {
+	const legacyPrefix = "/images/icons/issuetypes/"
+	_, after, found := strings.Cut(iconURL, legacyPrefix)
+	if !found {
+		return iconURL
+	}
+	name := strings.TrimSuffix(strings.ToLower(after), ".svg")
+	if id, ok := jiraDefaultIssueTypeAvatars[name]; ok {
+		return a.baseURL + "/rest/api/2/universal_avatar/view/type/issuetype/avatar/" + id
+	}
+	return iconURL
 }
 
 func (a *Adapter) SetStatus(ctx context.Context, issueKey, statusName string) error {

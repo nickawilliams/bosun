@@ -495,26 +495,42 @@ func githubAvatarURL(user string) string {
 	return fmt.Sprintf("https://github.com/%s.png?size=%d", user, cardIconPixels)
 }
 
-// sizedJiraIcon normalizes a Jira issue-type icon URL to the shared
-// card-icon size. Jira's universal_avatar URLs carry a `size` query
-// param (defaulting to "medium"); we bump it to cardIconJiraSize so the
-// icon matches the GitHub avatar's footprint. URLs without a `size`
-// param — fixed-path SVG system icons, custom external icons — are
-// returned unchanged, since we can't safely resize them.
-func sizedJiraIcon(rawURL string) string {
+// slackIconURL normalizes a Jira issue-type icon URL into something
+// Slack's image proxy can actually render, returning "" only when there
+// is nothing usable (in which case the card falls back to the :jira:
+// glyph).
+//
+// Slack fetches image_url server-side through its proxy and does NOT
+// render SVG (browsers do — which is why an SVG icon opens fine in a
+// browser but shows as a broken image on a card). Jira hands us icons in
+// two shapes:
+//
+//   - universal_avatar URLs (most issue types) default to SVG but accept
+//     a `format=png` parameter; we add it plus a `size` so Slack gets a
+//     card-sized raster.
+//   - legacy /images/icons/issuetypes/<name>.svg system icons (e.g. the
+//     built-in Epic, which has no avatar record). Jira serves a PNG
+//     sibling at the same path; we swap the extension. These are fixed
+//     ~16px — there is no larger variant Jira will serve.
+func slackIconURL(rawURL string) string {
 	if rawURL == "" {
 		return ""
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return rawURL
+		return ""
 	}
-	q := u.Query()
-	if !q.Has("size") {
-		return rawURL
+	switch {
+	case strings.Contains(u.Path, "/universal_avatar/"):
+		// SVG by default; force a card-sized PNG.
+		q := u.Query()
+		q.Set("size", cardIconJiraSize)
+		q.Set("format", "png")
+		u.RawQuery = q.Encode()
+	case strings.HasSuffix(strings.ToLower(u.Path), ".svg"):
+		// Legacy system icon — swap to the PNG sibling Slack can render.
+		u.Path = u.Path[:len(u.Path)-len(".svg")] + ".png"
 	}
-	q.Set("size", cardIconJiraSize)
-	u.RawQuery = q.Encode()
 	return u.String()
 }
 
@@ -616,17 +632,19 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		}
 		// Prefer the real issue-type icon (e.g. the Story/Bug avatar) as
 		// the card image, mirroring the GitHub avatar on PR cards. When
-		// unavailable, fall back to the :jira: glyph prefixed on the title
-		// so the card still reads as a Jira ticket.
+		// there's no usable icon, fall back to the :jira: glyph prefixed
+		// on the title so the card still reads as a Jira ticket. Key the
+		// fallback off the normalized icon, not the raw URL.
+		icon := slackIconURL(data.IssueIconURL)
 		text := title
-		if data.IssueIconURL == "" {
+		if icon == "" {
 			text = ":jira: " + title
 		}
 		sections = append(sections, notify.Section{
 			Text:     text,
 			Subtitle: issueType,
 			Body:     descriptionOrPlaceholder(data.IssueDescription),
-			IconURL:  sizedJiraIcon(data.IssueIconURL),
+			IconURL:  icon,
 			Buttons:  buttons,
 		})
 	}

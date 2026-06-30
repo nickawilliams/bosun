@@ -71,11 +71,12 @@ func TestReleaseStringConfigOverridesDefault(t *testing.T) {
 	}
 }
 
-// TestSizedJiraIcon confirms the Jira issue-type icon URL is normalized
-// to the shared card-icon size: the `size` query param is rewritten when
-// present, and URLs without one (SVG system icons, custom external icons)
-// are left untouched.
-func TestSizedJiraIcon(t *testing.T) {
+// TestSlackIconURL confirms a Jira issue-type icon URL is normalized for
+// Slack's image proxy: universal_avatar URLs (SVG by default) get
+// format=png plus the shared card size; legacy SVG system icons are
+// swapped for the PNG sibling Jira serves; empty/unusable inputs return
+// "" so the card falls back to the :jira: glyph.
+func TestSlackIconURL(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
@@ -83,42 +84,47 @@ func TestSizedJiraIcon(t *testing.T) {
 	}{
 		{"empty", "", ""},
 		{
-			"universal_avatar bumps size",
+			"universal_avatar forces png and size",
 			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
-			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=" + cardIconJiraSize,
+			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize,
 		},
 		{
-			"no size param left untouched",
-			"https://x.atlassian.net/images/icons/issuetypes/story.svg",
-			"https://x.atlassian.net/images/icons/issuetypes/story.svg",
+			"legacy svg system icon swapped to png",
+			"https://x.atlassian.net/images/icons/issuetypes/epic.svg",
+			"https://x.atlassian.net/images/icons/issuetypes/epic.png",
+		},
+		{
+			"plain raster passes through",
+			"https://x.atlassian.net/images/icons/issuetypes/story.png",
+			"https://x.atlassian.net/images/icons/issuetypes/story.png",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sizedJiraIcon(tc.in); got != tc.want {
-				t.Errorf("sizedJiraIcon(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := slackIconURL(tc.in); got != tc.want {
+				t.Errorf("slackIconURL(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestReviewJiraCardIconResized confirms the Jira card's icon is emitted
-// at the shared card-icon size (not the raw URL's default) on the block
+// TestReviewJiraCardIconNormalized confirms the Jira card's icon is
+// emitted as a Slack-renderable PNG at the shared card size on the block
 // path, with no :jira: glyph when a real icon is present.
-func TestReviewJiraCardIconResized(t *testing.T) {
+func TestReviewJiraCardIconNormalized(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 
 	c := buildNotifyContent("review", notifyTemplateData{
 		IssueKey:     "PROJ-1",
 		IssueTitle:   "Add widget",
-		IssueIconURL: "https://x.atlassian.net/avatar/10315?size=medium",
+		IssueIconURL: "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
 	})
 	if len(c.Sections) == 0 {
 		t.Fatal("no sections rendered")
 	}
 	card := c.Sections[0]
-	wantIcon := "https://x.atlassian.net/avatar/10315?size=" + cardIconJiraSize
+	wantIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize
 	if card.IconURL != wantIcon {
 		t.Errorf("IconURL = %q, want %q", card.IconURL, wantIcon)
 	}
