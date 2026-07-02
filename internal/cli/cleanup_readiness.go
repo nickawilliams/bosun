@@ -270,7 +270,7 @@ func emitCleanupReadiness(
 
 		for i := range repos {
 			r := repos[i]
-			_ = grp.Spinner(r.Name, func() error {
+			_ = grp.Spinner(ui.PreserveCase(r.Name), func() error {
 				probes[i] = gatherRepoProbe(ctx, g, host, r)
 				return nil
 			})

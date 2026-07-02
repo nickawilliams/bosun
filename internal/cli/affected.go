@@ -130,7 +130,7 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 	ui.RunGroup("workspace readiness", func(grp ui.Reporter) {
 		for i := range repos {
 			r := repos[i]
-			err := grp.Spinner(r.Name, func() error {
+			err := grp.Spinner(ui.PreserveCase(r.Name), func() error {
 				rr, err := gatherRepoReadiness(ctx, g, r)
 				if err != nil {
 					return err
@@ -193,7 +193,7 @@ func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) 
 				if rr.unpushed == 0 {
 					continue
 				}
-				err := grp.Spinner(rr.repo.Name, func() error {
+				err := grp.Spinner(ui.PreserveCase(rr.repo.Name), func() error {
 					return g.Push(ctx, rr.repo.Path, rr.branch)
 				})
 				label := ui.PreserveCase(rr.repo.Name)
