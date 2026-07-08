@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nickawilliams/bosun/internal/notify"
 	slackapi "github.com/slack-go/slack"
@@ -597,5 +599,124 @@ func TestNotifyUpsertsOwnMessageWithoutMetadata(t *testing.T) {
 	}
 	if ref.Timestamp != "1111111111.111111" {
 		t.Errorf("returned Timestamp = %q, want the updated message's ts", ref.Timestamp)
+	}
+}
+
+// TestFindThreadSeesFreshlyPostedMessage locks the Assess/Apply cache
+// consistency: after Notify posts a new message, a FindThread for the
+// same channel+issue must return that message from the cache rather
+// than a stale "not found" — even though FindThread's own negative
+// lookup was cached before the post. This is what keeps a re-run's
+// plan reading "update notification" instead of "new notification".
+func TestFindThreadSeesFreshlyPostedMessage(t *testing.T) {
+	var historyCalls int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "bb-prs"}},
+			})
+		case "/conversations.history":
+			historyCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"messages": []map[string]any{},
+			})
+		case "/chat.postMessage":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"channel": "C123",
+				"ts":      "1234567890.123456",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+	ctx := context.Background()
+
+	// Assess-side lookup before anything is posted: not found (and the
+	// negative result is now cached).
+	ref, err := a.FindThread(ctx, "bb-prs", "PROJ-123")
+	if err != nil {
+		t.Fatalf("FindThread() error: %v", err)
+	}
+	if ref.Timestamp != "" {
+		t.Fatalf("FindThread() before post = %+v, want zero ref", ref)
+	}
+
+	posted, err := a.Notify(ctx, notify.Message{
+		Channel:  "bb-prs",
+		IssueKey: "PROJ-123",
+		Content:  notify.Content{Header: "PROJ-123: Add widget"},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+
+	ref, err = a.FindThread(ctx, "bb-prs", "PROJ-123")
+	if err != nil {
+		t.Fatalf("FindThread() after post error: %v", err)
+	}
+	if ref.Timestamp != posted.Timestamp {
+		t.Errorf("FindThread() after post Timestamp = %q, want %q (the posted message)",
+			ref.Timestamp, posted.Timestamp)
+	}
+}
+
+// TestCacheDropsNegativeThreadEntries locks the persistence policy for
+// "not found" thread lookups: they are session-only. saveCache must not
+// write them (each save renews the TTL, so a frequently re-run command
+// would keep a stale negative alive indefinitely), and loadCache must
+// skip any a prior version already persisted.
+func TestCacheDropsNegativeThreadEntries(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	saveCache(apiCache{
+		channels: map[string]string{"bb-prs": "C123"},
+		threads: map[string]notify.ThreadRef{
+			"C123:PROJ-1": {},                                                // negative: must not persist
+			"C123:PROJ-2": {Channel: "C123", Timestamp: "1234567890.123456"}, // positive: must persist
+		},
+	})
+
+	c := loadCache()
+	if _, ok := c.threads["C123:PROJ-1"]; ok {
+		t.Error("negative thread entry was persisted; want session-only")
+	}
+	if ref := c.threads["C123:PROJ-2"]; ref.Timestamp != "1234567890.123456" {
+		t.Errorf("positive thread entry = %+v, want it persisted intact", ref)
+	}
+	if c.channels["bb-prs"] != "C123" {
+		t.Errorf("channel entry = %q, want %q", c.channels["bb-prs"], "C123")
+	}
+
+	// A negative persisted by a prior version is pruned by the next save.
+	path := cachePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading cache file: %v", err)
+	}
+	var pc persistentCache
+	if err := json.Unmarshal(data, &pc); err != nil {
+		t.Fatalf("unmarshaling cache file: %v", err)
+	}
+	pc.Threads["C123:PROJ-3"] = cacheEntry[notify.ThreadRef]{
+		Expires: time.Now().Add(time.Hour),
+	}
+	data, _ = json.Marshal(pc)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("writing cache file: %v", err)
+	}
+
+	saveCache(apiCache{})
+	c = loadCache()
+	if _, ok := c.threads["C123:PROJ-3"]; ok {
+		t.Error("stale persisted negative survived a save; want it pruned")
 	}
 }

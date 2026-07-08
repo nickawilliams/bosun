@@ -67,7 +67,10 @@ func loadCache() apiCache {
 		}
 	}
 	for k, v := range pc.Threads {
-		if now.Before(v.Expires) {
+		// Skip negative entries (zero Timestamp) a prior version may have
+		// persisted — trusting a stale "not found" across runs makes
+		// FindThread report "new notification" after the message exists.
+		if now.Before(v.Expires) && v.Value.Timestamp != "" {
 			c.threads[k] = v.Value
 		}
 	}
@@ -102,16 +105,22 @@ func saveCache(c apiCache) {
 		}
 	}
 	for k, v := range existing.Threads {
-		if now.After(v.Expires) {
+		if now.After(v.Expires) || v.Value.Timestamp == "" {
 			delete(existing.Threads, k)
 		}
 	}
 
-	// Merge in current session's entries.
+	// Merge in current session's entries. Negative thread lookups (zero
+	// Timestamp) stay session-only: persisted, they outlive the message
+	// being posted, and because every save renews the TTL, a frequently
+	// re-run command would keep a stale "not found" alive indefinitely.
 	for k, v := range c.channels {
 		existing.Channels[k] = cacheEntry[string]{Value: v, Expires: expires}
 	}
 	for k, v := range c.threads {
+		if v.Timestamp == "" {
+			continue
+		}
 		existing.Threads[k] = cacheEntry[notify.ThreadRef]{Value: v, Expires: expires}
 	}
 

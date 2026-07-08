@@ -286,10 +286,7 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 			if err == nil {
 				// Update the cached hash so subsequent runs detect no change.
 				existing.ContentHash = hash
-				if a.cache.threads == nil {
-					a.cache.threads = make(map[string]notify.ThreadRef)
-				}
-				a.cache.threads[cacheKey] = existing
+				a.rememberThread(channelID, msg.IssueKey, existing)
 				return existing, nil
 			}
 			if !strings.Contains(err.Error(), "message_not_found") {
@@ -299,6 +296,7 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 				_, _, _ = a.client.DeleteMessageContext(ctx, channelID, existing.Timestamp)
 			}
 			delete(a.cache.threads, cacheKey)
+			delete(a.cache.threads, channelID+":"+msg.IssueKey)
 		}
 	}
 
@@ -307,18 +305,30 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
 	}
 
-	// Cache the new message under the same key findOwnThread reads
-	// (":own:"), so a subsequent upsert in this session finds the message
-	// we just posted instead of re-posting a duplicate.
+	// Cache the new message under both lookup keys so a subsequent
+	// upsert or FindThread in this session finds the message we just
+	// posted instead of a stale "not found".
 	ref := notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}
 	if msg.IssueKey != "" {
-		if a.cache.threads == nil {
-			a.cache.threads = make(map[string]notify.ThreadRef)
-		}
-		a.cache.threads[channelID+":own:"+msg.IssueKey] = ref
+		a.rememberThread(channelID, msg.IssueKey, ref)
 	}
 
 	return ref, nil
+}
+
+// rememberThread caches ref under both keys an issue's notification is
+// looked up by: the upsert key (":own:", read by findOwnThread) and the
+// plain key (read by FindThread). Writing both keeps an Assess-side
+// FindThread consistent with what Apply just posted or updated — within
+// this session, and across runs for the xoxc adapter's persistent cache,
+// where a run-1 Assess caches "not found", run 1 then posts, and a
+// run-2 Assess would otherwise read the stale negative back from disk.
+func (a *Adapter) rememberThread(channelID, issueKey string, ref notify.ThreadRef) {
+	if a.cache.threads == nil {
+		a.cache.threads = make(map[string]notify.ThreadRef)
+	}
+	a.cache.threads[channelID+":own:"+issueKey] = ref
+	a.cache.threads[channelID+":"+issueKey] = ref
 }
 
 func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (notify.ThreadRef, error) {
@@ -480,7 +490,9 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 		}
 	}
 
-	// Cache the result (including zero refs — "not found" is also cached).
+	// Cache the result (including zero refs — "not found" is also cached,
+	// but only for this session: saveCache skips negatives, so a later
+	// run re-scans instead of trusting a stale "not found").
 	if a.cache.threads == nil {
 		a.cache.threads = make(map[string]notify.ThreadRef)
 	}
