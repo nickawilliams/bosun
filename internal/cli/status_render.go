@@ -78,7 +78,7 @@ func statusCardStateColor(state ui.CardState) color.Color {
 // CardFailed map to done / ready / blocked / pending / broken in
 // the summary). Two functions, two jobs: one for rendering the row,
 // one for categorizing it.
-func repoCardGlyphVisual(branchState string, pr code.PullRequest) (ui.CardState, color.Color) {
+func repoCardGlyphVisual(branchState string, pr code.PullRequest, checks code.CheckRollup) (ui.CardState, color.Color) {
 	switch pr.State {
 	case "merged":
 		return ui.CardSuccess, ui.Palette.RoleDone
@@ -94,7 +94,12 @@ func repoCardGlyphVisual(branchState string, pr code.PullRequest) (ui.CardState,
 		switch pr.MergeableState {
 		case "clean", "has_hooks":
 			return ui.CardReady, ui.Palette.RoleOpen
-		case "dirty", "behind", "blocked", "unstable":
+		case "blocked":
+			if prWaitingOnOthers(pr, checks) {
+				return ui.CardReady, ui.Palette.RoleInFlight
+			}
+			return ui.CardReady, ui.Palette.RoleAttention
+		case "dirty", "behind", "unstable":
 			return ui.CardReady, ui.Palette.RoleAttention
 		}
 		return ui.CardReady, ui.Palette.RoleInFlight
@@ -102,15 +107,29 @@ func repoCardGlyphVisual(branchState string, pr code.PullRequest) (ui.CardState,
 	return ui.CardReady, ui.Palette.RoleInFlight
 }
 
+// prWaitingOnOthers reports whether an open PR's "blocked"
+// mergeable_state is a benign wait rather than a user-actionable
+// block: required checks still running, or a requested review not yet
+// submitted (with no checks failing). Mirrors the two in-flight
+// branches of statusPRDominant's blocked case so the repo card's
+// glyph/tally and the PR row's label always agree on which side of
+// the pending/blocked line a PR falls.
+func prWaitingOnOthers(pr code.PullRequest, checks code.CheckRollup) bool {
+	return checks.State == "running" ||
+		(pr.Review == "awaiting" && checks.State != "failing")
+}
+
 // resolveRepoCardState maps a repo's branch + PR state onto the
 // 5-state aggregate vocabulary used by the workspace tally code.
 // Mirrors the scratchpad's resolveWstatRepoCardState. Precedence:
 // terminal PR states (merged → done, closed → broken) win; then
 // branch problems (diverged / behind) → blocked; then PR
-// mergeability (clean → ready, dirty/behind/blocked/unstable →
-// blocked); else pending. Used for counting only — glyph rendering
-// for repo cards goes through repoCardGlyphVisual above.
-func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState {
+// mergeability (clean → ready, dirty/behind/unstable → blocked,
+// blocked → pending when the PR is just waiting on others — see
+// prWaitingOnOthers — otherwise blocked); else pending. Used for
+// counting only — glyph rendering for repo cards goes through
+// repoCardGlyphVisual above.
+func resolveRepoCardState(branchState string, pr code.PullRequest, checks code.CheckRollup) ui.CardState {
 	switch pr.State {
 	case "merged":
 		return ui.CardSuccess
@@ -126,7 +145,12 @@ func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState 
 		switch pr.MergeableState {
 		case "clean":
 			return ui.CardReady
-		case "dirty", "behind", "blocked", "unstable":
+		case "blocked":
+			if prWaitingOnOthers(pr, checks) {
+				return ui.CardWaiting
+			}
+			return ui.CardSkipped
+		case "dirty", "behind", "unstable":
 			return ui.CardSkipped
 		}
 		return ui.CardWaiting
@@ -273,12 +297,16 @@ func statusPRRow(pr code.PullRequest, checks code.CheckRollup) (string, string) 
 //  1. review = changes_requested  → "changes requested" / attention
 //  2. mergeable = blocked + checks running
 //     → "required checks pending" / in-flight
-//  3. mergeable in {dirty, behind, unstable, blocked}
+//  3. mergeable = blocked + review = awaiting + checks not failing
+//     → "awaiting review" / in-flight
+//  4. mergeable in {dirty, behind, unstable, blocked}
 //     → mapped label / attention
-//  4. mergeable in {clean, has_hooks} + review = approved
+//  5. mergeable in {clean, has_hooks} + review = approved
 //     → "approved" / open
-//  5. mergeable = unknown → "unknown" / neutral
-//  6. else → "open" / in-flight
+//  6. mergeable in {clean, has_hooks} + review = awaiting
+//     → "awaiting review" / in-flight
+//  7. mergeable = unknown → "unknown" / neutral
+//  8. else → "open" / in-flight
 func statusPRDominant(state, mergeableState, reviewState string, checks code.CheckRollup) (label string, col color.Color, glyph string) {
 	switch state {
 	case "merged":
@@ -307,12 +335,28 @@ func statusPRDominant(state, mergeableState, reviewState string, checks code.Che
 			if checks.State == "running" {
 				return "required checks pending", ui.Palette.RoleInFlight, "●"
 			}
+			// The other benign "blocked" cause: a requested review not
+			// yet submitted. The author has done their part — the wait
+			// is on the reviewer, who isn't necessarily the person
+			// running status — so it reads as in-flight, not attention.
+			// Only a *requested* review softens the state ("" means no
+			// reviewer was asked, and asking is on the user), and
+			// failing checks still dominate.
+			if reviewState == "awaiting" && checks.State != "failing" {
+				return "awaiting review", ui.Palette.RoleInFlight, "●"
+			}
 			return "blocked", ui.Palette.RoleAttention, "●"
 		case "unknown":
 			return "unknown", ui.Palette.RoleNeutral, "●"
 		case "clean", "has_hooks":
 			if reviewState == "approved" {
 				return "approved", ui.Palette.RoleOpen, "●"
+			}
+			// Mergeable without a required review, but one was
+			// requested — say where the PR actually sits instead of
+			// the generic "open". Same in-flight role either way.
+			if reviewState == "awaiting" {
+				return "awaiting review", ui.Palette.RoleInFlight, "●"
 			}
 			return "open", ui.Palette.RoleInFlight, "●"
 		}

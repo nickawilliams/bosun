@@ -325,7 +325,7 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 		if rs.lastCommit.After(ws.updatedAt) {
 			ws.updatedAt = rs.lastCommit
 		}
-		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr) {
+		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr, rs.checks) {
 		case ui.CardSuccess:
 			ws.counts.done++
 		case ui.CardReady:
@@ -676,7 +676,7 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 // to role; ✓ purple for terminal merged; ✗ red for terminal closed).
 func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card {
 	branchState := branchStateString(rs.sync)
-	state, glyphCol := repoCardGlyphVisual(branchState, rs.pr)
+	state, glyphCol := repoCardGlyphVisual(branchState, rs.pr, rs.checks)
 
 	branchGlyph, branchValue := statusBranchRow(s.Branch, rs.branchURL, rs.sync, s.Dirty)
 	checksGlyph, checksValue := statusChecksRow(rs.checks, rs.checksURL)
@@ -700,7 +700,7 @@ func renderWorkspaceSummary(states []repoState) {
 	var done, ready, blocked, pending, broken int
 	for _, rs := range states {
 		branchState := branchStateString(rs.sync)
-		switch resolveRepoCardState(branchState, rs.pr) {
+		switch resolveRepoCardState(branchState, rs.pr, rs.checks) {
 		case ui.CardSuccess:
 			done++
 		case ui.CardReady:

@@ -17,6 +17,7 @@ func TestResolveRepoCardState(t *testing.T) {
 		name        string
 		branchState string
 		pr          code.PullRequest
+		checks      code.CheckRollup
 		want        ui.CardState
 	}{
 		// Terminal PR states — branch state is ignored.
@@ -33,6 +34,12 @@ func TestResolveRepoCardState(t *testing.T) {
 		{name: "open + behind → blocked", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "behind"}, want: ui.CardSkipped},
 		{name: "open + blocked → blocked", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "blocked"}, want: ui.CardSkipped},
 		{name: "open + unstable → blocked", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "unstable"}, want: ui.CardSkipped},
+		// Blocked-but-waiting-on-others → pending, not blocked.
+		{name: "open + blocked + awaiting review → pending", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "blocked", Review: "awaiting"}, want: ui.CardWaiting},
+		{name: "open + blocked + checks running → pending", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "blocked"}, checks: code.CheckRollup{State: "running", Running: 1}, want: ui.CardWaiting},
+		{name: "open + blocked + awaiting review + checks failing → blocked", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "blocked", Review: "awaiting"}, checks: code.CheckRollup{State: "failing", Failing: 1}, want: ui.CardSkipped},
+		{name: "open + blocked + approved → blocked (review isn't the blocker)", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "blocked", Review: "approved"}, want: ui.CardSkipped},
+		{name: "diverged + blocked + awaiting review → blocked (branch wins)", branchState: "diverged 1/2", pr: code.PullRequest{State: "open", MergeableState: "blocked", Review: "awaiting"}, want: ui.CardSkipped},
 		{name: "open + unknown → pending", branchState: "in sync", pr: code.PullRequest{State: "open", MergeableState: "unknown"}, want: ui.CardWaiting},
 		{name: "open + empty mergeable → pending", branchState: "in sync", pr: code.PullRequest{State: "open"}, want: ui.CardWaiting},
 		// Defaults.
@@ -42,7 +49,7 @@ func TestResolveRepoCardState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveRepoCardState(tc.branchState, tc.pr); got != tc.want {
+			if got := resolveRepoCardState(tc.branchState, tc.pr, tc.checks); got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -154,6 +161,18 @@ func TestStatusPRDominant(t *testing.T) {
 		{name: "open + blocked + checks running + changes_requested → ● changes requested", state: "open", mergeState: "blocked", reviewState: "changes_requested", checks: code.CheckRollup{State: "running"}, wantLabel: "changes requested", wantGlyph: "●"},
 		// Blocked + failing checks → real block, attention.
 		{name: "open + blocked + checks failing → ● blocked", state: "open", mergeState: "blocked", checks: code.CheckRollup{State: "failing", Failing: 1}, wantLabel: "blocked", wantGlyph: "●"},
+
+		// Blocked + requested-but-unsubmitted review → the wait is on
+		// the reviewer, not the user: in-flight with a specific label.
+		{name: "open + blocked + awaiting → ● awaiting review", state: "open", mergeState: "blocked", reviewState: "awaiting", wantLabel: "awaiting review", wantGlyph: "●"},
+		{name: "open + blocked + awaiting + checks passing → ● awaiting review", state: "open", mergeState: "blocked", reviewState: "awaiting", checks: code.CheckRollup{State: "passing", Passing: 3}, wantLabel: "awaiting review", wantGlyph: "●"},
+		// Running checks stay the dominant pending signal; failing checks dominate the other way.
+		{name: "open + blocked + awaiting + checks running → ● required checks pending", state: "open", mergeState: "blocked", reviewState: "awaiting", checks: code.CheckRollup{State: "running", Running: 1}, wantLabel: "required checks pending", wantGlyph: "●"},
+		{name: "open + blocked + awaiting + checks failing → ● blocked", state: "open", mergeState: "blocked", reviewState: "awaiting", checks: code.CheckRollup{State: "failing", Failing: 1}, wantLabel: "blocked", wantGlyph: "●"},
+		// No requested reviewer → asking one is on the user: still blocked.
+		{name: "open + blocked + no review involved → ● blocked", state: "open", mergeState: "blocked", wantLabel: "blocked", wantGlyph: "●"},
+		// Mergeable + review requested → specific label over generic "open".
+		{name: "open + clean + awaiting → ● awaiting review", state: "open", mergeState: "clean", reviewState: "awaiting", wantLabel: "awaiting review", wantGlyph: "●"},
 
 		// Indeterminate / pending states.
 		{name: "open + unknown → ● unknown", state: "open", mergeState: "unknown", wantLabel: "unknown", wantGlyph: "●"},
