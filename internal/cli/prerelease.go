@@ -137,6 +137,18 @@ func classifyReleaseGate(prNumber int, prState string, branchOnDefault bool) (re
 	return gateBlock, "no PR — work not on the default branch"
 }
 
+// applyEmptyReleaseGuard downgrades an allowed release to a skip when
+// the default branch is already fully contained in the latest tag
+// (shipped) — there's nothing new to release. Pure; the caller supplies
+// `shipped` from an IsMergedInto(origin/<default>, currentTag) check.
+// Only an allow is ever downgraded; blocks/skips pass through unchanged.
+func applyEmptyReleaseGuard(gate releaseGate, reason, currentTag string, shipped bool) (releaseGate, string) {
+	if gate == gateAllow && shipped {
+		return gateSkip, "already released — nothing new since " + currentTag
+	}
+	return gate, reason
+}
+
 // versionEligible reports whether rt would be a release candidate on
 // version/sweep-up grounds alone — before the release gate is applied:
 // its lookup succeeded, the derived next version differs from the latest
@@ -496,6 +508,14 @@ func newPrereleaseCmd() *cobra.Command {
 							// conservatively so we never silently miss
 							// an announcement on a transient lookup hiccup.
 							if r.isExisting {
+								if r.release.URL == "" {
+									// Assumed-contained: sweep-up couldn't
+									// confirm the release object (non-404
+									// lookup error), so we skipped cutting a
+									// release but have no URL to announce.
+									// Nothing to post for this repo.
+									continue
+								}
 								// excludeIssueKey lets re-runs in this
 								// workspace fall through to Notify (which
 								// upserts our own prior message); only a
@@ -1069,6 +1089,7 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 			sort.Slice(candidates, func(i, j int) bool {
 				return compareSemverTag(candidates[i], candidates[j]) < 0
 			})
+			unconfirmedTag := ""
 			for _, t := range candidates {
 				rel, err := host.GetReleaseByTag(ctx, rt.owner, rt.repoName, t)
 				if err == nil {
@@ -1076,12 +1097,25 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 					break
 				}
 				if !errors.Is(err, code.ErrNotFound) {
-					// Non-404 errors (network, auth) are surfaceable —
-					// but multi-user awareness is best-effort, so log
-					// silently by bailing without setting the field.
+					// Network/auth error — we can't confirm this tag is a
+					// published release, but it IS a release-shaped tag
+					// that contains our merged commit. Remember it and
+					// stop rather than walking into more failing calls.
+					unconfirmedTag = t
 					break
 				}
-				// 404 on this tag — keep trying the next candidate.
+				// 404 on this tag — a tag without a release; keep looking.
+			}
+			// Conservative fallback: our merged commit sits in a
+			// release-shaped tag, but a non-404 error stopped us
+			// confirming the release object. Assume it's already shipped
+			// and skip cutting a redundant/near-empty release rather than
+			// proceeding as if nothing contained it. The synthetic
+			// release carries only the tag (no URL) — enough to render
+			// "in <tag>"; the notify path skips URL-less results so we
+			// never announce a release we couldn't fetch.
+			if rt.containingRelease == nil && unconfirmedTag != "" {
+				rt.containingRelease = &code.Release{Tag: unconfirmedTag}
 			}
 		}
 	}
@@ -1127,7 +1161,19 @@ func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
 	if rt.workspacePRNumber > 0 {
 		// A PR exists: its merged-ness is the definitive signal (and
 		// covers the squash case, which always has a PR).
-		rt.gate, rt.gateReason = classifyReleaseGate(rt.workspacePRNumber, rt.workspacePRState, false)
+		gate, reason := classifyReleaseGate(rt.workspacePRNumber, rt.workspacePRState, false)
+		// Empty-release guard: an allowed (merged) repo whose default
+		// branch is already fully contained in the latest tag has nothing
+		// new to ship — the work was released already (e.g. by someone
+		// else) and sweep-up couldn't confirm it (empty MergeCommitSHA,
+		// or a non-404 lookup blip). Skip rather than cut an empty tag.
+		if gate == gateAllow && rt.currentTag != "" && rt.defaultBranch != "" {
+			_ = g.Fetch(ctx, rt.repo.Path, "origin", rt.defaultBranch)
+			if shipped, err := g.IsMergedInto(ctx, rt.repo.Path, "origin/"+rt.defaultBranch, rt.currentTag); err == nil {
+				gate, reason = applyEmptyReleaseGuard(gate, reason, rt.currentTag, shipped)
+			}
+		}
+		rt.gate, rt.gateReason = gate, reason
 		return
 	}
 	// No PR — split "nothing beyond default" (skip) from "unmerged

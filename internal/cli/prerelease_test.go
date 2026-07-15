@@ -135,6 +135,37 @@ func TestClassifyReleaseGate(t *testing.T) {
 	}
 }
 
+// TestApplyEmptyReleaseGuard locks the empty-release downgrade: an
+// allowed merged repo whose default branch is already contained in the
+// latest tag (shipped) becomes a skip; everything else passes through.
+func TestApplyEmptyReleaseGuard(t *testing.T) {
+	tests := []struct {
+		name       string
+		gate       releaseGate
+		reason     string
+		currentTag string
+		shipped    bool
+		wantGate   releaseGate
+		wantReason string
+	}{
+		{"allow + shipped → skip", gateAllow, "", "v1.2.3", true, gateSkip, "already released — nothing new since v1.2.3"},
+		{"allow + not shipped → allow", gateAllow, "", "v1.2.3", false, gateAllow, ""},
+		{"block passes through even if shipped", gateBlock, "PR #42 open — not merged", "v1.2.3", true, gateBlock, "PR #42 open — not merged"},
+		{"skip passes through", gateSkip, "no changes to release from this workspace", "v1.2.3", true, gateSkip, "no changes to release from this workspace"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate, reason := applyEmptyReleaseGuard(tt.gate, tt.reason, tt.currentTag, tt.shipped)
+			if gate != tt.wantGate {
+				t.Errorf("gate = %v, want %v", gate, tt.wantGate)
+			}
+			if reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tt.wantReason)
+			}
+		})
+	}
+}
+
 // TestEligibleRequiresGate locks eligible() = versionEligible() AND
 // gate == gateAllow: only an allowed, version-eligible repo is offered
 // for release.
