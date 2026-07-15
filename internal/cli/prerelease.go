@@ -169,6 +169,24 @@ func (rt *releaseTarget) eligible() bool {
 // repos, so there's no remaining opt-in edge case.
 func (rt *releaseTarget) preselect() bool { return rt.eligible() }
 
+// producesResult reports whether this repo lands a row in
+// releaseResults — i.e. something the notification would announce: a
+// release we'll create (include), a sweep-up we'll point at
+// (containingRelease), or an already-at-current-version listing.
+// Mirrors the branches of the release action's Assess/Apply that append
+// to releaseResults, computed from target state so the notify action
+// can predict an empty announcement before any Apply runs. Blocked,
+// skipped, deselected, and errored repos produce nothing.
+func (rt *releaseTarget) producesResult() bool {
+	if rt.tagErr != nil {
+		return false
+	}
+	if rt.include || rt.containingRelease != nil {
+		return true
+	}
+	return rt.currentTag != "" && rt.nextVersion == rt.currentTag
+}
+
 // infoRowNote returns the reason an inert (non-selectable) row carries
 // in the form and result card: the containing-release tag for sweep-up
 // repos, else the release gate's reason for blocked/skipped repos.
@@ -216,7 +234,7 @@ func newPrereleaseCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			_ = emitLifecyclePreamble(ctx, issue)
+			detail := emitLifecyclePreamble(ctx, issue)
 
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
 			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
@@ -420,8 +438,20 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 
 			tracker, _ := newIssueTracker()
-			if sa, ok := statusAction(tracker, issue, "", "ready_for_release"); ok {
+			if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
 				actions = append(actions, sa)
+			}
+
+			// Nothing to announce when no repo produces a release result
+			// (all blocked/skipped, or nothing selected): the notify
+			// action renders as a no-op rather than claiming it will post
+			// a message the Apply would then skip.
+			anyReleaseOutcome := false
+			for i := range targets {
+				if targets[i].producesResult() {
+					anyReleaseOutcome = true
+					break
+				}
 			}
 
 			releaseChannel := viper.GetString("notification.channel_release")
@@ -438,6 +468,9 @@ func newPrereleaseCmd() *cobra.Command {
 					Type:   "channel",
 					Name:   releaseChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
+						if !anyReleaseOutcome {
+							return ActionCompleted, "nothing to announce", nil
+						}
 						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
 						if ref.Timestamp != "" {
 							releaseNotifyOp = ui.PlanModify

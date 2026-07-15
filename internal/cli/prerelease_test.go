@@ -70,6 +70,35 @@ func TestReleaseTargetVersionEligibility(t *testing.T) {
 	}
 }
 
+// TestProducesResult locks which repo states land a row in
+// releaseResults — the predicate the notify action uses to decide
+// whether there's anything to announce. Must match the release action's
+// Assess/Apply branches that append results.
+func TestProducesResult(t *testing.T) {
+	tests := []struct {
+		name string
+		rt   releaseTarget
+		want bool
+	}{
+		{"selected for release", releaseTarget{include: true, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
+		{"sweep-up containing release", releaseTarget{containingRelease: &code.Release{Tag: "v1.2.4"}, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
+		{"already at current version", releaseTarget{currentTag: "v2.0.0", nextVersion: "v2.0.0"}, true},
+		{"gate-blocked (unmerged, would-release)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateBlock}, false},
+		{"gate-skipped (nothing beyond default)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateSkip}, false},
+		{"deselected eligible", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", include: false}, false},
+		{"lookup error", releaseTarget{tagErr: errors.New("boom"), currentTag: "v1.2.3", nextVersion: "v1.2.4"}, false},
+		{"first release, not selected", releaseTarget{currentTag: "", nextVersion: "v0.1.0"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := tt.rt
+			if got := rt.producesResult(); got != tt.want {
+				t.Errorf("producesResult() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestClassifyReleaseGate locks the pure gate decision: a merged PR is
 // the only PR state that allows a release; an unmerged PR blocks with
 // its state named; with no PR, the on-default ancestry check splits
