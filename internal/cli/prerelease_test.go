@@ -9,71 +9,138 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 )
 
-func TestReleaseTargetClassification(t *testing.T) {
+// TestReleaseTargetVersionEligibility covers the pre-gate filter:
+// version bump available, not already swept up, no lookup error. The
+// release gate layers on top of this (TestClassifyReleaseGate /
+// TestEligibleRequiresGate).
+func TestReleaseTargetVersionEligibility(t *testing.T) {
 	tests := []struct {
-		name          string
-		target        releaseTarget
-		wantEligible  bool
-		wantPreselect bool
-		wantNote      string
+		name                string
+		target              releaseTarget
+		wantVersionEligible bool
+		wantNote            string
 	}{
 		{
-			name:          "bump from existing tag",
-			target:        releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4"},
-			wantEligible:  true,
-			wantPreselect: true,
-			wantNote:      "v1.2.3",
+			name:                "bump from existing tag",
+			target:              releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4"},
+			wantVersionEligible: true,
+			wantNote:            "v1.2.3",
 		},
 		{
-			name:          "first release (no tags)",
-			target:        releaseTarget{currentTag: "", nextVersion: "v0.1.0"},
-			wantEligible:  true,
-			wantPreselect: true,
-			wantNote:      "(none)",
+			name:                "first release (no tags)",
+			target:              releaseTarget{currentTag: "", nextVersion: "v0.1.0"},
+			wantVersionEligible: true,
+			wantNote:            "(none)",
 		},
 		{
-			name:          "already at target version",
-			target:        releaseTarget{currentTag: "v2.0.0", nextVersion: "v2.0.0"},
-			wantEligible:  false,
-			wantPreselect: false,
-			wantNote:      "v2.0.0",
+			name:                "already at target version",
+			target:              releaseTarget{currentTag: "v2.0.0", nextVersion: "v2.0.0"},
+			wantVersionEligible: false,
+			wantNote:            "v2.0.0",
 		},
 		{
 			name: "containing release pins eligibility to false",
 			// Even when nextVersion would be a bump, a release tag
-			// containing our HEAD means we should NOT cut a new one
-			// — eligible() flips to false; the notify path handles
-			// the existing release.
+			// containing our HEAD means we should NOT cut a new one.
 			target: releaseTarget{
 				currentTag:        "v1.2.3",
 				nextVersion:       "v1.2.4",
 				containingRelease: &code.Release{Tag: "v1.2.4", AuthorLogin: "alice"},
 			},
-			wantEligible:  false,
-			wantPreselect: false,
-			wantNote:      "v1.2.3",
+			wantVersionEligible: false,
+			wantNote:            "v1.2.3",
 		},
 		{
-			name:          "lookup error",
-			target:        releaseTarget{tagErr: errors.New("boom")},
-			wantEligible:  false,
-			wantPreselect: false,
-			wantNote:      "(none)",
+			name:                "lookup error",
+			target:              releaseTarget{tagErr: errors.New("boom")},
+			wantVersionEligible: false,
+			wantNote:            "(none)",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := tt.target
-			if got := rt.eligible(); got != tt.wantEligible {
-				t.Errorf("eligible() = %v, want %v", got, tt.wantEligible)
-			}
-			if got := rt.preselect(); got != tt.wantPreselect {
-				t.Errorf("preselect() = %v, want %v", got, tt.wantPreselect)
+			if got := rt.versionEligible(); got != tt.wantVersionEligible {
+				t.Errorf("versionEligible() = %v, want %v", got, tt.wantVersionEligible)
 			}
 			if got := rt.versionNote(); got != tt.wantNote {
 				t.Errorf("versionNote() = %q, want %q", got, tt.wantNote)
 			}
 		})
+	}
+}
+
+// TestClassifyReleaseGate locks the pure gate decision: a merged PR is
+// the only PR state that allows a release; an unmerged PR blocks with
+// its state named; with no PR, the on-default ancestry check splits
+// "nothing to release" (skip) from "unmerged work, no PR" (block).
+func TestClassifyReleaseGate(t *testing.T) {
+	tests := []struct {
+		name            string
+		prNumber        int
+		prState         string
+		branchOnDefault bool
+		wantGate        releaseGate
+		wantReason      string
+	}{
+		{"merged PR → allow", 42, "merged", false, gateAllow, ""},
+		{"open PR → block", 42, "open", false, gateBlock, "PR #42 open — not merged"},
+		{"draft PR → block", 42, "draft", false, gateBlock, "PR #42 draft — not merged"},
+		{"closed unmerged PR → block", 42, "closed", false, gateBlock, "PR #42 closed — not merged"},
+		// A merged PR wins regardless of the ancestry bool (never
+		// consulted for the PR path — squash-merge would read false).
+		{"merged PR ignores ancestry", 42, "merged", false, gateAllow, ""},
+		{"no PR, on default → skip", 0, "", true, gateSkip, "no changes to release from this workspace"},
+		{"no PR, not on default → block", 0, "", false, gateBlock, "no PR — work not on the default branch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate, reason := classifyReleaseGate(tt.prNumber, tt.prState, tt.branchOnDefault)
+			if gate != tt.wantGate {
+				t.Errorf("gate = %v, want %v", gate, tt.wantGate)
+			}
+			if reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestEligibleRequiresGate locks eligible() = versionEligible() AND
+// gate == gateAllow: only an allowed, version-eligible repo is offered
+// for release.
+func TestEligibleRequiresGate(t *testing.T) {
+	gateCases := []struct {
+		name string
+		gate releaseGate
+		want bool
+	}{
+		{"allow → eligible", gateAllow, true},
+		{"block → not eligible", gateBlock, false},
+		{"skip → not eligible", gateSkip, false},
+		{"unknown → not eligible", gateUnknown, false},
+	}
+	for _, c := range gateCases {
+		t.Run(c.name, func(t *testing.T) {
+			rt := releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: c.gate}
+			if got := rt.eligible(); got != c.want {
+				t.Errorf("eligible() = %v, want %v", got, c.want)
+			}
+			if got := rt.preselect(); got != c.want {
+				t.Errorf("preselect() = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// A version-ineligible target is never eligible, even with gateAllow.
+	swept := releaseTarget{
+		currentTag:        "v1.2.3",
+		nextVersion:       "v1.2.4",
+		containingRelease: &code.Release{Tag: "v1.2.4"},
+		gate:              gateAllow,
+	}
+	if swept.eligible() {
+		t.Error("swept-up target must not be eligible even with gateAllow")
 	}
 }
 

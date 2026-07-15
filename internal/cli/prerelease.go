@@ -80,21 +80,71 @@ type releaseTarget struct {
 	// includes every merged PR in the range.
 	workspacePRNumber int
 
-	// workspaceMergeSHA is the squash/merge commit on the default
-	// branch produced when the workspace's PR was merged. Populated
-	// alongside workspacePRNumber when the PR is in "merged" state.
-	// Used as CreateRelease's Target so GitHub's
-	// generate_release_notes can trace PRs from a commit that's
-	// actually on the default branch — the workspace branch's HEAD
-	// (pre-squash) isn't on main and can't seed a useful changelog.
-	workspaceMergeSHA string
+	// workspacePRState is that PR's state ("open" | "draft" |
+	// "closed" | "merged"), when a PR exists. Feeds the release gate:
+	// only a merged PR puts the workspace's work on the default branch.
+	workspacePRState string
+
+	// gate is the per-repo release decision (allow / block / skip),
+	// computed by resolveReleaseGate from the PR state plus an
+	// on-default-branch ancestry check. gateReason is the human note
+	// rendered on blocked/skipped rows.
+	gate       releaseGate
+	gateReason string
+
+	// defaultBranch is the repo's default branch name (e.g. "main").
+	// Resolved once during gather and used as CreateRelease's Target
+	// (the tag always lands on default-branch HEAD), as the base for
+	// the gate's ancestry check, and as the extras range endpoint.
+	defaultBranch string
 }
 
-// eligible reports whether rt is a candidate for a new release: its
-// lookup succeeded and the derived next version differs from the latest
-// tag. Repos already at the target version (or with errors) are not
-// offered in the selection form.
-func (rt *releaseTarget) eligible() bool {
+// releaseGate is the per-repo release decision.
+type releaseGate int
+
+const (
+	// gateUnknown is the zero value — the gate hasn't been computed
+	// (or couldn't be). Treated as not-allowed by eligible().
+	gateUnknown releaseGate = iota
+	gateAllow                // work is on the default branch — release it
+	gateBlock                // work is NOT on default — refuse, with a reason
+	gateSkip                 // nothing of ours to release — no-op, with a reason
+)
+
+// classifyReleaseGate decides whether a repo may be released, from the
+// workspace PR (number/state; number 0 = no PR) and whether the branch
+// is already contained in the default branch. Pure — the git ancestry
+// check that produces branchOnDefault runs in the caller.
+//
+// The invariant: a release tags default-branch HEAD, so it must contain
+// the workspace's work. A merged PR guarantees that — and, since GitHub
+// only squash-merges through a PR, it sidesteps the "squashed tip isn't
+// an ancestor of main" trap that would fool a raw ancestry check. Any
+// unmerged PR means the work isn't on the default branch yet. With no PR
+// at all, the ancestry check splits "branch adds nothing beyond default"
+// (nothing to release → skip) from "unmerged commits, no PR" (block —
+// open a PR and merge first).
+func classifyReleaseGate(prNumber int, prState string, branchOnDefault bool) (releaseGate, string) {
+	if prNumber > 0 {
+		if prState == "merged" {
+			return gateAllow, ""
+		}
+		return gateBlock, fmt.Sprintf("PR #%d %s — not merged", prNumber, prState)
+	}
+	if branchOnDefault {
+		return gateSkip, "no changes to release from this workspace"
+	}
+	return gateBlock, "no PR — work not on the default branch"
+}
+
+// versionEligible reports whether rt would be a release candidate on
+// version/sweep-up grounds alone — before the release gate is applied:
+// its lookup succeeded, the derived next version differs from the latest
+// tag, and no existing release already contains its work. Used to scope
+// gate-reason rendering to repos that would otherwise release (so an
+// already-current or already-shipped repo shows its tag, not a gate
+// note).
+func (rt *releaseTarget) versionEligible() bool {
 	if rt.containingRelease != nil {
 		// Another release already contains our work — don't cut a
 		// duplicate. The notify path handles announcing it if Slack
@@ -104,11 +154,34 @@ func (rt *releaseTarget) eligible() bool {
 	return rt.tagErr == nil && rt.nextVersion != "" && rt.nextVersion != rt.currentTag
 }
 
+// eligible reports whether rt is a candidate for a new release: it
+// clears the version/sweep-up pre-filters AND the release gate confirms
+// the workspace's work is on the default branch. Repos already at the
+// target version, with errors, already released elsewhere, or whose work
+// isn't merged are not offered in the selection form.
+func (rt *releaseTarget) eligible() bool {
+	return rt.versionEligible() && rt.gate == gateAllow
+}
+
 // preselect reports whether an eligible repo should be pre-checked in
 // the selection form (and included by default when no form shows). Every
-// eligible repo pre-checks — there's no opt-in edge case the way review's
-// merged-PR case is.
+// eligible repo pre-checks — the gate already removed the not-on-default
+// repos, so there's no remaining opt-in edge case.
 func (rt *releaseTarget) preselect() bool { return rt.eligible() }
+
+// infoRowNote returns the reason an inert (non-selectable) row carries
+// in the form and result card: the containing-release tag for sweep-up
+// repos, else the release gate's reason for blocked/skipped repos.
+func (rt *releaseTarget) infoRowNote() string {
+	if rt.containingRelease != nil {
+		note := "in " + rt.containingRelease.Tag
+		if rt.containingRelease.AuthorLogin != "" {
+			note += " (by @" + rt.containingRelease.AuthorLogin + ")"
+		}
+		return note
+	}
+	return rt.gateReason
+}
 
 // versionNote returns the per-repo status shown in the selection form and
 // result card: the latest released tag, or "(none)" when the repo has no
@@ -257,6 +330,16 @@ func newPrereleaseCmd() *cobra.Command {
 									}
 									return ActionCompleted, detail, nil
 								}
+								// Blocked or skipped by the release gate — the
+								// work isn't on the default branch, or there's
+								// nothing of ours to release. Not announced; an
+								// explained no-op row (`= PR #N open — not
+								// merged`). Must precede the already-current
+								// branch below, which would otherwise mislabel a
+								// version-eligible-but-blocked repo with its tag.
+								if rt.versionEligible() && rt.gate != gateAllow {
+									return ActionCompleted, rt.gateReason, nil
+								}
 								// Already at a release version — capture it so
 								// notifications still list the repo, and render
 								// an unchanged row (the = glyph already reads as
@@ -292,18 +375,17 @@ func newPrereleaseCmd() *cobra.Command {
 							// phase of selectReleaseTargets and finalized by the
 							// form (or applyDefaults in the non-interactive
 							// path). Apply just reads them through.
-							// Tag the merge commit on the default branch when the
-							// workspace's PR has been merged — the workspace
-							// branch's HEAD is the local pre-squash commit, which
-							// isn't on main and would leave generate_release_notes
-							// with no PRs to trace, producing an empty "What's
-							// Changed" body. The merge commit IS on main and seeds
-							// the changelog correctly. Falls back to the workspace
-							// branch when no merge SHA is available (unmerged
-							// workspace cutting a pre-merge release).
+							// Tag default-branch HEAD: the release must contain
+							// the workspace's work, and the gate already verified
+							// it's on the default branch. Tagging HEAD (rather
+							// than a specific commit) also gives
+							// generate_release_notes full ancestry, so the
+							// changelog is never empty. Falls back to the branch
+							// only if the default couldn't be resolved — the gate
+							// then defaulted to permissive-allow.
 							target := rt.branch
-							if rt.workspaceMergeSHA != "" {
-								target = rt.workspaceMergeSHA
+							if rt.defaultBranch != "" {
+								target = rt.defaultBranch
 							}
 							// Pin the changelog baseline to the tag we
 							// resolved as "latest" — GitHub's own pick uses
@@ -505,6 +587,10 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 				// contributors) that will get swept into a release we
 				// create. See ROADMAP / plan for the framing.
 				resolveMultiUserContext(ctx, g, host, rt)
+				// Release gate: is the workspace's work on the default
+				// branch? Runs after the above so it can read the PR
+				// state and default branch it resolved.
+				resolveReleaseGate(ctx, g, rt)
 				return nil
 			},
 		})
@@ -581,6 +667,13 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 			rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
 			continue
 		}
+		// Gate-blocked/skipped repos surface the same way — an inert
+		// info row with the reason — so the user sees we considered the
+		// repo and why it's out, without it being selectable.
+		if rt.versionEligible() && rt.gate != gateAllow {
+			rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
+			continue
+		}
 		if !rt.eligible() {
 			continue
 		}
@@ -619,15 +712,10 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
 		switch {
 		case row.serviceIdx == infoOnlyServiceIdx:
-			// Containing-release row: append the tag (and author if
-			// known) so the user sees where the work was already
-			// shipped. The pick is parsed back to a no-op below.
-			tag := rt.containingRelease.Tag
-			suffix := " · in " + tag
-			if rt.containingRelease.AuthorLogin != "" {
-				suffix += " (by @" + rt.containingRelease.AuthorLogin + ")"
-			}
-			label += suffix
+			// Inert info row (sweep-up or gate-blocked/skipped): append
+			// the reason so the user sees why the repo is out. The pick
+			// is parsed back to a no-op below.
+			label += " · " + rt.infoRowNote()
 		case row.serviceIdx >= 0:
 			label += " · " + rt.services[row.serviceIdx]
 		}
@@ -732,11 +820,13 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 			// Render as a skipped row with "in <tag>" + author so the
 			// user sees who shipped it.
 			nSkip++
-			note := "in " + rt.containingRelease.Tag
-			if rt.containingRelease.AuthorLogin != "" {
-				note += " (by @" + rt.containingRelease.AuthorLogin + ")"
-			}
-			rows = append(rows, row{name, glyphOff, off(name, note)})
+			rows = append(rows, row{name, glyphOff, off(name, rt.infoRowNote())})
+		case rt.versionEligible() && rt.gate != gateAllow:
+			// Blocked or skipped by the release gate (work not on the
+			// default branch, or nothing of ours to release). Skipped
+			// row carrying the gate reason.
+			nSkip++
+			rows = append(rows, row{name, glyphOff, off(name, rt.gateReason)})
 		case rt.include:
 			nOK++
 			// Append the user-selected subjects in parens when partial;
@@ -885,9 +975,15 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	if pr, err := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch); err == nil {
 		workspacePR = pr
 		rt.workspacePRNumber = pr.Number
-		if pr.State == "merged" {
-			rt.workspaceMergeSHA = pr.MergeCommitSHA
-		}
+		rt.workspacePRState = pr.State
+	}
+
+	// Default branch — the release tag target (CreateRelease), the base
+	// for the gate's on-default ancestry check, and the extras range
+	// endpoint. Best-effort: an empty value makes the gate permissive
+	// and the extras range fall back to the branch.
+	if def, err := g.GetDefaultBranch(ctx, rt.repo.Path); err == nil {
+		rt.defaultBranch = def
 	}
 
 	// Refresh tags so containing-release detection sees anything
@@ -969,13 +1065,51 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	if rt.workspacePRNumber > 0 {
 		exclude = []int{rt.workspacePRNumber}
 	}
+	// The extras range ends where the tag lands — default-branch HEAD —
+	// so the "also ships PRs by @others" list matches exactly what this
+	// release covers. Falls back to the branch when the default isn't
+	// known; the containing tag stands in for the sweep-up case.
 	headRef := rt.branch
+	if rt.defaultBranch != "" {
+		headRef = rt.defaultBranch
+	}
 	if rt.containingRelease != nil {
 		headRef = rt.containingRelease.Tag
 	}
 	if prs, err := host.PRsInRange(ctx, rt.owner, rt.repoName, rt.currentTag, headRef, exclude); err == nil {
 		rt.extraPRs = prs
 	}
+}
+
+// resolveReleaseGate sets rt.gate/gateReason — the decision on whether
+// the workspace's work is on the default branch and may be released.
+// Runs after resolveMultiUserContext (which fills the PR fields and
+// defaultBranch). Best-effort and permissive: when the PR state or the
+// ancestry check can't be determined, it defaults to allow rather than
+// blocking a release on a transient failure.
+func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
+	if !rt.versionEligible() {
+		return // nothing to gate — version/sweep-up already excludes it
+	}
+	if rt.workspacePRNumber > 0 {
+		// A PR exists: its merged-ness is the definitive signal (and
+		// covers the squash case, which always has a PR).
+		rt.gate, rt.gateReason = classifyReleaseGate(rt.workspacePRNumber, rt.workspacePRState, false)
+		return
+	}
+	// No PR — split "nothing beyond default" (skip) from "unmerged
+	// commits, no PR" (block) via an on-default-branch ancestry check.
+	if rt.defaultBranch == "" {
+		rt.gate = gateAllow // can't determine default → don't block
+		return
+	}
+	_ = g.Fetch(ctx, rt.repo.Path, "origin", rt.defaultBranch)
+	onDefault, err := g.IsMergedInto(ctx, rt.repo.Path, rt.branch, "origin/"+rt.defaultBranch)
+	if err != nil {
+		rt.gate = gateAllow // can't verify ancestry → don't block
+		return
+	}
+	rt.gate, rt.gateReason = classifyReleaseGate(0, "", onDefault)
 }
 
 // detectAffectedServices narrows a repo's configured service list down
