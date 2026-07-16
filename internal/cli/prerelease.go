@@ -1079,16 +1079,7 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 			// the common case where the merge has already been
 			// released. Filtering it out would skip the correct
 			// answer and pick a stale tag-without-release instead.
-			candidates := make([]string, 0, len(tags))
-			for _, t := range tags {
-				if !releaseTagPattern.MatchString(t) {
-					continue
-				}
-				candidates = append(candidates, t)
-			}
-			sort.Slice(candidates, func(i, j int) bool {
-				return compareSemverTag(candidates[i], candidates[j]) < 0
-			})
+			candidates := releaseTagsInSemverOrder(tags)
 			unconfirmedTag := ""
 			for _, t := range candidates {
 				rel, err := host.GetReleaseByTag(ctx, rt.owner, rt.repoName, t)

@@ -1006,3 +1006,73 @@ func TestAPIError(t *testing.T) {
 		t.Errorf("error should mention 404, got: %v", err)
 	}
 }
+
+func TestGetLatestDeployment(t *testing.T) {
+	// deployments newest-first; statuses keyed by deployment id.
+	deployments := []map[string]any{
+		{"id": 2, "sha": "shaFAIL", "ref": "v1.3.0", "created_at": "2026-07-15T10:00:00Z"},
+		{"id": 1, "sha": "shaOK", "ref": "v1.2.3", "created_at": "2026-07-14T10:00:00Z"},
+	}
+	statuses := map[string]string{"2": "failure", "1": "success"}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/deployments"):
+			if got := r.URL.Query().Get("environment"); got != "account-api-production" {
+				t.Errorf("environment query = %q, want account-api-production", got)
+			}
+			_ = json.NewEncoder(w).Encode(deployments)
+		case strings.Contains(r.URL.Path, "/deployments/") && strings.HasSuffix(r.URL.Path, "/statuses"):
+			parts := strings.Split(r.URL.Path, "/")
+			id := parts[len(parts)-2]
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": statuses[id]}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	// Skips the failed newest deployment, returns the latest successful one.
+	dep, err := a.GetLatestDeployment(context.Background(), "org", "repo", "account-api-production")
+	if err != nil {
+		t.Fatalf("GetLatestDeployment() error: %v", err)
+	}
+	if dep.Ref != "v1.2.3" || dep.SHA != "shaOK" || dep.State != "success" {
+		t.Errorf("got %+v, want ref v1.2.3 / sha shaOK / state success", dep)
+	}
+}
+
+func TestGetLatestDeploymentNoneSucceeded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/deployments"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": 1, "sha": "sha", "ref": "v1.2.3", "created_at": "2026-07-14T10:00:00Z"},
+			})
+		case strings.HasSuffix(r.URL.Path, "/statuses"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "failure"}})
+		}
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	_, err := a.GetLatestDeployment(context.Background(), "org", "repo", "env")
+	if !errors.Is(err, code.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetLatestDeploymentEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	_, err := a.GetLatestDeployment(context.Background(), "org", "repo", "env")
+	if !errors.Is(err, code.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}

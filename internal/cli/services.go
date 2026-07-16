@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -957,6 +958,151 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, stage string)
 	return targets, nil
 }
 
+// defaultReleaseVersionInput is the workflow_dispatch input name that
+// carries the git tag to deploy. Overridable via
+// cicd.workflows.release.inputs.version for the rare non-"version" name.
+const defaultReleaseVersionInput = "version"
+
+// releaseVersionInput returns the configured version input name, or the
+// default "version".
+func releaseVersionInput() string {
+	if v := viper.GetString("cicd.workflows.release.inputs.version"); v != "" {
+		return v
+	}
+	return defaultReleaseVersionInput
+}
+
+// DeployTarget is one resolved per-service production deploy target: the
+// workflow to dispatch and the GitHub Deployments environment to read
+// the currently-live version from. A single-service repo yields one
+// target (Service == RepoName, Environment "production"); a monorepo
+// yields one per service.
+type DeployTarget struct {
+	Owner       string // GitHub owner (from ParseRemote of the local repo)
+	Repo        string // GitHub repo name
+	RepoName    string // bosun local repo name — keys tag/affected lookups
+	Service     string // bosun service name; == RepoName for single-service repos
+	Workflow    string // workflow filename for the dispatch API
+	Environment string // GitHub Deployments environment (default "production")
+	Label       string // display: "repo" or "repo · service"
+}
+
+// resolveReleaseDeployTargets resolves per-service production deploy
+// targets from cicd.workflows.release.target, a per-repo map whose value
+// is either a workflow-path string (single-service; env "production") or
+// a per-service map {service: workflow-string | {workflow, environment}}.
+// Env for a map entry defaults to "<service>-production" unless overridden.
+// Returns nil when unconfigured. Only active workspace repos are included.
+func resolveReleaseDeployTargets(ctx context.Context, workspace string) ([]DeployTarget, error) {
+	raw := viper.Get("cicd.workflows.release.target")
+	m, ok := raw.(map[string]any)
+	if !ok {
+		// Unset, or a bare global-string (not supported by the
+		// deployment-aware path). Caller reports "no targets".
+		return nil, nil
+	}
+
+	repos, err := resolveActiveRepositories(ctx, workspace, nil)
+	if err != nil {
+		return nil, err
+	}
+	repoByName := make(map[string]Repository, len(repos))
+	for _, r := range repos {
+		repoByName[r.Name] = r
+	}
+
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var targets []DeployTarget
+	for _, repoName := range names {
+		repo, active := repoByName[repoName]
+		if !active {
+			continue
+		}
+		ts, err := parseServiceDeployValue(ctx, repo, repoName, m[repoName])
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, ts...)
+	}
+	return targets, nil
+}
+
+// parseServiceDeployValue turns one repo's release.target value into
+// deploy targets. String → a single-service target (service == repo, env
+// "production"). Map → one target per service key (value: workflow-path
+// string, or {workflow, environment}); env defaults to
+// "<service>-production".
+func parseServiceDeployValue(ctx context.Context, repo Repository, repoName string, v any) ([]DeployTarget, error) {
+	switch val := v.(type) {
+	case string:
+		wt, err := resolveWorkflowFilename(ctx, repo, val)
+		if err != nil {
+			return nil, err
+		}
+		return []DeployTarget{{
+			Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
+			Service: repoName, Workflow: wt.Workflow,
+			Environment: "production", Label: repoName,
+		}}, nil
+	case map[string]any:
+		svcs := make([]string, 0, len(val))
+		for s := range val {
+			svcs = append(svcs, s)
+		}
+		sort.Strings(svcs)
+
+		var out []DeployTarget
+		for _, svc := range svcs {
+			var workflow, env string
+			switch sv := val[svc].(type) {
+			case string:
+				workflow = sv
+			case map[string]any:
+				workflow, _ = sv["workflow"].(string)
+				env, _ = sv["environment"].(string)
+			default:
+				continue
+			}
+			if workflow == "" {
+				continue
+			}
+			wt, err := resolveWorkflowFilename(ctx, repo, workflow)
+			if err != nil {
+				return nil, err
+			}
+			if env == "" {
+				env = svc + "-production"
+			}
+			out = append(out, DeployTarget{
+				Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
+				Service: svc, Workflow: wt.Workflow,
+				Environment: env, Label: repoName + " · " + svc,
+			})
+		}
+		return out, nil
+	}
+	return nil, nil
+}
+
+// resolveWorkflowFilename resolves a workflow path (absolute
+// owner/repo/.github/... or relative .github/...) into a WorkflowTarget,
+// resolving relative paths through the repo's git remote.
+func resolveWorkflowFilename(ctx context.Context, repo Repository, path string) (WorkflowTarget, error) {
+	if strings.HasPrefix(path, ".github/") {
+		identity, err := gh.ParseRemote(ctx, repo.Path)
+		if err != nil {
+			return WorkflowTarget{}, err
+		}
+		path = fmt.Sprintf("%s/%s/%s", identity.Owner, identity.Name, path)
+	}
+	return parseWorkflowPath(path)
+}
+
 // resolveRepoServiceNames returns the service names configured for a single
 // repository. Supports string, list, and map config shapes. Falls back to
 // the repo name when not configured.
@@ -996,54 +1142,6 @@ func resolveRepoServiceNames(repoName string) []string {
 // Config path: cicd.workflows.<stage>.inputs.<concept>
 func stageInputName(stage, concept string) string {
 	return viper.GetString("cicd.workflows." + stage + ".inputs." + concept)
-}
-
-// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
-// Reads input parameter names from the stage's config
-// (github_actions.workflows.<stage>.inputs.*). Used by the release
-// command; the preview command builds inputs inside its adapter.
-func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, stage, issue string) (map[string]string, error) {
-	inputs := make(map[string]string)
-
-	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
-		inputs[issueKey] = issue
-	}
-
-	inputName := stageInputName(stage, "services")
-	if inputName == "" {
-		return inputs, nil
-	}
-
-	// --service flag overrides auto-detection.
-	flagServices, _ := cmd.Flags().GetStringSlice("service")
-	if len(flagServices) > 0 {
-		inputs[inputName] = strings.Join(flagServices, ",")
-		return inputs, nil
-	}
-
-	// Change-based detection: diff branches, filter to affected
-	// services. Detection runs inside the observation group's per-repo
-	// spinners (no PR resolution — this path only needs the services
-	// list; image overrides are preview's concern).
-	g := git.New()
-	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
-	if err != nil {
-		return nil, err
-	}
-	results, _, _, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, false)
-	if err != nil {
-		return nil, err
-	}
-
-	var affected []string
-	for _, r := range results {
-		affected = append(affected, r.Services...)
-	}
-	if len(affected) > 0 {
-		inputs[inputName] = strings.Join(affected, ",")
-	}
-
-	return inputs, nil
 }
 
 // stageURLTemplate holds the data available when rendering a stage URL.

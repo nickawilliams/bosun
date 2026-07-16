@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -526,6 +527,76 @@ func (a *Adapter) GetReleaseByTag(ctx context.Context, owner, repository, tag st
 		Body:        PrettifyReleaseNotes(result.Body),
 		AuthorLogin: result.Author.Login,
 	}, nil
+}
+
+// GetLatestDeployment returns the most recent successful deployment for
+// an environment. GitHub returns deployments newest-first; we walk a
+// page and, for each, read its latest status, returning the first whose
+// state is "success" — so a failed or in-progress latest deployment
+// doesn't get mistaken for what's live. Returns code.ErrNotFound when
+// the environment has no deployments or none succeeded in the page.
+func (a *Adapter) GetLatestDeployment(ctx context.Context, owner, repository, environment string) (code.Deployment, error) {
+	path := fmt.Sprintf("/repos/%s/%s/deployments?environment=%s&per_page=10",
+		owner, repository, url.QueryEscape(environment))
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		if isNotFound(err) {
+			return code.Deployment{}, code.ErrNotFound
+		}
+		return code.Deployment{}, fmt.Errorf("listing deployments for %s: %w", environment, err)
+	}
+
+	var deployments []struct {
+		ID        int64     `json:"id"`
+		SHA       string    `json:"sha"`
+		Ref       string    `json:"ref"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&deployments); err != nil {
+		_ = resp.Body.Close()
+		return code.Deployment{}, fmt.Errorf("parsing deployments: %w", err)
+	}
+	_ = resp.Body.Close()
+
+	for _, d := range deployments {
+		state, err := a.latestDeploymentState(ctx, owner, repository, d.ID)
+		if err != nil {
+			return code.Deployment{}, err
+		}
+		if state == "success" {
+			return code.Deployment{
+				Environment: environment,
+				Ref:         d.Ref,
+				SHA:         d.SHA,
+				State:       state,
+				CreatedAt:   d.CreatedAt,
+			}, nil
+		}
+	}
+	return code.Deployment{}, code.ErrNotFound
+}
+
+// latestDeploymentState returns the most recent status state for a
+// deployment ("success", "failure", "in_progress", "inactive", ...), or
+// "" when it has no statuses yet.
+func (a *Adapter) latestDeploymentState(ctx context.Context, owner, repository string, deploymentID int64) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/deployments/%d/statuses?per_page=1", owner, repository, deploymentID)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("fetching deployment %d statuses: %w", deploymentID, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var statuses []struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&statuses); err != nil {
+		return "", fmt.Errorf("parsing deployment statuses: %w", err)
+	}
+	if len(statuses) == 0 {
+		return "", nil
+	}
+	return statuses[0].State, nil
 }
 
 // PRsInRange lists PRs whose commits fall in (baseRef, headRef] for

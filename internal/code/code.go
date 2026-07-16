@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrNotFound is returned by Get-style methods when the requested
@@ -131,6 +132,18 @@ type CreateReleaseRequest struct {
 	PreviousTag string
 }
 
+// Deployment is the most recent successful deployment recorded for a
+// hosting-platform environment. Used by release to learn which release
+// is currently live for a service (its environment) so it can decide
+// whether a deploy is needed, already-live, or a rollback.
+type Deployment struct {
+	Environment string
+	Ref         string    // the ref requested at deploy time (branch/tag/SHA)
+	SHA         string    // resolved commit SHA that was deployed
+	State       string    // latest status: "success" | "failure" | "inactive" | ...
+	CreatedAt   time.Time
+}
+
 // Host defines code hosting operations needed by bosun.
 type Host interface {
 	// CreatePR creates a pull request. If a PR already exists for the
@@ -196,4 +209,11 @@ type Host interface {
 	// (e.g., a PR head SHA or a branch HEAD). Returns CheckRollup
 	// with State="none" if no checks exist for the ref.
 	GetChecks(ctx context.Context, owner, repository, ref string) (CheckRollup, error)
+
+	// GetLatestDeployment returns the most recent *successful* deployment
+	// for an environment (e.g. "account-api-production"). Returns
+	// ErrNotFound when the environment has no successful deployment. A
+	// failed or inactive latest deployment is skipped so it isn't read
+	// as what's currently live.
+	GetLatestDeployment(ctx context.Context, owner, repository, environment string) (Deployment, error)
 }
