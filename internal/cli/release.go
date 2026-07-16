@@ -34,7 +34,8 @@ func newReleaseCmd() *cobra.Command {
 				if !isInteractive() {
 					return fmt.Errorf("use --migrations-done to confirm migrations have been run")
 				}
-				confirmed, err := NewDialog("have any required database migrations been run?").
+				confirmed, err := NewDialog("Database Migrations").
+					Description("Have any required database migrations been run?").
 					Default(false).
 					Show()
 				if err != nil {
