@@ -84,6 +84,12 @@ type releaseTarget struct {
 	// "closed" | "merged"), when a PR exists. Feeds the release gate:
 	// only a merged PR puts the workspace's work on the default branch.
 	workspacePRState string
+	// workspacePRMergeableState and workspacePRReview are the PR's
+	// mergeability signals (GitHub mergeable_state + review decision),
+	// used to explain *why* an unmerged PR blocks the release
+	// ("changes requested" / "checks failing" / "awaiting review" …).
+	workspacePRMergeableState string
+	workspacePRReview         string
 
 	// gate is the per-repo release decision (allow / block / skip),
 	// computed by resolveReleaseGate from the PR state plus an
@@ -147,6 +153,131 @@ func applyEmptyReleaseGuard(gate releaseGate, reason, currentTag string, shipped
 		return gateSkip, "already released — nothing new since " + currentTag
 	}
 	return gate, reason
+}
+
+// canMergePR reports whether a PR's mergeable_state means it can be
+// merged right now — no conflicts, and required checks/reviews satisfied.
+func canMergePR(mergeableState string) bool {
+	return mergeableState == "clean" || mergeableState == "has_hooks"
+}
+
+// prMergeBlockReason turns an unmergeable open PR's state into a short
+// human reason, so a blocked repo says *why* rather than a generic
+// "not merged". Derived from mergeable_state + review decision (no extra
+// checks fetch), mirroring status_render's vocabulary.
+func prMergeBlockReason(mergeableState, review string) string {
+	switch mergeableState {
+	case "dirty":
+		return "conflicts"
+	case "behind":
+		return "behind base"
+	case "unstable":
+		return "checks failing"
+	case "draft":
+		return "draft"
+	case "blocked":
+		switch review {
+		case "changes_requested":
+			return "changes requested"
+		case "approved":
+			return "checks required"
+		default: // "awaiting" | ""
+			return "awaiting review"
+		}
+	case "unknown", "":
+		return "mergeability unknown"
+	}
+	return "not mergeable"
+}
+
+// mergeMethod returns the configured PR merge method, defaulting to
+// "squash" (how these repos merge).
+func mergeMethod() string {
+	if m := viper.GetString("code_host.merge_method"); m != "" {
+		return m
+	}
+	return "squash"
+}
+
+// offerPRMerges is the pre-release merge pre-check (structurally like the
+// push offer): before the release plan is built, find each repo's
+// unmerged-but-mergeable workspace PR and, interactively, offer to merge
+// them. Merging here — rather than as a plan Action — is required
+// because the release gate and the tag T are computed from merge state,
+// which must be settled before Assess runs. Merged PRs then flow into
+// selectReleaseTargets as releasable; anything left unmerged is blocked
+// by the gate. Never auto-merges: non-interactive runs skip entirely.
+func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget) error {
+	if host == nil || !isInteractive() {
+		return nil
+	}
+
+	type candidate struct {
+		idx    int
+		number int
+		name   string
+	}
+	var candidates []candidate
+	if _, err := ui.RunCardSteps([]ui.CardStep{{
+		Card: ui.NewCard(ui.CardRunning, "releases").Raw("Checking pull requests..."),
+		Run: func() error {
+			for i := range targets {
+				rt := &targets[i]
+				if rt.tagErr != nil {
+					continue
+				}
+				pr, perr := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch)
+				if perr != nil {
+					continue // best-effort — the gate handles unknowns
+				}
+				if pr.Number > 0 && pr.State != "merged" && canMergePR(pr.MergeableState) {
+					candidates = append(candidates, candidate{i, pr.Number, rt.repo.Name})
+				}
+			}
+			return nil
+		},
+	}}, nil); err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	noun := "pull request"
+	if len(candidates) > 1 {
+		noun = "pull requests"
+	}
+	confirmed, err := NewDialog("Merge pull requests?").
+		Description(fmt.Sprintf("%d approved %s ready to merge. Merge before releasing?", len(candidates), noun)).
+		Affirmative("Merge").
+		Negative("Skip").
+		Default(true).
+		Show()
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		return nil // declined → those repos stay unmerged → blocked by the gate
+	}
+
+	// A merge failure is soft: surfaced on its row, and the repo simply
+	// stays unmerged and gets blocked below — never aborts the others.
+	method := mergeMethod()
+	ui.RunGroup("merging", func(grp ui.Reporter) {
+		for _, c := range candidates {
+			name := ui.PreserveCase(c.name)
+			merr := grp.Spinner(name, func() error {
+				_, e := host.MergePR(ctx, targets[c.idx].owner, targets[c.idx].repoName, c.number, method)
+				return e
+			})
+			if merr != nil {
+				grp.FailValue(name, merr.Error())
+				continue
+			}
+			grp.CompleteValue(name, fmt.Sprintf("#%d merged", c.number))
+		}
+	})
+	return nil
 }
 
 // versionEligible reports whether rt would be a release candidate on
@@ -293,6 +424,13 @@ func newPrereleaseCmd() *cobra.Command {
 					rt.repoName = identity.Name
 				}
 				targets = append(targets, rt)
+			}
+
+			// Pre-check: offer to merge unmerged-but-mergeable workspace
+			// PRs before the release plan is built, so the gate + tag T
+			// see settled merge state. Mirrors the push offer's position.
+			if err := offerPRMerges(ctx, host, targets); err != nil {
+				return err
 			}
 
 			// Observe → Select → record which repos get a release.
@@ -449,20 +587,27 @@ func newPrereleaseCmd() *cobra.Command {
 				}
 			}
 
-			tracker, _ := newIssueTracker()
-			if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
-				actions = append(actions, sa)
+			// Status + notify gates share these rollups. Status advances
+			// to ready_for_release UNLESS nothing releases AND something is
+			// blocked (an unmerged PR that didn't merge) — mirrors the
+			// release command's gate, so an unmerged PR no longer marks
+			// the issue ready while shipping nothing. All-already-current
+			// still advances. Notify no-ops when nothing produces a result.
+			anyReleaseOutcome, anyBlocked := false, false
+			for i := range targets {
+				rt := &targets[i]
+				if rt.producesResult() {
+					anyReleaseOutcome = true
+				}
+				if rt.versionEligible() && rt.gate == gateBlock {
+					anyBlocked = true
+				}
 			}
 
-			// Nothing to announce when no repo produces a release result
-			// (all blocked/skipped, or nothing selected): the notify
-			// action renders as a no-op rather than claiming it will post
-			// a message the Apply would then skip.
-			anyReleaseOutcome := false
-			for i := range targets {
-				if targets[i].producesResult() {
-					anyReleaseOutcome = true
-					break
+			tracker, _ := newIssueTracker()
+			if !(anyBlocked && !anyReleaseOutcome) {
+				if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
+					actions = append(actions, sa)
 				}
 			}
 
@@ -1029,6 +1174,8 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 		workspacePR = pr
 		rt.workspacePRNumber = pr.Number
 		rt.workspacePRState = pr.State
+		rt.workspacePRMergeableState = pr.MergeableState
+		rt.workspacePRReview = pr.Review
 	}
 
 	// Default branch — the release tag target (CreateRelease), the base
@@ -1153,6 +1300,13 @@ func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
 		// A PR exists: its merged-ness is the definitive signal (and
 		// covers the squash case, which always has a PR).
 		gate, reason := classifyReleaseGate(rt.workspacePRNumber, rt.workspacePRState, false)
+		// Enrich the unmerged-PR block with *why* it can't merge (the
+		// reason the merge pre-check couldn't offer/complete it), instead
+		// of the generic "not merged".
+		if gate == gateBlock {
+			reason = fmt.Sprintf("PR #%d · %s", rt.workspacePRNumber,
+				prMergeBlockReason(rt.workspacePRMergeableState, rt.workspacePRReview))
+		}
 		// Empty-release guard: an allowed (merged) repo whose default
 		// branch is already fully contained in the latest tag has nothing
 		// new to ship — the work was released already (e.g. by someone

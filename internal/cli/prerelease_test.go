@@ -449,3 +449,56 @@ func TestParseSubjectKey(t *testing.T) {
 		})
 	}
 }
+
+// TestCanMergePR locks which mergeable_state values are safe to auto-merge.
+func TestCanMergePR(t *testing.T) {
+	tests := []struct {
+		state string
+		want  bool
+	}{
+		{"clean", true},
+		{"has_hooks", true},
+		{"blocked", false},
+		{"unstable", false},
+		{"dirty", false},
+		{"behind", false},
+		{"draft", false},
+		{"unknown", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			if got := canMergePR(tt.state); got != tt.want {
+				t.Errorf("canMergePR(%q) = %v, want %v", tt.state, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPRMergeBlockReason locks the short human reason an unmergeable PR
+// shows, derived from mergeable_state + review decision.
+func TestPRMergeBlockReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		state      string
+		review     string
+		want       string
+	}{
+		{"conflicts", "dirty", "", "conflicts"},
+		{"behind base", "behind", "", "behind base"},
+		{"checks failing", "unstable", "", "checks failing"},
+		{"draft", "draft", "", "draft"},
+		{"blocked + changes requested", "blocked", "changes_requested", "changes requested"},
+		{"blocked + approved → checks required", "blocked", "approved", "checks required"},
+		{"blocked + awaiting", "blocked", "awaiting", "awaiting review"},
+		{"blocked + no review", "blocked", "", "awaiting review"},
+		{"unknown", "unknown", "", "mergeability unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prMergeBlockReason(tt.state, tt.review); got != tt.want {
+				t.Errorf("prMergeBlockReason(%q, %q) = %q, want %q", tt.state, tt.review, got, tt.want)
+			}
+		})
+	}
+}

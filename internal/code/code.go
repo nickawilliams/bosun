@@ -216,4 +216,11 @@ type Host interface {
 	// failed or inactive latest deployment is skipped so it isn't read
 	// as what's currently live.
 	GetLatestDeployment(ctx context.Context, owner, repository, environment string) (Deployment, error)
+
+	// MergePR merges a pull request using the given method ("squash" |
+	// "merge" | "rebase"; empty defaults to the host's default) and
+	// returns the resulting merge commit SHA. Fails when the PR isn't in
+	// a mergeable state — branch protection, conflicts, or failing
+	// required checks (the host enforces this, not bosun).
+	MergePR(ctx context.Context, owner, repository string, number int, method string) (string, error)
 }

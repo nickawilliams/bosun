@@ -1076,3 +1076,30 @@ func TestGetLatestDeploymentEmpty(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestMergePR(t *testing.T) {
+	var gotMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || !strings.HasSuffix(r.URL.Path, "/merge") {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotMethod, _ = body["merge_method"].(string)
+		_ = json.NewEncoder(w).Encode(map[string]any{"sha": "mergeSHA123", "merged": true})
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	sha, err := a.MergePR(context.Background(), "org", "repo", 42, "squash")
+	if err != nil {
+		t.Fatalf("MergePR() error: %v", err)
+	}
+	if sha != "mergeSHA123" {
+		t.Errorf("sha = %q, want mergeSHA123", sha)
+	}
+	if gotMethod != "squash" {
+		t.Errorf("merge_method = %q, want squash", gotMethod)
+	}
+}

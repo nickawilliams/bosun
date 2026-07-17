@@ -599,6 +599,32 @@ func (a *Adapter) latestDeploymentState(ctx context.Context, owner, repository s
 	return statuses[0].State, nil
 }
 
+// MergePR merges a pull request via PUT /pulls/{n}/merge with the given
+// merge_method, returning the resulting merge commit SHA. GitHub rejects
+// the request (405 / 409) when the PR isn't mergeable — branch
+// protection, conflicts, or failing required checks — surfaced as an error.
+func (a *Adapter) MergePR(ctx context.Context, owner, repository string, number int, method string) (string, error) {
+	body := map[string]any{}
+	if method != "" {
+		body["merge_method"] = method
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repository, number)
+	resp, err := a.doRequest(ctx, http.MethodPut, path, body)
+	if err != nil {
+		return "", fmt.Errorf("merging pull request #%d: %w", number, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		SHA    string `json:"sha"`
+		Merged bool   `json:"merged"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("parsing merge response: %w", err)
+	}
+	return result.SHA, nil
+}
+
 // PRsInRange lists PRs whose commits fall in (baseRef, headRef] for
 // the given repository. Implementation: call the compare endpoint
 // to get the commit list, then call /commits/{sha}/pulls for each

@@ -94,6 +94,7 @@ var configSchema = map[string]ConfigGroup{
 		Keys: []ConfigKey{
 			{Key: "provider", Label: "provider", Options: []string{"github"}, Required: true},
 			{Key: "token", Label: "personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
+			{Key: "merge_method", Label: "PR merge method", Options: []string{"squash", "merge", "rebase"}, Default: "squash"},
 		},
 	},
 	"pull_request": {
