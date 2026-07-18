@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -164,10 +165,12 @@ func newCleanupCmd() *cobra.Command {
 			}
 			for dir := filepath.Dir(wsPath); dir != wsRoot && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 				entries, err := os.ReadDir(dir)
-				if err != nil || len(entries) > 0 {
+				if err != nil || fsutil.HasMeaningfulEntries(entries) {
 					break
 				}
-				_ = os.Remove(dir)
+				// Junk-only (or empty) parent: RemoveAll so a lingering
+				// .DS_Store doesn't leave the directory behind.
+				_ = os.RemoveAll(dir)
 			}
 
 			return nil

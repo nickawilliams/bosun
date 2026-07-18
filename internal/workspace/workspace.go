@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
@@ -383,10 +384,12 @@ func cleanEmptyParents(stopAt, child string) {
 	dir := filepath.Dir(child)
 	for dir != stopAt && dir != filepath.Dir(dir) {
 		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
+		if err != nil || fsutil.HasMeaningfulEntries(entries) {
 			break
 		}
-		_ = os.Remove(dir)
+		// Junk-only (or empty) parent: RemoveAll so a lingering
+		// .DS_Store doesn't leave the directory behind.
+		_ = os.RemoveAll(dir)
 		dir = filepath.Dir(dir)
 	}
 }

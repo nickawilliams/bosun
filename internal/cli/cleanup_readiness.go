@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
+	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
@@ -444,7 +445,11 @@ func gatherWorkspaceProbe(ctx context.Context, tracker issue.Tracker, repos []Re
 				repoNames[r.Name] = true
 			}
 			for _, e := range entries {
-				if repoNames[e.Name()] {
+				// Skip the repo worktree subdirs and machine-generated OS
+				// junk (.DS_Store etc.) — the latter isn't user data worth
+				// blocking a cleanup over, and lives outside any repo so
+				// git's ignore never reaches it.
+				if repoNames[e.Name()] || fsutil.IgnorableName(e.Name()) {
 					continue
 				}
 				p.strayFiles = append(p.strayFiles, e.Name())
