@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/huh/v2"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
@@ -24,18 +25,22 @@ func newCreateCmd() *cobra.Command {
 			issueType, _ := cmd.Flags().GetString("type")
 
 			if isInteractive() {
+				promptTitle := title == ""
+				promptDescription := description == ""
+				promptType := !cmd.Flags().Changed("type")
+
 				var fields []huh.Field
-				if title == "" {
+				if promptTitle {
 					fields = append(fields, huh.NewInput().
 						Title("Title").
 						Prompt(ui.FocusMarker).
 						Value(&title))
 				}
-				if description == "" {
+				if promptDescription {
 					fields = append(fields, newText("Description").
 						Value(&description))
 				}
-				if !cmd.Flags().Changed("type") {
+				if promptType {
 					fields = append(fields, huh.NewSelect[string]().
 						Title("Type").
 						Options(
@@ -52,6 +57,28 @@ func newCreateCmd() *cobra.Command {
 						return err
 					}
 					rewind()
+					// Swap the cleared form for a record of the submitted
+					// input — the timeline retains what the user entered
+					// (single prompts use ui.Selected; multi-field forms
+					// use the consolidated KV card, like init's
+					// integration cards). Only prompted fields appear —
+					// flag-provided values never were in the form — and
+					// empty answers are omitted (init's convention). The
+					// description collapses to its first line; the full
+					// text lands on the issue, not the timeline.
+					pairs := make([]string, 0, 6)
+					if promptTitle && title != "" {
+						pairs = append(pairs, "Title", title)
+					}
+					if promptDescription && description != "" {
+						pairs = append(pairs, "Description", firstLineSummary(description))
+					}
+					if promptType {
+						pairs = append(pairs, "Type", ui.TitleCase(issueType))
+					}
+					if len(pairs) > 0 {
+						ui.NewCard(ui.CardSuccess, "issue details").KV(pairs...).Print()
+					}
 				}
 			}
 
@@ -118,4 +145,16 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().String("type", "story", "issue type (story|bug|task)")
 
 	return cmd
+}
+
+// firstLineSummary reduces a multi-line value to its first non-empty
+// line, appending an ellipsis when content was elided — the simplified
+// representation record cards show for textarea input.
+func firstLineSummary(s string) string {
+	line, rest, cut := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.TrimSpace(line)
+	if cut && strings.TrimSpace(rest) != "" {
+		line += " …"
+	}
+	return line
 }
