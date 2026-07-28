@@ -136,15 +136,73 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	}, nil
 }
 
+// RunCardStepsInto is RunCardSteps with a raw final frame: on success
+// the program's last frame is finalView()'s string verbatim (no Card
+// wrapping), letting callers hand the terminal off seamlessly to a
+// follow-up program — paint that program's exact first frame here,
+// cursor-up over it, and its first repaint is byte-identical (the
+// RunCardMorph no-flash principle, extended across program kinds).
+// No rewind is returned; the caller owns the region from here.
+func RunCardStepsInto(steps []CardStep, finalView func() string) error {
+	if IsRaw() {
+		for _, s := range steps {
+			if err := s.Run(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	prefix := spacerPrefix()
+	for _, s := range steps {
+		s.Card.state = CardRunning
+	}
+
+	resultCh := make(chan error, 1)
+	go func() {
+		for _, s := range steps {
+			start := time.Now()
+			err := s.Run()
+			holdSpinner(start)
+			resultCh <- err
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	sm := newCardStepsModel(steps, nil, prefix, resultCh)
+	sm.rawSuccessor = finalView
+	p := tea.NewProgram(sm)
+	model, err := p.Run()
+	if err != nil {
+		// Non-interactive fallback — drain the worker synchronously.
+		var stepErr error
+		for range steps {
+			if stepErr = <-resultCh; stepErr != nil {
+				break
+			}
+		}
+		if stepErr != nil {
+			fmt.Println(" " + stepErr.Error())
+			return stepErr
+		}
+		fmt.Print(prefix + finalView())
+		return nil
+	}
+	return model.(cardStepsModel).err
+}
+
 type cardStepsModel struct {
-	steps     []CardStep
-	successor func() *Card
-	prefix    string
-	idx       int
-	done      bool
-	err       error
-	spinner   spinner.Model
-	resultCh  <-chan error
+	steps        []CardStep
+	successor    func() *Card
+	rawSuccessor func() string
+	prefix       string
+	idx          int
+	done         bool
+	err          error
+	spinner      spinner.Model
+	resultCh     <-chan error
 }
 
 type cardStepDoneMsg struct{ err error }
@@ -205,6 +263,12 @@ func (m cardStepsModel) View() tea.View {
 	if m.done {
 		if m.err != nil {
 			return tea.NewView(m.prefix + m.steps[min(m.idx, len(m.steps)-1)].Card.Render())
+		}
+		if m.rawSuccessor != nil {
+			// Raw final frame (RunCardStepsInto): the caller's string
+			// verbatim — typically the next program's exact first
+			// frame for a seamless takeover.
+			return tea.NewView(m.prefix + m.rawSuccessor())
 		}
 		if m.successor == nil {
 			// Vanish: empty final frame clears the render area.

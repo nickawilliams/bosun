@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -276,54 +277,75 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		})
 	}
 
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+	// Selection form construction, needed inside the final-frame
+	// closure: the steps program's last frame paints the form header
+	// plus the form's EXACT first frame (formFirstFrame — same
+	// construction as runForm), so the takeover below repaints
+	// identical bytes and the gather → form transition has no
+	// collapse and no flash.
+	//
+	// Rows: deployable targets toggleable and pre-checked;
+	// skip/block/error rows inert (visible with their reason, toggles
+	// no-op'd at parse — huh has no disabled options) so every target
+	// is accounted for inside the picker.
+	var (
+		picked      []string
+		msField     *huh.MultiSelect[string]
+		formFrame   string
+		headerLines int
+	)
+	buildSelectionForm := func() {
+		opts := make([]huh.Option[string], 0, len(states))
+		for i := range states {
+			st := &states[i]
+			// Bold the repo segment via raw SGR toggles (lipgloss's
+			// closing reset would wipe huh's selection styling).
+			label := "\x1b[1m" + st.target.RepoName + "\x1b[22m · " + st.target.Service
+			switch {
+			case st.err != nil:
+				label += " · " + st.err.Error()
+			default:
+				label += " · " + st.reason
+			}
+			if st.infoNote != "" {
+				label += " (" + st.infoNote + ")"
+			}
+			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(st.state == deployGo))
+		}
+		msField = huh.NewMultiSelect[string]().
+			Options(opts...).
+			Height(len(opts)).
+			Value(&picked)
+		formFrame = formFirstFrame(msField)
+		if !strings.HasSuffix(formFrame, "\n") {
+			formFrame += "\n"
+		}
+	}
+
+	err = ui.RunCardStepsInto(steps, func() string {
 		if formGate() {
-			return ui.NewCard(ui.CardInput, "deploy").Tight()
+			buildSelectionForm()
+			header := ui.NewCard(ui.CardInput, "deploy").Tight().Render()
+			headerLines = strings.Count(header, "\n")
+			return header + formFrame
 		}
 		applyDefaults()
-		return buildDeployTargetsCard(states)
+		return buildDeployTargetsCard(states).Render()
 	})
 	if err != nil {
 		return nil, err
 	}
 	if !formGate() {
-		applyDefaults()
+		applyDefaults() // no-op when the closure already ran; needed in raw mode
 		return states, nil
 	}
 
-	// Selection form: one row per target. Deployable rows are
-	// toggleable and pre-checked; skip/block/error rows appear inert
-	// (visible with their reason, toggles no-op'd at parse — huh has
-	// no disabled options) so the user sees every target accounted
-	// for without leaving the picker.
-	opts := make([]huh.Option[string], 0, len(states))
-	for i := range states {
-		st := &states[i]
-		// Bold the repo segment via raw SGR toggles (lipgloss's
-		// closing reset would wipe huh's selection styling).
-		label := "\x1b[1m" + st.target.RepoName + "\x1b[22m · " + st.target.Service
-		switch {
-		case st.err != nil:
-			label += " · " + st.err.Error()
-		default:
-			label += " · " + st.reason
-		}
-		if st.infoNote != "" {
-			label += " (" + st.infoNote + ")"
-		}
-		opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(st.state == deployGo))
-	}
-
-	var picked []string
-	// The header was painted by the spinner program's final frame (not
-	// via Print), so suppress the spacer the way Tight-on-Print would.
+	// Seamless takeover: the form's first frame is already on screen —
+	// move the cursor to its origin and let huh repaint the same bytes
+	// in place.
+	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
 	ui.ClearSpacer()
-	if err := runForm(
-		huh.NewMultiSelect[string]().
-			Options(opts...).
-			Height(len(opts)).
-			Value(&picked),
-	); err != nil {
+	if err := runForm(msField); err != nil {
 		ui.RequestSpacer()
 		return nil, err
 	}
@@ -344,8 +366,12 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		states[i].include = true
 	}
 
-	// Erase the form header and drop the record card in its place.
-	rewind()
+	// huh cleared its frame on submit, leaving the cursor at the form's
+	// origin (the line below the header). Erase the header above and
+	// drop the record card in its place.
+	if headerLines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
+	}
 	buildDeployTargetsCard(states).Print()
 	return states, nil
 }

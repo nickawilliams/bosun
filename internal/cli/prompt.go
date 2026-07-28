@@ -145,10 +145,21 @@ func runForm(fields ...huh.Field) error {
 // not cleaned up.
 func snapshotForm(fields ...huh.Field) {
 	_ = emitFormPrologue(fields)
+	fmt.Fprint(ui.Output(), formFirstFrame(fields...))
+	fmt.Fprint(ui.Output(), "\n\n")
+}
+
+// formFirstFrame renders the exact first frame runForm's program will
+// paint for fields — buildForm + Init + View, the same construction
+// path — for seamless-takeover flows: paint this as the previous
+// program's final frame, cursor-up over it, and huh's first repaint is
+// byte-identical (no flash). Deterministic for cursor-less fields
+// (selects, multi-selects); text inputs blink a cursor, so takeover
+// callers should stick to select-shaped forms.
+func formFirstFrame(fields ...huh.Field) string {
 	f := buildForm(fields)
 	_ = f.Init()
-	fmt.Fprint(ui.Output(), f.View())
-	fmt.Fprint(ui.Output(), "\n\n")
+	return f.View()
 }
 
 // buildForm constructs a huh.Form with the app's theme, layout,
