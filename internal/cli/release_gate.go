@@ -74,13 +74,27 @@ type releaseServiceTarget struct {
 	include bool
 }
 
-// resolveServiceDeployTargets fills deployed state + classification for
-// each target. T is resolved once per repo (the workspace PR's merge
-// commit when merged, else HEAD → the lowest release tag containing it);
-// D per service comes from the latest successful deployment of the
-// target's environment, mapped to a release tag. Best-effort: a failure
-// on one target records an err row rather than aborting the others.
-func resolveServiceDeployTargets(ctx context.Context, g vcs.VCS, host code.Host, workspace string, targets []DeployTarget) ([]releaseServiceTarget, error) {
+// deployTargetResolver resolves targets one at a time so the gather
+// spinner can narrate per-target progress. T (and the repo's latest
+// tag) is computed once per repo and cached across targets; D is
+// per-target. Best-effort: a failure records an err on that target's
+// state rather than aborting the others.
+type deployTargetResolver struct {
+	g          vcs.VCS
+	host       code.Host
+	pathByName map[string]string
+	cache      map[string]deployRepoInfo
+}
+
+// deployRepoInfo is the per-repo half of target resolution.
+type deployRepoInfo struct {
+	workTag, latestTag string
+	err                error
+}
+
+// newDeployTargetResolver builds the resolver's repo lookup for the
+// active workspace.
+func newDeployTargetResolver(ctx context.Context, g vcs.VCS, host code.Host, workspace string) (*deployTargetResolver, error) {
 	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
 		return nil, err
@@ -89,98 +103,97 @@ func resolveServiceDeployTargets(ctx context.Context, g vcs.VCS, host code.Host,
 	for _, r := range repos {
 		pathByName[r.Name] = r.Path
 	}
+	return &deployTargetResolver{
+		g:          g,
+		host:       host,
+		pathByName: pathByName,
+		cache:      make(map[string]deployRepoInfo),
+	}, nil
+}
 
-	// Per-repo T + latest tag, computed once and cached.
-	type repoInfo struct {
-		workTag, latestTag string
-		err                error
-	}
-	cache := make(map[string]repoInfo)
-	computeRepo := func(dt DeployTarget) repoInfo {
-		if ri, ok := cache[dt.RepoName]; ok {
-			return ri
-		}
-		ri := repoInfo{}
-		path := pathByName[dt.RepoName]
-		if path == "" {
-			ri.err = fmt.Errorf("%s: not an active workspace repo", dt.RepoName)
-			cache[dt.RepoName] = ri
-			return ri
-		}
-		// Work SHA: the workspace PR's merge commit when merged (on the
-		// default branch), else local HEAD. Mirrors prerelease's probe.
-		workSHA := ""
-		if branch, berr := g.GetCurrentBranch(ctx, path); berr == nil && branch != "" {
-			if pr, perr := host.GetPRForBranch(ctx, dt.Owner, dt.Repo, branch); perr == nil &&
-				pr.State == "merged" && pr.MergeCommitSHA != "" {
-				workSHA = pr.MergeCommitSHA
-			}
-		}
-		if workSHA == "" {
-			if sha, herr := g.HeadSHA(ctx, path); herr == nil {
-				workSHA = sha
-			}
-		}
-		_ = g.FetchTags(ctx, path, "origin")
-		if workSHA != "" {
-			if tags, terr := g.TagsContaining(ctx, path, workSHA); terr == nil {
-				ri.workTag = lowestContainingReleaseTag(tags)
-			}
-		}
-		if lt, lerr := host.GetLatestTag(ctx, dt.Owner, dt.Repo); lerr == nil {
-			ri.latestTag = lt
-		}
-		cache[dt.RepoName] = ri
+// repoInfo returns the repo-level resolution (T + latest tag) for a
+// target's repo, computing it on first use.
+func (r *deployTargetResolver) repoInfo(ctx context.Context, dt DeployTarget) deployRepoInfo {
+	if ri, ok := r.cache[dt.RepoName]; ok {
 		return ri
 	}
-
-	out := make([]releaseServiceTarget, 0, len(targets))
-	for _, dt := range targets {
-		st := releaseServiceTarget{target: dt}
-		ri := computeRepo(dt)
-		if ri.err != nil {
-			st.err = ri.err
-			out = append(out, st)
-			continue
-		}
-		st.workTag = ri.workTag
-		st.latestTag = ri.latestTag
-		st.deployedTag, st.reason, st.state = "", "", deployUnknown
-
-		// D: the latest successful deployment of this environment, mapped
-		// to a release tag. Prefer the ref when it's already a tag; else
-		// resolve the deployed SHA to its lowest containing release tag.
-		deployedKnown := true
-		dep, derr := host.GetLatestDeployment(ctx, dt.Owner, dt.Repo, dt.Environment)
-		switch {
-		case errors.Is(derr, code.ErrNotFound):
-			st.deployedTag = "" // known: never deployed
-		case derr != nil:
-			deployedKnown = false // couldn't determine
-		default:
-			path := pathByName[dt.RepoName]
-			if releaseTagPattern.MatchString(dep.Ref) {
-				st.deployedTag = dep.Ref
-			} else if dep.SHA != "" {
-				if tags, terr := g.TagsContaining(ctx, path, dep.SHA); terr == nil {
-					st.deployedTag = lowestContainingReleaseTag(tags)
-				}
-			}
-			if st.deployedTag == "" {
-				// Deployed, but the ref/SHA doesn't map to a release tag
-				// (e.g. deployed from a branch). Treat as undeterminable.
-				deployedKnown = false
-			}
-		}
-
-		st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployedTag, deployedKnown)
-
-		if st.workTag != "" && st.latestTag != "" && compareSemverTag(st.latestTag, st.workTag) > 0 {
-			st.infoNote = "newer release exists: " + st.latestTag
-		}
-		out = append(out, st)
+	ri := deployRepoInfo{}
+	path := r.pathByName[dt.RepoName]
+	if path == "" {
+		ri.err = fmt.Errorf("%s: not an active workspace repo", dt.RepoName)
+		r.cache[dt.RepoName] = ri
+		return ri
 	}
-	return out, nil
+	// Work SHA: the workspace PR's merge commit when merged (on the
+	// default branch), else local HEAD. Mirrors prerelease's probe.
+	workSHA := ""
+	if branch, berr := r.g.GetCurrentBranch(ctx, path); berr == nil && branch != "" {
+		if pr, perr := r.host.GetPRForBranch(ctx, dt.Owner, dt.Repo, branch); perr == nil &&
+			pr.State == "merged" && pr.MergeCommitSHA != "" {
+			workSHA = pr.MergeCommitSHA
+		}
+	}
+	if workSHA == "" {
+		if sha, herr := r.g.HeadSHA(ctx, path); herr == nil {
+			workSHA = sha
+		}
+	}
+	_ = r.g.FetchTags(ctx, path, "origin")
+	if workSHA != "" {
+		if tags, terr := r.g.TagsContaining(ctx, path, workSHA); terr == nil {
+			ri.workTag = lowestContainingReleaseTag(tags)
+		}
+	}
+	if lt, lerr := r.host.GetLatestTag(ctx, dt.Owner, dt.Repo); lerr == nil {
+		ri.latestTag = lt
+	}
+	r.cache[dt.RepoName] = ri
+	return ri
+}
+
+// resolve fills one target's deployed state + classification.
+func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) releaseServiceTarget {
+	st := releaseServiceTarget{target: dt}
+	ri := r.repoInfo(ctx, dt)
+	if ri.err != nil {
+		st.err = ri.err
+		return st
+	}
+	st.workTag = ri.workTag
+	st.latestTag = ri.latestTag
+
+	// D: the latest successful deployment of this environment, mapped
+	// to a release tag. Prefer the ref when it's already a tag; else
+	// resolve the deployed SHA to its lowest containing release tag.
+	deployedKnown := true
+	dep, derr := r.host.GetLatestDeployment(ctx, dt.Owner, dt.Repo, dt.Environment)
+	switch {
+	case errors.Is(derr, code.ErrNotFound):
+		st.deployedTag = "" // known: never deployed
+	case derr != nil:
+		deployedKnown = false // couldn't determine
+	default:
+		path := r.pathByName[dt.RepoName]
+		if releaseTagPattern.MatchString(dep.Ref) {
+			st.deployedTag = dep.Ref
+		} else if dep.SHA != "" {
+			if tags, terr := r.g.TagsContaining(ctx, path, dep.SHA); terr == nil {
+				st.deployedTag = lowestContainingReleaseTag(tags)
+			}
+		}
+		if st.deployedTag == "" {
+			// Deployed, but the ref/SHA doesn't map to a release tag
+			// (e.g. deployed from a branch). Treat as undeterminable.
+			deployedKnown = false
+		}
+	}
+
+	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployedTag, deployedKnown)
+
+	if st.workTag != "" && st.latestTag != "" && compareSemverTag(st.latestTag, st.workTag) > 0 {
+		st.infoNote = "newer release exists: " + st.latestTag
+	}
+	return st
 }
 
 // selectServiceDeploys runs release's Observe → Select → record arc,
@@ -212,15 +225,32 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		}
 	}
 
-	rewind, err := ui.RunCardSteps([]ui.CardStep{{
-		Card: ui.NewCard(ui.CardRunning, "deploy").
-			Raw("Checking deployed versions..."),
-		Run: func() error {
-			s, e := resolveServiceDeployTargets(ctx, g, host, workspace, targets)
-			states = s
-			return e
-		},
-	}}, func() *ui.Card {
+	resolver, err := newDeployTargetResolver(ctx, g, host, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	// One spinner step per target with a stable-shape progress line —
+	// `<reason>: <target> (<n>/<total>)` — so fast steps read as
+	// progress (only the item and counter change) and slow steps show
+	// exactly what's being waited on.
+	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	steps := make([]ui.CardStep, 0, len(targets))
+	for i, dt := range targets {
+		body := statusMuted.Render("Checking deployed versions: ") + ui.Keyword(dt.Label)
+		if len(targets) > 1 {
+			body += statusMuted.Render(fmt.Sprintf(" (%d/%d)", i+1, len(targets)))
+		}
+		steps = append(steps, ui.CardStep{
+			Card: ui.NewCard(ui.CardRunning, "deploy").Raw(body),
+			Run: func() error {
+				states = append(states, resolver.resolve(ctx, dt))
+				return nil
+			},
+		})
+	}
+
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
 		if formGate() {
 			return ui.NewCard(ui.CardInput, "deploy").Tight()
 		}
