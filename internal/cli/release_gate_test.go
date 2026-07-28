@@ -44,24 +44,22 @@ func TestClassifyServiceDeploy(t *testing.T) {
 }
 
 // TestChooseDeployTag locks the deploy-tag choice: --tag override wins;
-// else the repo's latest release (the manual-workflow default); else
-// the containing release when the latest lookup failed or lagged.
+// else the workspace's own release — NOT the repo's latest (tags cut
+// after ours are other people's deploys to coordinate, not absorb).
 func TestChooseDeployTag(t *testing.T) {
 	tests := []struct {
-		name                      string
-		workTag, latest, override string
-		want                      string
+		name              string
+		workTag, override string
+		want              string
 	}{
-		{"override wins", "v1.2.4", "v1.2.5", "v1.2.2", "v1.2.2"},
-		{"latest by default", "v1.2.4", "v1.2.5", "", "v1.2.5"},
-		{"latest equals work", "v1.2.4", "v1.2.4", "", "v1.2.4"},
-		{"latest lookup failed → work", "v1.2.4", "", "", "v1.2.4"},
-		{"stale latest below work → work", "v1.2.4", "v1.2.3", "", "v1.2.4"},
+		{"override wins", "v1.2.4", "v1.2.2", "v1.2.2"},
+		{"own release by default", "v1.2.4", "", "v1.2.4"},
+		{"no work release, override still wins", "", "v1.2.5", "v1.2.5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := chooseDeployTag(tt.workTag, tt.latest, tt.override); got != tt.want {
-				t.Errorf("chooseDeployTag(%q, %q, %q) = %q, want %q", tt.workTag, tt.latest, tt.override, got, tt.want)
+			if got := chooseDeployTag(tt.workTag, tt.override); got != tt.want {
+				t.Errorf("chooseDeployTag(%q, %q) = %q, want %q", tt.workTag, tt.override, got, tt.want)
 			}
 		})
 	}

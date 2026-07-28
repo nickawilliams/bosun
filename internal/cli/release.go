@@ -195,6 +195,6 @@ func newReleaseCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
 	cmd.Flags().StringSlice("service", nil, "service to deploy (repeatable; default: all configured services)")
-	cmd.Flags().String("tag", "", "release tag to deploy (default: each repo's latest release)")
+	cmd.Flags().String("tag", "", "release tag to deploy (default: the workspace's own release)")
 	return cmd
 }

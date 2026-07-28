@@ -39,7 +39,8 @@ const (
 //	else                   → go     (D → T)
 //
 // workTag (the release containing the workspace's work) is the GATE;
-// deployTag (latest by default, --tag to override) is what ships. The
+// deployTag (the workspace release by default, --tag to override) is
+// what ships. The
 // two are split so "is the work released?" and "which release do we
 // deploy?" stay independent questions.
 //
@@ -63,18 +64,14 @@ func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown
 }
 
 // chooseDeployTag picks the tag a service deploys: an explicit --tag
-// override wins; else the repo's latest release (the manual-workflow
-// default — the team coordinates ship-readiness at release time, so
-// deploying latest matches how deploys are actually run); else the
-// containing release when the latest lookup failed. Latest always
-// contains the workspace's work when the gate passes (linear default-
-// branch history: containing ≤ latest). Pure.
-func chooseDeployTag(workTag, latestTag, override string) string {
+// override wins; else the workspace's own release (the one prerelease
+// cut — whose contents, including swept-in extras, are what the team
+// confirms before shipping). Deliberately NOT the repo's latest
+// release: tags cut after ours are other people's deploys to
+// coordinate, not ours to absorb. Pure.
+func chooseDeployTag(workTag, override string) string {
 	if override != "" {
 		return override
-	}
-	if latestTag != "" && compareSemverTag(latestTag, workTag) >= 0 {
-		return latestTag
 	}
 	return workTag
 }
@@ -84,21 +81,22 @@ func chooseDeployTag(workTag, latestTag, override string) string {
 type releaseServiceTarget struct {
 	target      DeployTarget
 	workTag     string // release containing the work (repo-level; the gate)
-	deployTag   string // tag to ship: latest by default, --tag override
+	deployTag   string // tag to ship: the workspace release, or --tag override
 	deployedTag string // D (per-service)
 	state       deployState
 	reason      string
 	err         error // identity/resolution failure → ✗ row (siblings unaffected)
 
-	// include is the user's selection (or the default: every deployGo
-	// target). Deselected targets render as "not selected" no-ops in
-	// the record card and plan, mirroring prerelease's deselection.
+	// include is the user's selection (default: nothing, unless the
+	// targets were --service-named — see selectServiceDeploys).
+	// Unselected targets render as "not selected" no-ops in the plan,
+	// with the record card showing their deployed tag.
 	include bool
 }
 
 // deployTargetResolver resolves targets one at a time so the gather
-// spinner can narrate per-target progress. T (and the repo's latest
-// tag) is computed once per repo and cached across targets; D is
+// spinner can narrate per-target progress. T (repo-level)
+// is computed once per repo and cached across targets; D is
 // per-target. Best-effort: a failure records an err on that target's
 // state rather than aborting the others.
 type deployTargetResolver struct {
@@ -106,13 +104,13 @@ type deployTargetResolver struct {
 	host        code.Host
 	pathByName  map[string]string
 	cache       map[string]deployRepoInfo
-	tagOverride string // --tag: deploy this tag instead of each repo's latest
+	tagOverride string // --tag: deploy this tag instead of the workspace's release
 }
 
 // deployRepoInfo is the per-repo half of target resolution.
 type deployRepoInfo struct {
-	workTag, latestTag string
-	err                error
+	workTag string
+	err     error
 }
 
 // newDeployTargetResolver builds the resolver's repo lookup for the
@@ -134,7 +132,7 @@ func newDeployTargetResolver(ctx context.Context, g vcs.VCS, host code.Host, wor
 	}, nil
 }
 
-// repoInfo returns the repo-level resolution (T + latest tag) for a
+// repoInfo returns the repo-level resolution (T) for a
 // target's repo, computing it on first use.
 func (r *deployTargetResolver) repoInfo(ctx context.Context, dt DeployTarget) deployRepoInfo {
 	if ri, ok := r.cache[dt.RepoName]; ok {
@@ -167,9 +165,6 @@ func (r *deployTargetResolver) repoInfo(ctx context.Context, dt DeployTarget) de
 			ri.workTag = lowestContainingReleaseTag(tags)
 		}
 	}
-	if lt, lerr := r.host.GetLatestTag(ctx, dt.Owner, dt.Repo); lerr == nil {
-		ri.latestTag = lt
-	}
 	r.cache[dt.RepoName] = ri
 	return ri
 }
@@ -183,7 +178,7 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 		return st
 	}
 	st.workTag = ri.workTag
-	st.deployTag = chooseDeployTag(ri.workTag, ri.latestTag, r.tagOverride)
+	st.deployTag = chooseDeployTag(ri.workTag, r.tagOverride)
 
 	// D: the latest successful deployment of this environment, mapped
 	// to a release tag. Prefer the ref when it's already a tag; else
@@ -218,14 +213,25 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 // selectServiceDeploys runs release's Observe → Select → record arc,
 // mirroring prerelease's selectReleaseTargets: gather each target's
 // deployed state + classification under a spinner, then (interactive,
-// not -y) offer a multi-select over the deployable targets — every
-// deployGo target pre-checked, skip/block/error rows shown inert for
-// visibility — and finally record the outcome in the Deploy card. The
-// plan interprets the selection (deselected → "= not selected").
-// Non-interactive runs take the defaults (every deployGo included).
+// not -y) offer a multi-select over the deployable targets —
+// skip/block/error rows shown inert for visibility — and finally
+// record the outcome in the Deploy card. The plan interprets the
+// selection (unselected → "= not selected").
+// Selection defaults to nothing: a monorepo deploy usually targets the
+// workspace's affected services, and until D..T affected-narrowing
+// exists bosun can't know which those are — so services are opted IN,
+// not out. Naming services via --service IS the opt-in: those targets
+// (the whole filtered set) pre-check in the form and deploy by default
+// non-interactively. Without --service, non-interactive runs deploy
+// nothing.
 func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Host, workspace string, targets []DeployTarget) ([]releaseServiceTarget, error) {
 	g := git.New()
 	var states []releaseServiceTarget
+
+	// --service filtered the target list upstream, so its presence
+	// means every remaining target was explicitly requested.
+	svcFlag, _ := cmd.Flags().GetStringSlice("service")
+	explicit := len(svcFlag) > 0
 
 	formGate := func() bool {
 		if !isInteractive() || isAutoApprove(cmd) {
@@ -238,9 +244,12 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		}
 		return false
 	}
+	preselect := func(st *releaseServiceTarget) bool {
+		return st.state == deployGo && explicit
+	}
 	applyDefaults := func() {
 		for i := range states {
-			states[i].include = states[i].state == deployGo
+			states[i].include = preselect(&states[i])
 		}
 	}
 
@@ -284,7 +293,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 				// Append this target's resolved row to every later
 				// card (gather-time inclusion = the classification),
 				// then the next card's pending row beneath the rows.
-				glyph, content := deployStateRow(&st, st.state == deployGo)
+				glyph, content := deployStateRow(&st, preselect(&st))
 				for j := i + 1; j < n; j++ {
 					cards[j].Item(glyph, content)
 				}
@@ -326,7 +335,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			default:
 				label += " · " + st.reason
 			}
-			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(st.state == deployGo))
+			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(preselect(st)))
 		}
 		msField = huh.NewMultiSelect[string]().
 			Options(opts...).
