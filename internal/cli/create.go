@@ -32,8 +32,7 @@ func newCreateCmd() *cobra.Command {
 						Value(&title))
 				}
 				if description == "" {
-					fields = append(fields, huh.NewText().
-						Title("Description").
+					fields = append(fields, newText("Description").
 						Value(&description))
 				}
 				if !cmd.Flags().Changed("type") {

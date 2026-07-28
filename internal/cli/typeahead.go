@@ -33,7 +33,7 @@ func typeaheadText(title, current string) (string, error) {
 	slot := ui.NewSlot()
 	slot.Show(ui.NewCard(ui.CardInput, title).Tight())
 	if err := runForm(
-		huh.NewText().
+		rawText().
 			Value(&value),
 	); err != nil {
 		return current, err
