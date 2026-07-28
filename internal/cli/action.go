@@ -36,6 +36,13 @@ type Action struct {
 
 	// Apply performs the action. Only called when Assess returned ActionNeeded.
 	Apply func(ctx context.Context) error
+
+	// DetailRef, when set, lets Apply supersede the assessed detail on
+	// the plan row after it runs — the assessed detail carries a
+	// "known after apply" placeholder, Apply fills the ref with the
+	// resolved value (created issue key, returned URL), and the plan
+	// card's final frame renders it. Sibling of OpRef.
+	DetailRef *string
 }
 
 // op returns the effective operation, preferring OpRef if set.
@@ -65,7 +72,11 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 			}
 			switch state {
 			case ActionNeeded:
-				plan.Add(a.op(), a.Action, a.Type, a.Name, detail)
+				if a.DetailRef != nil {
+					plan.AddWithDetailRef(a.op(), a.Action, a.Type, a.Name, detail, a.DetailRef)
+				} else {
+					plan.Add(a.op(), a.Action, a.Type, a.Name, detail)
+				}
 				if a.op() != ui.PlanDetail {
 					pending = append(pending, *a)
 				}

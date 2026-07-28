@@ -27,6 +27,15 @@ type PlanItem struct {
 	Type   string // subject category: "repo", "env", "channel", "issue"
 	Name   string // subject identifier: "api", "brave-falcon", "#reviews"
 	Detail string // free-form qualifier: transition, state, description
+
+	// DetailRef, when set and non-empty, overrides Detail at render
+	// time. It lets an Apply closure resolve a value that's only known
+	// after the action runs (a created issue key, a returned URL) —
+	// the plan card's final success frame renders after apply, so the
+	// resolved text lands in the same row that previously showed a
+	// "known after apply" placeholder. Sibling of Action.OpRef, which
+	// does the same for the operation glyph at assess time.
+	DetailRef *string
 }
 
 // Plan collects planned actions and renders them as a diff-style list.
@@ -42,6 +51,16 @@ func NewPlan() *Plan {
 // Add appends a plan item.
 func (p *Plan) Add(op PlanOp, action, subjectType, name, detail string) *Plan {
 	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail})
+	return p
+}
+
+// AddWithDetailRef appends a plan item whose detail can be superseded
+// after apply: while *ref is empty the static detail renders (typically
+// carrying a "known after apply" placeholder); once an Apply closure
+// fills the ref, subsequent renders — including the card's final
+// success frame — show the resolved text instead.
+func (p *Plan) AddWithDetailRef(op PlanOp, action, subjectType, name, detail string, ref *string) *Plan {
+	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail, DetailRef: ref})
 	return p
 }
 
@@ -271,11 +290,15 @@ func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
 		actionStyle, typeStyle, nameStyle, detailStyle = muted, muted, muted, muted
 	}
 
+	detail := item.Detail
+	if item.DetailRef != nil && *item.DetailRef != "" {
+		detail = *item.DetailRef
+	}
 	c := fmt.Sprintf("%s  %s  %s  %s",
 		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),
 		typeStyle.Render(fmt.Sprintf("%-*s", w.typ, item.Type)),
 		nameStyle.Render(fmt.Sprintf("%-*s", w.name, item.Name)),
-		detailStyle.Render(item.Detail),
+		detailStyle.Render(detail),
 	)
 	return g, c
 }

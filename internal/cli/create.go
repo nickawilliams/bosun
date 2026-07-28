@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -100,14 +101,23 @@ func newCreateCmd() *cobra.Command {
 			ctx := cmd.Context()
 			var created issuepkg.Issue
 
+			// The created issue's key is only known after apply. The
+			// plan row carries a placeholder that Apply supersedes via
+			// DetailRef with the OSC-8-linked key — the plan card's
+			// success frame is the record, so no trailing details card.
+			var createdDetail string
+			placeholder := lipgloss.NewStyle().Foreground(ui.Palette.Muted).
+				Render("(known after apply)")
+
 			actions := []Action{
 				{
-					Op:     ui.PlanCreate,
-					Action: "issue",
-					Type:   "project",
-					Name:   project,
+					Op:        ui.PlanCreate,
+					Action:    "issue",
+					Type:      "project",
+					Name:      project,
+					DetailRef: &createdDetail,
 					Assess: func(_ context.Context) (ActionState, string, error) {
-						return ActionNeeded, fmt.Sprintf("%s: %q", issueType, title), nil
+						return ActionNeeded, fmt.Sprintf("%s: %q → %s", issueType, title, placeholder), nil
 					},
 					Apply: func(ctx context.Context) error {
 						var createErr error
@@ -117,6 +127,10 @@ func newCreateCmd() *cobra.Command {
 							Description: description,
 							Type:        issueType,
 						})
+						if createErr == nil && created.Key != "" {
+							createdDetail = fmt.Sprintf("%s: %q → %s",
+								issueType, title, osc8Link(created.URL, ui.Keyword(created.Key)))
+						}
 						return createErr
 					},
 				},
@@ -126,8 +140,9 @@ func newCreateCmd() *cobra.Command {
 				return err
 			}
 
-			// Show created issue details.
-			if created.Key != "" {
+			// Raw mode renders no plan card, so scripts still need the
+			// created key/URL on stdout.
+			if ui.IsRaw() && created.Key != "" {
 				ui.Details(created.Key, ui.NewFields(
 					"Title", created.Title,
 					"Status", created.Status,
