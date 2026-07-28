@@ -45,10 +45,11 @@ func StripPreserveCase(s string) (clean string, verbatim bool) {
 // (it looks like the text the user wrote) but bounded, with the full
 // text living on the created artifact (issue, PR), not the timeline.
 //
-// Both record shapes render it correctly as-is: Card.KV aligns
-// continuation lines under the value column, and Card.Subtitle renders
-// each line muted. Surrounding whitespace is trimmed first, so a
-// trailing newline doesn't count as an elided line.
+// The marker line is pre-styled muted — it's meta-text about the
+// value, not part of it — while content lines stay unstyled and take
+// whatever the surrounding record renders them in (normal for KV
+// values, muted for subtitles). Surrounding whitespace is trimmed
+// first, so a trailing newline doesn't count as an elided line.
 func Excerpt(s string, max int) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) <= max {
@@ -59,7 +60,9 @@ func Excerpt(s string, max int) string {
 	if elided == 1 {
 		unit = "line"
 	}
-	kept := append(lines[:max:max], fmt.Sprintf("… +%d %s", elided, unit))
+	marker := lipgloss.NewStyle().Foreground(Palette.Muted).
+		Render(fmt.Sprintf("… +%d %s", elided, unit))
+	kept := append(lines[:max:max], marker)
 	return strings.Join(kept, "\n")
 }
 

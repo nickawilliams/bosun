@@ -761,15 +761,13 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 		for _, p := range b.pairs {
 			paddedKey := fmt.Sprintf("%-*s", maxKey, p[0])
 			first := true
-			// The first logical line is the value (normal style);
-			// subsequent logical lines are de-emphasized continuations
-			// (muted). Wrapped fragments inherit their logical line's
-			// style so a wrapped value doesn't dim mid-sentence.
-			for i, logical := range strings.Split(p[1], "\n") {
-				style := normalStyle
-				if i > 0 {
-					style = mutedStyle
-				}
+			// Every value line renders in the normal style — a
+			// multi-line value is all equally content. Meta lines
+			// (Excerpt's "… +K lines" marker) arrive pre-styled muted
+			// by their producer; normalStyle wrapping leaves embedded
+			// styling in charge (same convention as init's pre-styled
+			// "(none)" secret placeholders).
+			for _, logical := range strings.Split(p[1], "\n") {
 				frags := []string{logical}
 				if lipgloss.Width(logical) > valueWidth {
 					frags = strings.Split(lipgloss.Wrap(logical, valueWidth, " ,.-"), "\n")
@@ -779,14 +777,14 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 						out = append(out, fmt.Sprintf("%s %s %s",
 							mutedStyle.Render(paddedKey),
 							mutedStyle.Render(Palette.Dot),
-							style.Render(frag),
+							normalStyle.Render(frag),
 						))
 						first = false
 						continue
 					}
 					out = append(out, fmt.Sprintf("%*s %s",
 						prefixWidth, "",
-						style.Render(frag),
+						normalStyle.Render(frag),
 					))
 				}
 			}

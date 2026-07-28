@@ -1,10 +1,18 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+)
 
 // TestExcerpt locks the bounded multi-line record convention: first max
 // lines verbatim, elided content collapsed into a "… +K lines" marker,
 // surrounding whitespace trimmed so trailing newlines don't count.
+// Content assertions strip ANSI because the marker line is pre-styled
+// muted (meta-text about the value, not part of it) — content lines
+// must pass through unstyled for the surrounding record to style.
 func TestExcerpt(t *testing.T) {
 	tests := []struct {
 		name string
@@ -22,9 +30,19 @@ func TestExcerpt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Excerpt(tt.in, tt.max); got != tt.want {
+			if got := ansi.Strip(Excerpt(tt.in, tt.max)); got != tt.want {
 				t.Errorf("Excerpt(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
 			}
 		})
+	}
+
+	// Content lines must pass through byte-identical (no styling) —
+	// only the marker line may carry ANSI.
+	out := Excerpt("a\nb\nc\nd", 3)
+	lines := strings.Split(out, "\n")
+	for i, l := range lines[:3] {
+		if l != []string{"a", "b", "c"}[i] {
+			t.Errorf("content line %d altered: %q", i, l)
+		}
 	}
 }
