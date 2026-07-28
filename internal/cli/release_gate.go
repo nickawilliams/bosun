@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
+	"github.com/nickawilliams/bosun/internal/vcs/git"
+	"github.com/spf13/cobra"
 )
 
 // deployState is one service's production-deploy decision.
@@ -59,6 +63,11 @@ type releaseServiceTarget struct {
 	reason      string
 	infoNote    string
 	err         error // identity/resolution failure → ✗ row (siblings unaffected)
+
+	// include is the user's selection (or the default: every deployGo
+	// target). Deselected targets render as "not selected" no-ops in
+	// the record card and plan, mirroring prerelease's deselection.
+	include bool
 }
 
 // resolveServiceDeployTargets fills deployed state + classification for
@@ -170,10 +179,122 @@ func resolveServiceDeployTargets(ctx context.Context, g vcs.VCS, host code.Host,
 	return out, nil
 }
 
-// buildDeployTargetsCard renders the "deploy" observe card: one row per
-// service target with a glyph (✓ deploy / ○ skip-or-block / ✗ error) and
-// the classification reason, plus a muted continuation row for any
-// "newer release exists" note. Mirrors buildReleaseTargetsCard.
+// selectServiceDeploys runs release's Observe → Select → record arc,
+// mirroring prerelease's selectReleaseTargets: gather each target's
+// deployed state + classification under a spinner, then (interactive,
+// not -y) offer a multi-select over the deployable targets — every
+// deployGo target pre-checked, skip/block/error rows shown inert for
+// visibility — and finally record the outcome in the Deploy card. The
+// plan interprets the selection (deselected → "= not selected").
+// Non-interactive runs take the defaults (every deployGo included).
+func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Host, workspace string, targets []DeployTarget) ([]releaseServiceTarget, error) {
+	g := git.New()
+	var states []releaseServiceTarget
+
+	formGate := func() bool {
+		if !isInteractive() || isAutoApprove(cmd) {
+			return false
+		}
+		for i := range states {
+			if states[i].state == deployGo {
+				return true
+			}
+		}
+		return false
+	}
+	applyDefaults := func() {
+		for i := range states {
+			states[i].include = states[i].state == deployGo
+		}
+	}
+
+	rewind, err := ui.RunCardSteps([]ui.CardStep{{
+		Card: ui.NewCard(ui.CardRunning, "deploy").
+			Raw("Checking deployed versions..."),
+		Run: func() error {
+			s, e := resolveServiceDeployTargets(ctx, g, host, workspace, targets)
+			states = s
+			return e
+		},
+	}}, func() *ui.Card {
+		if formGate() {
+			return ui.NewCard(ui.CardInput, "deploy").Tight()
+		}
+		applyDefaults()
+		return buildDeployTargetsCard(states)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !formGate() {
+		applyDefaults()
+		return states, nil
+	}
+
+	// Selection form: one row per target. Deployable rows are
+	// toggleable and pre-checked; skip/block/error rows appear inert
+	// (visible with their reason, toggles no-op'd at parse — huh has
+	// no disabled options) so the user sees every target accounted
+	// for without leaving the picker.
+	opts := make([]huh.Option[string], 0, len(states))
+	for i := range states {
+		st := &states[i]
+		// Bold the repo segment via raw SGR toggles (lipgloss's
+		// closing reset would wipe huh's selection styling).
+		label := "\x1b[1m" + st.target.RepoName + "\x1b[22m · " + st.target.Service
+		switch {
+		case st.err != nil:
+			label += " · " + st.err.Error()
+		default:
+			label += " · " + st.reason
+		}
+		if st.infoNote != "" {
+			label += " (" + st.infoNote + ")"
+		}
+		opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(st.state == deployGo))
+	}
+
+	var picked []string
+	// The header was painted by the spinner program's final frame (not
+	// via Print), so suppress the spacer the way Tight-on-Print would.
+	ui.ClearSpacer()
+	if err := runForm(
+		huh.NewMultiSelect[string]().
+			Options(opts...).
+			Height(len(opts)).
+			Value(&picked),
+	); err != nil {
+		ui.RequestSpacer()
+		return nil, err
+	}
+
+	for i := range states {
+		states[i].include = false
+	}
+	for _, p := range picked {
+		i, perr := strconv.Atoi(p)
+		if perr != nil || i < 0 || i >= len(states) {
+			continue
+		}
+		// Inert rows (skip/block/error) can't be selected for deploy —
+		// silently no-op any toggle the user made on them.
+		if states[i].state != deployGo {
+			continue
+		}
+		states[i].include = true
+	}
+
+	// Erase the form header and drop the record card in its place.
+	rewind()
+	buildDeployTargetsCard(states).Print()
+	return states, nil
+}
+
+// buildDeployTargetsCard renders the "deploy" record card: one row per
+// service target with a glyph (✓ deploying / ○ deselected, skipped, or
+// blocked / ✗ error) and the classification reason, plus a muted
+// continuation row for any "newer release exists" note. Mirrors
+// buildReleaseTargetsCard: rows are status, the plan owns the change.
 func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -207,9 +328,13 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 		case st.err != nil:
 			nFail++
 			rows = append(rows, row{st.target.Label, glyphFail, on(st.target.Label, st.err.Error())})
-		case st.state == deployGo:
+		case st.state == deployGo && st.include:
 			nOK++
 			rows = append(rows, row{st.target.Label, glyphOK, on(st.target.Label, st.reason)})
+		case st.state == deployGo:
+			// Deployable but deselected in the form.
+			nSkip++
+			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, "not selected")})
 		default: // deploySkip / deployBlock
 			nSkip++
 			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, st.reason)})

@@ -6,7 +6,6 @@ import (
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/ui"
-	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
 )
 
@@ -92,18 +91,10 @@ func newReleaseCmd() *cobra.Command {
 				if len(targets) == 0 {
 					ui.Skip("no production deploy targets configured")
 				} else {
-					g := git.New()
-					_, err := ui.RunCardSteps([]ui.CardStep{{
-						Card: ui.NewCard(ui.CardRunning, "deploy").
-							Raw("Checking deployed versions..."),
-						Run: func() error {
-							s, e := resolveServiceDeployTargets(ctx, g, host, cc.Workspace, targets)
-							states = s
-							return e
-						},
-					}}, func() *ui.Card {
-						return buildDeployTargetsCard(states)
-					})
+					// Observe → Select → record: gather + gate under a
+					// spinner, offer the deployable targets as a
+					// pre-checked multi-select, record the outcome.
+					states, err = selectServiceDeploys(ctx, cmd, host, cc.Workspace, targets)
 					if err != nil {
 						return err
 					}
@@ -119,7 +110,7 @@ func newReleaseCmd() *cobra.Command {
 									return 0, "", st.err
 								},
 							})
-						case st.state == deployGo:
+						case st.state == deployGo && st.include:
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
 								Assess: func(_ context.Context) (ActionState, string, error) {
@@ -138,6 +129,14 @@ func newReleaseCmd() *cobra.Command {
 									})
 								},
 							})
+						case st.state == deployGo:
+							// Deployable but deselected in the form.
+							actions = append(actions, Action{
+								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
+								Assess: func(_ context.Context) (ActionState, string, error) {
+									return ActionCompleted, "not selected", nil
+								},
+							})
 						default: // deploySkip / deployBlock — explained no-op row
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
@@ -151,19 +150,23 @@ func newReleaseCmd() *cobra.Command {
 			}
 
 			// --- Status transition ---
-			// Advance to done unless the work isn't actually reaching
-			// production: something is blocked (no release contains it) and
-			// nothing else deploys. All-already-live still advances.
-			anyDeploy, anyBlock := false, false
+			// Advance to done when something actually deploys, or when
+			// nothing needed to (everything already live, none blocked).
+			// Deselecting every deploy or having blocked-only work holds
+			// the status — the issue isn't in production yet.
+			anyDeploy, anyDeployable, anyBlock := false, false, false
 			for _, st := range states {
 				switch st.state {
 				case deployGo:
-					anyDeploy = true
+					anyDeployable = true
+					if st.include {
+						anyDeploy = true
+					}
 				case deployBlock:
 					anyBlock = true
 				}
 			}
-			if !(anyBlock && !anyDeploy) {
+			if anyDeploy || (!anyDeployable && !anyBlock) {
 				tracker, _ := newIssueTracker()
 				if sa, ok := statusAction(tracker, issue, currentStatus, "done"); ok {
 					actions = append(actions, sa)
