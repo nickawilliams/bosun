@@ -265,12 +265,8 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 				// card (gather-time inclusion = the classification),
 				// then the next card's pending row beneath the rows.
 				glyph, content := deployStateRow(&st, st.state == deployGo)
-				ig, ic := deployInfoRow(&st)
 				for j := i + 1; j < n; j++ {
 					cards[j].Item(glyph, content)
-					if ig != "" {
-						cards[j].Item(ig, ic)
-					}
 				}
 				if i+1 < n {
 					pendingRow(cards[i+1], i+1)
@@ -355,14 +351,22 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 }
 
 // deployStateRow renders one target's status row — the shared shape
-// between the gather's progressively-filling card and the final record
-// card, so the accumulating rows and the record can't drift. selected
+// between the gather's progressively-filling card, the selection form,
+// and the final record card, so none of the three can drift. selected
 // is the effective inclusion (the classification default during
-// gather, the user's choice afterward).
+// gather, the user's choice afterward). Any infoNote ("newer release
+// exists: vX") rides the row as a trailing parenthetical — the same
+// single-line shape the selection form uses.
 func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content string) {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 
+	noted := func(s string) string {
+		if st.infoNote == "" {
+			return s
+		}
+		return s + " (" + st.infoNote + ")"
+	}
 	on := func(label, note string) string {
 		if note == "" {
 			return primary.Render(label)
@@ -382,7 +386,7 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 			on(st.target.Label, st.err.Error())
 	case st.state == deployGo && selected:
 		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
-			on(st.target.Label, st.reason)
+			on(st.target.Label, noted(st.reason))
 	case st.state == deployGo:
 		// Deployable but deselected in the form. Pure status — the
 		// currently-deployed version (the service stays there); the
@@ -392,20 +396,10 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 		if note == "" {
 			note = "(none)"
 		}
-		return muted.Render("○"), off(st.target.Label, note)
+		return muted.Render("○"), off(st.target.Label, noted(note))
 	default: // deploySkip / deployBlock
-		return muted.Render("○"), off(st.target.Label, st.reason)
+		return muted.Render("○"), off(st.target.Label, noted(st.reason))
 	}
-}
-
-// deployInfoRow renders the muted continuation row for a target's
-// infoNote ("newer release exists: vX"), or ("", "") when none.
-func deployInfoRow(st *releaseServiceTarget) (glyph, content string) {
-	if st.infoNote == "" {
-		return "", ""
-	}
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	return muted.Render("+"), muted.Render(st.infoNote)
 }
 
 // buildDeployTargetsCard renders the "deploy" record card: one row per
@@ -446,9 +440,6 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 		st := &states[i]
 		glyph, content := deployStateRow(st, st.include)
 		card.Item(glyph, content)
-		if g, c := deployInfoRow(st); g != "" {
-			card.Item(g, c)
-		}
 	}
 	return card
 }
