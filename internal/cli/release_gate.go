@@ -230,21 +230,55 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return nil, err
 	}
 
-	// One spinner step per target with a stable-shape progress line —
-	// `<reason>: <target> (<n>/<total>)` — so fast steps read as
-	// progress (only the item and counter change) and slow steps show
-	// exactly what's being waited on.
+	// Accumulating gather: each step's card carries the rows resolved
+	// so far plus a progress line for the target being checked —
+	// `<reason>: <target> (<n>/<total>)` — so the selection list
+	// materializes in place and then swaps into the form (or record
+	// card) with the same rows. Rows render via deployStateRow, the
+	// same renderer the record card uses, for seam-free continuity.
+	//
+	// Mutating later cards from a step's Run is safe: the runner's
+	// worker sends each step's result over a channel before the model
+	// advances to the next card, so a card is never rendered until
+	// every earlier step — including its appends to that card — has
+	// completed (happens-before via the channel).
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	steps := make([]ui.CardStep, 0, len(targets))
-	for i, dt := range targets {
-		body := statusMuted.Render("Checking deployed versions: ") + ui.Keyword(dt.Label)
-		if len(targets) > 1 {
-			body += statusMuted.Render(fmt.Sprintf(" (%d/%d)", i+1, len(targets)))
+	n := len(targets)
+	progressLine := func(i int) string {
+		body := statusMuted.Render("Checking deployed versions: ") + ui.Keyword(targets[i].Label)
+		if n > 1 {
+			body += statusMuted.Render(fmt.Sprintf(" (%d/%d)", i+1, n))
 		}
+		return body
+	}
+
+	cards := make([]*ui.Card, n)
+	for i := range cards {
+		cards[i] = ui.NewCard(ui.CardRunning, "deploy")
+	}
+	cards[0].Raw(progressLine(0))
+
+	steps := make([]ui.CardStep, 0, n)
+	for i, dt := range targets {
 		steps = append(steps, ui.CardStep{
-			Card: ui.NewCard(ui.CardRunning, "deploy").Raw(body),
+			Card: cards[i],
 			Run: func() error {
-				states = append(states, resolver.resolve(ctx, dt))
+				st := resolver.resolve(ctx, dt)
+				states = append(states, st)
+				// Append this target's resolved row to every later
+				// card (gather-time inclusion = the classification),
+				// then the next card's progress line beneath the rows.
+				glyph, content := deployStateRow(&st, st.state == deployGo)
+				ig, ic := deployInfoRow(&st)
+				for j := i + 1; j < n; j++ {
+					cards[j].Item(glyph, content)
+					if ig != "" {
+						cards[j].Item(ig, ic)
+					}
+				}
+				if i+1 < n {
+					cards[i+1].Raw(progressLine(i + 1))
+				}
 				return nil
 			},
 		})
@@ -324,21 +358,14 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	return states, nil
 }
 
-// buildDeployTargetsCard renders the "deploy" record card: one row per
-// service target with a glyph (✓ deploying / ○ deselected, skipped, or
-// blocked / ✗ error) and the classification reason, plus a muted
-// continuation row for any "newer release exists" note. Mirrors
-// buildReleaseTargetsCard: rows are status, the plan owns the change.
-func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
+// deployStateRow renders one target's status row — the shared shape
+// between the gather's progressively-filling card and the final record
+// card, so the accumulating rows and the record can't drift. selected
+// is the effective inclusion (the classification default during
+// gather, the user's choice afterward).
+func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content string) {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphOff := muted.Render("○")
-	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
-
-	type row struct{ label, glyph, content string }
-	var rows []row
-	var nOK, nSkip, nFail int
 
 	on := func(label, note string) string {
 		if note == "" {
@@ -353,36 +380,63 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 		return muted.Render(label + " · " + note)
 	}
 
-	info := make(map[string]string, len(states))
-	for _, st := range states {
-		if st.infoNote != "" {
-			info[st.target.Label] = st.infoNote
+	switch {
+	case st.err != nil:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+			on(st.target.Label, st.err.Error())
+	case st.state == deployGo && selected:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+			on(st.target.Label, st.reason)
+	case st.state == deployGo:
+		// Deployable but deselected in the form. Pure status — the
+		// currently-deployed version (the service stays there); the
+		// plan carries the "not selected" reason. Mirrors
+		// prerelease's card/plan split for deselected repos.
+		note := st.deployedTag
+		if note == "" {
+			note = "(none)"
 		}
+		return muted.Render("○"), off(st.target.Label, note)
+	default: // deploySkip / deployBlock
+		return muted.Render("○"), off(st.target.Label, st.reason)
+	}
+}
+
+// deployInfoRow renders the muted continuation row for a target's
+// infoNote ("newer release exists: vX"), or ("", "") when none.
+func deployInfoRow(st *releaseServiceTarget) (glyph, content string) {
+	if st.infoNote == "" {
+		return "", ""
+	}
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	return muted.Render("+"), muted.Render(st.infoNote)
+}
+
+// buildDeployTargetsCard renders the "deploy" record card: one row per
+// service target with a glyph (✓ deploying / ○ deselected, skipped, or
+// blocked / ✗ error) and the classification reason, plus a muted
+// continuation row for any "newer release exists" note. Mirrors
+// buildReleaseTargetsCard: rows are status, the plan owns the change.
+func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
+	idx := make([]int, len(states))
+	for i := range states {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return states[idx[a]].target.Label < states[idx[b]].target.Label
+	})
+
+	var nOK, nSkip, nFail int
+	for i := range states {
 		switch {
-		case st.err != nil:
+		case states[i].err != nil:
 			nFail++
-			rows = append(rows, row{st.target.Label, glyphFail, on(st.target.Label, st.err.Error())})
-		case st.state == deployGo && st.include:
+		case states[i].state == deployGo && states[i].include:
 			nOK++
-			rows = append(rows, row{st.target.Label, glyphOK, on(st.target.Label, st.reason)})
-		case st.state == deployGo:
-			// Deployable but deselected in the form. Pure status — the
-			// currently-deployed version (the service stays there); the
-			// plan carries the "not selected" reason. Mirrors
-			// prerelease's card/plan split for deselected repos.
+		default:
 			nSkip++
-			note := st.deployedTag
-			if note == "" {
-				note = "(none)"
-			}
-			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, note)})
-		default: // deploySkip / deployBlock
-			nSkip++
-			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, st.reason)})
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].label < rows[j].label })
-
 	state := ui.CardSuccess
 	switch {
 	case nFail > 0:
@@ -392,11 +446,12 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "deploy")
-	infoGlyph := muted.Render("+")
-	for _, r := range rows {
-		card.Item(r.glyph, r.content)
-		if n, ok := info[r.label]; ok {
-			card.Item(infoGlyph, muted.Render(n))
+	for _, i := range idx {
+		st := &states[i]
+		glyph, content := deployStateRow(st, st.include)
+		card.Item(glyph, content)
+		if g, c := deployInfoRow(st); g != "" {
+			card.Item(g, c)
 		}
 	}
 	return card
