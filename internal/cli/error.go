@@ -14,6 +14,15 @@ import (
 // ValidateArgs or fang's flag parsing render in the same style as
 // errors from RunE.
 func HandleError(err error) {
+	if errors.Is(err, errPlanCancelled) {
+		// The plan card already rendered its Cancelled state — a
+		// trailing "user cancelled" card would say the same thing
+		// twice. Just close the timeline.
+		if !ui.IsRaw() {
+			ui.EndTimeline()
+		}
+		return
+	}
 	if errors.Is(err, ErrCancelled) {
 		renderErrorHeader()
 		ui.NewCard(ui.CardSkipped, "user cancelled").Print()

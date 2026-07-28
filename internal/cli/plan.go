@@ -11,6 +11,14 @@ import (
 // ErrCancelled is returned when the user cancels or interrupts.
 var ErrCancelled = errors.New("cancelled")
 
+// errPlanCancelled marks a cancellation the plan card has already
+// rendered — the Cancelled-state card is on screen, so HandleError
+// suppresses its trailing "user cancelled" card (which would say the
+// same thing twice) while the non-zero exit and abort semantics are
+// preserved. Wraps ErrCancelled so every existing errors.Is check
+// still matches.
+var errPlanCancelled = fmt.Errorf("plan %w", ErrCancelled)
+
 // PlanAction is a function that executes one step of a plan.
 type PlanAction func() error
 
@@ -96,9 +104,11 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	rewind()
 
 	if !confirmed {
+		// The Cancelled plan card IS the cancellation record —
+		// errPlanCancelled tells HandleError not to add another.
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
-		return ErrCancelled
+		return errPlanCancelled
 	}
 
 	return applyPlanCard(pc, actions)
