@@ -231,11 +231,11 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	}
 
 	// Accumulating gather: each step's card carries the rows resolved
-	// so far plus a progress line for the target being checked —
-	// `<reason>: <target> (<n>/<total>)` — so the selection list
-	// materializes in place and then swaps into the form (or record
-	// card) with the same rows. Rows render via deployStateRow, the
-	// same renderer the record card uses, for seam-free continuity.
+	// so far plus a pending row — the in-flight target with the live
+	// spinner in its glyph slot — so the selection list materializes in
+	// place and then swaps into the form (or record card) with the same
+	// rows. Rows render via deployStateRow, the same renderer the
+	// record card uses, for seam-free continuity.
 	//
 	// Mutating later cards from a step's Run is safe: the runner's
 	// worker sends each step's result over a channel before the model
@@ -244,19 +244,15 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	// completed (happens-before via the channel).
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	n := len(targets)
-	progressLine := func(i int) string {
-		body := statusMuted.Render("Checking deployed versions: ") + ui.Keyword(targets[i].Label)
-		if n > 1 {
-			body += statusMuted.Render(fmt.Sprintf(" (%d/%d)", i+1, n))
-		}
-		return body
+	pendingRow := func(c *ui.Card, i int) {
+		c.Item(ui.GlyphSlot, statusMuted.Render(targets[i].Label))
 	}
 
 	cards := make([]*ui.Card, n)
 	for i := range cards {
 		cards[i] = ui.NewCard(ui.CardRunning, "deploy")
 	}
-	cards[0].Raw(progressLine(0))
+	pendingRow(cards[0], 0)
 
 	steps := make([]ui.CardStep, 0, n)
 	for i, dt := range targets {
@@ -267,7 +263,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 				states = append(states, st)
 				// Append this target's resolved row to every later
 				// card (gather-time inclusion = the classification),
-				// then the next card's progress line beneath the rows.
+				// then the next card's pending row beneath the rows.
 				glyph, content := deployStateRow(&st, st.state == deployGo)
 				ig, ic := deployInfoRow(&st)
 				for j := i + 1; j < n; j++ {
@@ -277,7 +273,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 					}
 				}
 				if i+1 < n {
-					cards[i+1].Raw(progressLine(i + 1))
+					pendingRow(cards[i+1], i+1)
 				}
 				return nil
 			},
