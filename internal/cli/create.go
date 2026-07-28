@@ -21,7 +21,6 @@ func newCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			title, _ := cmd.Flags().GetString("title")
 			description, _ := cmd.Flags().GetString("description")
-			size, _ := cmd.Flags().GetString("size")
 			issueType, _ := cmd.Flags().GetString("type")
 
 			if isInteractive() {
@@ -43,18 +42,9 @@ func newCreateCmd() *cobra.Command {
 						Options(
 							huh.NewOption("Story", "story"),
 							huh.NewOption("Bug", "bug"),
+							huh.NewOption("Task", "task"),
 						).
 						Value(&issueType))
-				}
-				if size == "" {
-					fields = append(fields, huh.NewSelect[string]().
-						Title("Size").
-						Options(
-							huh.NewOption("Small", "small"),
-							huh.NewOption("Medium", "medium"),
-							huh.NewOption("Large", "large"),
-						).
-						Value(&size))
 				}
 
 				if len(fields) > 0 {
@@ -100,7 +90,6 @@ func newCreateCmd() *cobra.Command {
 							Title:       title,
 							Description: description,
 							Type:        issueType,
-							Size:        size,
 						})
 						return createErr
 					},
@@ -127,8 +116,7 @@ func newCreateCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	cmd.Flags().String("title", "", "issue title")
 	cmd.Flags().String("description", "", "issue description")
-	cmd.Flags().String("size", "", "issue size estimate")
-	cmd.Flags().String("type", "story", "issue type (bug|story)")
+	cmd.Flags().String("type", "story", "issue type (story|bug|task)")
 
 	return cmd
 }

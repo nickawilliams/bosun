@@ -46,8 +46,7 @@ type CreateRequest struct {
 	Project     string // Project key, e.g., "PROJ"
 	Title       string
 	Description string
-	Type        string // "story" or "bug"
-	Size        string // "small", "medium", "large"
+	Type        string // "story" | "bug" | "task"
 }
 
 // Tracker defines issue tracking operations needed by bosun.
