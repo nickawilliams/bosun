@@ -332,9 +332,16 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 			nOK++
 			rows = append(rows, row{st.target.Label, glyphOK, on(st.target.Label, st.reason)})
 		case st.state == deployGo:
-			// Deployable but deselected in the form.
+			// Deployable but deselected in the form. Pure status — the
+			// currently-deployed version (the service stays there); the
+			// plan carries the "not selected" reason. Mirrors
+			// prerelease's card/plan split for deselected repos.
 			nSkip++
-			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, "not selected")})
+			note := st.deployedTag
+			if note == "" {
+				note = "(none)"
+			}
+			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, note)})
 		default: // deploySkip / deployBlock
 			nSkip++
 			rows = append(rows, row{st.target.Label, glyphOff, off(st.target.Label, st.reason)})
