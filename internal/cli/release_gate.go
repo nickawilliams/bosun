@@ -36,18 +36,22 @@ const (
 //	D == ""                → go     (first deploy)
 //	compareSemverTag(D,T)≥0 → skip   (already live at D / D newer → would roll back)
 //	else                   → go     (D → T)
+//
+// Detail strings follow the plan-detail grammar — the state/diff first,
+// any why as a trailing parenthetical — except the block reason, which
+// has no diff and stays plain (the plan wraps it, cards show it as-is).
 func classifyServiceDeploy(containingTag, deployedTag string, deployedKnown bool) (deployState, string) {
 	if containingTag == "" {
 		return deployBlock, "no release contains this work — run prerelease"
 	}
 	if !deployedKnown {
-		return deployGo, "deployed state unknown — deploying " + containingTag
+		return deployGo, "→ " + containingTag + " (deployed state unknown)"
 	}
 	if deployedTag == "" {
-		return deployGo, "first deploy → " + containingTag
+		return deployGo, "→ " + containingTag + " (first deploy)"
 	}
 	if compareSemverTag(deployedTag, containingTag) >= 0 {
-		return deploySkip, "already live at " + deployedTag
+		return deploySkip, deployedTag + " (already live)"
 	}
 	return deployGo, deployedTag + " → " + containingTag
 }

@@ -500,13 +500,19 @@ func newPrereleaseCmd() *cobra.Command {
 								}
 								// Blocked or skipped by the release gate — the
 								// work isn't on the default branch, or there's
-								// nothing of ours to release. Not announced; an
-								// explained no-op row (`= PR #N open — not
-								// merged`). Must precede the already-current
-								// branch below, which would otherwise mislabel a
-								// version-eligible-but-blocked repo with its tag.
+								// nothing of ours to release. Not announced.
+								// Plan-detail grammar: persisting tag first
+								// (when known), the gate reason parenthesized
+								// — `= v1.2.3 (PR #42 open — not merged)`.
+								// Must precede the already-current branch
+								// below, which would otherwise mislabel a
+								// version-eligible-but-blocked repo.
 								if rt.versionEligible() && rt.gate != gateAllow {
-									return ActionCompleted, rt.gateReason, nil
+									detail := "(" + rt.gateReason + ")"
+									if rt.currentTag != "" {
+										detail = rt.currentTag + " " + detail
+									}
+									return ActionCompleted, detail, nil
 								}
 								// Already at a release version — capture it so
 								// notifications still list the repo, and render
@@ -530,7 +536,12 @@ func newPrereleaseCmd() *cobra.Command {
 									})
 									return ActionCompleted, rt.currentTag, nil
 								}
-								return ActionCompleted, "not selected", nil
+								// Deselected-eligible: persisting tag first,
+								// why parenthesized (plan-detail grammar).
+								if rt.currentTag != "" {
+									return ActionCompleted, rt.currentTag + " (not selected)", nil
+								}
+								return ActionCompleted, "(not selected)", nil
 							}
 							from := rt.currentTag
 							if from == "" {

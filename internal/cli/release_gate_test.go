@@ -20,11 +20,11 @@ func TestClassifyServiceDeploy(t *testing.T) {
 	}{
 		{"no release contains work → block", "", "", true, deployBlock, "no release contains this work — run prerelease"},
 		{"no release wins over deployed → block", "", "v1.2.3", true, deployBlock, "no release contains this work — run prerelease"},
-		{"unknown deployed → go (permissive)", "v1.2.4", "", false, deployGo, "deployed state unknown — deploying v1.2.4"},
-		{"never deployed → first deploy", "v1.2.4", "", true, deployGo, "first deploy → v1.2.4"},
+		{"unknown deployed → go (permissive)", "v1.2.4", "", false, deployGo, "→ v1.2.4 (deployed state unknown)"},
+		{"never deployed → first deploy", "v1.2.4", "", true, deployGo, "→ v1.2.4 (first deploy)"},
 		{"behind → deploy", "v1.2.4", "v1.2.3", true, deployGo, "v1.2.3 → v1.2.4"},
-		{"equal → skip", "v1.2.4", "v1.2.4", true, deploySkip, "already live at v1.2.4"},
-		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", true, deploySkip, "already live at v1.2.5"},
+		{"equal → skip", "v1.2.4", "v1.2.4", true, deploySkip, "v1.2.4 (already live)"},
+		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", true, deploySkip, "v1.2.5 (already live)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

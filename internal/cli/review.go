@@ -710,10 +710,12 @@ func newReviewCmd() *cobra.Command {
 							// no-op reads as intentional rather than an
 							// oversight.
 							if !include {
+								// Plan-detail grammar: persisting state first
+								// (the PR that stays as-is), why parenthesized.
 								if existing.Number > 0 {
-									return ActionCompleted, fmt.Sprintf("#%d %s", existing.Number, existing.State), nil
+									return ActionCompleted, fmt.Sprintf("#%d %s (not selected)", existing.Number, existing.State), nil
 								}
-								return ActionCompleted, "not selected", nil
+								return ActionCompleted, "(not selected)", nil
 							}
 
 							// Selected for creation — Apply opens a new PR

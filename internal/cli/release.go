@@ -130,18 +130,30 @@ func newReleaseCmd() *cobra.Command {
 								},
 							})
 						case st.state == deployGo:
-							// Deployable but deselected in the form.
+							// Deployable but deselected in the form. Plan-detail
+							// grammar: persisting state first, why parenthesized.
+							detail := "(not selected)"
+							if st.deployedTag != "" {
+								detail = st.deployedTag + " " + detail
+							}
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
 								Assess: func(_ context.Context) (ActionState, string, error) {
-									return ActionCompleted, "not selected", nil
+									return ActionCompleted, detail, nil
 								},
 							})
-						default: // deploySkip / deployBlock — explained no-op row
+						default:
+							// deploySkip carries grammar'd state already
+							// ("D (already live)"); deployBlock is why-only,
+							// so the plan parenthesizes it.
+							detail := st.reason
+							if st.state == deployBlock {
+								detail = "(" + detail + ")"
+							}
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
 								Assess: func(_ context.Context) (ActionState, string, error) {
-									return ActionCompleted, st.reason, nil
+									return ActionCompleted, detail, nil
 								},
 							})
 						}
