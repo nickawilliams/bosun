@@ -225,7 +225,7 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 		state = ui.CardSkipped
 	}
 
-	card := ui.NewCard(state, "deploy").PreserveCase()
+	card := ui.NewCard(state, "deploy")
 	infoGlyph := muted.Render("+")
 	for _, r := range rows {
 		card.Item(r.glyph, r.content)
