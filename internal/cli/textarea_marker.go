@@ -30,9 +30,12 @@ import (
 // Delete all of this in favor of a huh-native prompt API when one
 // exists.
 //
-// The marker inherits the theme's prompt styling (accent when focused)
-// because bubbles renders the promptFunc result through the prompt
-// style; blurred rows and continuation rows render 2 spaces, keeping
+// The marker renders on the first display row whether focused or not —
+// matching every other field, where the marker persists and only the
+// color changes. bubbles renders the promptFunc result through the
+// theme's prompt style, which huh re-syncs from the active state each
+// render: accent when focused, NormalFg when blurred (theme.go's
+// blurred overrides). Continuation rows render 2 spaces, keeping
 // content at the same column as before.
 func applyTextareaFocusMarker(t *huh.Text) bool {
 	f := reflect.ValueOf(t).Elem().FieldByName("textarea")
@@ -41,7 +44,7 @@ func applyTextareaFocusMarker(t *huh.Text) bool {
 	}
 	ta := (*textarea.Model)(unsafe.Pointer(f.UnsafeAddr()))
 	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 && info.Focused {
+		if info.LineNumber == 0 {
 			return ui.FocusMarker
 		}
 		return "  "
