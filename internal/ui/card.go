@@ -748,21 +748,47 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 		// Prefix width: padded key + " · " (dot with spaces), minus one
 		// because the continuation format "% *s %s" adds its own space.
 		prefixWidth := maxKey + 2
+		// Long values wrap HERE, to the width left of the value column,
+		// so every fragment keeps the hanging indent. Left to the
+		// generic body pass, wrapForTimeline would re-break overlong
+		// lines at the content margin, losing the column. Lines emitted
+		// at this width already fit, so that pass leaves them alone.
+		valueWidth := TermWidth() - timelineConnWidth - prefixWidth - 1
+		if valueWidth < 20 {
+			valueWidth = 20
+		}
 		var out []string
 		for _, p := range b.pairs {
-			lines := strings.Split(p[1], "\n")
 			paddedKey := fmt.Sprintf("%-*s", maxKey, p[0])
-			out = append(out, fmt.Sprintf("%s %s %s",
-				mutedStyle.Render(paddedKey),
-				mutedStyle.Render(Palette.Dot),
-				normalStyle.Render(lines[0]),
-			))
-			// Continuation lines aligned under the value column.
-			for _, cont := range lines[1:] {
-				out = append(out, fmt.Sprintf("%*s %s",
-					prefixWidth, "",
-					mutedStyle.Render(cont),
-				))
+			first := true
+			// The first logical line is the value (normal style);
+			// subsequent logical lines are de-emphasized continuations
+			// (muted). Wrapped fragments inherit their logical line's
+			// style so a wrapped value doesn't dim mid-sentence.
+			for i, logical := range strings.Split(p[1], "\n") {
+				style := normalStyle
+				if i > 0 {
+					style = mutedStyle
+				}
+				frags := []string{logical}
+				if lipgloss.Width(logical) > valueWidth {
+					frags = strings.Split(lipgloss.Wrap(logical, valueWidth, " ,.-"), "\n")
+				}
+				for _, frag := range frags {
+					if first {
+						out = append(out, fmt.Sprintf("%s %s %s",
+							mutedStyle.Render(paddedKey),
+							mutedStyle.Render(Palette.Dot),
+							style.Render(frag),
+						))
+						first = false
+						continue
+					}
+					out = append(out, fmt.Sprintf("%*s %s",
+						prefixWidth, "",
+						style.Render(frag),
+					))
+				}
 			}
 		}
 		return out
