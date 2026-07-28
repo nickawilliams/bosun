@@ -66,7 +66,6 @@ type releaseServiceTarget struct {
 	latestTag   string // repo's latest release, for the "newer exists" note
 	state       deployState
 	reason      string
-	infoNote    string
 	err         error // identity/resolution failure → ✗ row (siblings unaffected)
 
 	// include is the user's selection (or the default: every deployGo
@@ -190,11 +189,38 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 	}
 
 	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployedTag, deployedKnown)
-
-	if st.workTag != "" && st.latestTag != "" && compareSemverTag(st.latestTag, st.workTag) > 0 {
-		st.infoNote = "newer release exists: " + st.latestTag
-	}
 	return st
+}
+
+// deployNewerNotes returns one muted note per repo whose latest release
+// is newer than the tag being deployed (T) — repo-level information,
+// so it renders once under the card header rather than repeating on
+// every service row. The repo name is included only when the states
+// span multiple repos.
+func deployNewerNotes(states []releaseServiceTarget) []string {
+	repos := make(map[string]bool)
+	for i := range states {
+		repos[states[i].target.RepoName] = true
+	}
+	seen := make(map[string]bool)
+	var notes []string
+	for i := range states {
+		st := &states[i]
+		if st.workTag == "" || st.latestTag == "" || seen[st.target.RepoName] {
+			continue
+		}
+		if compareSemverTag(st.latestTag, st.workTag) <= 0 {
+			continue
+		}
+		seen[st.target.RepoName] = true
+		note := "newer release exists: " + st.latestTag
+		if len(repos) > 1 {
+			note = st.target.RepoName + " · " + note
+		}
+		notes = append(notes, note)
+	}
+	sort.Strings(notes)
+	return notes
 }
 
 // selectServiceDeploys runs release's Observe → Select → record arc,
@@ -307,9 +333,6 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			default:
 				label += " · " + st.reason
 			}
-			if st.infoNote != "" {
-				label += " (" + st.infoNote + ")"
-			}
 			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(st.state == deployGo))
 		}
 		msField = huh.NewMultiSelect[string]().
@@ -325,7 +348,11 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	err = ui.RunCardStepsInto(steps, func() string {
 		if formGate() {
 			buildSelectionForm()
-			header := ui.NewCard(ui.CardInput, "deploy").Tight().Render()
+			headerCard := ui.NewCard(ui.CardInput, "deploy")
+			if notes := deployNewerNotes(states); len(notes) > 0 {
+				headerCard.Muted(notes...)
+			}
+			header := headerCard.Tight().Render()
 			headerLines = strings.Count(header, "\n")
 			return header + formFrame
 		}
@@ -380,19 +407,13 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 // between the gather's progressively-filling card, the selection form,
 // and the final record card, so none of the three can drift. selected
 // is the effective inclusion (the classification default during
-// gather, the user's choice afterward). Any infoNote ("newer release
-// exists: vX") rides the row as a trailing parenthetical — the same
-// single-line shape the selection form uses.
+// gather, the user's choice afterward). Repo-level context ("newer
+// release exists") is NOT on the rows — deployNewerNotes renders it
+// once under the header.
 func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content string) {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 
-	noted := func(s string) string {
-		if st.infoNote == "" {
-			return s
-		}
-		return s + " (" + st.infoNote + ")"
-	}
 	on := func(label, note string) string {
 		if note == "" {
 			return primary.Render(label)
@@ -412,7 +433,7 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 			on(st.target.Label, st.err.Error())
 	case st.state == deployGo && selected:
 		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
-			on(st.target.Label, noted(st.reason))
+			on(st.target.Label, st.reason)
 	case st.state == deployGo:
 		// Deployable but deselected in the form. Pure status — the
 		// currently-deployed version (the service stays there); the
@@ -422,9 +443,9 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 		if note == "" {
 			note = "(none)"
 		}
-		return muted.Render("○"), off(st.target.Label, noted(note))
+		return muted.Render("○"), off(st.target.Label, note)
 	default: // deploySkip / deployBlock
-		return muted.Render("○"), off(st.target.Label, noted(st.reason))
+		return muted.Render("○"), off(st.target.Label, st.reason)
 	}
 }
 
@@ -462,6 +483,9 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "deploy")
+	if notes := deployNewerNotes(states); len(notes) > 0 {
+		card.Muted(notes...)
+	}
 	for _, i := range idx {
 		st := &states[i]
 		glyph, content := deployStateRow(st, st.include)
