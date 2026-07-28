@@ -117,15 +117,16 @@ func newReleaseCmd() *cobra.Command {
 									return ActionNeeded, st.reason, nil
 								},
 								Apply: func(ctx context.Context) error {
-									// Dispatch ON the tag (Ref: T) with the version
-									// input = T, so the run — and the GitHub
-									// Deployment it records — is a deploy of T.
+									// Dispatch ON the deploy tag (Ref) with the
+									// version input set to it, so the run — and
+									// the GitHub Deployment it records — is a
+									// deploy of exactly that tag.
 									return pipeline.TriggerWorkflow(ctx, cicd.TriggerRequest{
 										Owner:      st.target.Owner,
 										Repository: st.target.Repo,
 										Workflow:   st.target.Workflow,
-										Ref:        st.workTag,
-										Inputs:     map[string]string{versionInput: st.workTag},
+										Ref:        st.deployTag,
+										Inputs:     map[string]string{versionInput: st.deployTag},
 									})
 								},
 							})
@@ -194,5 +195,6 @@ func newReleaseCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().Bool("migrations-done", false, "skip migration confirmation")
 	cmd.Flags().StringSlice("service", nil, "service to deploy (repeatable; default: all configured services)")
+	cmd.Flags().String("tag", "", "release tag to deploy (default: each repo's latest release)")
 	return cmd
 }

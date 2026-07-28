@@ -6,34 +6,62 @@ import (
 )
 
 // TestClassifyServiceDeploy locks the per-service production decision:
-// no containing release blocks; an unmerged/undeterminable deployed
-// state deploys permissively; a deployed tag at or past the containing
-// tag skips (already live / would roll back); behind deploys.
+// no containing release blocks (the gate, keyed on workTag); an
+// undeterminable deployed state deploys permissively; a deployed tag at
+// or past the deploy tag skips (already live / would roll back); behind
+// deploys. workTag gates, deployTag ships.
 func TestClassifyServiceDeploy(t *testing.T) {
 	tests := []struct {
 		name          string
-		containingTag string
+		workTag       string
+		deployTag     string
 		deployedTag   string
 		deployedKnown bool
 		wantState     deployState
 		wantReason    string
 	}{
-		{"no release contains work → block", "", "", true, deployBlock, "no release contains this work — run prerelease"},
-		{"no release wins over deployed → block", "", "v1.2.3", true, deployBlock, "no release contains this work — run prerelease"},
-		{"unknown deployed → go (permissive)", "v1.2.4", "", false, deployGo, "→ v1.2.4 (deployed state unknown)"},
-		{"never deployed → first deploy", "v1.2.4", "", true, deployGo, "→ v1.2.4 (first deploy)"},
-		{"behind → deploy", "v1.2.4", "v1.2.3", true, deployGo, "v1.2.3 → v1.2.4"},
-		{"equal → skip", "v1.2.4", "v1.2.4", true, deploySkip, "v1.2.4 (already live)"},
-		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", true, deploySkip, "v1.2.5 (already live)"},
+		{"no release contains work → block", "", "v1.2.5", "", true, deployBlock, "no release contains this work — run prerelease"},
+		{"no release wins over deployed → block", "", "v1.2.5", "v1.2.3", true, deployBlock, "no release contains this work — run prerelease"},
+		{"unknown deployed → go (permissive)", "v1.2.4", "v1.2.5", "", false, deployGo, "→ v1.2.5 (deployed state unknown)"},
+		{"never deployed → first deploy", "v1.2.4", "v1.2.5", "", true, deployGo, "→ v1.2.5 (first deploy)"},
+		{"behind → deploy", "v1.2.4", "v1.2.5", "v1.2.3", true, deployGo, "v1.2.3 → v1.2.5"},
+		{"equal to deploy tag → skip", "v1.2.4", "v1.2.5", "v1.2.5", true, deploySkip, "v1.2.5 (already live)"},
+		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", "v1.2.6", true, deploySkip, "v1.2.6 (already live)"},
+		// D at the work's release but behind the deploy tag → still deploys.
+		{"at workTag, behind deployTag → deploy", "v1.2.4", "v1.2.5", "v1.2.4", true, deployGo, "v1.2.4 → v1.2.5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			state, reason := classifyServiceDeploy(tt.containingTag, tt.deployedTag, tt.deployedKnown)
+			state, reason := classifyServiceDeploy(tt.workTag, tt.deployTag, tt.deployedTag, tt.deployedKnown)
 			if state != tt.wantState {
 				t.Errorf("state = %v, want %v", state, tt.wantState)
 			}
 			if reason != tt.wantReason {
 				t.Errorf("reason = %q, want %q", reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestChooseDeployTag locks the deploy-tag choice: --tag override wins;
+// else the repo's latest release (the manual-workflow default); else
+// the containing release when the latest lookup failed or lagged.
+func TestChooseDeployTag(t *testing.T) {
+	tests := []struct {
+		name                      string
+		workTag, latest, override string
+		want                      string
+	}{
+		{"override wins", "v1.2.4", "v1.2.5", "v1.2.2", "v1.2.2"},
+		{"latest by default", "v1.2.4", "v1.2.5", "", "v1.2.5"},
+		{"latest equals work", "v1.2.4", "v1.2.4", "", "v1.2.4"},
+		{"latest lookup failed → work", "v1.2.4", "", "", "v1.2.4"},
+		{"stale latest below work → work", "v1.2.4", "v1.2.3", "", "v1.2.4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chooseDeployTag(tt.workTag, tt.latest, tt.override); got != tt.want {
+				t.Errorf("chooseDeployTag(%q, %q, %q) = %q, want %q", tt.workTag, tt.latest, tt.override, got, tt.want)
 			}
 		})
 	}

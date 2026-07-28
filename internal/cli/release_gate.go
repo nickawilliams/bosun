@@ -32,38 +32,60 @@ const (
 // and the service's currently-deployed tag (D; "" = never deployed when
 // deployedKnown, else undeterminable). Pure.
 //
-//	T == ""                → block  (no release contains this work)
+//	workTag == ""          → block  (no release contains this work)
 //	!deployedKnown         → go     (can't verify what's live → deploy, permissive)
 //	D == ""                → go     (first deploy)
 //	compareSemverTag(D,T)≥0 → skip   (already live at D / D newer → would roll back)
 //	else                   → go     (D → T)
 //
+// workTag (the release containing the workspace's work) is the GATE;
+// deployTag (latest by default, --tag to override) is what ships. The
+// two are split so "is the work released?" and "which release do we
+// deploy?" stay independent questions.
+//
 // Detail strings follow the plan-detail grammar — the state/diff first,
 // any why as a trailing parenthetical — except the block reason, which
 // has no diff and stays plain (the plan wraps it, cards show it as-is).
-func classifyServiceDeploy(containingTag, deployedTag string, deployedKnown bool) (deployState, string) {
-	if containingTag == "" {
+func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown bool) (deployState, string) {
+	if workTag == "" {
 		return deployBlock, "no release contains this work — run prerelease"
 	}
 	if !deployedKnown {
-		return deployGo, "→ " + containingTag + " (deployed state unknown)"
+		return deployGo, "→ " + deployTag + " (deployed state unknown)"
 	}
 	if deployedTag == "" {
-		return deployGo, "→ " + containingTag + " (first deploy)"
+		return deployGo, "→ " + deployTag + " (first deploy)"
 	}
-	if compareSemverTag(deployedTag, containingTag) >= 0 {
+	if compareSemverTag(deployedTag, deployTag) >= 0 {
 		return deploySkip, deployedTag + " (already live)"
 	}
-	return deployGo, deployedTag + " → " + containingTag
+	return deployGo, deployedTag + " → " + deployTag
+}
+
+// chooseDeployTag picks the tag a service deploys: an explicit --tag
+// override wins; else the repo's latest release (the manual-workflow
+// default — the team coordinates ship-readiness at release time, so
+// deploying latest matches how deploys are actually run); else the
+// containing release when the latest lookup failed. Latest always
+// contains the workspace's work when the gate passes (linear default-
+// branch history: containing ≤ latest). Pure.
+func chooseDeployTag(workTag, latestTag, override string) string {
+	if override != "" {
+		return override
+	}
+	if latestTag != "" && compareSemverTag(latestTag, workTag) >= 0 {
+		return latestTag
+	}
+	return workTag
 }
 
 // releaseServiceTarget is one deploy target resolved with its work tag
 // (T), deployed tag (D), and classification.
 type releaseServiceTarget struct {
 	target      DeployTarget
-	workTag     string // T (repo-level)
+	workTag     string // release containing the work (repo-level; the gate)
+	deployTag   string // tag to ship: latest by default, --tag override
 	deployedTag string // D (per-service)
-	latestTag   string // repo's latest release, for the "newer exists" note
 	state       deployState
 	reason      string
 	err         error // identity/resolution failure → ✗ row (siblings unaffected)
@@ -80,10 +102,11 @@ type releaseServiceTarget struct {
 // per-target. Best-effort: a failure records an err on that target's
 // state rather than aborting the others.
 type deployTargetResolver struct {
-	g          vcs.VCS
-	host       code.Host
-	pathByName map[string]string
-	cache      map[string]deployRepoInfo
+	g           vcs.VCS
+	host        code.Host
+	pathByName  map[string]string
+	cache       map[string]deployRepoInfo
+	tagOverride string // --tag: deploy this tag instead of each repo's latest
 }
 
 // deployRepoInfo is the per-repo half of target resolution.
@@ -160,7 +183,7 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 		return st
 	}
 	st.workTag = ri.workTag
-	st.latestTag = ri.latestTag
+	st.deployTag = chooseDeployTag(ri.workTag, ri.latestTag, r.tagOverride)
 
 	// D: the latest successful deployment of this environment, mapped
 	// to a release tag. Prefer the ref when it's already a tag; else
@@ -188,39 +211,8 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 		}
 	}
 
-	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployedTag, deployedKnown)
+	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployTag, st.deployedTag, deployedKnown)
 	return st
-}
-
-// deployNewerNotes returns one muted note per repo whose latest release
-// is newer than the tag being deployed (T) — repo-level information,
-// so it renders once under the card header rather than repeating on
-// every service row. The repo name is included only when the states
-// span multiple repos.
-func deployNewerNotes(states []releaseServiceTarget) []string {
-	repos := make(map[string]bool)
-	for i := range states {
-		repos[states[i].target.RepoName] = true
-	}
-	seen := make(map[string]bool)
-	var notes []string
-	for i := range states {
-		st := &states[i]
-		if st.workTag == "" || st.latestTag == "" || seen[st.target.RepoName] {
-			continue
-		}
-		if compareSemverTag(st.latestTag, st.workTag) <= 0 {
-			continue
-		}
-		seen[st.target.RepoName] = true
-		note := "newer release exists: " + st.latestTag
-		if len(repos) > 1 {
-			note = st.target.RepoName + " · " + note
-		}
-		notes = append(notes, note)
-	}
-	sort.Strings(notes)
-	return notes
 }
 
 // selectServiceDeploys runs release's Observe → Select → record arc,
@@ -256,6 +248,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	if err != nil {
 		return nil, err
 	}
+	resolver.tagOverride, _ = cmd.Flags().GetString("tag")
 
 	// Accumulating gather: each step's card carries the rows resolved
 	// so far plus a pending row — the in-flight target with the live
@@ -348,11 +341,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	err = ui.RunCardStepsInto(steps, func() string {
 		if formGate() {
 			buildSelectionForm()
-			headerCard := ui.NewCard(ui.CardInput, "deploy")
-			if notes := deployNewerNotes(states); len(notes) > 0 {
-				headerCard.Muted(notes...)
-			}
-			header := headerCard.Tight().Render()
+			header := ui.NewCard(ui.CardInput, "deploy").Tight().Render()
 			headerLines = strings.Count(header, "\n")
 			return header + formFrame
 		}
@@ -483,9 +472,6 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "deploy")
-	if notes := deployNewerNotes(states); len(notes) > 0 {
-		card.Muted(notes...)
-	}
 	for _, i := range idx {
 		st := &states[i]
 		glyph, content := deployStateRow(st, st.include)
