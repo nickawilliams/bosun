@@ -117,7 +117,7 @@ func newCreateCmd() *cobra.Command {
 					Name:      project,
 					DetailRef: &createdDetail,
 					Assess: func(_ context.Context) (ActionState, string, error) {
-						return ActionNeeded, fmt.Sprintf("%s: %q → %s", issueType, title, placeholder), nil
+						return ActionNeeded, placeholder, nil
 					},
 					Apply: func(ctx context.Context) error {
 						var createErr error
@@ -128,8 +128,7 @@ func newCreateCmd() *cobra.Command {
 							Type:        issueType,
 						})
 						if createErr == nil && created.Key != "" {
-							createdDetail = fmt.Sprintf("%s: %q → %s",
-								issueType, title, osc8Link(created.URL, ui.Keyword(created.Key)))
+							createdDetail = osc8Link(created.URL, ui.Keyword(created.Key))
 						}
 						return createErr
 					},
