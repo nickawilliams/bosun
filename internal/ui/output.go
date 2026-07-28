@@ -38,6 +38,31 @@ func StripPreserveCase(s string) (clean string, verbatim bool) {
 	return strings.CutPrefix(s, preserveCaseMarker)
 }
 
+// Excerpt bounds a multi-line value for record display: the first max
+// lines pass through verbatim, and elided content collapses into a
+// final "… +K lines" marker. This is the convention for retaining
+// textarea input on the timeline after a form submits — shape-faithful
+// (it looks like the text the user wrote) but bounded, with the full
+// text living on the created artifact (issue, PR), not the timeline.
+//
+// Both record shapes render it correctly as-is: Card.KV aligns
+// continuation lines under the value column, and Card.Subtitle renders
+// each line muted. Surrounding whitespace is trimmed first, so a
+// trailing newline doesn't count as an elided line.
+func Excerpt(s string, max int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) <= max {
+		return strings.Join(lines, "\n")
+	}
+	elided := len(lines) - max
+	unit := "lines"
+	if elided == 1 {
+		unit = "line"
+	}
+	kept := append(lines[:max:max], fmt.Sprintf("… +%d %s", elided, unit))
+	return strings.Join(kept, "\n")
+}
+
 var (
 	errorStyle   = lipgloss.NewStyle().Foreground(Palette.Error)
 	mutedStyle   = lipgloss.NewStyle().Foreground(Palette.Muted)

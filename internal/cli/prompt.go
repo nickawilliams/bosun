@@ -13,6 +13,12 @@ import (
 // formTheme is the shared huh theme derived from the app palette.
 var formTheme = ui.FormTheme()
 
+// recordExcerptLines is how many lines of a multi-line answer the
+// post-submit record keeps (via ui.Excerpt) before collapsing the rest
+// into a "… +K lines" marker. Shared by every record shape that can
+// carry textarea input (create's KV card, typeaheadText's Selected).
+const recordExcerptLines = 3
+
 // transformFieldTitle normalizes a form-field title to the app's
 // title-case convention so labels stay consistent across forms
 // regardless of how the caller wrote them. Wrap a label with

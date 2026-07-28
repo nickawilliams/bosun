@@ -39,7 +39,9 @@ func typeaheadText(title, current string) (string, error) {
 		return current, err
 	}
 	slot.Clear()
-	ui.Selected(title, value)
+	// Multi-line values (PR bodies) record as a bounded excerpt — the
+	// full text lands on the artifact being edited, not the timeline.
+	ui.Selected(title, ui.Excerpt(value, recordExcerptLines))
 	return value, nil
 }
 
