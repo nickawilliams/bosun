@@ -42,25 +42,24 @@ func rawInput() *huh.Input {
 }
 
 // newText — see newInput. All textareas route through here (or
-// rawText) so a future focus-marker capability lands in one place.
-//
-// Unlike newInput there is no `❭` focus marker: huh v2.0.3 (latest)
-// hardcodes the textarea's prompt to "" and doesn't expose bubbles'
-// textarea.SetPromptFunc — the primitive that could render the marker
-// on the first line only (PromptInfo{LineNumber, Focused}). When huh
-// grows that API, apply it here and rawText and every textarea
-// inherits it. Don't fake it via the theme's TextInput.Prompt
-// SetString: that style renders on EVERY textarea line and is shared
-// with huh.Input, whose marker would double.
+// rawText) so the focus marker (and any future textarea-wide behavior)
+// lands in one place. The `❭` marker comes via
+// applyTextareaFocusMarker — a guarded bridge around huh v2.0.3's
+// missing textarea-prompt API; see its doc for the mechanism and the
+// exit plan.
 func newText(title string) *huh.Text {
-	return huh.NewText().Title(transformFieldTitle(title))
+	t := huh.NewText().Title(transformFieldTitle(title))
+	applyTextareaFocusMarker(t)
+	return t
 }
 
 // rawText is huh.NewText() without a Title — for textareas whose title
-// lives on a wrapping card (typeahead editors). See newText for the
-// focus-marker status.
+// lives on a wrapping card (typeahead editors). Carries the same focus
+// marker as newText.
 func rawText() *huh.Text {
-	return huh.NewText()
+	t := huh.NewText()
+	applyTextareaFocusMarker(t)
+	return t
 }
 
 // newSelect — see newInput. Generic over the option value type.
