@@ -485,10 +485,22 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "deploy")
+	shown := 0
 	for _, i := range idx {
 		st := &states[i]
+		// Record only what was selected (plus errors — those need
+		// eyes): the opt-in model makes unselected the common case,
+		// and the plan below accounts for every target anyway
+		// (= not selected / = already live / block reasons).
+		if st.err == nil && !(st.state == deployGo && st.include) {
+			continue
+		}
 		glyph, content := deployStateRow(st, st.include)
 		card.Item(glyph, content)
+		shown++
+	}
+	if shown == 0 {
+		card.Muted("(none selected)")
 	}
 	return card
 }
