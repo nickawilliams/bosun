@@ -259,24 +259,29 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	// persist readable metadata) on a message bosun itself authored that
 	// mentions the issue key. See findOwnThread. The author scope is what
 	// keeps this safe: we never update/delete a message we don't own, so
-	// a stale text match on someone else's message can't trigger
-	// cant_update_message / cant_delete_message.
+	// a stale match on someone else's message can't destroy it. A failed
+	// history fetch is an error, not "no existing message" — posting
+	// blind would duplicate the announcement the fetch failed to see.
 	//
 	// Two update strategies depending on what the API accepts:
 	//   - Block content (review/preview): chat.update works cleanly.
 	//   - markdown_text content (prerelease): chat.update rejects
 	//     markdown_text with internal_error in practice (despite the
 	//     docs listing it as supported). When chat.update fails we
-	//     fall back to chat.delete + chat.postMessage so the upsert
-	//     still succeeds. Subscribers see a re-notification — that's
-	//     desirable for "the announcement was updated, look again".
-	//
-	// If both update AND delete fail (rare — we own the message via
-	// metadata match), swallow and post fresh. An orphaned message is
-	// better than a hard failure on the announcement path.
+	//     fall back to chat.postMessage + chat.delete — post first, so
+	//     a failed post leaves the old announcement standing instead
+	//     of destroying it with nothing in its place. Subscribers see
+	//     a re-notification — that's desirable for "the announcement
+	//     was updated, look again". If the trailing delete fails, the
+	//     superseded message is orphaned; better than a hard failure
+	//     on the announcement path.
+	var replaceTS string // superseded message; deleted after a successful post
 	if msg.IssueKey != "" {
 		cacheKey := channelID + ":own:" + msg.IssueKey
-		existing, _ := a.findOwnThread(ctx, channelID, msg.IssueKey)
+		existing, ferr := a.findOwnThread(ctx, channelID, msg.IssueKey)
+		if ferr != nil {
+			return notify.ThreadRef{}, fmt.Errorf("locating existing notification: %w", ferr)
+		}
 		if existing.Timestamp != "" {
 			// Skip update if content hasn't changed.
 			if existing.ContentHash == hash {
@@ -290,10 +295,7 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 				return existing, nil
 			}
 			if !strings.Contains(err.Error(), "message_not_found") {
-				// chat.update failed (typically internal_error for
-				// markdown_text). Try delete; if that also fails,
-				// orphan the old message and post fresh anyway.
-				_, _, _ = a.client.DeleteMessageContext(ctx, channelID, existing.Timestamp)
+				replaceTS = existing.Timestamp
 			}
 			delete(a.cache.threads, cacheKey)
 			delete(a.cache.threads, channelID+":"+msg.IssueKey)
@@ -303,6 +305,11 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	_, ts, err := a.client.PostMessageContext(ctx, channelID, opts...)
 	if err != nil {
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
+	}
+	if replaceTS != "" {
+		// Best-effort removal of the superseded message — the fresh
+		// post above already carries the announcement.
+		_, _, _ = a.client.DeleteMessageContext(ctx, channelID, replaceTS)
 	}
 
 	// Cache the new message under both lookup keys so a subsequent
@@ -344,9 +351,16 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 // It matches on bosun metadata first (exact, app tokens). When that
 // finds nothing — the xoxc/user-token case, where Slack does not persist
 // readable message metadata — it falls back to a message authored by the
-// authenticated identity that mentions the issue key. The author scope is
-// what keeps the upsert safe: we only ever update/delete a message bosun
-// itself posted, never a stale text match on someone else's message.
+// authenticated identity that mentions the issue key.
+//
+// BOTH passes are author-scoped. Metadata proves "a bosun posted this
+// for this issue", not "this principal's bosun posted it" — teammate
+// B's bosun writes the same event type and issue key, and an unscoped
+// metadata match would hand B's message to A's update/delete (which a
+// workspace-admin user token can actually destroy). When the identity
+// can't be resolved at all, ownership can't be verified, so nothing
+// matches — the caller posts fresh rather than touching a message that
+// might be someone else's.
 func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
 	cacheKey := channelID + ":own:" + issueKey
 	if !notify.NoCache(ctx) {
@@ -367,30 +381,36 @@ func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string)
 	}
 
 	var result notify.ThreadRef
+	selfUser, selfBot := a.resolveSelf(ctx)
+	selfKnown := selfUser != "" || selfBot != ""
 
-	// Metadata pass — exact, reliable (app tokens).
-	for _, msg := range resp.Messages {
-		if msg.Metadata.EventType != metadataEventType {
-			continue
+	// Metadata pass — exact key + hash (app tokens), gated on
+	// authorship like everything else here.
+	if selfKnown {
+		for _, msg := range resp.Messages {
+			if !messageAuthoredBy(msg, selfUser, selfBot) {
+				continue
+			}
+			if msg.Metadata.EventType != metadataEventType {
+				continue
+			}
+			key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+			if key != issueKey {
+				continue
+			}
+			hash, _ := msg.Metadata.EventPayload["content_hash"].(string)
+			result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp, ContentHash: hash}
+			break
 		}
-		key, _ := msg.Metadata.EventPayload["issue_key"].(string)
-		if key != issueKey {
-			continue
-		}
-		hash, _ := msg.Metadata.EventPayload["content_hash"].(string)
-		result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp, ContentHash: hash}
-		break
 	}
 
 	// Author-scoped fallback — xoxc/user tokens can't persist readable
 	// metadata, so recognize our own prior message by author + mention.
-	if result.Timestamp == "" {
-		if selfUser, selfBot := a.resolveSelf(ctx); selfUser != "" || selfBot != "" {
-			for _, msg := range resp.Messages {
-				if messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, issueKey) {
-					result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-					break
-				}
+	if result.Timestamp == "" && selfKnown {
+		for _, msg := range resp.Messages {
+			if messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, issueKey) {
+				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+				break
 			}
 		}
 	}

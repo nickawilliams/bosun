@@ -28,6 +28,17 @@ func TestNotify(t *testing.T) {
 					{"id": "C123", "name": "bb-prs"},
 				},
 			})
+		case "/conversations.history":
+			// No existing notification — the upsert requires a
+			// successful history read before it may post fresh.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"messages": []map[string]any{},
+			})
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "user_id": "U-SELF",
+			})
 		case "/chat.postMessage":
 			postedChannel = r.FormValue("channel")
 			postedText = r.FormValue("text")
@@ -391,14 +402,21 @@ func TestNotifyUpsertDeleteFallback(t *testing.T) {
 				"ok":       true,
 				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
 			})
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "user_id": "U-SELF",
+			})
 		case "/conversations.history":
-			// Existing message keyed on bosun metadata for PROJ-123.
+			// Existing message keyed on bosun metadata for PROJ-123,
+			// authored by this principal (the metadata pass is
+			// author-scoped).
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ok": true,
 				"messages": []map[string]any{
 					{
 						"text": "going out `extracker`: https://github.com/org/repo/releases/tag/v1.2.3",
 						"ts":   "1111111111.111111",
+						"user": "U-SELF",
 						"metadata": map[string]any{
 							"event_type":    "bosun_notification",
 							"event_payload": map[string]any{"issue_key": "PROJ-123"},
@@ -718,5 +736,141 @@ func TestCacheDropsNegativeThreadEntries(t *testing.T) {
 	c = loadCache()
 	if _, ok := c.threads["C123:PROJ-3"]; ok {
 		t.Error("stale persisted negative survived a save; want it pruned")
+	}
+}
+
+// TestNotifyIgnoresForeignMetadataMessages locks the authorship gate on
+// the METADATA pass: a message carrying bosun metadata for the same
+// issue key but authored by a different principal (a teammate's bosun)
+// must never be updated or deleted — with a workspace-admin user token
+// the delete would actually succeed and destroy their announcement.
+func TestNotifyIgnoresForeignMetadataMessages(t *testing.T) {
+	var updateCalled, deleteCalled bool
+	var postCount int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
+			})
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "user_id": "U-SELF",
+			})
+		case "/conversations.history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{
+						"text": "going out `extracker`: v1.2.3 PROJ-123",
+						"ts":   "1111111111.111111",
+						"user": "U-OTHER", // someone else's bosun
+						"metadata": map[string]any{
+							"event_type":    "bosun_notification",
+							"event_payload": map[string]any{"issue_key": "PROJ-123"},
+						},
+					},
+				},
+			})
+		case "/chat.update":
+			updateCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/chat.delete":
+			deleteCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/chat.postMessage":
+			postCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "channel": "C123", "ts": "9999999999.999999",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	_, err := a.Notify(context.Background(), notify.Message{
+		Channel:  "release-coordination",
+		IssueKey: "PROJ-123",
+		Content:  notify.Content{Text: "going out `extracker`: v1.2.4 PROJ-123"},
+	})
+	if err != nil {
+		t.Fatalf("Notify() error: %v", err)
+	}
+	if updateCalled {
+		t.Error("chat.update was called on a foreign message")
+	}
+	if deleteCalled {
+		t.Error("chat.delete was called on a foreign message")
+	}
+	if postCount != 1 {
+		t.Errorf("post count = %d, want 1 fresh post", postCount)
+	}
+}
+
+// TestNotifyUpsertKeepsOldMessageWhenPostFails locks the post-then-
+// delete ordering of the update fallback: when the fresh post fails,
+// the superseded announcement must still be standing (regression: the
+// old order deleted first, so a failed post left nothing in place).
+func TestNotifyUpsertKeepsOldMessageWhenPostFails(t *testing.T) {
+	var deleteCalled bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "release-coordination"}},
+			})
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "user_id": "U-SELF",
+			})
+		case "/conversations.history":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{
+						"text": "going out `extracker`: v1.2.3 PROJ-123",
+						"ts":   "1111111111.111111",
+						"user": "U-SELF",
+						"metadata": map[string]any{
+							"event_type":    "bosun_notification",
+							"event_payload": map[string]any{"issue_key": "PROJ-123"},
+						},
+					},
+				},
+			})
+		case "/chat.update":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "internal_error"})
+		case "/chat.delete":
+			deleteCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/chat.postMessage":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "restricted_action"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	_, err := a.Notify(context.Background(), notify.Message{
+		Channel:  "release-coordination",
+		IssueKey: "PROJ-123",
+		Content:  notify.Content{Text: "going out `extracker`: v1.2.4 PROJ-123"},
+	})
+	if err == nil {
+		t.Fatal("expected the failed post to surface as an error")
+	}
+	if deleteCalled {
+		t.Error("chat.delete ran before the replacement post succeeded — old announcement destroyed")
 	}
 }
