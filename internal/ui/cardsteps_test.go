@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestStartStepWorkerRunsAllSteps locks the happy path: every step
@@ -70,5 +74,102 @@ func TestStartStepWorkerQuitStopsBetweenSteps(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // let a (wrongly) scheduled step 2 surface
 	if ran2.Load() {
 		t.Fatal("step 2 ran after quit was closed")
+	}
+}
+
+// stepsModel drives cardStepsModel directly — the tea program itself
+// needs a TTY, but the model's Update/View are pure and carry all the
+// lifecycle logic worth locking.
+func stepsModel(successor func() *Card, rawSuccessor func() string, n int) (cardStepsModel, []*Card) {
+	cards := make([]*Card, n)
+	steps := make([]CardStep, n)
+	for i := range steps {
+		cards[i] = NewCard(CardRunning, "step")
+		steps[i] = CardStep{Card: cards[i], Run: func() error { return nil }}
+	}
+	m := newCardStepsModel(steps, successor, " ", make(chan error))
+	m.rawSuccessor = rawSuccessor
+	return m, cards
+}
+
+// TestCardStepsModelAdvancesToSuccessorFrame locks the happy-path
+// lifecycle: each step-done message advances the index, and the final
+// frame after the last step is the successor's render (the takeover
+// contract the rewind math depends on).
+func TestCardStepsModelAdvancesToSuccessorFrame(t *testing.T) {
+	final := NewCard(CardSuccess, "done")
+	m, _ := stepsModel(func() *Card { return final }, nil, 2)
+
+	next, _ := m.Update(cardStepDoneMsg{})
+	m = next.(cardStepsModel)
+	if m.done || m.idx != 1 {
+		t.Fatalf("after first step: done=%v idx=%d, want running at idx 1", m.done, m.idx)
+	}
+
+	next, _ = m.Update(cardStepDoneMsg{})
+	m = next.(cardStepsModel)
+	if !m.done || m.err != nil {
+		t.Fatalf("after last step: done=%v err=%v, want clean finish", m.done, m.err)
+	}
+	if got, want := m.View().Content, " "+final.Render(); got != want {
+		t.Errorf("final frame = %q, want the successor render %q", got, want)
+	}
+}
+
+// TestCardStepsModelFailureFrame locks the failure shape: the failed
+// step's card flips to CardFailed with the error as subtitle and IS
+// the permanent final frame.
+func TestCardStepsModelFailureFrame(t *testing.T) {
+	m, cards := stepsModel(nil, nil, 2)
+
+	next, _ := m.Update(cardStepDoneMsg{err: errors.New("boom")})
+	m = next.(cardStepsModel)
+	if !m.done || m.err == nil {
+		t.Fatalf("done=%v err=%v, want failed finish", m.done, m.err)
+	}
+	if cards[0].state != CardFailed {
+		t.Errorf("failed step card state = %v, want CardFailed", cards[0].state)
+	}
+	if got := m.View().Content; !strings.Contains(got, "boom") {
+		t.Errorf("final frame missing the error subtitle: %q", got)
+	}
+}
+
+// TestCardStepsModelInterruptFrame locks ctrl+c handling: the model
+// finishes with an interrupted error and the IN-FLIGHT card leaves
+// CardRunning (regression: the final frame showed a forever-running
+// glyph above the cancellation output).
+func TestCardStepsModelInterruptFrame(t *testing.T) {
+	m, cards := stepsModel(nil, nil, 2)
+
+	// First step completes; the second is in flight when ctrl+c lands.
+	next, _ := m.Update(cardStepDoneMsg{})
+	m = next.(cardStepsModel)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = next.(cardStepsModel)
+	if !m.done || m.err == nil || m.err.Error() != "interrupted" {
+		t.Fatalf("done=%v err=%v, want interrupted", m.done, m.err)
+	}
+	if cards[1].state != CardFailed {
+		t.Errorf("in-flight card state = %v, want CardFailed (not forever-running)", cards[1].state)
+	}
+	if got := m.View().Content; !strings.Contains(got, "interrupted") {
+		t.Errorf("final frame missing the interrupted subtitle: %q", got)
+	}
+}
+
+// TestCardStepsModelRawSuccessorFrame locks RunCardStepsInto's
+// takeover contract: on success the final frame is finalView()'s
+// string verbatim, so the next program's first repaint is
+// byte-identical.
+func TestCardStepsModelRawSuccessorFrame(t *testing.T) {
+	const frame = "EXACT NEXT PROGRAM FRAME\nline two\n"
+	m, _ := stepsModel(nil, func() string { return frame }, 1)
+
+	next, _ := m.Update(cardStepDoneMsg{})
+	m = next.(cardStepsModel)
+	if got, want := m.View().Content, " "+frame; got != want {
+		t.Errorf("raw final frame = %q, want %q verbatim", got, want)
 	}
 }
