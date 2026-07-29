@@ -319,8 +319,18 @@ func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace str
 	}
 
 	results, overrides, prs, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, true)
-	if err != nil && errors.Is(err, ErrCancelled) {
-		return nil, nil, nil, err
+	if err != nil {
+		if errors.Is(err, ErrCancelled) {
+			return nil, nil, nil, err
+		}
+		// Detection failures render as ✗ rows in the Services card;
+		// interactively the user sees them and can still cancel at
+		// the plan gate. Under -y nobody gets that look — a repo
+		// silently dropped from the deploy set is exactly what
+		// auto-approve must not gloss over, so fail instead.
+		if isAutoApprove(cmd) {
+			return nil, nil, nil, err
+		}
 	}
 
 	services := flagServices

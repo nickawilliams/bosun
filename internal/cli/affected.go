@@ -731,6 +731,16 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	overrides := make(map[string]string)
 	var prs []repoPR
 	for _, sr := range sources {
+		if withPRs && !sr.prResolved(withPRs) && len(sr.res.Services) > 0 {
+			// The card renders this repo as not-deployable ("no PR for
+			// branch") and the form never offered its services — the
+			// returned result set must agree, or preview would deploy
+			// them with no pr-N override (i.e. the provider's default
+			// image tag). Local mutation only: sr is a copy, so the
+			// card built from sources is unaffected.
+			sr.res.Skipped = append(append([]string{}, sr.res.Services...), sr.res.Skipped...)
+			sr.res.Services = nil
+		}
 		results = append(results, sr.res)
 		if withPRs && sr.prResolved(withPRs) && len(sr.res.Services) > 0 {
 			tag := fmt.Sprintf("pr-%d", sr.pr.Number)
