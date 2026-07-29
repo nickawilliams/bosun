@@ -104,28 +104,6 @@ func repoNoopDetail(states []releaseServiceTarget, repo string) string {
 	return "(" + why + ")"
 }
 
-// commonDeployTag returns the single deploy tag shared by every
-// deployable target, or "" when they diverge (multi-repo workspaces
-// with different releases) or none are deployable. Lets the selection
-// header state the target once instead of every row repeating it.
-func commonDeployTag(states []releaseServiceTarget) string {
-	tag := ""
-	for i := range states {
-		st := &states[i]
-		if st.state != deployGo || st.deployTag == "" {
-			continue
-		}
-		if tag == "" {
-			tag = st.deployTag
-			continue
-		}
-		if st.deployTag != tag {
-			return ""
-		}
-	}
-	return tag
-}
-
 // chooseDeployTag picks the tag a service deploys: an explicit --tag
 // override wins; else the workspace's own release (the one prerelease
 // cut — whose contents, including swept-in extras, are what the team
@@ -396,9 +374,12 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			case st.err != nil:
 				label += " · " + st.err.Error()
 			case st.state == deployGo:
-				// Just the current version — the deploy target is
-				// repo-level and shown once in the header, so "→ T"
-				// per row is repeated noise. Matches the gather rows.
+				// Just the current version — it informs the selection
+				// (who's behind). The deploy target doesn't: it's
+				// constant per repo and belongs to approval, so it
+				// shows on the plan's D → T rows instead (prerelease's
+				// form-shows-no-versions rationale). Matches the
+				// gather rows.
 				d := st.deployedTag
 				if d == "" {
 					d = "(none)"
@@ -424,14 +405,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	err = ui.RunCardStepsInto(steps, func() string {
 		if formGate() {
 			buildSelectionForm()
-			// State the deploy target once in the header ("Deploy ·
-			// v1.55.200") when the deployable targets agree on one —
-			// the reason the per-row "→ T" could go.
-			headerCard := ui.NewCard(ui.CardInput, "deploy")
-			if tag := commonDeployTag(states); tag != "" {
-				headerCard.Value(tag)
-			}
-			header := headerCard.Tight().Render()
+			header := ui.NewCard(ui.CardInput, "deploy").Tight().Render()
 			headerLines = strings.Count(header, "\n")
 			return header + formFrame
 		}
