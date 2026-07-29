@@ -274,15 +274,15 @@ func strayFilesMessage(files []string) string {
 // scoped signals under one spinner, classifies them via the safety
 // matrix, renders the result card, and gates accordingly.
 //
-//   - Any BLOCK without --force → returns ErrCancelled with the card on
-//     screen showing the blockers. (Caller's responsibility to detect
-//     `errors.Is(err, ErrCancelled)` and exit cleanly.)
+//   - Any BLOCK without --force → returns an actionable error with the
+//     card on screen showing the blockers.
 //   - Any WARN (or --force overriding BLOCKs) → Continue/Cancel prompt
 //     focused on Cancel; Continue returns nil, Cancel returns ErrCancelled.
 //   - All SAFE → static card prints, no prompt, returns nil.
 //
-// In raw / non-interactive mode the card prints and BLOCK findings
-// still produce ErrCancelled (cleanup can't be silently destructive);
+// In raw / non-interactive mode the card prints and BOTH BLOCK and
+// WARN findings error without --force (cleanup can't be silently
+// destructive, and there's nobody to answer the WARN prompt);
 // --force forces success the way it does interactively.
 func emitCleanupReadiness(
 	ctx context.Context,
@@ -298,7 +298,11 @@ func emitCleanupReadiness(
 	var workspaceProbe workspaceCleanupProbe
 
 	// Raw / non-interactive mode: no group, no spinners. Gather
-	// sequentially, classify, print the static summary.
+	// sequentially, classify, print the static summary. WARN findings
+	// gate here too: interactively they get a Continue/Cancel prompt,
+	// and with nobody to answer it a piped/CI run must not silently
+	// proceed to delete an open PR's remote branch — --force is the
+	// non-interactive acknowledgement.
 	if !isInteractive() {
 		for i, r := range repos {
 			probes[i] = gatherRepoProbe(ctx, g, host, r)
@@ -308,6 +312,9 @@ func emitCleanupReadiness(
 		buildCleanupReadinessCard(repoResults, wsFindings).Print()
 		if worstSeverity == findingBlock && !force {
 			return repoResults, wsFindings, fmt.Errorf("cleanup readiness: blocking findings present; re-run with --force to override")
+		}
+		if worstSeverity == findingWarn && !force {
+			return repoResults, wsFindings, fmt.Errorf("cleanup readiness: warnings present and no prompt available; re-run with --force to proceed")
 		}
 		return repoResults, wsFindings, nil
 	}
