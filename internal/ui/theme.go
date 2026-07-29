@@ -95,12 +95,6 @@ func IsCompactHeader() bool {
 	return compactHeader
 }
 
-// displayPadding returns extra vertical whitespace to insert after a
-// non-timeline block (e.g. Panel) for breathing room.
-func displayPadding() string {
-	return "\n"
-}
-
 // needsSpacer is set after a timeline card prints to signal that
 // the next card should be preceded by a connector line (" │\n").
 // The connector is emitted as a leading prefix so the last card
@@ -303,7 +297,6 @@ func ApplyColorMode(mode string) {
 func rebuildStyles() {
 	errorStyle = lipgloss.NewStyle().Foreground(Palette.Error)
 	mutedStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
 }
 
 // BosunTheme implements huh.Theme for use with huh forms.

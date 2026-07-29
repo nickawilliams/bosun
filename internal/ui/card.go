@@ -405,8 +405,6 @@ func (c *Card) PrintRewindable() func() {
 	}
 }
 
-// renderWithGlyph renders the card with a custom leading glyph.
-// Used by the spinner to animate the state indicator in place.
 // GlyphSlot is a placeholder for a body-item glyph that should track
 // the card's live glyph at render time — the animated spinner frame
 // while the card is running, the state glyph otherwise. Gather cards
@@ -415,6 +413,8 @@ func (c *Card) PrintRewindable() func() {
 // (private use) can't collide with real content.
 const GlyphSlot = "\uE000"
 
+// renderWithGlyph renders the card with a custom leading glyph.
+// Used by the spinner to animate the state indicator in place.
 func (c *Card) renderWithGlyph(glyph string) string {
 	out := c.renderInner(glyph)
 	if strings.Contains(out, GlyphSlot) {

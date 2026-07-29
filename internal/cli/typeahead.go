@@ -45,67 +45,6 @@ func typeaheadText(title, current string) (string, error) {
 	return value, nil
 }
 
-// typeaheadSelect fetches options with a spinner, then presents a filterable
-// single-select. If current is non-empty and matches an option, the selector
-// starts with it highlighted. Returns the selected value or an error if the
-// fetch fails or the user aborts.
-func typeaheadSelect(title, current string, fetch func() ([]string, error)) (string, error) {
-	slot := ui.NewSlot()
-
-	var items []string
-	if err := slot.Run("fetching "+title, func() error {
-		var e error
-		items, e = fetch()
-		return e
-	}); err != nil {
-		return "", err
-	}
-
-	if len(items) == 0 {
-		slot.Clear()
-		ui.Skip("no " + title + " found")
-		return "", nil
-	}
-
-	// Move the current value to the front so it's visible and pre-selected.
-	if current != "" {
-		for i, item := range items {
-			if item == current && i > 0 {
-				reordered := make([]string, 0, len(items))
-				reordered = append(reordered, current)
-				reordered = append(reordered, items[:i]...)
-				reordered = append(reordered, items[i+1:]...)
-				items = reordered
-				break
-			}
-		}
-	}
-
-	opts := make([]huh.Option[string], len(items))
-	for i, item := range items {
-		opts[i] = huh.NewOption(item, item)
-	}
-
-	selected := current
-	height := min(len(items), maxSelectHeight)
-	slot.Show(ui.NewCard(ui.CardInput, title).Tight())
-	if err := runForm(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Height(height).
-			Value(&selected),
-	); err != nil {
-		if errors.Is(err, ErrCancelled) {
-			return "", err
-		}
-		return "", err
-	}
-	slot.Clear()
-
-	ui.Selected(title, selected)
-	return selected, nil
-}
-
 // multiSelectConfig captures optional per-call behavior for
 // typeaheadMultiSelect, set via multiSelectOption.
 type multiSelectConfig struct {

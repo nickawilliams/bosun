@@ -67,10 +67,9 @@ func Excerpt(s string, max int) string {
 }
 
 var (
-	errorStyle   = lipgloss.NewStyle().Foreground(Palette.Error)
-	mutedStyle   = lipgloss.NewStyle().Foreground(Palette.Muted)
-	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
-	boldStyle    = lipgloss.NewStyle().Bold(true)
+	errorStyle = lipgloss.NewStyle().Foreground(Palette.Error)
+	mutedStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
+	boldStyle  = lipgloss.NewStyle().Bold(true)
 )
 
 // Success prints a success message with a check mark.

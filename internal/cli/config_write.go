@@ -273,16 +273,6 @@ func setConfigValues(path string, kvs map[string]any) error {
 	return writeConfigAtomic(v, path)
 }
 
-// setConfigMap sets a map value at a key in a config file.
-func setConfigMap(path, key string, values map[string]string) error {
-	v := viper.New()
-	v.SetConfigFile(path)
-	_ = v.ReadInConfig()
-
-	v.Set(key, values)
-	return writeConfigAtomic(v, path)
-}
-
 // setConfigListValue sets a list value at a key in a config file.
 func setConfigListValue(path, key string, values []string) error {
 	v := viper.New()
