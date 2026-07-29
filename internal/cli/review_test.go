@@ -57,9 +57,11 @@ func TestPlanSync(t *testing.T) {
 		Assignees:          []string{"alice"},
 	}
 
-	t.Run("reconciles adds and removes", func(t *testing.T) {
-		// Want carol+alice as reviewers (drop bob), no teams (drop backend),
-		// assignee dave (drop alice).
+	t.Run("reconciles additively", func(t *testing.T) {
+		// Want carol+alice as reviewers and assignee dave. bob and the
+		// backend team aren't in the wanted set but stay untouched —
+		// reconciliation never removes (out-of-band humans are signal,
+		// not drift).
 		s := planSync(existing,
 			[]string{"carol", "alice"}, nil, []string{"dave"},
 			"Old title", "Old body", "main")
@@ -67,17 +69,8 @@ func TestPlanSync(t *testing.T) {
 		if !reflect.DeepEqual(s.addRevs, []string{"carol"}) {
 			t.Errorf("addRevs = %v", s.addRevs)
 		}
-		if !reflect.DeepEqual(s.removeRevs, []string{"bob"}) {
-			t.Errorf("removeRevs = %v", s.removeRevs)
-		}
-		if !reflect.DeepEqual(s.removeTeams, []string{"backend"}) {
-			t.Errorf("removeTeams = %v", s.removeTeams)
-		}
 		if !reflect.DeepEqual(s.addAsns, []string{"dave"}) {
 			t.Errorf("addAsns = %v", s.addAsns)
-		}
-		if !reflect.DeepEqual(s.removeAsns, []string{"alice"}) {
-			t.Errorf("removeAsns = %v", s.removeAsns)
 		}
 		if s.contentChanged {
 			t.Errorf("contentChanged = true, want false (title/body/base unchanged)")
@@ -146,9 +139,9 @@ func TestSyncSummary(t *testing.T) {
 			want: "content",
 		},
 		{
-			name: "reviewers added and removed",
-			s:    &prState{addRevs: []string{"a"}, removeRevs: []string{"b", "c"}},
-			want: "+1/-2 rev",
+			name: "reviewers added",
+			s:    &prState{addRevs: []string{"a", "b", "c"}},
+			want: "+3 rev",
 		},
 		{
 			name: "assignees added only",
@@ -157,13 +150,13 @@ func TestSyncSummary(t *testing.T) {
 		},
 		{
 			name: "teams count toward reviewers",
-			s:    &prState{addTeams: []string{"t"}, removeRevs: []string{"b"}},
-			want: "+1/-1 rev",
+			s:    &prState{addTeams: []string{"t"}},
+			want: "+1 rev",
 		},
 		{
 			name: "everything",
-			s:    &prState{contentChanged: true, addRevs: []string{"a"}, removeAsns: []string{"x"}},
-			want: "content +1 rev -1 asn",
+			s:    &prState{contentChanged: true, addRevs: []string{"a"}, addAsns: []string{"x"}},
+			want: "content +1 rev +1 asn",
 		},
 	}
 	for _, tt := range tests {

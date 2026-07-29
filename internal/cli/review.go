@@ -350,12 +350,9 @@ func reviewTargetRow(rc *repoContext, on bool) (glyph, content string) {
 type prState struct {
 	pr code.PullRequest
 
-	addRevs     []string
-	addTeams    []string
-	addAsns     []string
-	removeRevs  []string
-	removeTeams []string
-	removeAsns  []string
+	addRevs  []string
+	addTeams []string
+	addAsns  []string
 
 	contentChanged bool
 	title          string
@@ -363,11 +360,15 @@ type prState struct {
 	base           string
 }
 
-// planSync computes the deltas needed to reconcile an existing PR to the
-// requested state: reviewers/teams/assignees to add and remove, plus
-// whether title/body/base differ and must be overwritten. The result's
-// remove* sets are empty for a fresh create (callers pass that path their
-// own full add* sets directly).
+// planSync computes the deltas needed to reconcile an existing PR to
+// the requested state: reviewers/teams/assignees to ADD, plus whether
+// title/body/base differ and must be overwritten.
+//
+// Reconciliation is deliberately additive-only: config and flags say
+// who must be on the PR, not who may be. A reviewer or assignee a
+// teammate added out-of-band is collaboration signal, not config
+// drift — stripping them (which reconcile-to-config did) silently
+// undid a human's decision on every re-run.
 //
 // A wanted reviewer counts as satisfied when they're pending
 // (RequestedReviewers) OR have already submitted a review (ReviewedBy)
@@ -377,16 +378,13 @@ type prState struct {
 func planSync(existing code.PullRequest, reviewers, teamReviewers, assignees []string, title, body, base string) *prState {
 	satisfiedRevs := append(append([]string{}, existing.RequestedReviewers...), existing.ReviewedBy...)
 	return &prState{
-		pr:          existing,
-		addRevs:     diffCaseInsensitive(reviewers, satisfiedRevs),
-		removeRevs:  diffCaseInsensitive(existing.RequestedReviewers, reviewers),
-		addTeams:    diffCaseInsensitive(teamReviewers, existing.RequestedTeams),
-		removeTeams: diffCaseInsensitive(existing.RequestedTeams, teamReviewers),
-		addAsns:     diffCaseInsensitive(assignees, existing.Assignees),
-		removeAsns:  diffCaseInsensitive(existing.Assignees, assignees),
-		title:       title,
-		body:        body,
-		base:        base,
+		pr:       existing,
+		addRevs:  diffCaseInsensitive(reviewers, satisfiedRevs),
+		addTeams: diffCaseInsensitive(teamReviewers, existing.RequestedTeams),
+		addAsns:  diffCaseInsensitive(assignees, existing.Assignees),
+		title:    title,
+		body:     body,
+		base:     base,
 		contentChanged: existing.Title != title ||
 			existing.Body != body ||
 			existing.BaseRef != base,
@@ -396,9 +394,7 @@ func planSync(existing code.PullRequest, reviewers, teamReviewers, assignees []s
 // hasChanges reports whether a sync has any delta to apply.
 func (s *prState) hasChanges() bool {
 	return s.contentChanged ||
-		len(s.addRevs)+len(s.removeRevs)+
-			len(s.addTeams)+len(s.removeTeams)+
-			len(s.addAsns)+len(s.removeAsns) > 0
+		len(s.addRevs)+len(s.addTeams)+len(s.addAsns) > 0
 }
 
 // syncSummary renders a compact delta summary for an in-place PR update,
@@ -408,11 +404,11 @@ func syncSummary(s *prState) string {
 	if s.contentChanged {
 		parts = append(parts, "content")
 	}
-	if a, r := len(s.addRevs)+len(s.addTeams), len(s.removeRevs)+len(s.removeTeams); a+r > 0 {
-		parts = append(parts, countPair(a, r)+" rev")
+	if a := len(s.addRevs) + len(s.addTeams); a > 0 {
+		parts = append(parts, countPair(a, 0)+" rev")
 	}
-	if a, r := len(s.addAsns), len(s.removeAsns); a+r > 0 {
-		parts = append(parts, countPair(a, r)+" asn")
+	if a := len(s.addAsns); a > 0 {
+		parts = append(parts, countPair(a, 0)+" asn")
 	}
 	return strings.Join(parts, " ")
 }
@@ -854,19 +850,9 @@ func newReviewCmd() *cobra.Command {
 									ui.Fail(fmt.Sprintf("%s: reviewers: %v", repoDisplayName, err))
 								}
 							}
-							if len(state.removeRevs) > 0 || len(state.removeTeams) > 0 {
-								if err := host.RemoveReviewers(ctx, owner, repoName, pr.Number, state.removeRevs, state.removeTeams); err != nil {
-									ui.Fail(fmt.Sprintf("%s: remove reviewers: %v", repoDisplayName, err))
-								}
-							}
 							if len(state.addAsns) > 0 {
 								if err := host.AddAssignees(ctx, owner, repoName, pr.Number, state.addAsns); err != nil {
 									ui.Fail(fmt.Sprintf("%s: assignees: %v", repoDisplayName, err))
-								}
-							}
-							if len(state.removeAsns) > 0 {
-								if err := host.RemoveAssignees(ctx, owner, repoName, pr.Number, state.removeAsns); err != nil {
-									ui.Fail(fmt.Sprintf("%s: remove assignees: %v", repoDisplayName, err))
 								}
 							}
 							return nil
