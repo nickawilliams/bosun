@@ -135,13 +135,18 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 // aborts while a sibling carries on. Commands that have a hard
 // dependency on detail fields can still short-circuit by checking
 // `detail.Key == ""`.
-func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside func()) issue.Issue {
+// The fetch error is returned alongside the detail (nil when no
+// tracker is configured) so commands whose mutations are keyed on the
+// issue can branch on issue.ErrNotFound — a definitive "no such key"
+// — without giving up the render-and-continue posture for transient
+// failures.
+func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside func()) (issue.Issue, error) {
 	var detail issue.Issue
 	var fetchErr error
 
 	tracker, err := newIssueTracker()
 	if err != nil || tracker == nil {
-		return detail
+		return detail, nil
 	}
 
 	// fn always returns nil so RunCardReplace takes the successCard
@@ -163,7 +168,7 @@ func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside 
 		return buildWorkspaceStoryCard(detail, issueKey, fetchErr == nil)
 	})
 
-	return detail
+	return detail, fetchErr
 }
 
 // emitLifecyclePreamble renders the visual preamble shown at the
@@ -173,7 +178,7 @@ func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside 
 // symbol so call sites read as intent rather than mechanics. Future
 // expansion of the preamble lands in the shared helper and every
 // command inherits the change.
-func emitLifecyclePreamble(ctx context.Context, issueKey string) issue.Issue {
+func emitLifecyclePreamble(ctx context.Context, issueKey string) (issue.Issue, error) {
 	return emitWorkspaceIssuePreamble(ctx, issueKey, nil)
 }
 

@@ -34,7 +34,7 @@ func newCleanupCmd() *cobra.Command {
 			ctx := cmd.Context()
 			g := git.New()
 
-			_ = emitLifecyclePreamble(ctx, cc.Issue)
+			_, _ = emitLifecyclePreamble(ctx, cc.Issue)
 
 			// Workspace-scoped repos carry the worktree path on
 			// Repository.Path; the safety check uses that for its

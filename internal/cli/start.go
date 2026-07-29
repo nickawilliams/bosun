@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
@@ -38,7 +40,15 @@ func newStartCmd() *cobra.Command {
 			// preamble. Tracker outages render a Failed card and
 			// continue with zero detail — start gracefully degrades by
 			// using the issue key as the branch name (no slug prompt).
-			detail := emitLifecyclePreamble(ctx, issue)
+			// A definitive not-found is different: everything below
+			// mutates state keyed on the issue (branch, worktree,
+			// workspace — and the reuse-by-issue lookup then makes the
+			// name sticky for the key), so a typo'd key aborts here
+			// before anything is created for it.
+			detail, fetchErr := emitLifecyclePreamble(ctx, issue)
+			if errors.Is(fetchErr, issuepkg.ErrNotFound) {
+				return fmt.Errorf("issue %s not found — nothing was created for it", issue)
+			}
 
 			// One workspace per issue: if a workspace already exists
 			// for this issue, reuse its name as the branch name and

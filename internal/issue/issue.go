@@ -3,7 +3,16 @@ package issue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrNotFound reports that the tracker definitively knows no issue by
+// the given key — as opposed to a transient failure where the issue's
+// existence couldn't be determined. Callers that mutate state keyed on
+// the issue (start's workspace provisioning) branch on this to abort
+// before creating anything for a typo'd key, while degrading
+// gracefully on mere connectivity problems.
+var ErrNotFound = errors.New("issue not found")
 
 // Issue represents an issue from a tracker.
 type Issue struct {

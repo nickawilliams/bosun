@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -581,7 +582,13 @@ func TestAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetIssue() should error for 404")
 	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Errorf("error should contain status code, got: %v", err)
+	// A 404 is the tracker definitively saying "no such issue" — it
+	// maps to the typed sentinel so provisioning commands (start) can
+	// abort before creating state keyed on a typo'd issue.
+	if !errors.Is(err, issue.ErrNotFound) {
+		t.Errorf("404 should map to issue.ErrNotFound, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "PROJ-999") {
+		t.Errorf("error should identify the issue key, got: %v", err)
 	}
 }

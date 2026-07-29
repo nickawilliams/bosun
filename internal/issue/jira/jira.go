@@ -72,6 +72,9 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,status,issuetype,description", issueKey)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, issue.ErrNotFound)
+		}
 		return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, err)
 	}
 	defer func() { _ = resp.Body.Close() }()

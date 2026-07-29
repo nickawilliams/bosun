@@ -53,7 +53,7 @@ func newReleaseCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			detail := emitLifecyclePreamble(ctx, issue)
+			detail, _ := emitLifecyclePreamble(ctx, issue)
 			currentStatus := detail.Status
 
 			pipeline, pipelineErr := newCICD()

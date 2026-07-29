@@ -32,7 +32,7 @@ func newPreviewCmd() *cobra.Command {
 			issueKey := cc.Issue
 
 			ctx := cmd.Context()
-			detail := emitLifecyclePreamble(ctx, issueKey)
+			detail, _ := emitLifecyclePreamble(ctx, issueKey)
 			currentStatus := detail.Status
 			issueTitle := detail.Title
 			issueType := detail.Type
