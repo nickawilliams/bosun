@@ -30,13 +30,15 @@ const (
 // classifyServiceDeploy decides one service's production action from the
 // repo-level tag containing the work (T; "" = no release contains it)
 // and the service's currently-deployed tag (D; "" = never deployed when
-// deployedKnown, else undeterminable). Pure.
+// deployedKnown, else undeterminable). explicit marks a --tag override
+// — an operator naming exactly what to ship. Pure.
 //
-//	workTag == ""          → block  (no release contains this work)
-//	!deployedKnown         → go     (can't verify what's live → deploy, permissive)
-//	D == ""                → go     (first deploy)
-//	compareSemverTag(D,T)≥0 → skip   (already live at D / D newer → would roll back)
-//	else                   → go     (D → T)
+//	workTag == ""            → block  (no release contains this work)
+//	!deployedKnown           → go     (can't verify what's live → deploy, permissive)
+//	D == ""                  → go     (first deploy)
+//	compareSemverTag(D,T)≥0  → skip   (already live at D / D newer → would roll back)
+//	  …unless explicit, D≠T  → go     (a --tag naming an older release IS a rollback request)
+//	else                     → go     (D → T)
 //
 // workTag (the release containing the workspace's work) is the GATE;
 // deployTag (the workspace release by default, --tag to override) is
@@ -47,7 +49,7 @@ const (
 // Detail strings follow the plan-detail grammar — the state/diff first,
 // any why as a trailing parenthetical — except the block reason, which
 // has no diff and stays plain (the plan wraps it, cards show it as-is).
-func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown bool) (deployState, string) {
+func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown, explicit bool) (deployState, string) {
 	if workTag == "" {
 		return deployBlock, "no release contains this work — run prerelease"
 	}
@@ -58,6 +60,9 @@ func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown
 		return deployGo, "→ " + deployTag + " (first deploy)"
 	}
 	if compareSemverTag(deployedTag, deployTag) >= 0 {
+		if explicit && deployedTag != deployTag {
+			return deployGo, deployedTag + " → " + deployTag + " (rollback, --tag)"
+		}
 		return deploySkip, deployedTag + " (already live)"
 	}
 	return deployGo, deployedTag + " → " + deployTag
@@ -304,7 +309,7 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 		}
 	}
 
-	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployTag, st.deployedTag, deployedKnown)
+	st.state, st.reason = classifyServiceDeploy(st.workTag, st.deployTag, st.deployedTag, deployedKnown, r.tagOverride != "")
 	return st
 }
 

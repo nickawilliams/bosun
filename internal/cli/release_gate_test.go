@@ -17,22 +17,28 @@ func TestClassifyServiceDeploy(t *testing.T) {
 		deployTag     string
 		deployedTag   string
 		deployedKnown bool
+		explicit      bool
 		wantState     deployState
 		wantReason    string
 	}{
-		{"no release contains work → block", "", "v1.2.5", "", true, deployBlock, "no release contains this work — run prerelease"},
-		{"no release wins over deployed → block", "", "v1.2.5", "v1.2.3", true, deployBlock, "no release contains this work — run prerelease"},
-		{"unknown deployed → go (permissive)", "v1.2.4", "v1.2.5", "", false, deployGo, "→ v1.2.5 (deployed state unknown)"},
-		{"never deployed → first deploy", "v1.2.4", "v1.2.5", "", true, deployGo, "→ v1.2.5 (first deploy)"},
-		{"behind → deploy", "v1.2.4", "v1.2.5", "v1.2.3", true, deployGo, "v1.2.3 → v1.2.5"},
-		{"equal to deploy tag → skip", "v1.2.4", "v1.2.5", "v1.2.5", true, deploySkip, "v1.2.5 (already live)"},
-		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", "v1.2.6", true, deploySkip, "v1.2.6 (already live)"},
+		{"no release contains work → block", "", "v1.2.5", "", true, false, deployBlock, "no release contains this work — run prerelease"},
+		{"no release wins over deployed → block", "", "v1.2.5", "v1.2.3", true, false, deployBlock, "no release contains this work — run prerelease"},
+		{"unknown deployed → go (permissive)", "v1.2.4", "v1.2.5", "", false, false, deployGo, "→ v1.2.5 (deployed state unknown)"},
+		{"never deployed → first deploy", "v1.2.4", "v1.2.5", "", true, false, deployGo, "→ v1.2.5 (first deploy)"},
+		{"behind → deploy", "v1.2.4", "v1.2.5", "v1.2.3", true, false, deployGo, "v1.2.3 → v1.2.5"},
+		{"equal to deploy tag → skip", "v1.2.4", "v1.2.5", "v1.2.5", true, false, deploySkip, "v1.2.5 (already live)"},
+		{"deployed newer → skip (rollback guard)", "v1.2.4", "v1.2.5", "v1.2.6", true, false, deploySkip, "v1.2.6 (already live)"},
 		// D at the work's release but behind the deploy tag → still deploys.
-		{"at workTag, behind deployTag → deploy", "v1.2.4", "v1.2.5", "v1.2.4", true, deployGo, "v1.2.4 → v1.2.5"},
+		{"at workTag, behind deployTag → deploy", "v1.2.4", "v1.2.5", "v1.2.4", true, false, deployGo, "v1.2.4 → v1.2.5"},
+		// An explicit --tag naming an older release is a rollback
+		// request — the operator gets what they asked for, labeled.
+		{"explicit --tag older than deployed → rollback deploy", "v1.2.4", "v1.2.3", "v1.2.6", true, true, deployGo, "v1.2.6 → v1.2.3 (rollback, --tag)"},
+		// Explicit but identical to what's live: still nothing to do.
+		{"explicit --tag already live → skip", "v1.2.4", "v1.2.6", "v1.2.6", true, true, deploySkip, "v1.2.6 (already live)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			state, reason := classifyServiceDeploy(tt.workTag, tt.deployTag, tt.deployedTag, tt.deployedKnown)
+			state, reason := classifyServiceDeploy(tt.workTag, tt.deployTag, tt.deployedTag, tt.deployedKnown, tt.explicit)
 			if state != tt.wantState {
 				t.Errorf("state = %v, want %v", state, tt.wantState)
 			}
