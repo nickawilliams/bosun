@@ -1,5 +1,5 @@
 .nh
-.TH "BOSUN" "1" "Jun 2026" "bosun" "User Commands"
+.TH "BOSUN" "1" "Jul 2026" "bosun" "User Commands"
 
 .SH NAME
 bosun \- Automate SDLC lifecycle tasks
@@ -12,14 +12,14 @@ Automate SDLC lifecycle tasks
 
 .SH OPTIONS
 .TP
+\fB\-a\fP, \fB\-\-approve\fP
+Approve the plan without prompting.
+.TP
 \fB\-\-dry\-run\fP
 Show what would happen without making changes.
 .TP
 \fB\-\-interactive\fP
 Prompt for configurable values.
-.TP
-\fB\-y\fP, \fB\-\-yes\fP
-Skip confirmation prompt.
 .TP
 \fB\-h\fP, \fB\-\-help\fP
 Display help and exit.
@@ -48,7 +48,7 @@ Prepare release artifacts
 Deploy to production
 .TP
 \fBcleanup\fP
-Remove workspace and feature branches
+Tear down a workspace's previews, branches, and worktrees
 .TP
 \fBconfig\fP
 View and manage bosun configuration
