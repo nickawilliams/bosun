@@ -91,16 +91,28 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 		for _, n := range filterNames {
 			filter[n] = true
 		}
+		matched := make(map[string]bool, len(filterNames))
 		var filtered []Repository
 		for _, r := range repositories {
 			if filter[r.Name] {
+				matched[r.Name] = true
 				filtered = append(filtered, r)
 			}
 		}
-		if len(filtered) == 0 {
+		// Every requested name must match — silently dropping a typo'd
+		// name while its siblings proceed reads as success for an
+		// operation that never happened (`workspace rm api typo`
+		// removed api and said nothing about typo).
+		var unknown []string
+		for _, n := range filterNames {
+			if !matched[n] {
+				unknown = append(unknown, n)
+			}
+		}
+		if len(unknown) > 0 {
 			return nil, fmt.Errorf(
-				"no repositories matched filter %v (available: %s)",
-				filterNames, repositoryNames(repositories),
+				"no repositories matched %s (available: %s)",
+				strings.Join(unknown, ", "), repositoryNames(repositories),
 			)
 		}
 		repositories = filtered

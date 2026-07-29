@@ -436,10 +436,23 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 			}
 			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 
-			plan := ui.NewPlan()
-			for _, r := range repositories {
-				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+			// Plan from the workspace's ACTUAL contents (Status), not
+			// the configured repo list — Remove acts on what's in the
+			// workspace, and the confirmation card must match: no rows
+			// for configured repos absent from this workspace, and the
+			// per-repo branch (local + remote) deletion disclosed.
+			statuses, err := mgr.Status(cmd.Context(), name)
+			if err != nil {
+				return err
 			}
+			plan := ui.NewPlan()
+			for _, s := range statuses {
+				plan.Add(ui.PlanDestroy, "worktree", "repo", s.Name, name)
+				if s.Branch != "" && s.Branch != "(unknown)" {
+					plan.Add(ui.PlanDestroy, "branch", "repo", s.Name, fmt.Sprintf("%s (local + remote)", s.Branch))
+				}
+			}
+			plan.Add(ui.PlanDestroy, "directory", "workspace", name, "")
 
 			// movedFrom is set inside the apply action if the process is
 			// standing in the workspace about to disappear; surfaced as a

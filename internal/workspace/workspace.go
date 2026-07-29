@@ -291,12 +291,22 @@ func (m *Manager) RemoveRepositories(ctx context.Context, name string, repositor
 		}
 	}
 
+	// Validate every target's source path BEFORE destroying anything —
+	// erroring mid-loop would leave a partially-removed workspace with
+	// some branches already deleted.
+	var missing []string
+	for _, s := range targets {
+		if _, ok := repositoryPath[s.Name]; !ok {
+			missing = append(missing, s.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("source repository path unknown for %s: provide it via repositories config", strings.Join(missing, ", "))
+	}
+
 	// Remove worktrees and branches.
 	for _, s := range targets {
-		srcPath, ok := repositoryPath[s.Name]
-		if !ok {
-			return fmt.Errorf("source repository path unknown for %q: provide it via repositories config", s.Name)
-		}
+		srcPath := repositoryPath[s.Name]
 		worktreePath := filepath.Join(wsPath, s.Name)
 
 		if err := m.vcs.RemoveWorktree(ctx, srcPath, worktreePath, force); err != nil {
