@@ -130,13 +130,22 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		// anything else — not-required failures and errNotConfigured —
 		// counts as a warning and uses the warn glyph (!) so the row's
 		// visible state matches the summary count category.
-		if hc.Required && !errors.Is(checkErr, errNotConfigured) {
+		if errors.Is(checkErr, errNotConfigured) {
+			*warned++
+			g.SkipValue(hc.Name, reason, alignWidth)
+			return
+		}
+		if hc.Required {
 			*failed++
 			g.FailValue(hc.Name, reason, alignWidth)
 			return
 		}
+		// Optional integration that IS configured but failing — same
+		// warn category (it doesn't gate the run) but labeled: a broken
+		// token and an absent integration are different problems, and
+		// the row must not read as "just not set up".
 		*warned++
-		g.SkipValue(hc.Name, reason, alignWidth)
+		g.SkipValue(hc.Name, "configured but failing — "+reason, alignWidth)
 		return
 	}
 	*passed++
