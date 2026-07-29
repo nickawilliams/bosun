@@ -209,7 +209,6 @@ func TestWrapForTimeline(t *testing.T) {
 	})
 }
 
-
 // TestMultiLineSubtitleKeepsConnector locks the timeline gutter on
 // multi-line subtitles: every physical line after the card's first
 // must carry the connector prefix (regression: an embedded-newline

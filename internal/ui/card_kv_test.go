@@ -78,7 +78,6 @@ func TestCardKVNarrowClampKeepsLinesBounded(t *testing.T) {
 		KV(wideKey, long).Render())
 
 	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
-	const maxContent = 75
 
 	var keyLine, contLines int
 	for _, l := range lines {
