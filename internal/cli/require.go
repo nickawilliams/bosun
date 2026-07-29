@@ -27,7 +27,7 @@ func requireConfig(keys ...string) error {
 		}
 
 		if ck, groupName, ok := findConfigKey(key); ok {
-			if viper.GetString(fullKey(groupName, ck)) != "" {
+			if ensureConfigValue(groupName, ck) {
 				continue
 			}
 			if err := resolveConfigKey(groupName, ck, false); err != nil {
@@ -36,8 +36,12 @@ func requireConfig(keys ...string) error {
 			continue
 		}
 
-		// Unknown key — just check if it's set.
+		// Unknown key — just check if it's set (config or BOSUN_* env).
 		if viper.GetString(key) != "" {
+			continue
+		}
+		if v := os.Getenv(envVarForKey(key)); v != "" {
+			viper.Set(key, v)
 			continue
 		}
 		if !isInteractive() {
@@ -54,6 +58,27 @@ func requireConfig(keys ...string) error {
 	}
 
 	return nil
+}
+
+// ensureConfigValue reports whether a schema key already has an
+// effective value: viper (config file), or an env var — the key's
+// explicit EnvVar or the automatic BOSUN_* name. Env-only values are
+// materialized into viper so downstream bare viper.GetString reads
+// (the provider factories) see exactly what this check saw. Bare
+// viper misses both env forms for schema keys (no SetEnvKeyReplacer;
+// explicit EnvVar names like GITHUB_TOKEN aren't bound at all), which
+// used to make `config check` report a group green while the same
+// group's requireConfig re-prompted for the token.
+func ensureConfigValue(groupName string, ck ConfigKey) bool {
+	fk := fullKey(groupName, ck)
+	if viper.GetString(fk) != "" {
+		return true
+	}
+	if v := effectiveEnvValue(groupName, ck); v != "" {
+		viper.Set(fk, v)
+		return true
+	}
+	return false
 }
 
 // resolveGroup ensures all required keys in a config group are populated.
@@ -174,8 +199,9 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt, silent b
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
 
-		// Already set (config file, env var via AutomaticEnv, etc.)?
-		if !forcePrompt && viper.GetString(fk) != "" {
+		// Already set — config file, or an env var materialized into
+		// viper by ensureConfigValue?
+		if !forcePrompt && ensureConfigValue(groupName, ck) {
 			continue
 		}
 
