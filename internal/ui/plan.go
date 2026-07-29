@@ -3,9 +3,25 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
 )
+
+// DetailRef is a render-safe, apply-writable detail slot. Apply
+// closures run on a worker goroutine while the plan card's render
+// loop reads the item every frame, so the value goes through an
+// atomic rather than a bare string the two goroutines would race on.
+type DetailRef struct{ v atomic.Value }
+
+// Set stores the resolved detail. Safe from any goroutine.
+func (r *DetailRef) Set(s string) { r.v.Store(s) }
+
+// Get returns the resolved detail, or "" while unresolved.
+func (r *DetailRef) Get() string {
+	s, _ := r.v.Load().(string)
+	return s
+}
 
 // PlanOp represents what kind of change a plan item describes.
 type PlanOp int
@@ -35,7 +51,7 @@ type PlanItem struct {
 	// resolved text lands in the same row that previously showed a
 	// "known after apply" placeholder. Sibling of Action.OpRef, which
 	// does the same for the operation glyph at assess time.
-	DetailRef *string
+	DetailRef *DetailRef
 }
 
 // Plan collects planned actions and renders them as a diff-style list.
@@ -55,11 +71,11 @@ func (p *Plan) Add(op PlanOp, action, subjectType, name, detail string) *Plan {
 }
 
 // AddWithDetailRef appends a plan item whose detail can be superseded
-// after apply: while *ref is empty the static detail renders (typically
+// after apply: while ref is unset the static detail renders (typically
 // carrying a "known after apply" placeholder); once an Apply closure
-// fills the ref, subsequent renders — including the card's final
+// calls ref.Set, subsequent renders — including the card's final
 // success frame — show the resolved text instead.
-func (p *Plan) AddWithDetailRef(op PlanOp, action, subjectType, name, detail string, ref *string) *Plan {
+func (p *Plan) AddWithDetailRef(op PlanOp, action, subjectType, name, detail string, ref *DetailRef) *Plan {
 	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail, DetailRef: ref})
 	return p
 }
@@ -291,8 +307,10 @@ func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
 	}
 
 	detail := item.Detail
-	if item.DetailRef != nil && *item.DetailRef != "" {
-		detail = *item.DetailRef
+	if item.DetailRef != nil {
+		if d := item.DetailRef.Get(); d != "" {
+			detail = d
+		}
 	}
 	c := fmt.Sprintf("%s  %s  %s  %s",
 		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),

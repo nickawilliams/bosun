@@ -105,7 +105,7 @@ func newCreateCmd() *cobra.Command {
 			// plan row carries a placeholder that Apply supersedes via
 			// DetailRef with the OSC-8-linked key — the plan card's
 			// success frame is the record, so no trailing details card.
-			var createdDetail string
+			var createdDetail ui.DetailRef
 			placeholder := lipgloss.NewStyle().Foreground(ui.Palette.Muted).
 				Render("(known after apply)")
 
@@ -128,7 +128,7 @@ func newCreateCmd() *cobra.Command {
 							Type:        issueType,
 						})
 						if createErr == nil && created.Key != "" {
-							createdDetail = osc8Link(created.URL, ui.Keyword(created.Key))
+							createdDetail.Set(osc8Link(created.URL, ui.Keyword(created.Key)))
 						}
 						return createErr
 					},

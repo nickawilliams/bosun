@@ -42,7 +42,7 @@ type Action struct {
 	// "known after apply" placeholder, Apply fills the ref with the
 	// resolved value (created issue key, returned URL), and the plan
 	// card's final frame renders it. Sibling of OpRef.
-	DetailRef *string
+	DetailRef *ui.DetailRef
 }
 
 // op returns the effective operation, preferring OpRef if set.

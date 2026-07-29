@@ -304,7 +304,7 @@ func TestPlanSymbol(t *testing.T) {
 // the ref, subsequent renders — the plan card's final frame — show the
 // resolved text instead.
 func TestPlanDetailRef(t *testing.T) {
-	var resolved string
+	var resolved DetailRef
 	p := NewPlan().AddWithDetailRef(PlanCreate, "issue", "project", "EX", `story: "x" → (known after apply)`, &resolved)
 
 	before := strings.Join(p.RenderItemLines(), "\n")
@@ -312,7 +312,7 @@ func TestPlanDetailRef(t *testing.T) {
 		t.Errorf("pre-apply render missing placeholder: %q", before)
 	}
 
-	resolved = `story: "x" → EX-123`
+	resolved.Set(`story: "x" → EX-123`)
 	after := strings.Join(p.RenderItemLines(), "\n")
 	if !strings.Contains(after, "EX-123") {
 		t.Errorf("post-apply render missing resolved detail: %q", after)
