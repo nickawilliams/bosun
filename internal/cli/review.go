@@ -889,12 +889,12 @@ func newReviewCmd() *cobra.Command {
 				defer notifier.Close()
 			}
 
-			// Resolve GitHub avatar for card icons.
+			// Resolve GitHub avatar for card icons — from the login the
+			// reviewer-exclusion pass already fetched (best-effort; an
+			// empty selfUser just means no avatar).
 			var avatarURL string
-			if host != nil {
-				if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-					avatarURL = githubAvatarURL(user)
-				}
+			if selfUser != "" {
+				avatarURL = githubAvatarURL(selfUser)
 			}
 
 			// notifyItems renders every open PR in the workspace (existing
@@ -940,7 +940,13 @@ func newReviewCmd() *cobra.Command {
 					Type:   "channel",
 					Name:   reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
-						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)
+						// A failed lookup must not read as "no thread"
+						// — Apply would post a duplicate instead of
+						// updating the existing notification. ✗-row it.
+						ref, err := notifier.FindThread(ctx, reviewChannel, issue)
+						if err != nil {
+							return 0, "", fmt.Errorf("finding notification thread: %w", err)
+						}
 						if ref.Timestamp == "" {
 							return ActionNeeded, "new notification", nil
 						}

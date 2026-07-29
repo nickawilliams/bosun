@@ -102,7 +102,13 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 			updatedAt  time.Time
 			updatedMu  sync.Mutex
 		)
-		previewProvider, _ := newPreviewProvider(wsName)
+		// A failed provider construction renders "(unavailable)" via
+		// previewErr — "(none)" would misread a misconfigured provider
+		// as "no env bound".
+		previewProvider, provErr := newPreviewProvider(wsName)
+		if previewProvider == nil && provErr != nil {
+			previewErr = provErr
+		}
 		emitWorkspaceIssuePreamble(ctx, issueKey, func() {
 			var wg sync.WaitGroup
 			if previewProvider != nil {

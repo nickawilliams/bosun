@@ -90,9 +90,6 @@ func newCleanupCmd() *cobra.Command {
 			tracker, _ := newIssueTracker()
 			cleanupRepos, _, err := emitCleanupReadiness(ctx, g, host, tracker, workspaceRepos, wsPath, cc.Issue, force)
 			if err != nil {
-				if errors.Is(err, ErrCancelled) {
-					return err
-				}
 				return err
 			}
 
@@ -223,11 +220,15 @@ func cleanupPreviewAction(_ context.Context, provider preview.Provider, issueKey
 				}
 				// Probe failure (network, indeterminate) — still
 				// attempt teardown so a registry entry doesn't strand.
+				// envName keeps the API value (possibly empty for the
+				// provider to resolve); only the plan detail shows the
+				// "(unknown)" placeholder.
 				envName = env.Name
-				if envName == "" {
-					envName = "(unknown)"
+				detail := envName
+				if detail == "" {
+					detail = "(unknown)"
 				}
-				return ActionNeeded, envName, nil
+				return ActionNeeded, detail, nil
 			}
 			envName = env.Name
 			return ActionNeeded, envName, nil
