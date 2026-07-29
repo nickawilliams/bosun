@@ -154,6 +154,14 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 					// fall through with empty metaEnv
 				case force && isProbeError(err):
 					metaForceURL = probeURL(err)
+					// The returned env still carries the stored binding
+					// (name, URL, Probed=false). Keep it so resolution
+					// routes through the metaUnprobable arms — redeploy
+					// under the stored name — rather than Rows 1/2,
+					// where a freshly generated name would deploy and
+					// its Create would overwrite the binding, orphaning
+					// the (possibly live) existing env.
+					metaEnv = env
 				default:
 					return err
 				}
@@ -313,8 +321,8 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 				res.isCurrent = true
 			}
 		case metaUnprobable:
-			// No url_template — preserve today's behavior (redeploy with
-			// stored name, treat as modify).
+			// No url_template, or --force past a failed probe — redeploy
+			// with the stored name, treat as modify.
 			res.deployName = metaName
 			res.isRedeploy = true
 		default:
@@ -362,8 +370,12 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 				}
 				// Preserve the teardown decision from the parent branch —
 				// the conflict resolution may have generated a new name
-				// but the stale-metadata teardown still applies.
-				if res.teardownName != "" {
+				// but the stale-metadata teardown still applies. Unless
+				// the resolution landed on the metadata env itself (the
+				// user typed its name at the "new name" prompt): tearing
+				// that down would destroy the very env the resolution
+				// just declared current, and delete its binding.
+				if res.teardownName != "" && conflict.previewName != res.teardownName {
 					conflict.teardownName = res.teardownName
 				}
 				return conflict, nil
