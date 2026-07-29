@@ -874,3 +874,48 @@ func TestNotifyUpsertKeepsOldMessageWhenPostFails(t *testing.T) {
 		t.Error("chat.delete ran before the replacement post succeeded — old announcement destroyed")
 	}
 }
+
+// TestHasAnnouncementRecognizesOwnByAuthor locks the xoxc-token dedup
+// path: user tokens can't read message metadata back, so the exclusion
+// must also recognize the caller's own prior announcement by
+// author + mention — otherwise a re-run reads it as a foreign match
+// and skips the upsert, leaving the stale announcement in place.
+func TestHasAnnouncementRecognizesOwnByAuthor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/conversations.list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":       true,
+				"channels": []map[string]any{{"id": "C123", "name": "releases"}},
+			})
+		case "/auth.test":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user_id": "U-SELF"})
+		case "/conversations.history":
+			// Our own prior announcement — no readable metadata (xoxc),
+			// attributed by author, mentioning the issue key.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []map[string]any{
+					{
+						"text": "going out `api` v1.2.3 (PROJ-9)",
+						"ts":   "1111111111.111111",
+						"user": "U-SELF",
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	a := NewWithOptions("test-token", slackapi.OptionAPIURL(server.URL+"/"))
+
+	got, err := a.HasAnnouncement(context.Background(), "releases", "v1.2.3", "PROJ-9")
+	if err != nil {
+		t.Fatalf("HasAnnouncement() error: %v", err)
+	}
+	if got {
+		t.Error("own author-matched announcement counted as a foreign match")
+	}
+}

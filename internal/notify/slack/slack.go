@@ -554,12 +554,26 @@ func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query, excludeIs
 		return false, fmt.Errorf("fetching channel history: %w", err)
 	}
 
+	var selfUser, selfBot string
+	if excludeIssueKey != "" {
+		selfUser, selfBot = a.resolveSelf(ctx)
+	}
 	isOwn := func(msg slackapi.Message) bool {
-		if excludeIssueKey == "" || msg.Metadata.EventType != metadataEventType {
+		if excludeIssueKey == "" {
 			return false
 		}
-		key, _ := msg.Metadata.EventPayload["issue_key"].(string)
-		return key == excludeIssueKey
+		if msg.Metadata.EventType == metadataEventType {
+			key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+			if key == excludeIssueKey {
+				return true
+			}
+		}
+		// xoxc/user tokens can't read message metadata back, so an
+		// announcement this identity posted would otherwise read as a
+		// foreign match and the caller would skip the upsert, leaving
+		// the stale announcement in place. Mirror findOwnThread's
+		// author + mention recognition.
+		return messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, excludeIssueKey)
 	}
 
 	for _, msg := range resp.Messages {
