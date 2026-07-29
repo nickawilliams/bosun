@@ -36,6 +36,10 @@ type AffectedResult struct {
 	HasChanges bool
 	Services   []string // Services to deploy.
 	Skipped    []string // Services excluded (for display).
+	// StaleRemote marks a failed pre-diff fetch: detection ran against
+	// whatever origin/<default> the local clone last saw, so the diff
+	// may be stale. Rendered as a ▲ note on the repo's card rows.
+	StaleRemote bool
 }
 
 // prepareAffectedRepos runs the interactive pre-flight ahead of
@@ -352,8 +356,11 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 	if err != nil {
 		return AffectedResult{}, false, fmt.Errorf("%s: getting default branch: %w", r.Name, err)
 	}
-	// Fetch latest to ensure an accurate merge-base for the diff.
-	_ = g.Fetch(ctx, r.Path, "origin", defaultBranch)
+	// Fetch latest to ensure an accurate merge-base for the diff. A
+	// failed fetch (offline, auth) still detects against the local
+	// origin ref, but marks the result so the card says the diff may
+	// be stale instead of silently presenting it as current.
+	staleRemote := g.Fetch(ctx, r.Path, "origin", defaultBranch) != nil
 
 	changed, err := g.ChangedFiles(ctx, r.Path, "origin/"+defaultBranch)
 	if err != nil {
@@ -362,10 +369,11 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 
 	if len(changed) == 0 {
 		return AffectedResult{
-			RepoName: r.Name,
-			RepoPath: r.Path,
-			Branch:   branch,
-			Skipped:  services,
+			RepoName:    r.Name,
+			RepoPath:    r.Path,
+			Branch:      branch,
+			Skipped:     services,
+			StaleRemote: staleRemote,
 		}, true, nil
 	}
 
@@ -374,17 +382,19 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 	pathMap := resolveServicePaths(r.Name)
 	if pathMap == nil {
 		return AffectedResult{
-			RepoName:   r.Name,
-			RepoPath:   r.Path,
-			Branch:     branch,
-			HasChanges: true,
-			Services:   services,
+			RepoName:    r.Name,
+			RepoPath:    r.Path,
+			Branch:      branch,
+			HasChanges:  true,
+			Services:    services,
+			StaleRemote: staleRemote,
 		}, true, nil
 	}
 
 	result := matchServicePaths(r.Name, services, changed, pathMap)
 	result.RepoPath = r.Path
 	result.Branch = branch
+	result.StaleRemote = staleRemote
 	return result, true, nil
 }
 
@@ -824,6 +834,9 @@ func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *
 	}
 	for _, sr := range sources {
 		r := sr.res
+		if r.StaleRemote {
+			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, "remote fetch failed — diff may be stale")})
+		}
 		switch {
 		case withPRs && len(r.Services) == 0 && sr.prErr != nil:
 			// PR lookup failed — surface it regardless of whether the
