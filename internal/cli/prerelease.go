@@ -84,6 +84,12 @@ type releaseTarget struct {
 	// "closed" | "merged"), when a PR exists. Feeds the release gate:
 	// only a merged PR puts the workspace's work on the default branch.
 	workspacePRState string
+	// workspacePRErr records a failed PR lookup (list call, not
+	// enrichment). "Couldn't check for a PR" is not "no PR" — the
+	// gate fails closed on it with that reason rather than running
+	// the no-PR arm and mislabeling a transient API failure as
+	// "work not on the default branch".
+	workspacePRErr error
 	// workspacePRMergeableState and workspacePRReview are the PR's
 	// mergeability signals (GitHub mergeable_state + review decision),
 	// used to explain *why* an unmerged PR blocks the release
@@ -1266,6 +1272,12 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 		rt.workspacePRState = pr.State
 		rt.workspacePRMergeableState = pr.MergeableState
 		rt.workspacePRReview = pr.Review
+	} else {
+		// The adapter only errors when the list itself failed —
+		// enrichment failures degrade inside it — so this is
+		// "couldn't determine whether a PR exists", recorded for the
+		// gate to fail closed on rather than misread as "no PR".
+		rt.workspacePRErr = err
 	}
 
 	// Default branch — the release tag target (CreateRelease), the base
@@ -1411,6 +1423,14 @@ func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
 			}
 		}
 		rt.gate, rt.gateReason = gate, reason
+		return
+	}
+	// PR lookup failed — "couldn't check" is not "no PR". Fail closed
+	// with the honest reason instead of running the no-PR arm below
+	// and blaming the work for not being on the default branch.
+	if rt.workspacePRErr != nil {
+		rt.gate = gateBlock
+		rt.gateReason = "couldn't check for a PR — retry (code host error)"
 		return
 	}
 	// No PR — split "nothing beyond default" (skip) from "unmerged

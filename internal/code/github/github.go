@@ -112,7 +112,8 @@ func (a *Adapter) CreatePR(ctx context.Context, req code.CreatePRRequest) (code.
 }
 
 func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch string) (code.PullRequest, error) {
-	path := fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s&state=all", owner, repository, owner, branch)
+	path := fmt.Sprintf("/repos/%s/%s/pulls?head=%s&state=all",
+		owner, repository, url.QueryEscape(owner+":"+branch))
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return code.PullRequest{}, fmt.Errorf("fetching PR for branch: %w", err)
@@ -196,19 +197,25 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 
 	// Only enrich open PRs (including drafts) — for terminal states
 	// (merged / closed) the additional fields don't carry useful
-	// signal and the extra fetches would be wasted.
+	// signal and the extra fetches would be wasted. Enrichment is
+	// best-effort: the PR demonstrably exists (the list call above
+	// succeeded), and callers uniformly discard the whole value on a
+	// non-nil error — so a transient blip on these detail calls would
+	// misread as "no PR" (release gates hard-block on that). A failed
+	// enrichment degrades to MergeableState "unknown" (GitHub's own
+	// indeterminate value; canMergePR treats it as not mergeable) and
+	// an empty review decision. A returned error therefore always
+	// means the list itself failed — "couldn't determine", never
+	// "doesn't exist".
 	if state == "open" || state == "draft" {
-		mergeable, err := a.fetchMergeableState(ctx, owner, repository, raw.Number)
-		if err != nil {
-			return pr, fmt.Errorf("fetching PR mergeable state: %w", err)
+		if mergeable, err := a.fetchMergeableState(ctx, owner, repository, raw.Number); err == nil {
+			pr.MergeableState = mergeable
+		} else {
+			pr.MergeableState = "unknown"
 		}
-		pr.MergeableState = mergeable
-
-		review, err := a.fetchReviewDecision(ctx, owner, repository, raw.Number)
-		if err != nil {
-			return pr, fmt.Errorf("fetching PR review decision: %w", err)
+		if review, err := a.fetchReviewDecision(ctx, owner, repository, raw.Number); err == nil {
+			pr.Review = review
 		}
-		pr.Review = review
 	}
 
 	return pr, nil

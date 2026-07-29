@@ -575,6 +575,19 @@ func TestResolveReleaseGateFailsClosed(t *testing.T) {
 		}
 	})
 
+	t.Run("PR lookup failure → block with honest reason", func(t *testing.T) {
+		rt := base()
+		rt.defaultBranch = "main"
+		rt.workspacePRErr = errors.New("api down")
+		resolveReleaseGate(ctx, gateVCS{merged: true}, rt)
+		if rt.gate != gateBlock {
+			t.Fatalf("gate = %v, want gateBlock", rt.gate)
+		}
+		if !strings.Contains(rt.gateReason, "couldn't check for a PR") {
+			t.Errorf("reason = %q, want couldn't-check explanation, not a no-PR verdict", rt.gateReason)
+		}
+	})
+
 	t.Run("merged PR still allows", func(t *testing.T) {
 		rt := base()
 		rt.defaultBranch = "main"

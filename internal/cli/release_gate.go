@@ -225,10 +225,15 @@ func (r *deployTargetResolver) repoInfo(ctx context.Context, dt DeployTarget) de
 	// Work SHA: the workspace PR's merge commit when merged (on the
 	// default branch), else local HEAD. Mirrors prerelease's probe.
 	workSHA := ""
+	var prLookupErr error
 	if branch, berr := r.g.GetCurrentBranch(ctx, path); berr == nil && branch != "" {
-		if pr, perr := r.host.GetPRForBranch(ctx, dt.Owner, dt.Repo, branch); perr == nil &&
-			pr.State == "merged" && pr.MergeCommitSHA != "" {
-			workSHA = pr.MergeCommitSHA
+		pr, perr := r.host.GetPRForBranch(ctx, dt.Owner, dt.Repo, branch)
+		if perr == nil {
+			if pr.State == "merged" && pr.MergeCommitSHA != "" {
+				workSHA = pr.MergeCommitSHA
+			}
+		} else {
+			prLookupErr = perr
 		}
 	}
 	if workSHA == "" {
@@ -241,6 +246,15 @@ func (r *deployTargetResolver) repoInfo(ctx context.Context, dt DeployTarget) de
 		if tags, terr := r.g.TagsContaining(ctx, path, workSHA); terr == nil {
 			ri.workTag = lowestContainingReleaseTag(tags)
 		}
+	}
+	if ri.workTag == "" && prLookupErr != nil {
+		// Local HEAD found no containing tag AND the PR lookup failed:
+		// for a squash-merged branch, only the PR's merge commit maps
+		// to the containing release, so "no release contains this
+		// work" can't be distinguished from "couldn't see the PR". An
+		// ✗ row (fail closed) beats a deployBlock that misdirects the
+		// user to run prerelease again.
+		ri.err = fmt.Errorf("resolving work release: %w", prLookupErr)
 	}
 	r.cache[dt.RepoName] = ri
 	return ri
