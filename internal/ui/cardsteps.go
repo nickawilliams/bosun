@@ -78,21 +78,7 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 		s.Card.state = CardRunning
 	}
 
-	// Worker goroutine executes steps sequentially, reporting each
-	// completion. holdSpinner keeps every step's frame on screen long
-	// enough to read instead of strobing through fast items.
-	resultCh := make(chan error, 1)
-	go func() {
-		for _, s := range steps {
-			start := time.Now()
-			err := s.Run()
-			holdSpinner(start)
-			resultCh <- err
-			if err != nil {
-				return
-			}
-		}
-	}()
+	resultCh, quit := startStepWorker(steps)
 
 	sm := newCardStepsModel(steps, successor, prefix, resultCh)
 	p := tea.NewProgram(sm)
@@ -114,6 +100,7 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	} else {
 		stepErr = model.(cardStepsModel).err
 	}
+	close(quit)
 
 	if stepErr != nil {
 		return nil, stepErr
@@ -154,22 +141,20 @@ func RunCardStepsInto(steps []CardStep, finalView func() string) error {
 	}
 
 	prefix := spacerPrefix()
+
+	// No steps — nothing to animate (and the model's View would index
+	// an empty slice). Leave the final frame on screen exactly as a
+	// stepped run would: the caller owns the region from here.
+	if len(steps) == 0 {
+		fmt.Print(prefix + finalView())
+		return nil
+	}
+
 	for _, s := range steps {
 		s.Card.state = CardRunning
 	}
 
-	resultCh := make(chan error, 1)
-	go func() {
-		for _, s := range steps {
-			start := time.Now()
-			err := s.Run()
-			holdSpinner(start)
-			resultCh <- err
-			if err != nil {
-				return
-			}
-		}
-	}()
+	resultCh, quit := startStepWorker(steps)
 
 	sm := newCardStepsModel(steps, nil, prefix, resultCh)
 	sm.rawSuccessor = finalView
@@ -183,6 +168,7 @@ func RunCardStepsInto(steps []CardStep, finalView func() string) error {
 				break
 			}
 		}
+		close(quit)
 		if stepErr != nil {
 			fmt.Println(" " + stepErr.Error())
 			return stepErr
@@ -190,7 +176,41 @@ func RunCardStepsInto(steps []CardStep, finalView func() string) error {
 		fmt.Print(prefix + finalView())
 		return nil
 	}
+	close(quit)
 	return model.(cardStepsModel).err
+}
+
+// startStepWorker executes steps sequentially on a goroutine,
+// reporting each completion on the returned channel. holdSpinner
+// keeps every step's frame on screen long enough to read instead of
+// strobing through fast items. Closing quit stops the worker between
+// steps — the in-flight step still finishes (steps carry no context
+// to cancel), but no further step's side effects run — and unblocks
+// a pending send so an interrupted run never leaks the goroutine.
+func startStepWorker(steps []CardStep) (resultCh chan error, quit chan struct{}) {
+	resultCh = make(chan error, 1)
+	quit = make(chan struct{})
+	go func() {
+		for _, s := range steps {
+			select {
+			case <-quit:
+				return
+			default:
+			}
+			start := time.Now()
+			err := s.Run()
+			holdSpinner(start)
+			select {
+			case resultCh <- err:
+			case <-quit:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return resultCh, quit
 }
 
 type cardStepsModel struct {
@@ -252,6 +272,13 @@ func (m cardStepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			m.err = fmt.Errorf("interrupted")
+			// Flip the in-flight card out of CardRunning so the final
+			// frame doesn't show a forever-"running" glyph above the
+			// cancellation output.
+			if m.idx < len(m.steps) {
+				m.steps[m.idx].Card.state = CardFailed
+				m.steps[m.idx].Card.Subtitle("interrupted")
+			}
 			m.done = true
 			return m, tea.Quit
 		}
