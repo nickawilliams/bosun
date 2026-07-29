@@ -149,6 +149,9 @@ func newConfigEditCmd() *cobra.Command {
 			// common cases; truly exotic EDITOR values (quoted paths
 			// with spaces) would need shell parsing, which we punt on.
 			parts := strings.Fields(editor)
+			if len(parts) == 0 {
+				parts = []string{"vi"} // whitespace-only $EDITOR
+			}
 			c := exec.Command(parts[0], append(parts[1:], configPath)...)
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
@@ -197,6 +200,28 @@ func resolveConfigPath(global bool) (string, error) {
 	return filepath.Join(projectRoot, ".bosun", "config.yaml"), nil
 }
 
+// writeConfigAtomic persists v to path via temp-file + rename so a
+// crash mid-write can't truncate the config (viper's WriteConfigAs
+// writes in place). The temp file lives in the target's directory so
+// the rename stays atomic on one filesystem.
+func writeConfigAtomic(v *viper.Viper, path string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	if err := v.WriteConfigAs(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 // setConfigValue sets a key in a config file using a fresh viper instance
 // scoped to that file only. Handles dot-separated keys at any depth.
 // value is `any` so scalar strings, sub-maps, and slices all flow
@@ -207,7 +232,7 @@ func setConfigValue(path, key string, value any) error {
 	_ = v.ReadInConfig() // ignore error — file may not exist yet
 
 	v.Set(key, value)
-	return v.WriteConfigAs(path)
+	return writeConfigAtomic(v, path)
 }
 
 // printConfigWriteConfirmation renders the one-line "<verb> <key>
@@ -245,7 +270,7 @@ func setConfigValues(path string, kvs map[string]any) error {
 	for k, val := range kvs {
 		v.Set(k, val)
 	}
-	return v.WriteConfigAs(path)
+	return writeConfigAtomic(v, path)
 }
 
 // setConfigMap sets a map value at a key in a config file.
@@ -255,7 +280,7 @@ func setConfigMap(path, key string, values map[string]string) error {
 	_ = v.ReadInConfig()
 
 	v.Set(key, values)
-	return v.WriteConfigAs(path)
+	return writeConfigAtomic(v, path)
 }
 
 // setConfigListValue sets a list value at a key in a config file.
@@ -265,7 +290,7 @@ func setConfigListValue(path, key string, values []string) error {
 	_ = v.ReadInConfig()
 
 	v.Set(key, values)
-	return v.WriteConfigAs(path)
+	return writeConfigAtomic(v, path)
 }
 
 // unsetConfigValue removes a key from a config file. Returns true if
@@ -310,7 +335,25 @@ func unsetConfigValue(path, key string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("marshaling config: %w", err)
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return false, fmt.Errorf("writing config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return false, fmt.Errorf("writing config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return false, fmt.Errorf("writing config: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return false, fmt.Errorf("writing config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return false, fmt.Errorf("writing config: %w", err)
 	}
 	return true, nil
