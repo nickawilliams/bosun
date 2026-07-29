@@ -38,10 +38,13 @@ type CardStep struct {
 // return nil (the Services detection pattern).
 //
 // successor is evaluated after the last step completes, so it can
-// derive the final card from state the steps accumulated. A nil
-// successor vanishes: empty final frame, no-op rewind. On success the
-// returned rewind erases the successor block (same contract as
-// RunCardMorph).
+// derive the final card from state the steps accumulated. It MUST be
+// pure with respect to repeated calls: the program's final frame and
+// the rewind's line count come from separate evaluations, so a
+// successor whose render differs between calls erases the wrong
+// number of lines. A nil successor vanishes: empty final frame,
+// no-op rewind. On success the returned rewind erases the successor
+// block (same contract as RunCardMorph).
 func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	if IsRaw() {
 		for _, s := range steps {
@@ -66,10 +69,14 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	prefix := spacerPrefix()
 
 	// No steps — nothing to animate; just print the successor (or
-	// nothing) and hand back its rewind.
+	// nothing) and hand back its rewind. needsSpacer stays armed while
+	// the successor is on screen (matching the stepped path) and only
+	// the rewind restores it — resetting before the print left the
+	// next card without its comfy connector whenever prevSpacer was
+	// false.
 	if len(steps) == 0 {
-		needsSpacer = prevSpacer
 		if successor == nil {
+			needsSpacer = prevSpacer
 			return func() {}, nil
 		}
 		final := successor()
