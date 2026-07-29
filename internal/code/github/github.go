@@ -213,8 +213,9 @@ func (a *Adapter) GetPRForBranch(ctx context.Context, owner, repository, branch 
 		} else {
 			pr.MergeableState = "unknown"
 		}
-		if review, err := a.fetchReviewDecision(ctx, owner, repository, raw.Number); err == nil {
+		if review, reviewedBy, err := a.fetchReviewDecision(ctx, owner, repository, raw.Number); err == nil {
 			pr.Review = review
+			pr.ReviewedBy = reviewedBy
 		}
 	}
 
@@ -252,12 +253,16 @@ func (a *Adapter) fetchMergeableState(ctx context.Context, owner, repository str
 //
 // REST's reviews endpoint returns the full review history; we keep
 // only the latest review per user (later reviews supersede earlier
-// ones from the same person).
-func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository string, number int) (string, error) {
+// ones from the same person). Alongside the decision it returns the
+// set of users who submitted ANY review (including comment-only) —
+// GitHub drops them from requested_reviewers on submission, and
+// reconciliation needs them to avoid re-requesting completed
+// reviewers.
+func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository string, number int) (string, []string, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repository, number)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -269,12 +274,20 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository str
 		SubmittedAt string `json:"submitted_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&reviews); err != nil {
-		return "", fmt.Errorf("parsing reviews: %w", err)
+		return "", nil, fmt.Errorf("parsing reviews: %w", err)
 	}
 
-	// Latest non-COMMENTED/PENDING review per user wins.
+	// Latest non-COMMENTED/PENDING review per user wins for the
+	// decision; every submitter (PENDING excluded — those are
+	// unsubmitted drafts) counts as having reviewed.
 	latest := map[string]string{}
+	seenReviewer := map[string]bool{}
+	var reviewedBy []string
 	for _, r := range reviews {
+		if r.State != "PENDING" && r.User.Login != "" && !seenReviewer[r.User.Login] {
+			seenReviewer[r.User.Login] = true
+			reviewedBy = append(reviewedBy, r.User.Login)
+		}
 		// Skip COMMENTED and PENDING — they don't carry a decision.
 		if r.State != "APPROVED" && r.State != "CHANGES_REQUESTED" && r.State != "DISMISSED" {
 			continue
@@ -294,9 +307,9 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository str
 
 	switch {
 	case changesRequested:
-		return "changes_requested", nil
+		return "changes_requested", reviewedBy, nil
 	case approved:
-		return "approved", nil
+		return "approved", reviewedBy, nil
 	}
 
 	// No decisive reviews — check if any reviewers were requested
@@ -304,12 +317,12 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository str
 	// surface this; the PR detail's requested_reviewers does.
 	requested, err := a.hasRequestedReviewers(ctx, owner, repository, number)
 	if err != nil {
-		return "", err
+		return "", reviewedBy, err
 	}
 	if requested {
-		return "awaiting", nil
+		return "awaiting", reviewedBy, nil
 	}
-	return "", nil
+	return "", reviewedBy, nil
 }
 
 // hasRequestedReviewers returns true if the PR has any pending

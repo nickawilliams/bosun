@@ -368,10 +368,17 @@ type prState struct {
 // whether title/body/base differ and must be overwritten. The result's
 // remove* sets are empty for a fresh create (callers pass that path their
 // own full add* sets directly).
+//
+// A wanted reviewer counts as satisfied when they're pending
+// (RequestedReviewers) OR have already submitted a review (ReviewedBy)
+// — GitHub drops submitters from the pending list, so diffing against
+// pending alone re-requested completed reviewers on every run,
+// resetting their review state.
 func planSync(existing code.PullRequest, reviewers, teamReviewers, assignees []string, title, body, base string) *prState {
+	satisfiedRevs := append(append([]string{}, existing.RequestedReviewers...), existing.ReviewedBy...)
 	return &prState{
 		pr:          existing,
-		addRevs:     diffCaseInsensitive(reviewers, existing.RequestedReviewers),
+		addRevs:     diffCaseInsensitive(reviewers, satisfiedRevs),
 		removeRevs:  diffCaseInsensitive(existing.RequestedReviewers, reviewers),
 		addTeams:    diffCaseInsensitive(teamReviewers, existing.RequestedTeams),
 		removeTeams: diffCaseInsensitive(existing.RequestedTeams, teamReviewers),
@@ -667,6 +674,20 @@ func newReviewCmd() *cobra.Command {
 					return err
 				}
 				assignees = selected
+			}
+
+			// GitHub forbids requesting a review from the PR author
+			// (422). The typeahead already filters self out, but the
+			// config / --reviewer / -y paths bypass it — drop the
+			// author from the FINAL list so every path agrees.
+			if selfUser != "" {
+				kept := reviewers[:0]
+				for _, r := range reviewers {
+					if !strings.EqualFold(r, selfUser) {
+						kept = append(kept, r)
+					}
+				}
+				reviewers = kept
 			}
 
 			// --- Plan + Apply ---

@@ -87,6 +87,22 @@ func TestPlanSync(t *testing.T) {
 		}
 	})
 
+	t.Run("completed reviewers are not re-requested", func(t *testing.T) {
+		// carol reviewed already, so GitHub dropped her from the
+		// pending list; wanting her must NOT re-request (which would
+		// reset her review). Mixed case exercises the fold.
+		reviewed := existing
+		reviewed.RequestedReviewers = []string{"alice"}
+		reviewed.ReviewedBy = []string{"Carol"}
+		s := planSync(reviewed,
+			[]string{"alice", "carol", "dave"}, nil, nil,
+			"Old title", "Old body", "main")
+
+		if !reflect.DeepEqual(s.addRevs, []string{"dave"}) {
+			t.Errorf("addRevs = %v, want only the never-asked dave", s.addRevs)
+		}
+	})
+
 	t.Run("detects content change", func(t *testing.T) {
 		s := planSync(existing,
 			[]string{"alice", "bob"}, []string{"backend"}, []string{"alice"},

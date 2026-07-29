@@ -42,6 +42,14 @@ type PullRequest struct {
 	// Reviewers who already submitted a review move out of this list,
 	// so a stale entry here means "still waiting on them."
 	RequestedReviewers []string
+	// ReviewedBy lists user logins who have submitted a review on the
+	// PR (any state, including comment-only). GitHub removes them from
+	// RequestedReviewers on submission, so config-driven reviewer
+	// reconciliation needs this set too — treating "not pending" as
+	// "never asked" would re-request completed reviewers on every run,
+	// resetting their review state. Populated only for open PRs
+	// (same enrichment pass as Review).
+	ReviewedBy []string
 	// RequestedTeams lists team slugs currently pending review.
 	// Same semantics as RequestedReviewers.
 	RequestedTeams []string

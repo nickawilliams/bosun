@@ -978,12 +978,27 @@ func TestReviewDecision(t *testing.T) {
 
 			a := NewWithClient(server.Client(), server.URL, "token")
 
-			got, err := a.fetchReviewDecision(context.Background(), "org", "repo", 1)
+			got, reviewedBy, err := a.fetchReviewDecision(context.Background(), "org", "repo", 1)
 			if err != nil {
 				t.Fatalf("fetchReviewDecision() error: %v", err)
 			}
 			if got != tc.wantDecision {
 				t.Errorf("decision = %q, want %q", got, tc.wantDecision)
+			}
+			// Every submitted (non-PENDING) review's author must land in
+			// reviewedBy — reconciliation depends on it to not re-request
+			// completed reviewers.
+			seen := make(map[string]bool, len(reviewedBy))
+			for _, u := range reviewedBy {
+				seen[u] = true
+			}
+			for _, rv := range tc.reviews {
+				state, _ := rv["state"].(string)
+				user, _ := rv["user"].(map[string]any)
+				login, _ := user["login"].(string)
+				if state != "PENDING" && login != "" && !seen[login] {
+					t.Errorf("reviewedBy = %v, missing submitter %q", reviewedBy, login)
+				}
 			}
 		})
 	}
