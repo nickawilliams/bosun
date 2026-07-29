@@ -415,6 +415,16 @@ func emitWorkspaceRows(grp ui.Reporter, findings []cleanupFinding) {
 // a single transient hiccup shouldn't tank the whole gather, but
 // classifyRepo surfaces the gap as an unverified finding instead of
 // letting a failed probe silently read as SAFE.
+//
+// Deliberately NOT probed:
+//   - Stashes: refs/stash is shared across worktrees (verified
+//     empirically), so stash entries survive worktree removal and
+//     stay recoverable from the main checkout — no data loss.
+//   - Gitignored files: destroyed with the worktree, same as
+//     `git worktree remove --force`. A probe would WARN on every
+//     worktree with build artifacts (node_modules, .out, …), which
+//     trains users to ignore the warnings that matter. Anything
+//     precious-but-ignored (.env) is the same trade git itself makes.
 func gatherRepoProbe(ctx context.Context, g vcs.VCS, host code.Host, r Repository) repoCleanupProbe {
 	p := repoCleanupProbe{repo: r}
 
