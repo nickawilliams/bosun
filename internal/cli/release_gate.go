@@ -393,10 +393,14 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 
 	// huh cleared its frame on submit, leaving the cursor at the form's
 	// origin (the line below the header). Erase the header above and
-	// drop the record card in its place.
+	// drop the record card in its place. ClearSpacer first: runForm's
+	// prologue armed the spacer flag (FlushSpacer → spacerPrefix arms
+	// on empty), but the gather program's original spacer line is still
+	// on screen above the header — printing another would double-space.
 	if headerLines > 0 {
 		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
 	}
+	ui.ClearSpacer()
 	buildDeployTargetsCard(states).Print()
 	return states, nil
 }
