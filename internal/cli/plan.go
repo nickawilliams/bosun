@@ -58,9 +58,15 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	// of PlanSuccess (same ✓ glyph + success color) with a different
 	// title word — "Success" carries an action-verb feel that misreads
 	// when no work was performed; "Verified" affirms the check happened
-	// and the state already matches what was wanted.
+	// and the state already matches what was wanted. When the only
+	// rows are failed assessments, though, nothing was verified —
+	// render the failure state (the caller returns the assess error).
 	if !plan.HasChanges() {
-		pc.SetState(ui.PlanVerified)
+		if plan.HasFailures() {
+			pc.SetState(ui.PlanFailure)
+		} else {
+			pc.SetState(ui.PlanVerified)
+		}
 		pc.Print()
 		return nil
 	}

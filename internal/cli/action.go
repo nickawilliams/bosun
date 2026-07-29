@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -54,12 +55,20 @@ func (a *Action) op() ui.PlanOp {
 }
 
 // runActions assesses each action, builds a plan, and executes only the
-// actions that are still needed. It delegates to runPlanCard for confirmation
-// and apply.
+// actions that are still needed. It delegates to runPlanCard for
+// confirmation and apply.
+//
+// A failed assessment is a ✗ plan row, not a run-wide abort: the
+// commands route per-target failures through Assess errors (release's
+// st.err rows, prerelease's rt.tagErr, review's per-repo prErr) with
+// the documented contract that siblings proceed. The healthy actions
+// plan and apply normally; the first assess error is returned after
+// the run so the exit code still reflects the partial failure.
 func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error {
 	plan := ui.NewPlan()
 	var pending []Action
 	var assessErr error
+	assessFailures := 0
 
 	// Show a spinner while assessing actions (may involve API calls).
 	rewind, spinErr := ui.RunCardRewindable("assessing", func() error {
@@ -67,8 +76,12 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 			a := &actions[i]
 			state, detail, err := a.Assess(ctx)
 			if err != nil {
-				assessErr = err
-				return nil // don't fail the spinner card
+				plan.Add(ui.PlanFailed, a.Action, a.Type, a.Name, err.Error())
+				if assessErr == nil {
+					assessErr = err
+				}
+				assessFailures++
+				continue
 			}
 			switch state {
 			case ActionNeeded:
@@ -91,9 +104,6 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 	if spinErr != nil {
 		return spinErr
 	}
-	if assessErr != nil {
-		return assessErr
-	}
 
 	// Rewind the spinner to replace it with the plan card.
 	if rewind != nil {
@@ -105,5 +115,14 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 		applyFns[i] = func() error { return a.Apply(ctx) }
 	}
 
-	return runPlanCard(cmd, plan, applyFns, DefaultPlanOpts(cmd))
+	if err := runPlanCard(cmd, plan, applyFns, DefaultPlanOpts(cmd)); err != nil {
+		return err
+	}
+	if assessErr != nil {
+		if assessFailures > 1 {
+			return fmt.Errorf("%d actions failed to assess; first: %w", assessFailures, assessErr)
+		}
+		return assessErr
+	}
+	return nil
 }

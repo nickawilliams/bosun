@@ -32,6 +32,7 @@ const (
 	PlanDestroy                // - destroy resource
 	PlanNoChange               // = no change (already exists)
 	PlanDetail                 // + informational sub-item (not counted in summaries)
+	PlanFailed                 // ✗ assessment failed (rendered for visibility, never applied)
 )
 
 // PlanItem describes a single action in a plan. The four core fields (Op,
@@ -88,7 +89,17 @@ func (p *Plan) IsEmpty() bool {
 // HasChanges returns true if the plan has any actionable items.
 func (p *Plan) HasChanges() bool {
 	for _, item := range p.items {
-		if item.Op != PlanNoChange && item.Op != PlanDetail {
+		if item.Op != PlanNoChange && item.Op != PlanDetail && item.Op != PlanFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFailures returns true if any item failed assessment.
+func (p *Plan) HasFailures() bool {
+	for _, item := range p.items {
+		if item.Op == PlanFailed {
 			return true
 		}
 	}
@@ -187,6 +198,9 @@ func (p *Plan) Summary() string {
 	if n := counts[PlanNoChange]; n > 0 {
 		parts = append(parts, unchangedStyle.Render(fmt.Sprintf("%d unchanged", n)))
 	}
+	if n := counts[PlanFailed]; n > 0 {
+		parts = append(parts, destroyStyle.Render(fmt.Sprintf("%d failed", n)))
+	}
 
 	return strings.Join(parts, ", ")
 }
@@ -216,6 +230,9 @@ func (p *Plan) SummaryPastTense() string {
 	}
 	if n := counts[PlanNoChange]; n > 0 {
 		parts = append(parts, unchangedStyle.Render(fmt.Sprintf("%d unchanged", n)))
+	}
+	if n := counts[PlanFailed]; n > 0 {
+		parts = append(parts, destroyStyle.Render(fmt.Sprintf("%d failed", n)))
 	}
 
 	return strings.Join(parts, ", ")
@@ -343,6 +360,8 @@ func planSymbol(op PlanOp) (string, lipgloss.Style) {
 		return "=", lipgloss.NewStyle().Foreground(Palette.Muted)
 	case PlanDetail:
 		return "+", lipgloss.NewStyle().Foreground(Palette.Success)
+	case PlanFailed:
+		return "\u2717", lipgloss.NewStyle().Foreground(Palette.Error)
 	}
 	return " ", lipgloss.NewStyle()
 }
