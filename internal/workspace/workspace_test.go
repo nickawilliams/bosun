@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -319,5 +320,55 @@ func TestDetectNameFromSubdirectory(t *testing.T) {
 	}
 	if name != filepath.Join("feature", "PROJ-456") {
 		t.Errorf("DetectName() = %q, want %q", name, "feature/PROJ-456")
+	}
+}
+
+// TestRemoveRepositoriesRefusesUnpushed locks the unpushed-commits
+// guard: a branch with a remote tracking counterpart and local commits
+// ahead of it refuses removal (the commits exist nowhere else), and
+// pushing clears the refusal without --force.
+func TestRemoveRepositoriesRefusesUnpushed(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api")
+	repositoryPath := repositories[0].Path
+
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %s\n%s", args, err, out)
+		}
+	}
+
+	// Give the source repo a real origin so the workspace branch can
+	// have a remote tracking counterpart.
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	gitRun("init", "--bare", bare)
+	gitRun("-C", repositoryPath, "remote", "add", "origin", bare)
+
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+	if err := mgr.Create(ctx, "feature-x", repositories, true); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	wtPath := filepath.Join(wsRoot, "feature-x", "api")
+	gitRun("-C", wtPath, "push", "-u", "origin", "feature-x")
+	gitRun("-C", wtPath, "commit", "--allow-empty", "-m", "local only")
+
+	err := mgr.RemoveRepositories(ctx, "feature-x", repositories, []string{"api"}, false)
+	if err == nil || !strings.Contains(err.Error(), "not pushed") {
+		t.Fatalf("RemoveRepositories() = %v, want unpushed-commits refusal", err)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("worktree should survive a refused removal: %v", statErr)
+	}
+
+	// Pushing the commit clears the refusal — no --force needed.
+	gitRun("-C", wtPath, "push", "origin", "feature-x")
+	if err := mgr.RemoveRepositories(ctx, "feature-x", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() after push error: %v", err)
+	}
+	if _, statErr := os.Stat(wtPath); statErr == nil {
+		t.Fatal("worktree should be removed once the branch is fully pushed")
 	}
 }

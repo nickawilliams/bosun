@@ -220,8 +220,9 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 // repo's worktree, local branch, and remote branch. The workspace
 // directory itself stays. repositories supplies the source-path lookup
 // (same shape as Remove). Refuses if any of the named repos is dirty
-// unless force is true. Names that aren't currently in the workspace
-// are silently skipped.
+// or has commits not pushed to its remote tracking branch, unless
+// force is true. Names that aren't currently in the workspace are
+// silently skipped.
 func (m *Manager) RemoveRepositories(ctx context.Context, name string, repositories []Repository, names []string, force bool) error {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 
@@ -261,6 +262,31 @@ func (m *Manager) RemoveRepositories(ctx context.Context, name string, repositor
 			return fmt.Errorf(
 				"repositories have uncommitted changes: %s (use --force to override)",
 				strings.Join(dirty, ", "),
+			)
+		}
+
+		// Unpushed commits are as unrecoverable as a dirty tree once
+		// the branch is force-deleted below. Only the remote-tracking
+		// case is checked: without a remote counterpart, Ahead counts
+		// against the default branch, which reads nonzero for every
+		// squash-merged branch — a false positive on the everyday
+		// flow. Sync errors also skip the check; this layer has no
+		// host data to disambiguate, and `bosun cleanup` runs the
+		// full readiness gate for the cases that need it.
+		var unpushed []string
+		for _, s := range targets {
+			if s.Branch == "" || s.Branch == "(unknown)" {
+				continue
+			}
+			sync, err := m.vcs.GetBranchSync(ctx, s.Path, s.Branch)
+			if err == nil && sync.HasRemote && sync.Ahead > 0 {
+				unpushed = append(unpushed, fmt.Sprintf("%s (%d commit(s))", s.Name, sync.Ahead))
+			}
+		}
+		if len(unpushed) > 0 {
+			return fmt.Errorf(
+				"repositories have commits not pushed to their remote branch: %s (use --force to override)",
+				strings.Join(unpushed, ", "),
 			)
 		}
 	}

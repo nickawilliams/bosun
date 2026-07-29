@@ -335,9 +335,26 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 
+			// Removal deletes each repo's branch (local + remote)
+			// along with the worktree — the plan must say so. Branch
+			// names come from each worktree's actual HEAD via Status;
+			// repos whose branch couldn't be determined skip the
+			// branch delete in RemoveRepositories, so no row shows.
+			statuses, err := mgr.Status(ctx, name)
+			if err != nil {
+				return err
+			}
+			branchOf := make(map[string]string, len(statuses))
+			for _, s := range statuses {
+				branchOf[s.Name] = s.Branch
+			}
+
 			plan := ui.NewPlan()
 			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+				if b := branchOf[r.Name]; b != "" && b != "(unknown)" {
+					plan.Add(ui.PlanDestroy, "branch", "repo", r.Name, fmt.Sprintf("%s (local + remote)", b))
+				}
 			}
 
 			// movedFrom is set inside the apply action if the process is
