@@ -43,9 +43,12 @@ var (
 
 	// Compare URLs: https://github.com/<owner>/<repo>/compare/<spec>
 	// Same leading-anchor rule as the PR/issue regex so already-wrapped
-	// URLs are left alone.
+	// URLs are left alone. The spec must END on a word character:
+	// dots are legitimate inside it (v1.2.3...v1.3.0), but a compare
+	// URL closing a sentence would otherwise swallow the final period
+	// into both the link text and the target.
 	prettyCompareRe = regexp.MustCompile(
-		`(^|\s)(https://github\.com/[\w.-]+/[\w.-]+/compare/([^\s)]+))`,
+		`(^|\s)(https://github\.com/[\w.-]+/[\w.-]+/compare/([^\s)]*\w))`,
 	)
 
 	// User mentions: `@<username>`. GitHub usernames are 1–39 chars,

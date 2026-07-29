@@ -97,3 +97,15 @@ func TestPrettifyReleaseNotes(t *testing.T) {
 		})
 	}
 }
+
+// TestPrettifyCompareURLSentencePunctuation locks the spec boundary:
+// a compare URL ending a sentence must not swallow the final period
+// into the link text and target.
+func TestPrettifyCompareURLSentencePunctuation(t *testing.T) {
+	in := "See https://github.com/o/r/compare/v1.2.3...v1.3.0."
+	got := PrettifyReleaseNotes(in)
+	want := "See [v1.2.3...v1.3.0](https://github.com/o/r/compare/v1.2.3...v1.3.0)."
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
