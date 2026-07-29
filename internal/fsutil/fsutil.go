@@ -47,9 +47,14 @@ func IgnorableName(name string) bool {
 // HasMeaningfulEntries reports whether entries contains anything that
 // isn't ignorable OS junk — i.e. whether a directory is "non-empty" for
 // bosun's purposes. A directory holding only junk counts as empty.
+//
+// Subdirectories always count as meaningful, even junk-named ones: the
+// junk list targets files (.DS_Store, ._* sidecars), and callers use
+// this to gate an os.RemoveAll — a directory that happens to carry a
+// junk name could hold real files this check never looked inside.
 func HasMeaningfulEntries(entries []os.DirEntry) bool {
 	for _, e := range entries {
-		if !IgnorableName(e.Name()) {
+		if e.IsDir() || !IgnorableName(e.Name()) {
 			return true
 		}
 	}
