@@ -559,13 +559,17 @@ func newPrereleaseCmd() *cobra.Command {
 							// it's on the default branch. Tagging HEAD (rather
 							// than a specific commit) also gives
 							// generate_release_notes full ancestry, so the
-							// changelog is never empty. Falls back to the branch
-							// only if the default couldn't be resolved — the gate
-							// then defaulted to permissive-allow.
-							target := rt.branch
-							if rt.defaultBranch != "" {
-								target = rt.defaultBranch
+							// changelog is never empty. Never fall back to the
+							// feature branch: for a squash-merged PR its tip is
+							// pre-merge history, and for no-PR work it's exactly
+							// the unreleased state the gate blocks. The no-PR
+							// gate already fails closed on an unresolved
+							// default; this guards the merged-PR path, which
+							// allows on the PR signal alone.
+							if rt.defaultBranch == "" {
+								return fmt.Errorf("default branch unknown — refusing to tag the feature branch (git remote set-head origin -a)")
 							}
+							target := rt.defaultBranch
 							// Pin the changelog baseline to the tag we
 							// resolved as "latest" — GitHub's own pick uses
 							// /releases/latest, which can miss intermediate
@@ -1375,9 +1379,11 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 // resolveReleaseGate sets rt.gate/gateReason — the decision on whether
 // the workspace's work is on the default branch and may be released.
 // Runs after resolveMultiUserContext (which fills the PR fields and
-// defaultBranch). Best-effort and permissive: when the PR state or the
-// ancestry check can't be determined, it defaults to allow rather than
-// blocking a release on a transient failure.
+// defaultBranch). A PR's merged-ness is trusted as the definitive
+// signal; without a PR the gate fails closed — when the default
+// branch or the ancestry check can't be resolved there is no evidence
+// the work ever left the feature branch, and an allow here flows
+// straight into CreateRelease, which would tag unmerged work.
 func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
 	if !rt.versionEligible() {
 		return // nothing to gate — version/sweep-up already excludes it
@@ -1409,14 +1415,20 @@ func resolveReleaseGate(ctx context.Context, g vcs.VCS, rt *releaseTarget) {
 	}
 	// No PR — split "nothing beyond default" (skip) from "unmerged
 	// commits, no PR" (block) via an on-default-branch ancestry check.
+	// Fail closed when the check can't run: this path is the exact
+	// bypass the gate exists to prevent (unmerged no-PR work releasing
+	// from the feature branch), and origin/HEAD being unset — the
+	// common cause — is one command away from fixed.
 	if rt.defaultBranch == "" {
-		rt.gate = gateAllow // can't determine default → don't block
+		rt.gate = gateBlock
+		rt.gateReason = "default branch unknown — can't verify the work is merged (git remote set-head origin -a)"
 		return
 	}
 	_ = g.Fetch(ctx, rt.repo.Path, "origin", rt.defaultBranch)
 	onDefault, err := g.IsMergedInto(ctx, rt.repo.Path, rt.branch, "origin/"+rt.defaultBranch)
 	if err != nil {
-		rt.gate = gateAllow // can't verify ancestry → don't block
+		rt.gate = gateBlock
+		rt.gateReason = "couldn't verify the branch is merged into " + rt.defaultBranch
 		return
 	}
 	rt.gate, rt.gateReason = classifyReleaseGate(0, "", onDefault)

@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
 // TestReleaseTargetVersionEligibility covers the pre-gate filter:
@@ -501,4 +503,86 @@ func TestPRMergeBlockReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gateVCS is the minimal vcs.VCS fake resolveReleaseGate touches:
+// Fetch (ignored) and IsMergedInto. Everything else panics via the
+// embedded nil interface — the gate must not need more.
+type gateVCS struct {
+	vcs.VCS
+	merged    bool
+	mergedErr error
+}
+
+func (f gateVCS) Fetch(context.Context, string, string, string) error { return nil }
+func (f gateVCS) IsMergedInto(context.Context, string, string, string) (bool, error) {
+	return f.merged, f.mergedErr
+}
+
+// TestResolveReleaseGateFailsClosed locks the no-PR arm of the gate:
+// an unresolvable default branch or a failed ancestry probe must
+// BLOCK, never allow. gateAllow here flowed straight into
+// CreateRelease and tagged the feature branch — the exact bypass the
+// gate exists to prevent (regression: both paths returned gateAllow).
+func TestResolveReleaseGateFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	base := func() *releaseTarget {
+		return &releaseTarget{
+			branch:      "feature-x",
+			currentTag:  "v1.0.0",
+			nextVersion: "v1.1.0",
+		}
+	}
+
+	t.Run("no PR, default branch unknown → block", func(t *testing.T) {
+		rt := base()
+		resolveReleaseGate(ctx, gateVCS{}, rt)
+		if rt.gate != gateBlock {
+			t.Fatalf("gate = %v, want gateBlock", rt.gate)
+		}
+		if !strings.Contains(rt.gateReason, "default branch unknown") {
+			t.Errorf("reason = %q, want default-branch-unknown explanation", rt.gateReason)
+		}
+	})
+
+	t.Run("no PR, ancestry probe fails → block", func(t *testing.T) {
+		rt := base()
+		rt.defaultBranch = "main"
+		resolveReleaseGate(ctx, gateVCS{mergedErr: errors.New("boom")}, rt)
+		if rt.gate != gateBlock {
+			t.Fatalf("gate = %v, want gateBlock", rt.gate)
+		}
+		if !strings.Contains(rt.gateReason, "couldn't verify") {
+			t.Errorf("reason = %q, want couldn't-verify explanation", rt.gateReason)
+		}
+	})
+
+	t.Run("no PR, on default branch → skip", func(t *testing.T) {
+		rt := base()
+		rt.defaultBranch = "main"
+		resolveReleaseGate(ctx, gateVCS{merged: true}, rt)
+		if rt.gate != gateSkip {
+			t.Fatalf("gate = %v, want gateSkip", rt.gate)
+		}
+	})
+
+	t.Run("no PR, unmerged work → block", func(t *testing.T) {
+		rt := base()
+		rt.defaultBranch = "main"
+		resolveReleaseGate(ctx, gateVCS{merged: false}, rt)
+		if rt.gate != gateBlock {
+			t.Fatalf("gate = %v, want gateBlock", rt.gate)
+		}
+	})
+
+	t.Run("merged PR still allows", func(t *testing.T) {
+		rt := base()
+		rt.defaultBranch = "main"
+		rt.workspacePRNumber = 7
+		rt.workspacePRState = "merged"
+		resolveReleaseGate(ctx, gateVCS{merged: false}, rt)
+		if rt.gate != gateAllow {
+			t.Fatalf("gate = %v, want gateAllow", rt.gate)
+		}
+	})
 }
