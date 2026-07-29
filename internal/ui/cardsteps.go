@@ -49,6 +49,16 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 				return nil, err
 			}
 		}
+		// Raw output gets the successor too — piped/CI runs would
+		// otherwise lose the final result card entirely (interactive
+		// runs paint it as the program's last frame). Input-state
+		// successors are form headers for prompts raw mode never
+		// runs, so those stay silent.
+		if successor != nil {
+			if final := successor(); final != nil && final.state != CardInput {
+				final.Print()
+			}
+		}
 		return func() {}, nil
 	}
 
@@ -87,14 +97,17 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	var stepErr error
 	if err != nil {
 		// Non-interactive fallback — drain the worker synchronously.
-		for range steps {
+		// A failure renders the failed step's card (same shape the
+		// interactive path paints) rather than a bare error line.
+		for i := range steps {
 			if stepErr = <-resultCh; stepErr != nil {
+				steps[i].Card.state = CardFailed
+				steps[i].Card.Subtitle(stepErr.Error())
+				steps[i].Card.Print()
 				break
 			}
 		}
-		if stepErr != nil {
-			fmt.Println(" " + stepErr.Error())
-		} else if successor != nil {
+		if stepErr == nil && successor != nil {
 			successor().Print()
 		}
 	} else {
