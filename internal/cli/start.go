@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
@@ -59,17 +60,36 @@ func newStartCmd() *cobra.Command {
 			// tracker transition.
 			//
 			// Where we got the issue (flag / picker / cwd) doesn't
-			// affect this — the issue key is the lookup key.
+			// affect this — the issue key is the lookup key. Lookup
+			// failures abort rather than degrade: a swallowed List
+			// error would send start down the fresh-workspace path
+			// and mint a duplicate workspace for the issue. Matching
+			// is case-insensitive (issue keys are), and multiple hits
+			// (possible from pre-1-workspace-per-issue runs) error
+			// out for an explicit --workspace choice instead of
+			// silently attaching to the lexicographically first.
 			existingWorkspace := ""
-			if mgr, err := newWorkspaceManager(); err == nil {
-				if names, err := mgr.List(); err == nil {
-					for _, name := range names {
-						if extractIssue(filepath.Base(name)) == issue {
-							existingWorkspace = name
-							break
-						}
-					}
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+			names, err := mgr.List()
+			if err != nil {
+				return fmt.Errorf("listing workspaces: %w", err)
+			}
+			var issueMatches []string
+			for _, name := range names {
+				if strings.EqualFold(extractIssue(filepath.Base(name)), issue) {
+					issueMatches = append(issueMatches, name)
 				}
+			}
+			switch len(issueMatches) {
+			case 0:
+			case 1:
+				existingWorkspace = issueMatches[0]
+			default:
+				return fmt.Errorf("multiple workspaces exist for %s (%s); pass --workspace to choose",
+					issue, strings.Join(issueMatches, ", "))
 			}
 
 			var branchName string
