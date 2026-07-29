@@ -47,22 +47,20 @@ schema model.
   currently means "accept the default" — there's no way to express "leave
   this unset")
 
-### Confirmation Flag Consolidation
+### Confirmation Flag Consolidation — RESOLVED (split, not merged)
 
-Unify `--yes` and `--force` across the CLI. Today they're orthogonal but
-overlapping: `--yes` auto-confirms prompts (init, plan, workspace rm),
-`--force` overrides safety checks (cleanup, workspace rm). The new `--force`
-on `preview` blurs the line by combining "auto-confirm" with "prefer
-destructive/replace."
+Resolved on the `26-refine-command-output` remediation pass, in the
+opposite direction the original scope guessed: the two consents are
+genuinely different questions, so they got distinct flags instead of
+one merged one.
 
-**Why:** Two flags with overlapping semantics is a recipe for "which one do
-I need?" confusion. A single flag with a clear mental model is easier to
-teach and document.
-
-**Scope:** Pick one canonical name (likely `--force`) and migrate all
-commands; keep the other as a deprecated alias for one release. Audit each
-call site to confirm the merged semantic ("auto-confirm + override safety")
-is correct everywhere or needs separation.
+- `--approve` / `-a` (persistent; renamed from `--yes`) answers the
+  plan confirmation — "apply this plan". The plan confirm button says
+  Approve to match.
+- `--force` (per-command) bypasses safety checks only — dirty trees,
+  unpushed work, readiness blockers. It no longer implies approval:
+  a forced destructive run still confirms its plan (or passes
+  `--approve` explicitly).
 
 ### Status Command — CI/CD Integration
 

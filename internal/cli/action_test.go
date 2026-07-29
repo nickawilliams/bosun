@@ -26,7 +26,7 @@ func TestRunActionsFailedAssessDoesNotAbortSiblings(t *testing.T) {
 	}()
 
 	cmd := &cobra.Command{Use: "t"}
-	cmd.Flags().Bool("yes", true, "")
+	cmd.Flags().Bool("approve", true, "")
 	cmd.Flags().Bool("dry-run", false, "")
 
 	applied := false
@@ -70,7 +70,7 @@ func TestRunActionsAllAssessFailedReturnsError(t *testing.T) {
 	}()
 
 	cmd := &cobra.Command{Use: "t"}
-	cmd.Flags().Bool("yes", true, "")
+	cmd.Flags().Bool("approve", true, "")
 	cmd.Flags().Bool("dry-run", false, "")
 
 	actions := []Action{

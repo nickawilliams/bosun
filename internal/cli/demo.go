@@ -250,7 +250,7 @@ func demoPlanCardStates() {
 	snapshotForm(
 		newConfirm().
 			Title(plan.RenderItems()).
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
 	)
@@ -364,7 +364,7 @@ func demoFormStatic() {
 			).
 			Value(&services),
 		newConfirm().
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
 	)

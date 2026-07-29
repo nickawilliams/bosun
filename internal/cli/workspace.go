@@ -399,7 +399,6 @@ func newWorkspaceRmCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
-	cmd.Flags().BoolP("yes", "y", false, "skip the confirmation prompt")
 
 	return cmd
 }
@@ -487,7 +486,6 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
-	cmd.Flags().BoolP("yes", "y", false, "skip the confirmation prompt")
 
 	return cmd
 }

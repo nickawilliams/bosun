@@ -38,7 +38,7 @@ Application
 - **Phase.Plan** when the mutation is composed of multiple discrete
   actions the user should see as a list and confirm together.
 - **Direct mutating Task** when the mutation is one logical operation.
-  The user gate is elsewhere (`--yes`, `--dry-run`, or an interactive
+  The user gate is elsewhere (`--approve`, `--dry-run`, or an interactive
   confirm before the Task runs).
 
 ## Command tree

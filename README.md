@@ -61,7 +61,7 @@ to set up interactively, or `bosun doctor` to verify connectivity.
 bosun config {get,set,list,edit,path,show,check,unset}
 bosun workspace {create,add,status,rm}
 bosun doctor
-bosun init [--quick] [--yes]
+bosun init [--quick] [--approve]
 ```
 
 ## Related Tools and Alternatives

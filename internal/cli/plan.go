@@ -84,9 +84,9 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 
 	// Confirmation required but we can't surface a form to a human:
 	// either stdin can't be read (CI / piped input) or stdout can't
-	// render the prompt visibly (piped stdout). Require --yes.
+	// render the prompt visibly (piped stdout). Require --approve.
 	if !isInteractive() || !ui.CanRenderInteractively() {
-		return fmt.Errorf("confirmation required (pass --yes to approve, or --dry-run to preview)")
+		return fmt.Errorf("confirmation required (pass --approve, or --dry-run to preview)")
 	}
 
 	// Interactive confirmation gate: show the plan as a CardInput,
@@ -98,7 +98,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	err := runForm(
 		newConfirm().
 			Title(plan.RenderItems()).
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
 	)
@@ -138,15 +138,12 @@ func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
 	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
 }
 
-// isAutoApprove returns true if the --yes or --force flag is set. Commands
-// that don't define one of the flags get a false from cobra (with an
-// ignored error), so the check is safe to apply uniformly.
+// isAutoApprove reports whether the run pre-approved plan
+// confirmation. Only --approve counts: --force is the SAFETY bypass
+// (dirty trees, readiness blockers) and deliberately does not answer
+// the plan prompt — "I accept the data risk" and "apply this plan"
+// are two separate consents.
 func isAutoApprove(cmd *cobra.Command) bool {
-	if v, _ := cmd.Flags().GetBool("yes"); v {
-		return true
-	}
-	if v, _ := cmd.Flags().GetBool("force"); v {
-		return true
-	}
-	return false
+	v, _ := cmd.Flags().GetBool("approve")
+	return v
 }

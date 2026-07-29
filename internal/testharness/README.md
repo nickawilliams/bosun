@@ -24,7 +24,7 @@ issue_tracker:
         Key: "EX-1", Title: "Add feature", Type: "Story",
     })
 
-    if err := h.Run("start", "--issue", "EX-1", "--slug", "feature", "--yes"); err != nil {
+    if err := h.Run("start", "--issue", "EX-1", "--slug", "feature", "--approve"); err != nil {
         t.Fatalf("start: %v", err)
     }
     if !api.HasBranch("story/EX-1_feature") {

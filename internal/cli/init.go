@@ -225,7 +225,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		ui.Skip("no repositories configured — add patterns to " + configPath)
 	}
 
-	// Service configuration wizard — runs unless --yes.
+	// Service configuration wizard — runs unless --approve.
 	if isInteractive() {
 		// Reload config so resolveGroup can read/write the new file.
 		if err := config.Load(); err != nil {
