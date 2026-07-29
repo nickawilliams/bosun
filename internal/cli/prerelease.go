@@ -90,6 +90,12 @@ type releaseTarget struct {
 	// the no-PR arm and mislabeling a transient API failure as
 	// "work not on the default branch".
 	workspacePRErr error
+	// prefetchedPR carries offerPRMerges' lookup so
+	// resolveMultiUserContext doesn't repeat it (up to three API calls
+	// per open PR). Cleared for any repo whose PR the merge offer
+	// attempted to merge — the cached state is stale the moment the
+	// merge is tried.
+	prefetchedPR *code.PullRequest
 	// workspacePRMergeableState and workspacePRReview are the PR's
 	// mergeability signals (GitHub mergeable_state + review decision),
 	// used to explain *why* an unmerged PR blocks the release
@@ -236,6 +242,12 @@ func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget)
 				if perr != nil {
 					continue // best-effort — the gate handles unknowns
 				}
+				// Cache the lookup for resolveMultiUserContext (each
+				// open-PR fetch fans out to two enrichment calls, and
+				// this loop already paid for them). Invalidated below
+				// for any repo whose PR we attempt to merge.
+				prCopy := pr
+				rt.prefetchedPR = &prCopy
 				if pr.Number > 0 && pr.State != "merged" && canMergePR(pr.MergeableState) {
 					candidates = append(candidates, candidate{i, pr.Number, rt.repo.Name})
 				}
@@ -253,8 +265,11 @@ func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget)
 	if len(candidates) > 1 {
 		noun = "pull requests"
 	}
+	// "Ready to merge" = GitHub's mergeable_state is clean — conflicts,
+	// required checks, and required reviews all pass. NOT a claim of
+	// approval: a repo without required reviews is "clean" unreviewed.
 	confirmed, err := NewDialog("Merge pull requests?").
-		Description(fmt.Sprintf("%d approved %s ready to merge. Merge before releasing?", len(candidates), noun)).
+		Description(fmt.Sprintf("%d %s ready to merge. Merge before releasing?", len(candidates), noun)).
 		Affirmative("Merge").
 		Negative("Skip").
 		Default(true).
@@ -268,7 +283,13 @@ func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget)
 
 	// A merge failure is soft: surfaced on its row, and the repo simply
 	// stays unmerged and gets blocked below — never aborts the others.
+	// Every attempted merge invalidates that repo's cached PR — its
+	// state just changed (or is now uncertain), and the gate must see
+	// the post-merge truth.
 	method := mergeMethod()
+	for _, c := range candidates {
+		targets[c.idx].prefetchedPR = nil
+	}
 	ui.RunGroup("merging", func(grp ui.Reporter) {
 		for _, c := range candidates {
 			name := ui.PreserveCase(c.name)
@@ -765,18 +786,23 @@ func resolveReleaseTarget(ctx context.Context, g vcs.VCS, host code.Host, bump s
 	}
 	rt.nextVersion = next
 
+	// Multi-user awareness: detect whether someone else already cut a
+	// release whose range includes our HEAD, and enumerate any "extra"
+	// PRs (work by other contributors) that will get swept into a
+	// release we create. See ROADMAP / plan for the framing. Runs
+	// BEFORE service detection: it fetches tags from origin, and the
+	// affected-services diff below is against currentTag — right after
+	// anyone else releases, that tag isn't in the local clone yet and
+	// the diff would error, silently degrading narrowing to
+	// "pre-check all services" in its most common scenario.
+	resolveMultiUserContext(ctx, g, host, rt)
+
 	// Service detection: configured set + path-map narrowing.
 	rt.services = resolveRepoServiceNames(rt.repo.Name)
 	if len(rt.services) > 1 {
 		pathMap := resolveServicePaths(rt.repo.Name)
 		rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
 	}
-
-	// Multi-user awareness: detect whether someone else already cut a
-	// release whose range includes our HEAD, and enumerate any "extra"
-	// PRs (work by other contributors) that will get swept into a
-	// release we create. See ROADMAP / plan for the framing.
-	resolveMultiUserContext(ctx, g, host, rt)
 	// Release gate: is the workspace's work on the default branch?
 	// Runs after the above so it can read the PR state and default
 	// branch it resolved.
@@ -1271,18 +1297,27 @@ func resolveMultiUserContext(ctx context.Context, g vcs.VCS, host code.Host, rt 
 	//     `--contains <mergeCommitSHA>` finds tags that include the
 	//     merged work).
 	var workspacePR code.PullRequest
-	if pr, err := host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch); err == nil {
-		workspacePR = pr
-		rt.workspacePRNumber = pr.Number
-		rt.workspacePRState = pr.State
-		rt.workspacePRMergeableState = pr.MergeableState
-		rt.workspacePRReview = pr.Review
+	var prErr error
+	if rt.prefetchedPR != nil {
+		// offerPRMerges already looked this PR up (and invalidated the
+		// cache for anything it tried to merge) — reuse it instead of
+		// re-paying the fetch plus its enrichment calls.
+		workspacePR = *rt.prefetchedPR
+	} else {
+		workspacePR, prErr = host.GetPRForBranch(ctx, rt.owner, rt.repoName, rt.branch)
+	}
+	if prErr == nil {
+		rt.workspacePRNumber = workspacePR.Number
+		rt.workspacePRState = workspacePR.State
+		rt.workspacePRMergeableState = workspacePR.MergeableState
+		rt.workspacePRReview = workspacePR.Review
 	} else {
 		// The adapter only errors when the list itself failed —
 		// enrichment failures degrade inside it — so this is
 		// "couldn't determine whether a PR exists", recorded for the
 		// gate to fail closed on rather than misread as "no PR".
-		rt.workspacePRErr = err
+		workspacePR = code.PullRequest{}
+		rt.workspacePRErr = prErr
 	}
 
 	// Default branch — the release tag target (CreateRelease), the base
