@@ -1103,3 +1103,74 @@ func TestMergePR(t *testing.T) {
 		t.Errorf("merge_method = %q, want squash", gotMethod)
 	}
 }
+
+// TestGetLatestDeploymentRepoNotFound locks the 404 semantics: a 404
+// from /deployments means the repo wasn't found (a missing environment
+// is a 200 with an empty list), so it must surface as an error —
+// "repo unreachable" reading as ErrNotFound would classify a
+// misconfigured repo as "never deployed" and dispatch a first deploy.
+func TestGetLatestDeploymentRepoNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	_, err := a.GetLatestDeployment(context.Background(), "org", "gone", "env")
+	if err == nil {
+		t.Fatal("expected error for repo 404")
+	}
+	if errors.Is(err, code.ErrNotFound) {
+		t.Errorf("repo 404 must not map to ErrNotFound; got %v", err)
+	}
+}
+
+// TestGetLatestDeploymentPaginates walks past a first page of
+// non-success deployments via the Link header to find the success on
+// page two (regression: only the first 10 were ever inspected).
+func TestGetLatestDeploymentPaginates(t *testing.T) {
+	page1 := make([]map[string]any, 0, 30)
+	for i := 60; i > 30; i-- {
+		page1 = append(page1, map[string]any{
+			"id": i, "sha": "shaFAIL", "ref": "v9.9.9", "created_at": "2026-07-15T10:00:00Z",
+		})
+	}
+	page2 := []map[string]any{
+		{"id": 1, "sha": "shaOK", "ref": "v1.2.3", "created_at": "2026-07-14T10:00:00Z"},
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/deployments"):
+			if r.URL.Query().Get("page") == "2" {
+				_ = json.NewEncoder(w).Encode(page2)
+				return
+			}
+			w.Header().Set("Link",
+				"<"+server.URL+r.URL.Path+"?environment=env&per_page=30&page=2>; rel=\"next\"")
+			_ = json.NewEncoder(w).Encode(page1)
+		case strings.HasSuffix(r.URL.Path, "/statuses"):
+			parts := strings.Split(r.URL.Path, "/")
+			id := parts[len(parts)-2]
+			state := "failure"
+			if id == "1" {
+				state = "success"
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": state}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	dep, err := a.GetLatestDeployment(context.Background(), "org", "repo", "env")
+	if err != nil {
+		t.Fatalf("GetLatestDeployment() error: %v", err)
+	}
+	if dep.Ref != "v1.2.3" || dep.SHA != "shaOK" {
+		t.Errorf("got %+v, want the page-two success (v1.2.3/shaOK)", dep)
+	}
+}

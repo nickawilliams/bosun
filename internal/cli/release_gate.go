@@ -260,13 +260,20 @@ func (r *deployTargetResolver) resolve(ctx context.Context, dt DeployTarget) rel
 	// D: the latest successful deployment of this environment, mapped
 	// to a release tag. Prefer the ref when it's already a tag; else
 	// resolve the deployed SHA to its lowest containing release tag.
+	// An API error is an observation *failure*, not an observation —
+	// fail closed as an ✗ row rather than deployGo: a transient 500
+	// while production is ahead would otherwise let a -y run dispatch
+	// the older tag and roll production back. deployedKnown=false is
+	// reserved for the affirmative "deployed, but not from a release
+	// tag" case, where deploying over a branch-deploy is plausible.
 	deployedKnown := true
 	dep, derr := r.host.GetLatestDeployment(ctx, dt.Owner, dt.Repo, dt.Environment)
 	switch {
 	case errors.Is(derr, code.ErrNotFound):
 		st.deployedTag = "" // known: never deployed
 	case derr != nil:
-		deployedKnown = false // couldn't determine
+		st.err = fmt.Errorf("deployed state: %w", derr)
+		return st
 	default:
 		path := r.pathByName[dt.RepoName]
 		if releaseTagPattern.MatchString(dep.Ref) {

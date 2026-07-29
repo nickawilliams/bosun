@@ -530,48 +530,64 @@ func (a *Adapter) GetReleaseByTag(ctx context.Context, owner, repository, tag st
 }
 
 // GetLatestDeployment returns the most recent successful deployment for
-// an environment. GitHub returns deployments newest-first; we walk a
-// page and, for each, read its latest status, returning the first whose
-// state is "success" — so a failed or in-progress latest deployment
-// doesn't get mistaken for what's live. Returns code.ErrNotFound when
-// the environment has no deployments or none succeeded in the page.
+// an environment. GitHub returns deployments newest-first; we walk the
+// pages and, for each deployment, read its latest status, returning the
+// first whose state is "success" — so a failed or in-progress latest
+// deployment doesn't get mistaken for what's live. Returns
+// code.ErrNotFound when the environment has no deployments or none
+// succeeded in the walked window (a missing environment is a 200 with
+// an empty list; a 404 means the repo itself wasn't found and surfaces
+// as an error, not ErrNotFound — "repo unreachable" must never read as
+// "never deployed").
 func (a *Adapter) GetLatestDeployment(ctx context.Context, owner, repository, environment string) (code.Deployment, error) {
-	path := fmt.Sprintf("/repos/%s/%s/deployments?environment=%s&per_page=10",
+	// Cap the walk: each deployment costs a statuses request, and a
+	// success normally sits in the first few entries. Environments
+	// with more consecutive non-success deployments than this read as
+	// ErrNotFound ("nothing live"), which matches the likeliest truth.
+	const maxDeployments = 90
+
+	path := fmt.Sprintf("/repos/%s/%s/deployments?environment=%s&per_page=30",
 		owner, repository, url.QueryEscape(environment))
-	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		if isNotFound(err) {
-			return code.Deployment{}, code.ErrNotFound
-		}
-		return code.Deployment{}, fmt.Errorf("listing deployments for %s: %w", environment, err)
-	}
-
-	var deployments []struct {
-		ID        int64     `json:"id"`
-		SHA       string    `json:"sha"`
-		Ref       string    `json:"ref"`
-		CreatedAt time.Time `json:"created_at"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&deployments); err != nil {
-		_ = resp.Body.Close()
-		return code.Deployment{}, fmt.Errorf("parsing deployments: %w", err)
-	}
-	_ = resp.Body.Close()
-
-	for _, d := range deployments {
-		state, err := a.latestDeploymentState(ctx, owner, repository, d.ID)
+	seen := 0
+	for path != "" && seen < maxDeployments {
+		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
-			return code.Deployment{}, err
+			return code.Deployment{}, fmt.Errorf("listing deployments for %s: %w", environment, err)
 		}
-		if state == "success" {
-			return code.Deployment{
-				Environment: environment,
-				Ref:         d.Ref,
-				SHA:         d.SHA,
-				State:       state,
-				CreatedAt:   d.CreatedAt,
-			}, nil
+
+		var deployments []struct {
+			ID        int64     `json:"id"`
+			SHA       string    `json:"sha"`
+			Ref       string    `json:"ref"`
+			CreatedAt time.Time `json:"created_at"`
 		}
+		if err := json.NewDecoder(resp.Body).Decode(&deployments); err != nil {
+			_ = resp.Body.Close()
+			return code.Deployment{}, fmt.Errorf("parsing deployments: %w", err)
+		}
+		next := nextPagePath(resp.Header.Get("Link"))
+		_ = resp.Body.Close()
+
+		for _, d := range deployments {
+			seen++
+			state, err := a.latestDeploymentState(ctx, owner, repository, d.ID)
+			if err != nil {
+				return code.Deployment{}, err
+			}
+			if state == "success" {
+				return code.Deployment{
+					Environment: environment,
+					Ref:         d.Ref,
+					SHA:         d.SHA,
+					State:       state,
+					CreatedAt:   d.CreatedAt,
+				}, nil
+			}
+			if seen >= maxDeployments {
+				break
+			}
+		}
+		path = next
 	}
 	return code.Deployment{}, code.ErrNotFound
 }
