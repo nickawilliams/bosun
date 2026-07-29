@@ -200,3 +200,82 @@ func TestRepoNoopDetail(t *testing.T) {
 		})
 	}
 }
+
+// TestAdvanceReleaseStatus locks the done-transition rollup: only a
+// real deploy — or a fully-observed "nothing needed doing" — may move
+// the issue, and failure to observe never reads as "nothing to do".
+func TestAdvanceReleaseStatus(t *testing.T) {
+	st := func(state deployState, include bool) releaseServiceTarget {
+		return releaseServiceTarget{state: state, include: include}
+	}
+
+	tests := []struct {
+		name     string
+		observed bool
+		states   []releaseServiceTarget
+		want     bool
+	}{
+		{
+			name:     "deploy selected → advance",
+			observed: true,
+			states:   []releaseServiceTarget{st(deployGo, true), st(deploySkip, false)},
+			want:     true,
+		},
+		{
+			name:     "everything already live → advance",
+			observed: true,
+			states:   []releaseServiceTarget{st(deploySkip, false), st(deploySkip, false)},
+			want:     true,
+		},
+		{
+			name:     "zero configured targets, providers fine → advance",
+			observed: true,
+			states:   nil,
+			want:     true,
+		},
+		{
+			name:     "providers failed to construct → hold",
+			observed: false,
+			states:   nil,
+			want:     false,
+		},
+		{
+			name:     "deployable but deselected → hold",
+			observed: true,
+			states:   []releaseServiceTarget{st(deployGo, false)},
+			want:     false,
+		},
+		{
+			name:     "blocked-only work → hold",
+			observed: true,
+			states:   []releaseServiceTarget{st(deployBlock, false), st(deploySkip, false)},
+			want:     false,
+		},
+		{
+			name:     "erred target → hold even with skips",
+			observed: true,
+			states: []releaseServiceTarget{
+				{err: fakeErr("resolve failed")},
+				st(deploySkip, false),
+			},
+			want: false,
+		},
+		{
+			name:     "erred target → hold even alongside a deploy",
+			observed: true,
+			states: []releaseServiceTarget{
+				st(deployGo, true),
+				{err: fakeErr("resolve failed")},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := advanceReleaseStatus(tt.observed, tt.states); got != tt.want {
+				t.Errorf("advanceReleaseStatus() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

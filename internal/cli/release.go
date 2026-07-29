@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -74,16 +75,30 @@ func newReleaseCmd() *cobra.Command {
 					return err
 				}
 				// --service narrows to the named services (default: all).
+				// A name matching no configured target is a hard error:
+				// silently filtering it out would leave zero targets and
+				// read as "nothing to deploy" for what is actually a typo.
 				if svc, _ := cmd.Flags().GetStringSlice("service"); len(svc) > 0 {
 					want := make(map[string]bool, len(svc))
 					for _, s := range svc {
 						want[s] = true
 					}
+					matched := make(map[string]bool, len(svc))
 					filtered := targets[:0]
 					for _, t := range targets {
 						if want[t.Service] {
+							matched[t.Service] = true
 							filtered = append(filtered, t)
 						}
+					}
+					var unknown []string
+					for _, s := range svc {
+						if !matched[s] {
+							unknown = append(unknown, s)
+						}
+					}
+					if len(unknown) > 0 {
+						return fmt.Errorf("--service %s doesn't match any configured deploy target", strings.Join(unknown, ", "))
 					}
 					targets = filtered
 				}
@@ -163,23 +178,8 @@ func newReleaseCmd() *cobra.Command {
 			}
 
 			// --- Status transition ---
-			// Advance to done when something actually deploys, or when
-			// nothing needed to (everything already live, none blocked).
-			// Deselecting every deploy or having blocked-only work holds
-			// the status — the issue isn't in production yet.
-			anyDeploy, anyDeployable, anyBlock := false, false, false
-			for _, st := range states {
-				switch st.state {
-				case deployGo:
-					anyDeployable = true
-					if st.include {
-						anyDeploy = true
-					}
-				case deployBlock:
-					anyBlock = true
-				}
-			}
-			if anyDeploy || (!anyDeployable && !anyBlock) {
+			observed := pipeline != nil && host != nil
+			if advanceReleaseStatus(observed, states) {
 				tracker, _ := newIssueTracker()
 				if sa, ok := statusAction(tracker, issue, currentStatus, "done"); ok {
 					actions = append(actions, sa)

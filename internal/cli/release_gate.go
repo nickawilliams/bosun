@@ -104,6 +104,42 @@ func repoNoopDetail(states []releaseServiceTarget, repo string) string {
 	return "(" + why + ")"
 }
 
+// advanceReleaseStatus decides whether a release run may move the
+// issue to done: something actually deployed, or nothing needed to
+// (everything already live, none blocked, none erred). Pure.
+//
+// Deselecting every deploy or having blocked-only work holds the
+// status — the issue isn't in production yet. observed=false (CI/CD
+// or code-host setup failed, so no target was ever classified) also
+// holds it: "couldn't look" must not read as "nothing to do" and mark
+// work done that never shipped. Zero *configured* targets still
+// advances (observed with an empty states slice) — a project with no
+// deploy targets uses release purely as the status transition.
+func advanceReleaseStatus(observed bool, states []releaseServiceTarget) bool {
+	if !observed {
+		return false
+	}
+	anyDeploy, anyDeployable, anyBlock := false, false, false
+	for _, st := range states {
+		if st.err != nil {
+			// An unresolved target is an unknown, not a no-op: some
+			// service's production state couldn't even be classified,
+			// so the issue can't be called done this run.
+			return false
+		}
+		switch st.state {
+		case deployGo:
+			anyDeployable = true
+			if st.include {
+				anyDeploy = true
+			}
+		case deployBlock:
+			anyBlock = true
+		}
+	}
+	return anyDeploy || (!anyDeployable && !anyBlock)
+}
+
 // chooseDeployTag picks the tag a service deploys: an explicit --tag
 // override wins; else the workspace's own release (the one prerelease
 // cut — whose contents, including swept-in extras, are what the team
