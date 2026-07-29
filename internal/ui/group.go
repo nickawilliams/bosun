@@ -211,8 +211,13 @@ func (g *group) Task(title string, fn func() error) error {
 			card.Subtitle(err.Error())
 			state = CardFailed
 		}
-		doneCh <- err
+		// The done message must land on msgCh BEFORE the caller
+		// unblocks: once doneCh is sent, the caller's next Task/Spinner
+		// pushes its start message, and a stale done arriving after it
+		// would clear the NEW task's spinner row — or silently drop a
+		// later task's result card via the activeTask guard.
 		g.msgCh <- groupTaskDoneMsg{err: err, rendered: card.Render(), state: state}
+		doneCh <- err
 	}()
 	err := <-doneCh
 	if err != nil {
@@ -235,10 +240,12 @@ func (g *group) Spinner(title string, fn func() error) error {
 		start := time.Now()
 		err := fn()
 		holdSpinner(start)
-		doneCh <- err
 		// Empty rendered string signals the message handler to clear
-		// the active task without appending a child card.
+		// the active task without appending a child card. Sent before
+		// doneCh for the same ordering reason as Task: the caller's
+		// next start message must not beat this done message to msgCh.
 		g.msgCh <- groupTaskDoneMsg{err: err, rendered: "", state: CardSuccess}
+		doneCh <- err
 	}()
 	return <-doneCh
 }
