@@ -8,8 +8,45 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
+
+// PreParseBootstrapFlags reads the --project and --output values out
+// of argv ahead of cobra's authoritative parse and sets them on
+// target's FlagSet so Bootstrap can honor them. A throwaway FlagSet
+// (unknown flags whitelisted) does the reading: parsing target's real
+// FlagSet here would mark every flag Changed, and pflag slice values
+// append on the second, authoritative parse — every --service /
+// --reviewer style flag would end up with duplicated values. Only
+// these two string flags are copied over; a string flag's second Set
+// is an idempotent overwrite.
+func PreParseBootstrapFlags(target *cobra.Command, args []string) {
+	if target == nil {
+		return
+	}
+	pre := pflag.NewFlagSet("bootstrap-preparse", pflag.ContinueOnError)
+	pre.ParseErrorsWhitelist.UnknownFlags = true
+	pre.Usage = func() {}
+	var wired []string
+	for _, name := range []string{"project", "output"} {
+		f := target.Flags().Lookup(name)
+		if f == nil {
+			continue
+		}
+		pre.StringP(name, f.Shorthand, "", "")
+		wired = append(wired, name)
+	}
+	if len(wired) == 0 {
+		return
+	}
+	_ = pre.Parse(args)
+	for _, name := range wired {
+		if pf := pre.Lookup(name); pf != nil && pf.Changed {
+			_ = target.Flags().Set(name, pf.Value.String())
+		}
+	}
+}
 
 // currentCmd holds the cobra command targeted by the current
 // invocation. Set by Bootstrap (called from main() before any cobra

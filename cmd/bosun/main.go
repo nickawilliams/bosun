@@ -14,17 +14,18 @@ var version = "dev"
 func main() {
 	cmd := cli.NewRootCmd(version)
 
-	// Resolve the target command from os.Args and pre-parse its
-	// flags so Bootstrap can honor --project / --output before
+	// Resolve the target command from os.Args and read the bootstrap
+	// flags (--project / --output) so Bootstrap can honor them before
 	// loading config and picking the renderer. cmd.Find only walks
-	// the command tree (no validators fire); ParseFlags' error is
-	// ignored on purpose — anything pflag rejects here will be
-	// rejected again by cobra/fang and flow to HandleError, which by
-	// then has a fully-configured UI to render it.
+	// the command tree (no validators fire). The read goes through a
+	// throwaway FlagSet — parsing the target's real FlagSet here
+	// would make cobra/fang's later authoritative parse the *second*
+	// parse, and pflag appends slice values on a re-parse, doubling
+	// every --service / --reviewer style flag. Malformed flags are
+	// ignored on purpose: cobra/fang rejects them again and flows to
+	// HandleError, which by then has a fully-configured UI.
 	target, remaining, _ := cmd.Find(os.Args[1:])
-	if target != nil {
-		_ = target.ParseFlags(remaining)
-	}
+	cli.PreParseBootstrapFlags(target, remaining)
 	if err := cli.Bootstrap(target); err != nil {
 		cli.HandleError(err)
 		os.Exit(1)
