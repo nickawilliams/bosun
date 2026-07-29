@@ -121,6 +121,15 @@ func (a *Adapter) BranchExists(ctx context.Context, repositoryPath, branchName s
 }
 
 func (a *Adapter) CreateWorktree(ctx context.Context, repositoryPath, worktreePath, branchName string) error {
+	// Clear stale worktree registrations before adding. Git refuses to
+	// add a worktree at a path it already has a registration for, even
+	// when the on-disk directory was deleted manually (rm -rf without
+	// `git worktree remove`). Prune only removes registrations whose
+	// target paths don't exist on disk, so it's safe to run
+	// unconditionally and leaves valid worktrees alone.
+	if err := run(ctx, repositoryPath, "worktree", "prune"); err != nil {
+		return fmt.Errorf("pruning stale worktrees: %w", err)
+	}
 	return run(ctx, repositoryPath, "worktree", "add", worktreePath, branchName)
 }
 
@@ -213,16 +222,8 @@ func (a *Adapter) LastCommitTime(ctx context.Context, repositoryPath, branchName
 	return time.Unix(secs, 0), nil
 }
 
-func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error) {
-	defaultBranch, err := a.GetDefaultBranch(ctx, repositoryPath)
-	if err != nil {
-		return nil, fmt.Errorf("getting default branch for diff: %w", err)
-	}
-
-	// Fetch latest to ensure accurate merge-base.
-	_ = run(ctx, repositoryPath, "fetch", "origin", defaultBranch)
-
-	out, err := output(ctx, repositoryPath, "diff", "--name-only", "origin/"+defaultBranch+"...HEAD")
+func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath, base string) ([]string, error) {
+	out, err := output(ctx, repositoryPath, "diff", "--name-only", base+"...HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("listing changed files: %w", err)
 	}
@@ -230,6 +231,59 @@ func (a *Adapter) ChangedFiles(ctx context.Context, repositoryPath string) ([]st
 		return nil, nil
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+func (a *Adapter) Fetch(ctx context.Context, repositoryPath, remote, ref string) error {
+	return run(ctx, repositoryPath, "fetch", remote, ref)
+}
+
+// IsMergedInto reports whether branch is an ancestor of base.
+// `git merge-base --is-ancestor` exits 0 when branch's tip is reachable
+// from base, exit 1 when it isn't, anything else when the call itself
+// failed (e.g. an unknown ref). The non-binary exit codes have to be
+// surfaced as errors so callers don't mistake "couldn't tell" for
+// "definitely not merged" — that mistake would BLOCK cleanup on a
+// transient git failure.
+func (a *Adapter) IsMergedInto(ctx context.Context, repositoryPath, branch, base string) (bool, error) {
+	err := run(ctx, repositoryPath, "merge-base", "--is-ancestor", branch, base)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+// HeadSHA returns the commit SHA at HEAD for the given path. Works
+// for both bare repos and worktrees (rev-parse traverses the linked
+// .git file).
+func (a *Adapter) HeadSHA(ctx context.Context, repositoryPath string) (string, error) {
+	return output(ctx, repositoryPath, "rev-parse", "HEAD")
+}
+
+// TagsContaining wraps `git tag --contains <sha>`. Returns each tag
+// (one per line on stdout) whose history reaches sha, in
+// implementation-defined order. Empty input → empty slice (not an
+// error).
+func (a *Adapter) TagsContaining(ctx context.Context, repositoryPath, sha string) ([]string, error) {
+	out, err := output(ctx, repositoryPath, "tag", "--contains", sha)
+	if err != nil {
+		return nil, fmt.Errorf("listing tags containing %s: %w", sha, err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// FetchTags refreshes tag refs from remote. The --quiet flag drops
+// the per-ref progress lines so this can run in the gather phase
+// without spamming stderr; --tags pulls every tag (including ones
+// not reachable from any local branch).
+func (a *Adapter) FetchTags(ctx context.Context, repositoryPath, remote string) error {
+	return run(ctx, repositoryPath, "fetch", remote, "--tags", "--quiet")
 }
 
 // run executes a git command in the given directory.

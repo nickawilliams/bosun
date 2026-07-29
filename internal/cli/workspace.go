@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 func newWorkspaceCmd() *cobra.Command {
@@ -20,25 +23,55 @@ func newWorkspaceCmd() *cobra.Command {
 
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
+		newWorkspaceDeleteCmd(),
 		newWorkspaceAddCmd(),
-		newWorkspaceStatusCmd(),
 		newWorkspaceRmCmd(),
 	)
 
 	return cmd
 }
 
-// resolveWorkspaceAddArgs splits positional args into a workspace name and a
-// list of repositories. Uses the already-resolved workspace from
-// CommandContext, falling back to args[0] only when empty.
-func resolveWorkspaceAddArgs(cc CommandContext, args []string) (string, []string, error) {
-	if cc.Workspace != "" {
-		return cc.Workspace, args, nil
+// pickOrPromptWorkspace presents an interactive picker of existing
+// workspaces. Returns the selected workspace name, or empty string in
+// non-interactive mode, when no workspaces exist, or when the user
+// cancels. Falls back to a free-text prompt when the workspace root is
+// configured but empty so the caller still has a path to supply a name.
+func pickOrPromptWorkspace() string {
+	if !isInteractive() {
+		return ""
 	}
-	if len(args) >= 1 {
-		return args[0], args[1:], nil
+
+	mgr, err := newWorkspaceManager()
+	if err != nil {
+		return promptRequired("Workspace")
 	}
-	return "", nil, fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or include the name as the first argument")
+
+	names, err := mgr.List()
+	if err != nil || len(names) == 0 {
+		return promptRequired("Workspace")
+	}
+
+	if len(names) == 1 {
+		return names[0]
+	}
+
+	opts := make([]huh.Option[string], len(names))
+	for i, n := range names {
+		opts[i] = huh.NewOption(n, n)
+	}
+
+	var selected string
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, "select workspace").Tight())
+	if err := runForm(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return ""
+	}
+	slot.Clear()
+	return selected
 }
 
 // pickWorkspaceAddRepositories prompts the user to select repositories to add
@@ -102,6 +135,53 @@ func pickWorkspaceAddRepositories(ctx context.Context, mgr *workspace.Manager, n
 	return selected, nil
 }
 
+// pickWorkspaceRmRepositories prompts the user to select repositories to
+// remove from the named workspace. Enumerates from the workspace's
+// current repo statuses (so the picker shows only repos actually
+// present). Returns the selected names, or nil if there is nothing to
+// remove.
+func pickWorkspaceRmRepositories(ctx context.Context, mgr *workspace.Manager, name string) ([]string, error) {
+	statuses, err := mgr.Status(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(statuses) == 0 {
+		ui.Skip(fmt.Sprintf("workspace %q has no repositories to remove", name))
+		return nil, nil
+	}
+
+	if len(statuses) == 1 {
+		return []string{statuses[0].Name}, nil
+	}
+
+	if !isInteractive() {
+		return nil, fmt.Errorf("no repositories specified (pass repository names or run interactively)")
+	}
+
+	opts := make([]huh.Option[string], len(statuses))
+	for i, s := range statuses {
+		opts[i] = huh.NewOption(s.Name, s.Name)
+	}
+
+	var selected []string
+	repositorySlot := ui.NewSlot()
+	repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
+	if err := runForm(
+		huh.NewMultiSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return nil, err
+	}
+	repositorySlot.Clear()
+
+	if len(selected) > 0 {
+		ui.SelectedMulti("repositories", selected)
+	}
+	return selected, nil
+}
+
 // argsToWorkspaceRepositories converts repository name arguments into
 // workspace.Repository by resolving them against the configured repository globs.
 func argsToWorkspaceRepositories(names []string) ([]workspace.Repository, error) {
@@ -117,7 +197,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Use:   "create <name> <repositories...>",
 		Short: "Create a new workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "create",
+			headerAnnotationTitle: "create workspace",
 		},
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -159,20 +239,20 @@ func newWorkspaceCreateCmd() *cobra.Command {
 
 func newWorkspaceAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [name] [repositories...]",
+		Use:   "add [repositories...]",
 		Short: "Add repositories to an existing workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "add",
+			headerAnnotationTitle: "add repository",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
-			fromHead, _ := cmd.Flags().GetBool("from-head")
-			ctx := cmd.Context()
-
-			name, repositoryNames, err := resolveWorkspaceAddArgs(cc, args)
-			if err != nil {
+			if err := cc.RequireWorkspace(); err != nil {
 				return err
 			}
+			name := cc.Workspace
+			repositoryNames := args
+			fromHead, _ := cmd.Flags().GetBool("from-head")
+			ctx := cmd.Context()
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
@@ -217,127 +297,93 @@ func newWorkspaceAddCmd() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceStatusCmd() *cobra.Command {
+func newWorkspaceRmCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status [name]",
-		Short: "Show workspace status",
+		Use:   "rm [repositories...]",
+		Short: "Remove repositories from an existing workspace",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "status",
+			headerAnnotationTitle: "remove repository",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
 			name := cc.Workspace
-			if len(args) > 0 {
-				name = args[0]
-			}
-			if name == "" {
-				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
-			}
+			repositoryNames := args
+			force, _ := cmd.Flags().GetBool("force")
+			ctx := cmd.Context()
 
 			mgr, err := newWorkspaceManager()
 			if err != nil {
 				return err
 			}
 
-			statuses, err := mgr.Status(context.Background(), name)
-			if err != nil {
-				return err
-			}
-
-			if len(statuses) == 0 {
-				ui.Skip(fmt.Sprintf("no repositories found in workspace %q", name))
-				return nil
-			}
-
-			for _, s := range statuses {
-				if s.Dirty {
-					ui.Skip(fmt.Sprintf("%s: %s · dirty", s.Name, s.Branch))
-				} else {
-					ui.Complete(fmt.Sprintf("%s: %s · clean", s.Name, s.Branch))
-				}
-			}
-
-			return nil
-		},
-	}
-
-	addProjectFlag(cmd)
-	addWorkspaceFlag(cmd)
-
-	return cmd
-}
-
-func newWorkspaceRmCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "rm [name]",
-		Short: "Remove a workspace",
-		Annotations: map[string]string{
-			headerAnnotationTitle: "remove",
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cc := commandContext(cmd)
-			name := cc.Workspace
-			if len(args) > 0 {
-				name = args[0]
-			}
-			if name == "" {
-				return fmt.Errorf("workspace name required: pass --workspace, run from inside a workspace, or provide as argument")
-			}
-			force, _ := cmd.Flags().GetBool("force")
-			yes, _ := cmd.Flags().GetBool("yes")
-
-			// Pre-Plan confirmation (separate from the Plan Card gate).
-			// Dry-run skips this — the user just wants to see what
-			// would happen, not commit to removing.
-			if !isDryRun(cmd) && !yes {
-				if !isInteractive() {
-					return fmt.Errorf("refusing to remove workspace %q non-interactively (pass --yes to confirm)", name)
-				}
-				confirmed, err := promptConfirm(fmt.Sprintf("Remove workspace %q?", name), false)
+			if len(repositoryNames) == 0 {
+				repositoryNames, err = pickWorkspaceRmRepositories(ctx, mgr, name)
 				if err != nil {
 					return err
 				}
-				if !confirmed {
-					ui.Skip("aborted")
+				if len(repositoryNames) == 0 {
 					return nil
 				}
 			}
 
-			mgr, err := newWorkspaceManager()
+			repositories, err := resolveRepositories(repositoryNames)
 			if err != nil {
 				return err
 			}
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 
-			repositories, err := resolveRepositories(nil)
+			// Removal deletes each repo's branch (local + remote)
+			// along with the worktree — the plan must say so. Branch
+			// names come from each worktree's actual HEAD via Status;
+			// repos whose branch couldn't be determined skip the
+			// branch delete in RemoveRepositories, so no row shows.
+			statuses, err := mgr.Status(ctx, name)
 			if err != nil {
 				return err
+			}
+			branchOf := make(map[string]string, len(statuses))
+			for _, s := range statuses {
+				branchOf[s.Name] = s.Branch
 			}
 
 			plan := ui.NewPlan()
 			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+				if b := branchOf[r.Name]; b != "" && b != "(unknown)" {
+					plan.Add(ui.PlanDestroy, "branch", "repo", r.Name, fmt.Sprintf("%s (local + remote)", b))
+				}
 			}
 
-			// If we're standing inside the workspace we're about to delete,
-			// move the process out so it doesn't operate from a directory
-			// that's about to disappear, and we can guide the user back.
+			// movedFrom is set inside the apply action if the process is
+			// standing in a worktree about to disappear; surfaced as a
+			// "cd back" hint after the plan finalizes.
 			var movedFrom string
 			projectRoot := config.FindProjectRoot()
-			if detected, _ := detectWorkspaceFromCWD(); detected == name && projectRoot != "" {
-				cwd, _ := os.Getwd()
-				if err := os.Chdir(projectRoot); err != nil {
-					return fmt.Errorf("moving to project root: %w", err)
-				}
-				movedFrom = cwd
-			}
-
-			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 			actions := []PlanAction{func() error {
-				return mgr.Remove(cmd.Context(), name, wsRepos, force)
+				if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
+					wsRoot := viper.GetString("workspace.root")
+					if !filepath.IsAbs(wsRoot) {
+						wsRoot = filepath.Join(projectRoot, wsRoot)
+					}
+					for _, r := range repositoryNames {
+						wtPath := filepath.Join(wsRoot, name, r)
+						if cwd == wtPath || strings.HasPrefix(cwd+string(os.PathSeparator), wtPath+string(os.PathSeparator)) {
+							if err := os.Chdir(projectRoot); err != nil {
+								return fmt.Errorf("moving to project root: %w", err)
+							}
+							movedFrom = cwd
+							break
+						}
+					}
+				}
+				return mgr.RemoveRepositories(ctx, name, wsRepos, repositoryNames, force)
 			}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
-				Confirm: false,
+				Confirm: true,
 				Apply:   !isDryRun(cmd),
 			}); err != nil {
 				return err
@@ -353,7 +399,93 @@ func newWorkspaceRmCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
-	cmd.Flags().BoolP("yes", "y", false, "skip the confirmation prompt")
+
+	return cmd
+}
+
+func newWorkspaceDeleteCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete [name]",
+		Short: "Delete a workspace",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "delete workspace",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cc := commandContext(cmd)
+			// Positional name wins over the resolution chain — it's an
+			// explicit on-the-line target. Otherwise fall through to the
+			// standard --workspace/env/CWD/prompt path.
+			if len(args) > 0 {
+				cc.Workspace = args[0]
+			}
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
+			name := cc.Workspace
+			force, _ := cmd.Flags().GetBool("force")
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			repositories, err := resolveRepositories(nil)
+			if err != nil {
+				return err
+			}
+			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
+
+			// Plan from the workspace's ACTUAL contents (Status), not
+			// the configured repo list — Remove acts on what's in the
+			// workspace, and the confirmation card must match: no rows
+			// for configured repos absent from this workspace, and the
+			// per-repo branch (local + remote) deletion disclosed.
+			statuses, err := mgr.Status(cmd.Context(), name)
+			if err != nil {
+				return err
+			}
+			plan := ui.NewPlan()
+			for _, s := range statuses {
+				plan.Add(ui.PlanDestroy, "worktree", "repo", s.Name, name)
+				if s.Branch != "" && s.Branch != "(unknown)" {
+					plan.Add(ui.PlanDestroy, "branch", "repo", s.Name, fmt.Sprintf("%s (local + remote)", s.Branch))
+				}
+			}
+			plan.Add(ui.PlanDestroy, "directory", "workspace", name, "")
+
+			// movedFrom is set inside the apply action if the process is
+			// standing in the workspace about to disappear; surfaced as a
+			// "cd back" hint after the plan finalizes.
+			var movedFrom string
+			projectRoot := config.FindProjectRoot()
+			actions := []PlanAction{func() error {
+				if detected, _ := detectWorkspaceFromCWD(); detected == name && projectRoot != "" {
+					cwd, _ := os.Getwd()
+					if err := os.Chdir(projectRoot); err != nil {
+						return fmt.Errorf("moving to project root: %w", err)
+					}
+					movedFrom = cwd
+				}
+				return mgr.Remove(cmd.Context(), name, wsRepos, force)
+			}}
+
+			if err := runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: true,
+				Apply:   !isDryRun(cmd),
+			}); err != nil {
+				return err
+			}
+
+			if movedFrom != "" {
+				ui.Info("shell is in a removed directory (%s); cd to %s", movedFrom, projectRoot)
+			}
+			return nil
+		},
+	}
+
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
 
 	return cmd
 }

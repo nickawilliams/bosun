@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -36,6 +36,12 @@ type previewResolution struct {
 	// alive (forced redeploy or no url_template fallback). Drives the
 	// PlanModify op for the deploy action.
 	isRedeploy bool
+
+	// cardPainted is true when the resolution morph already rendered the
+	// final "✓ Preview · name" card in-place. The caller skips its own
+	// ui.Selected call to avoid a double-paint (and the rewind/print flash
+	// it would have introduced).
+	cardPainted bool
 }
 
 // adoptChoice represents the user's decision when an env conflict is detected.
@@ -55,29 +61,46 @@ func promptAdopt(name string) (adoptChoice, string, error) {
 		return cancelAdopt, "", fmt.Errorf("environment %q already exists; pass --force to redeploy or run interactively", name)
 	}
 
-	choice := adoptExisting
-	err := runForm(
-		huh.NewSelect[adoptChoice]().
-			Title(fmt.Sprintf("environment %q already exists", name)).
-			Options(
-				huh.NewOption("adopt existing (skip deploy)", adoptExisting),
-				huh.NewOption("choose another name", chooseAnother),
-				huh.NewOption("cancel", cancelAdopt),
-			).
-			Value(&choice),
-	)
-	if err != nil {
+	// Keep the stable "Preview" card title and carry the conflict notice
+	// as a muted body sentence, with the env name in keyword style to
+	// match how repo names are referenced elsewhere. The trailing blank
+	// line gives the options breathing room beneath the prose; the select
+	// renders titleless under that.
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	notice := muted.Render("Environment ") + ui.Keyword(name) + muted.Render(" already exists.")
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, "preview").
+		Raw(notice, "").
+		AccentBody().
+		Tight())
+
+	// Binary Adopt / New Name buttons, defaulting to New Name so an
+	// accidental Enter picks a fresh name rather than silently adopting
+	// (and skipping the deploy). Ctrl+c (shown in the help footer)
+	// cancels. A dedicated 3+-button dialog primitive would let Cancel be
+	// its own button — left as future work.
+	adopt := false
+	if err := runForm(
+		newConfirm().
+			Affirmative("Adopt").
+			Negative("New Name").
+			Value(&adopt),
+	); err != nil {
+		// Leave the question on screen as context for the caller's
+		// cancellation card; pad so it lays out against huh's help row.
+		ui.RequestSpacer()
 		return cancelAdopt, "", err
 	}
+	slot.Clear()
 
-	if choice == chooseAnother {
-		newName, err := promptDefault("preview name", generateEphemeralName())
+	if !adopt {
+		newName, err := promptDefault("preview", generateEphemeralName())
 		if err != nil {
 			return cancelAdopt, "", err
 		}
 		return chooseAnother, strings.TrimSpace(newName), nil
 	}
-	return choice, "", nil
+	return adoptExisting, "", nil
 }
 
 // resolvePreview implements the --name × stored-metadata resolution matrix.
@@ -104,46 +127,97 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// spinner shows even when both names are empty (Row 1) — the work is
 	// near-instant in that case but the initial card frame keeps
 	// feedback consistent across all paths.
+	//
+	// The card keeps the stable "Preview" title through every state —
+	// the transient status text lives on a muted body line, so the
+	// title doesn't morph from "Resolving Preview" to "Preview" between
+	// the spinner and the final confirmation card. The morph's final
+	// frame is decided AFTER probing finishes (RunCardSteps' deferred
+	// successor): paths with a definitive outcome land directly on the
+	// "✓ Preview · name" card — no rewind, no flash — while paths that
+	// still need a prompt land on the "? Preview" header that huh's
+	// form sits under in the SAME BubbleTea program so the boundary
+	// stays seamless.
 	var (
 		metaEnv, flagEnv           preview.Environment
 		metaForceURL, flagForceURL string
 	)
-	rewind, probeErr := ui.RunCardRewindable("resolving preview", func() error {
-		env, err := provider.Get(ctx, issueKey)
-		if err != nil {
-			switch {
-			case errors.Is(err, preview.ErrNoEnvironment):
-				// fall through with empty metaEnv
-			case force && isProbeError(err):
-				metaForceURL = probeURL(err)
-			default:
-				return err
-			}
-		} else {
-			metaEnv = env
-		}
-
-		if flagName != "" {
-			env, err := provider.Inspect(ctx, flagName)
+	spinCard := ui.NewCard(ui.CardRunning, "preview").Muted("Resolving environment...")
+	morphPaintedSuccess := false
+	rewind, probeErr := ui.RunCardSteps([]ui.CardStep{{
+		Card: spinCard,
+		Run: func() error {
+			env, err := provider.Get(ctx, issueKey)
 			if err != nil {
 				switch {
 				case errors.Is(err, preview.ErrNoEnvironment):
-					// fall through with empty flagEnv
+					// fall through with empty metaEnv
 				case force && isProbeError(err):
-					flagForceURL = probeURL(err)
+					metaForceURL = probeURL(err)
+					// The returned env still carries the stored binding
+					// (name, URL, Probed=false). Keep it so resolution
+					// routes through the metaUnprobable arms — redeploy
+					// under the stored name — rather than Rows 1/2,
+					// where a freshly generated name would deploy and
+					// its Create would overwrite the binding, orphaning
+					// the (possibly live) existing env.
+					metaEnv = env
 				default:
 					return err
 				}
 			} else {
-				flagEnv = env
+				metaEnv = env
 			}
+
+			if flagName != "" {
+				env, err := provider.Inspect(ctx, flagName)
+				if err != nil {
+					switch {
+					case errors.Is(err, preview.ErrNoEnvironment):
+						// fall through with empty flagEnv
+					case force && isProbeError(err):
+						flagForceURL = probeURL(err)
+					default:
+						return err
+					}
+				} else {
+					flagEnv = env
+				}
+			}
+			return nil
+		},
+	}}, func() *ui.Card {
+		// Definitive single-outcome path: no flag, metadata pointed at
+		// a real env, no force-fallback notice to interleave. Nothing
+		// to prompt, so the morph's last frame IS the final card the
+		// user should see — bypassing the placeholder→rewind→repaint
+		// cycle that produced a visible flash.
+		if flagName == "" && metaEnv.Name != "" && metaForceURL == "" {
+			morphPaintedSuccess = true
+			return ui.NewCard(ui.CardSuccess, "preview").Subtitle(metaEnv.Name)
 		}
-		return nil
+		return ui.NewCard(ui.CardInput, "preview").Tight()
 	})
 	if probeErr != nil {
 		return previewResolution{}, probeErr
 	}
-	if rewind != nil {
+
+	metaName := metaEnv.Name
+	metaAlive := metaEnv.Probed && metaEnv.Alive
+	metaUnprobable := metaName != "" && !metaEnv.Probed
+	flagAlive := flagEnv.Probed && flagEnv.Alive
+
+	// The morphed "? Preview" header stays on screen only for the
+	// Row-1 interactive prompt, where huh's form renders directly
+	// beneath it (the morph exists so that boundary never shows a
+	// blank frame). Every other path rewinds it now and prints its
+	// own next card; the rare Row-1-with-force-notice path also
+	// rewinds so the notices don't render below a prompt header.
+	// When the morph already painted the final success card, there's
+	// nothing to rewind — that's the no-flash path.
+	row1Prompt := flagName == "" && metaName == "" && isInteractive() &&
+		metaForceURL == "" && flagForceURL == ""
+	if !row1Prompt && !morphPaintedSuccess {
 		rewind()
 	}
 
@@ -154,24 +228,68 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		ui.Skip(fmt.Sprintf("couldn't verify %s, proceeding (--force)", flagForceURL))
 	}
 
-	metaName := metaEnv.Name
-	metaAlive := metaEnv.Probed && metaEnv.Alive
-	metaUnprobable := metaName != "" && !metaEnv.Probed
-	flagAlive := flagEnv.Probed && flagEnv.Alive
-
 	res := previewResolution{}
 
 	switch {
 	case flagName == "" && metaName == "":
-		// Row 1: unset / unset — generate, optionally prompt.
-		name := generateEphemeralName()
-		if forceInteractive(cmd) {
-			resolved, perr := promptDefault("preview name", name)
+		// Row 1: unset / unset — generate and prompt (interactive
+		// only). Matches `bosun start`'s slug prompt: the generated
+		// name shows as the placeholder, empty submit accepts it,
+		// typed input goes through enforceValidName (which loops on
+		// invalid input). Non-interactive silently uses the generated
+		// name.
+		generated := generateEphemeralName()
+		name := generated
+		switch {
+		case row1Prompt:
+			// Header already on screen from the morph — run the form
+			// directly beneath it. ClearSpacer stands in for the
+			// Tight()-on-Print suppression the morphed card never got.
+			input, field := newDefaultInput(generated)
+			ui.ClearSpacer()
+			if err := runForm(input); err != nil {
+				return previewResolution{}, err
+			}
+			rewind()
+			validated, verr := enforceValidName(strings.TrimSpace(field.Resolved()))
+			if verr != nil {
+				return previewResolution{}, verr
+			}
+			name = validated
+		case isInteractive():
+			// Force-notice variant: header was rewound so the notices
+			// could print; fall back to the self-contained prompt.
+			resolved, perr := promptDefault("preview", name)
 			if perr != nil {
 				return previewResolution{}, perr
 			}
-			name = strings.TrimSpace(resolved)
+			resolved = strings.TrimSpace(resolved)
+			if resolved == "" {
+				resolved = name
+			}
+			validated, verr := enforceValidName(resolved)
+			if verr != nil {
+				return previewResolution{}, verr
+			}
+			name = validated
 		}
+
+		// A user-entered name was never probed (only flagName gets the
+		// Inspect during the resolution spinner), so an existing live
+		// env entered here would silently plan as a fresh create.
+		// Route it back through the matrix as if it had been passed
+		// via --name — Row 2 probes it and offers the adopt prompt on
+		// a conflict. Same mechanism handleConflict's "choose another
+		// name" uses. The untouched generated name skips this: it was
+		// just minted, randomly, and an extra probe round-trip per run
+		// would cost more than the collision risk justifies.
+		if name != generated {
+			if err := cmd.Flags().Set("name", name); err != nil {
+				return previewResolution{}, err
+			}
+			return resolvePreview(cmd, ctx, provider, issueKey, stage, force)
+		}
+
 		res.previewName = name
 		res.deployName = name
 
@@ -203,10 +321,16 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 				res.isCurrent = true
 			}
 		case metaUnprobable:
-			// No url_template — preserve today's behavior (redeploy with
-			// stored name, treat as modify).
+			// No url_template, or --force past a failed probe — redeploy
+			// with the stored name, treat as modify.
 			res.deployName = metaName
 			res.isRedeploy = true
+		default:
+			// Probed and dead — the env was torn down externally
+			// (cleanup job, manual delete). Metadata still points at
+			// the name, so recreate under it. PlanCreate, not
+			// redeploy: there's nothing alive to modify.
+			res.deployName = metaName
 		}
 
 	case flagName != "" && metaName != "" && flagName == metaName:
@@ -224,6 +348,9 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		case metaUnprobable:
 			res.deployName = flagName
 			res.isRedeploy = true
+		default:
+			// Probed and dead — same recreate semantics as Row 3.
+			res.deployName = flagName
 		}
 
 	case flagName != "" && metaName != "" && flagName != metaName:
@@ -243,8 +370,12 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 				}
 				// Preserve the teardown decision from the parent branch —
 				// the conflict resolution may have generated a new name
-				// but the stale-metadata teardown still applies.
-				if res.teardownName != "" {
+				// but the stale-metadata teardown still applies. Unless
+				// the resolution landed on the metadata env itself (the
+				// user typed its name at the "new name" prompt): tearing
+				// that down would destroy the very env the resolution
+				// just declared current, and delete its binding.
+				if res.teardownName != "" && conflict.previewName != res.teardownName {
 					conflict.teardownName = res.teardownName
 				}
 				return conflict, nil
@@ -255,6 +386,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	}
 
 	res.previewURL = renderStageURL(stage, res.previewName)
+	res.cardPainted = morphPaintedSuccess
 	return res, nil
 }
 
@@ -270,7 +402,7 @@ func enforceValidName(name string) (string, error) {
 			if !isInteractive() {
 				return "", err
 			}
-			next, perr := promptDefault("preview name", generateEphemeralName())
+			next, perr := promptDefault("preview", generateEphemeralName())
 			if perr != nil {
 				return "", perr
 			}

@@ -15,6 +15,7 @@ type PlanCardState int
 
 const (
 	PlanProposed  PlanCardState = iota // ? glyph — awaiting confirmation
+	PlanVerified                       // ✓ — assess found nothing to do; no apply ran
 	PlanApplying                       // spinner — executing actions
 	PlanSuccess                        // ✓ — all actions succeeded
 	PlanPartial                        // ! — some actions failed
@@ -82,21 +83,19 @@ func (pc *PlanCard) PrintRewindable() func() {
 // same primitive as status repo cards and Plan.Render().
 func (pc *PlanCard) renderWithGlyph(glyph string) string {
 	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
-	widths := pc.plan.columnWidths()
-	for _, item := range pc.plan.items {
-		g, content := planItemParts(item, widths)
-		card.Item(g, content)
-	}
+	pc.plan.AppendItemsToCard(card)
 	return card.renderWithGlyph(glyph)
 }
 
 // titleWord returns the title word for the current state. The
-// trailing colon is added by Card's titleStyle when a value is set,
-// so it isn't included here.
+// " · " separator before the value is added by Card's title row
+// rendering when a value is set, so it isn't included here.
 func (pc *PlanCard) titleWord() string {
 	switch pc.state {
 	case PlanProposed:
 		return "Pending"
+	case PlanVerified:
+		return "Verified"
 	case PlanApplying:
 		return "Applying"
 	case PlanSuccess:
@@ -128,6 +127,8 @@ func (pc *PlanCard) glyph() string {
 	switch pc.state {
 	case PlanProposed:
 		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
+	case PlanVerified:
+		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
 	case PlanApplying:
 		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphPending)
 	case PlanSuccess:

@@ -74,7 +74,15 @@ func resolveCommandContext(cmd *cobra.Command) (CommandContext, error) {
 	}
 
 	// Store on cmd context for retrieval by commandContext(cmd).
-	cmd.SetContext(context.WithValue(cmd.Context(), contextKey{}, cc))
+	// cmd.Context() can be nil when called from an error path before
+	// cobra/fang has dispatched (e.g. HandleError after a flag-parse
+	// failure); fall back to a fresh Background so WithValue doesn't
+	// panic.
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	cmd.SetContext(context.WithValue(parent, contextKey{}, cc))
 
 	return cc, nil
 }
@@ -92,6 +100,23 @@ func (cc *CommandContext) RequireIssue() error {
 	}
 	return fmt.Errorf(
 		"issue not specified: use --issue, set BOSUN_ISSUE, or run from a workspace",
+	)
+}
+
+// RequireWorkspace ensures the workspace is populated. If the pipeline
+// did not resolve a workspace, runs the interactive picker as a last
+// resort. Returns an error if the workspace is still empty after all
+// attempts.
+func (cc *CommandContext) RequireWorkspace() error {
+	if cc.Workspace != "" {
+		return nil
+	}
+	if ws := pickOrPromptWorkspace(); ws != "" {
+		cc.Workspace = ws
+		return nil
+	}
+	return fmt.Errorf(
+		"workspace not specified: use --workspace, set BOSUN_WORKSPACE, or run from inside a workspace",
 	)
 }
 

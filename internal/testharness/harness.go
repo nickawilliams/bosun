@@ -3,8 +3,11 @@ package testharness
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
@@ -33,8 +36,36 @@ type Harness struct {
 	Tracker *fakes.Tracker
 
 	stdin  *bytes.Buffer
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+	stdout *syncBuffer
+	stderr *syncBuffer
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer. Run wires the same
+// buffer as a cobra command stream (written from the test goroutine)
+// AND as the captureFD pipe sink (written from the copy goroutine) —
+// a bare bytes.Buffer would race whenever a command writes through
+// both os.Stdout and cmd.OutOrStdout.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
 }
 
 // New constructs a Harness with a fresh workspace, a fake tracker, and
@@ -59,8 +90,8 @@ func New(t *testing.T) *Harness {
 		Workspace: NewWorkspace(t),
 		Tracker:   fakes.NewTracker(),
 		stdin:     &bytes.Buffer{},
-		stdout:    &bytes.Buffer{},
-		stderr:    &bytes.Buffer{},
+		stdout:    &syncBuffer{},
+		stderr:    &syncBuffer{},
 	}
 
 	// Isolate viper, ui streams, and the project-root override so
@@ -72,6 +103,12 @@ func New(t *testing.T) *Harness {
 	t.Cleanup(func() { config.ProjectRootOverride = prevOverride })
 
 	t.Cleanup(ui.ResetStreams)
+
+	// Reset cli.Bootstrap's once-per-process guard so each test's
+	// cmd.Execute re-runs config load + UI-mode setup against its
+	// own fresh workspace and viper.
+	cli.ResetBootstrap()
+	t.Cleanup(cli.ResetBootstrap)
 
 	prevServices := cli.GetServices()
 	t.Cleanup(func() { cli.SetServices(prevServices) })
@@ -102,8 +139,32 @@ func (h *Harness) Type(s string) {
 // Run executes the bosun command tree with the given args. The
 // workspace path is injected as --project so commands resolve config
 // from the temp dir without depending on the test's CWD.
+//
+// Both cobra's cmd.OutOrStdout / cmd.ErrOrStderr streams AND the
+// process-wide os.Stdout / os.Stderr file descriptors are captured
+// for the duration of the call. The bosun rendering layer writes
+// directly to os.Stdout via fmt.Print, so capturing only the cobra
+// streams misses everything the user actually sees; tests can rely
+// on h.Stdout() / h.Stderr() returning the full rendered output
+// regardless of which channel each write went through.
 func (h *Harness) Run(args ...string) error {
 	h.t.Helper()
+
+	// Each Run should behave like a fresh process invocation:
+	// reset viper (so the file is re-read instead of returning cached
+	// values from a prior Run) and reset the bootstrap guard (so
+	// PersistentPreRunE actually runs Bootstrap again). Without this,
+	// a set + get sequence within one test sees the set succeed on
+	// disk but the get returns the pre-set value from the cached viper.
+	viper.Reset()
+	cli.ResetBootstrap()
+
+	// Fresh-process semantics extend to the output buffers: Stdout()
+	// documents "the most recent Run call", so prior runs' output
+	// must not accumulate into this one's assertions.
+	h.stdout.Reset()
+	h.stderr.Reset()
+
 	cmd := cli.NewRootCmd("test")
 	cmd.SetIn(h.stdin)
 	cmd.SetOut(h.stdout)
@@ -115,13 +176,50 @@ func (h *Harness) Run(args ...string) error {
 	}
 	cmd.SetArgs(final)
 
+	restoreOut := captureFD(h.t, &os.Stdout, h.stdout)
+	defer restoreOut()
+	restoreErr := captureFD(h.t, &os.Stderr, h.stderr)
+	defer restoreErr()
+
 	return cmd.Execute()
 }
 
-// Stdout returns everything written to the cobra command's out stream.
+// captureFD swaps *fd for a pipe whose reads are copied into sink for
+// the duration of the returned restore func. Used to intercept the
+// process-wide os.Stdout / os.Stderr during Run so direct fmt.Print
+// writes from the rendering layer land in the harness's buffers
+// alongside whatever cobra routes through its own streams.
+func captureFD(t *testing.T, fd **os.File, sink io.Writer) func() {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("captureFD pipe: %v", err)
+	}
+	orig := *fd
+	*fd = w
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(sink, r)
+		close(done)
+	}()
+
+	return func() {
+		_ = w.Close()
+		<-done
+		*fd = orig
+		_ = r.Close()
+	}
+}
+
+// Stdout returns everything written to stdout during the most recent
+// Run call — covers both cobra's cmd.OutOrStdout writes and direct
+// fmt.Print writes from the rendering layer.
 func (h *Harness) Stdout() string { return h.stdout.String() }
 
-// Stderr returns everything written to the cobra command's err stream.
+// Stderr returns everything written to stderr during the most recent
+// Run call — covers both cobra's cmd.ErrOrStderr writes and direct
+// fmt.Fprint(os.Stderr, ...) writes from the rendering layer.
 func (h *Harness) Stderr() string { return h.stderr.String() }
 
 // WorktreePath returns the canonical worktree path for a branch under
@@ -164,9 +262,9 @@ func notInstalled[T any](t *testing.T, name string) func() (T, error) {
 }
 
 // notInstalledPreview is the preview-provider variant of notInstalled
-// (the signature differs because PreviewProvider takes parameters).
-func notInstalledPreview(t *testing.T) func(string, func(string, string)) (preview.Provider, error) {
-	return func(_ string, _ func(string, string)) (preview.Provider, error) {
+// (the signature differs because PreviewProvider takes a parameter).
+func notInstalledPreview(t *testing.T) func(string) (preview.Provider, error) {
+	return func(_ string) (preview.Provider, error) {
 		t.Fatalf("test invoked PreviewProvider factory but no fake was installed")
 		return nil, fmt.Errorf("no PreviewProvider fake installed")
 	}

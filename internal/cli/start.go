@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
@@ -35,49 +37,98 @@ func newStartCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			// Fetch issue details for branch naming.
-			var detail issuepkg.Issue
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil {
-				if d, err := fetchIssue(ctx, tracker, issue); err != nil {
-					return fmt.Errorf("fetching issue: %w", err)
-				} else {
-					detail = d
-				}
+			// Story card + future meta cards via the shared lifecycle
+			// preamble. Tracker outages render a Failed card and
+			// continue with zero detail — start gracefully degrades by
+			// using the issue key as the branch name (no slug prompt).
+			// A definitive not-found is different: everything below
+			// mutates state keyed on the issue (branch, worktree,
+			// workspace — and the reuse-by-issue lookup then makes the
+			// name sticky for the key), so a typo'd key aborts here
+			// before anything is created for it.
+			detail, fetchErr := emitLifecyclePreamble(ctx, issue)
+			if errors.Is(fetchErr, issuepkg.ErrNotFound) {
+				return fmt.Errorf("issue %s not found — nothing was created for it", issue)
 			}
 
-			// Resolve slug for branch naming.
-			slugOverride, _ := cmd.Flags().GetString("slug")
-			var slug string
-			if detail.Key != "" {
-				switch {
-				case slugOverride != "":
-					slug = slugify(slugOverride)
-				case isInteractive():
-					suggested := slugify(detail.Title)
-					input, field := newDefaultInput(suggested)
-					slugSlot := ui.NewSlot()
-					slugSlot.Show(ui.NewCard(ui.CardInput, "branch slug").Tight())
-					if err := runForm(input.Title("Slug")); err != nil {
-						return err
-					}
-					slugSlot.Clear()
-					slug = field.Resolved()
-					if slug != suggested {
-						slug = slugify(slug)
-					}
-					ui.Selected("branch slug", slug)
+			// One workspace per issue: if a workspace already exists
+			// for this issue, reuse its name as the branch name and
+			// skip the slug prompt + buildBranchName entirely. The
+			// per-repo branch/worktree actions below assess each repo
+			// independently and no-op when nothing's needed, so the
+			// "reuse" path lands as setup-checks-only followed by the
+			// tracker transition.
+			//
+			// Where we got the issue (flag / picker / cwd) doesn't
+			// affect this — the issue key is the lookup key. Lookup
+			// failures abort rather than degrade: a swallowed List
+			// error would send start down the fresh-workspace path
+			// and mint a duplicate workspace for the issue. Matching
+			// is case-insensitive (issue keys are), and multiple hits
+			// (possible from pre-1-workspace-per-issue runs) error
+			// out for an explicit --workspace choice instead of
+			// silently attaching to the lexicographically first.
+			existingWorkspace := ""
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+			names, err := mgr.List()
+			if err != nil {
+				return fmt.Errorf("listing workspaces: %w", err)
+			}
+			var issueMatches []string
+			for _, name := range names {
+				if strings.EqualFold(extractIssue(filepath.Base(name)), issue) {
+					issueMatches = append(issueMatches, name)
 				}
 			}
+			switch len(issueMatches) {
+			case 0:
+			case 1:
+				existingWorkspace = issueMatches[0]
+			default:
+				return fmt.Errorf("multiple workspaces exist for %s (%s); pass --workspace to choose",
+					issue, strings.Join(issueMatches, ", "))
+			}
 
-			// Build branch name.
-			branchName := issue
-			if detail.Key != "" {
-				name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
-				if err != nil {
-					ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
-				} else {
-					branchName = name
+			var branchName string
+			if existingWorkspace != "" {
+				branchName = existingWorkspace
+			} else {
+				// Resolve slug for branch naming.
+				slugOverride, _ := cmd.Flags().GetString("slug")
+				var slug string
+				if detail.Key != "" {
+					switch {
+					case slugOverride != "":
+						slug = slugify(slugOverride)
+					case isInteractive():
+						suggested := slugify(detail.Title)
+						input, field := newDefaultInput(suggested)
+						slugSlot := ui.NewSlot()
+						slugSlot.Show(ui.NewCard(ui.CardInput, "branch slug").Tight())
+						if err := runForm(input); err != nil {
+							return err
+						}
+						slugSlot.Clear()
+						slug = field.Resolved()
+						if slug != suggested {
+							slug = slugify(slug)
+						}
+						ui.Selected("branch slug", slug)
+					}
+				}
+
+				// Build branch name.
+				branchName = issue
+				if detail.Key != "" {
+					name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
+					if err != nil {
+						ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
+					} else {
+						branchName = name
+					}
 				}
 			}
 
@@ -87,8 +138,43 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
-			// Interactive repository selection.
-			if len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
+			// Reusing an existing workspace: scope to repos already in
+			// it. The configured repo set may have grown since the
+			// workspace was created (new repos added to project
+			// config), but expanding the workspace as a side-effect of
+			// `start` is the wrong verb — that's what `workspace add`
+			// is for. Without this filter, `start` on an existing
+			// workspace silently produces a plan that provisions
+			// branches + worktrees for every newly-configured repo.
+			//
+			// resolveActiveRepositories enforces the --repository
+			// filter against the workspace's actual repo list, so
+			// `bosun start --repository=NotInWorkspace` surfaces as
+			// "no repositories matched filter (workspace repos: …)"
+			// rather than silently adding NotInWorkspace.
+			if existingWorkspace != "" {
+				active, err := resolveActiveRepositories(ctx, existingWorkspace, filterRepositories)
+				if err != nil {
+					return err
+				}
+				activeNames := make(map[string]bool, len(active))
+				for _, a := range active {
+					activeNames[a.Name] = true
+				}
+				filtered := repositories[:0]
+				for _, r := range repositories {
+					if activeNames[r.Name] {
+						filtered = append(filtered, r)
+					}
+				}
+				repositories = filtered
+			}
+
+			// Interactive repository selection — only for fresh
+			// workspaces. Reusing an existing one shouldn't re-ask the
+			// user to pick repos; membership is already settled and
+			// the per-repo assess will no-op the existing entries.
+			if existingWorkspace == "" && len(repositories) > 1 && len(filterRepositories) == 0 && isInteractive() {
 				opts := make([]huh.Option[string], len(repositories))
 				for i, r := range repositories {
 					opts[i] = huh.NewOption(r.Name, r.Name)
@@ -132,11 +218,37 @@ func newStartCmd() *cobra.Command {
 			g := git.New()
 			var actions []Action
 
+			// Per-repo branch name. For an existing workspace, the truth
+			// is what each worktree is actually checked out on — not the
+			// workspace name. Heterogeneous workspaces (the user manually
+			// checked out a different branch in one worktree, or curated
+			// the workspace with per-repo custom branches) need each
+			// repo's actions to key off the repo's real HEAD; otherwise
+			// the branch action sees the workspace-name branch as missing
+			// and creates a dangling sibling. Mirrors cleanup.go's
+			// actualBranch pattern.
+			//
+			// Fresh workspaces (no worktree yet) and any repo whose
+			// branch can't be determined fall back to the workspace name
+			// — the creation-time default.
+			actualBranch := make(map[string]string, len(repositories))
+			for _, r := range repositories {
+				actualBranch[r.Name] = branchName
+				if existingWorkspace == "" {
+					continue
+				}
+				wtPath := filepath.Join(wsRoot, branchName, r.Name)
+				if b, err := g.GetCurrentBranch(ctx, wtPath); err == nil && b != "" {
+					actualBranch[r.Name] = b
+				}
+			}
+
 			// Per-repo branch actions, then worktree actions (order matters:
 			// branches must exist before worktrees can be created).
 			for _, r := range repositories {
 				repoPath := r.Path
 				repoName := r.Name
+				branch := actualBranch[repoName]
 
 				actions = append(actions, Action{
 					Op:     ui.PlanCreate,
@@ -144,20 +256,20 @@ func newStartCmd() *cobra.Command {
 					Type:   "repo",
 					Name:   repoName,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
-						exists, err := g.BranchExists(ctx, repoPath, branchName)
+						exists, err := g.BranchExists(ctx, repoPath, branch)
 						if err != nil {
 							return 0, "", err
 						}
 						if exists {
-							return ActionCompleted, branchName, nil
+							return ActionCompleted, branch, nil
 						}
-						return ActionNeeded, branchName, nil
+						return ActionNeeded, branch, nil
 					},
 					Apply: func(ctx context.Context) error {
 						if fromHead {
-							return g.CreateBranchFromHead(ctx, repoPath, branchName)
+							return g.CreateBranchFromHead(ctx, repoPath, branch)
 						}
-						return g.CreateBranch(ctx, repoPath, branchName)
+						return g.CreateBranch(ctx, repoPath, branch)
 					},
 				})
 			}
@@ -192,6 +304,7 @@ func newStartCmd() *cobra.Command {
 				})
 			}
 
+			tracker, _ := newIssueTracker()
 			if sa, ok := statusAction(tracker, issue, detail.Status, "in_progress"); ok {
 				actions = append(actions, sa)
 			}

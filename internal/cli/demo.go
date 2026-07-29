@@ -3,10 +3,14 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"image/color"
+	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -23,10 +27,13 @@ func newDemoCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !interactive {
+				demoPalette()
 				demoCards(cmd)
+				demoSummary()
 				demoTree()
 				demoGroupsStatic()
 				demoItemCard()
+				demoWorkspaceMeta()
 				demoPlanCardStates()
 				demoFormStatic()
 				return nil
@@ -61,6 +68,13 @@ func newDemoCmd() *cobra.Command {
 			demoPlanDryRun(cmd)
 			demoPlanNoWork(cmd)
 
+			if err := demoContinue("Summary", false); err != nil {
+				return err
+			}
+			if err := demoSummaryInteractive(); err != nil {
+				return err
+			}
+
 			return nil
 		},
 	}
@@ -82,6 +96,68 @@ func buildDemoPlan() *ui.Plan {
 }
 
 // --- Static sections ---
+
+// demoPalette renders the active color palette as swatch rows, grouped
+// the way the palette struct groups them (semantic / resolution-role /
+// chrome), plus the symbol set. The canonical reference for "which
+// color is which" when designing new components.
+func demoPalette() {
+	swatch := func(name string, col color.Color) string {
+		block := lipgloss.NewStyle().Foreground(col).Render("██")
+		return fmt.Sprintf("%s %-13s", block, name)
+	}
+	rows := func(entries ...string) []string {
+		const perRow = 4
+		var out []string
+		for i := 0; i < len(entries); i += perRow {
+			end := min(i+perRow, len(entries))
+			out = append(out, strings.TrimRight(strings.Join(entries[i:end], " "), " "))
+		}
+		return out
+	}
+	header := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	var body []string
+	body = append(body, header.Render("Semantic"))
+	body = append(body, rows(
+		swatch("Primary", ui.Palette.Primary),
+		swatch("Secondary", ui.Palette.Secondary),
+		swatch("Brand", ui.Palette.Brand),
+		swatch("Accent", ui.Palette.Accent),
+		swatch("Info", ui.Palette.Info),
+		swatch("Success", ui.Palette.Success),
+		swatch("Error", ui.Palette.Error),
+		swatch("Warning", ui.Palette.Warning),
+		swatch("Muted", ui.Palette.Muted),
+		swatch("NormalFg", ui.Palette.NormalFg),
+		swatch("Keyword", ui.Palette.Keyword),
+	)...)
+	body = append(body, "", header.Render("Resolution Roles"))
+	body = append(body, rows(
+		swatch("RoleOpen", ui.Palette.RoleOpen),
+		swatch("RoleDone", ui.Palette.RoleDone),
+		swatch("RoleClosed", ui.Palette.RoleClosed),
+		swatch("RoleAttention", ui.Palette.RoleAttention),
+		swatch("RoleInFlight", ui.Palette.RoleInFlight),
+		swatch("RoleNeutral", ui.Palette.RoleNeutral),
+	)...)
+	body = append(body, "", header.Render("Chrome"))
+	body = append(body, rows(
+		swatch("Recessed", ui.Palette.Recessed),
+		swatch("Border", ui.Palette.Border),
+		swatch("Subtle", ui.Palette.Subtle),
+		swatch("ButtonFg", ui.Palette.ButtonFg),
+		swatch("LogoTop", ui.Palette.LogoTop),
+		swatch("LogoBottom", ui.Palette.LogoBottom),
+	)...)
+	body = append(body, "", header.Render("Symbols"))
+	body = append(body, strings.Join([]string{
+		ui.Palette.Check, ui.Palette.Cross, ui.Palette.Arrow,
+		ui.Palette.Bullet, ui.Palette.Dot,
+	}, "  "))
+
+	ui.NewCard(ui.CardInfo, "palette").Raw(body...).Print()
+}
 
 func demoCards(cmd *cobra.Command) {
 	// Static card — title, subtitle, and body with text, muted,
@@ -137,28 +213,61 @@ func demoCards(cmd *cobra.Command) {
 		Print()
 }
 
+// demoWorkspaceMeta renders the workspace status meta block's
+// Status (lifecycle stepper) + issue card pair in three variants:
+// happy path, blocked (active dot becomes ✗ yellow), and degraded
+// (tracker fetch failed — both cards collapse to their warning
+// rows). Uses the real builders so the demo stays faithful to what
+// `bosun status` and the lifecycle preambles render.
+func demoWorkspaceMeta() {
+	detail := issuepkg.Issue{
+		Key:    "EX-1234",
+		Title:  "Add login page",
+		Type:   "Story",
+		Status: "In Progress",
+		URL:    "https://jira.example.com/browse/EX-1234",
+	}
+	buildWorkspaceStoryCard(detail, detail.Key, true).Print()
+
+	blocked := detail
+	blocked.Status = "Blocked"
+	buildWorkspaceStoryCard(blocked, blocked.Key, true).Print()
+
+	buildWorkspaceStoryCard(issuepkg.Issue{}, "EX-1234", false).Print()
+}
+
 func demoPlanCardStates() {
-	// Static snapshot of the plan confirmation flow — plan card
-	// title + confirm with plan items as its content + buttons.
+	// Static snapshot of the plan confirmation flow — pending header
+	// card + confirm form with plan items as its content + buttons.
+	// Routes through newPlanPendingHeader and snapshotForm so the
+	// static rendering matches what runPlanCard produces when the
+	// user actually runs a plan.
 	plan := buildDemoPlan()
 	var confirmed bool
 
-	ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().Print()
+	newPlanPendingHeader(plan).Print()
 
-	f := huh.NewForm(huh.NewGroup(
+	snapshotForm(
 		newConfirm().
 			Title(plan.RenderItems()).
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
-	)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true)
+	)
+}
 
-	f.Init()
-	fmt.Print(f.View())
-	fmt.Print("\n\n")
+// demoSummary renders one Reporter.Summary card with a mixed
+// breakdown so the colored segments and the order-based glyph
+// rollup are both visible at a glance.
+func demoSummary() {
+	ui.Default().Summary(
+		"8 checks",
+		[]ui.SummarySegment{
+			{Count: 5, Label: "passed", Color: ui.Palette.Success},
+			{Count: 2, Label: "warnings", Color: ui.Palette.Warning},
+			{Count: 1, Label: "failed", Color: ui.Palette.Error},
+		},
+	)
 }
 
 func demoGroupsStatic() {
@@ -213,11 +322,15 @@ func demoTree() {
 }
 
 func demoFormStatic() {
-	// Static snapshot of a multi-field form — Init() + View()
-	// renders the focused state without running the interactive loop.
+	// Static snapshot of a multi-field form. Routes through
+	// snapshotForm so the prologue (leading spacer for multi-field)
+	// and the theme/layout/help wiring all match what runForm
+	// produces in interactive mode — no parallel construction code
+	// to keep in sync.
 	var (
 		summary   string
 		issueType string
+		services  []string
 		confirmed bool
 	)
 
@@ -225,8 +338,8 @@ func demoFormStatic() {
 		Subtitle("static snapshot (no interaction)").
 		Tight().Print()
 
-	f := huh.NewForm(huh.NewGroup(
-		huh.NewInput().
+	snapshotForm(
+		rawInput().
 			Title("Summary").
 			Placeholder("add user authentication flow").
 			Value(&summary),
@@ -238,18 +351,23 @@ func demoFormStatic() {
 				huh.NewOption("Task", "Task"),
 			).
 			Value(&issueType),
+		// Multi-select rows share Card.Item's grid (glyph col 6,
+		// content col 9) so the form lines up with the static card
+		// that typically replaces it — compare with the Services
+		// card shape in the preview flow.
+		huh.NewMultiSelect[string]().
+			Title("Services").
+			Options(
+				huh.NewOption("extracker · tag-api", "tag-api").Selected(true),
+				huh.NewOption("extracker · pdfgen", "pdfgen"),
+				huh.NewOption("host-ui", "host-ui").Selected(true),
+			).
+			Value(&services),
 		newConfirm().
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
-	)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true)
-
-	f.Init()
-	fmt.Print(f.View())
-	fmt.Print("\n\n")
+	)
 }
 
 // --- Interactive sections (gated by --interactive) ---
@@ -348,7 +466,7 @@ func demoForms() error {
 	nameTitle := "form: single input"
 	rewind := ui.NewCard(ui.CardInput, nameTitle).Tight().PrintRewindable()
 	if err := runForm(
-		huh.NewInput().
+		rawInput().
 			Description("Used as the worktree directory name").
 			Placeholder("my-workspace").
 			Value(&name),
@@ -386,7 +504,7 @@ func demoForms() error {
 	rewind = ui.NewCard(ui.CardInput, createTitle).Tight().
 		PrintRewindable()
 	if err := runForm(
-		huh.NewInput().
+		rawInput().
 			Title("Summary").
 			Placeholder("Add user authentication flow").
 			Value(&issueSummary),
@@ -459,7 +577,9 @@ func demoPlanDryRun(cmd *cobra.Command) {
 }
 
 func demoPlanNoWork(cmd *cobra.Command) {
-	// No-work: all items are no-change, plan finalizes as success.
+	// No-work: all items are no-change, plan finalizes as verified
+	// (PlanVerified — the sibling of PlanSuccess for "we checked,
+	// nothing needed doing").
 	ui.Info("no-work branch (all items unchanged)")
 	plan := ui.NewPlan().
 		Add(ui.PlanNoChange, "branch", "repo", "api", "feature/ABC-123").
@@ -469,35 +589,29 @@ func demoPlanNoWork(cmd *cobra.Command) {
 
 // --- Helpers ---
 
-// demoContinue shows a gate card between demo sections. The title
-// names the upcoming batch of components. When first is true, the
-// body invites the user to start; otherwise it gives them a moment
-// to review what just rendered. After the user chooses Continue, the
-// card stays on screen (rewound to its title only) as a section
-// heading for the output that follows.
+// demoContinue shows a gate card between demo sections via the
+// Dialog component. The title names the upcoming batch of
+// components; the body invites review or starts the run. After
+// the user chooses Continue, the dialog is gone and a section
+// heading card replaces it for the output that follows.
 func demoContinue(title string, first bool) error {
 	body := "Review the output above, then continue when ready."
 	if first {
 		body = "Each section pauses so you can review at your own pace."
 	}
 
-	confirmed := true
-	rewind := ui.NewCard(ui.CardInput, title).
-		Muted(body).
-		Tight().PrintRewindable()
-	if err := runForm(
-		newConfirm().
-			Affirmative("Continue").
-			Negative("Stop").
-			Value(&confirmed),
-	); err != nil {
+	confirmed, err := NewDialog(title).
+		Description(body).
+		Affirmative("Continue").
+		Negative("Stop").
+		Show()
+	if err != nil {
 		return err
 	}
-	rewind()
 	if !confirmed {
 		return ErrCancelled
 	}
-	// Re-print the title as a section heading (no body, no form).
+	// Re-print the title as a section heading for the output that follows.
 	ui.NewCard(ui.CardInfo, title).Print()
 	return nil
 }
@@ -514,4 +628,41 @@ func boolStr(b bool) string {
 		return "Yes"
 	}
 	return "No"
+}
+
+// demoSummaryInteractive shows the summary card by way of a form
+// that gathers counts from the user, then re-renders the summary
+// card with those values. Lets a designer play with the order-based
+// glyph rollup and the per-segment color treatment without leaving
+// the demo.
+func demoSummaryInteractive() error {
+	passedStr := "5"
+	warnedStr := "2"
+	failedStr := "1"
+
+	title := "summary: counts"
+	rewind := ui.NewCard(ui.CardInput, title).Tight().PrintRewindable()
+	if err := runForm(
+		rawInput().Title("Passed").Value(&passedStr),
+		rawInput().Title("Warnings").Value(&warnedStr),
+		rawInput().Title("Failed").Value(&failedStr),
+	); err != nil {
+		return err
+	}
+	rewind()
+
+	passed, _ := strconv.Atoi(passedStr)
+	warned, _ := strconv.Atoi(warnedStr)
+	failed, _ := strconv.Atoi(failedStr)
+	total := passed + warned + failed
+
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+		[]ui.SummarySegment{
+			{Count: passed, Label: "passed", Color: ui.Palette.Success},
+			{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+			{Count: failed, Label: "failed", Color: ui.Palette.Error},
+		},
+	)
+	return nil
 }

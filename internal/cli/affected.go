@@ -3,18 +3,29 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/nickawilliams/bosun/internal/code"
+	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-type unpushedRepo struct {
-	repo   Repository
-	branch string
-	count  int // -1 = never pushed, >0 = commits ahead
+// repoReadiness captures one repo's pre-deploy git state for the
+// "Workspace Readiness" section: whether local commits are on the remote
+// and whether the working tree is dirty.
+type repoReadiness struct {
+	repo     Repository
+	branch   string
+	unpushed int  // -1 = never pushed, >0 = commits ahead, 0 = in sync
+	dirty    bool // uncommitted working-tree changes
+	pushed   bool // we pushed it during this run
 }
 
 // AffectedResult holds the change-detection outcome for a single repository.
@@ -25,174 +36,366 @@ type AffectedResult struct {
 	HasChanges bool
 	Services   []string // Services to deploy.
 	Skipped    []string // Services excluded (for display).
+	// StaleRemote marks a failed pre-diff fetch: detection ran against
+	// whatever origin/<default> the local clone last saw, so the diff
+	// may be stale. Rendered as a ▲ note on the repo's card rows.
+	StaleRemote bool
 }
 
-// resolveAffectedServices determines which services are affected by changes
-// on each repository's current branch relative to the default branch. Repos
-// with no changes have all their services excluded. Repos using the map
-// config form get per-service path-prefix filtering.
-//
-// Pre-flight: checks for unpushed commits and offers to push (interactive)
-// or aborts (non-interactive) so the diff matches what CI has seen.
-func resolveAffectedServices(ctx context.Context, workspace string, g vcs.VCS) ([]AffectedResult, error) {
+// prepareAffectedRepos runs the interactive pre-flight ahead of
+// change detection: resolves the workspace's repos + branches, checks
+// for unpushed commits and offers to push (interactive) or aborts
+// (non-interactive) so the diff matches what CI has seen, and warns
+// about dirty working trees. Detection itself happens inside
+// emitDeploymentSources' group so each repo's `git fetch` runs under
+// a per-repo child spinner — prompts can't run inside the group's
+// TUI program, which is why this half stays separate.
+func prepareAffectedRepos(ctx context.Context, workspace string, g vcs.VCS) ([]Repository, map[string]string, error) {
 	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// --- Pre-flight: push check ---
-
-	repoBranch := make(map[string]string, len(repos))
-	var needsPush []unpushedRepo
-
-	for _, r := range repos {
-		branch, err := g.GetCurrentBranch(ctx, r.Path)
-		if err != nil {
-			return nil, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
-		}
-		repoBranch[r.Name] = branch
-		n, err := g.UnpushedCommits(ctx, r.Path, branch)
-		if err != nil {
-			return nil, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
-		}
-		if n != 0 {
-			needsPush = append(needsPush, unpushedRepo{repo: r, branch: branch, count: n})
-		}
+	_, repoBranch, err := emitWorkspaceReadiness(ctx, g, repos)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	if len(needsPush) > 0 {
-		if err := promptPushOrAbort(ctx, g, needsPush); err != nil {
-			return nil, err
-		}
-	}
-
-	// --- Dirty working tree warning ---
-
-	for _, r := range repos {
-		dirty, err := g.IsDirty(ctx, r.Path)
-		if err != nil {
-			continue
-		}
-		if dirty {
-			ui.Skip(fmt.Sprintf("%s: uncommitted changes won't be reflected", r.Name))
-		}
-	}
-
-	// --- Change detection ---
-
-	var results []AffectedResult
-	for _, r := range repos {
-		services := resolveRepoServiceNames(r.Name)
-		if len(services) == 0 {
-			continue
-		}
-
-		changed, err := g.ChangedFiles(ctx, r.Path)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", r.Name, err)
-		}
-
-		branch := repoBranch[r.Name]
-
-		if len(changed) == 0 {
-			results = append(results, AffectedResult{
-				RepoName: r.Name,
-				RepoPath: r.Path,
-				Branch:   branch,
-				Skipped:  services,
-			})
-			continue
-		}
-
-		// Check if per-service path filtering is configured (map form).
-		pathMap := resolveServicePaths(r.Name)
-		if pathMap == nil {
-			// Phase 1: repo has changes → include all services.
-			results = append(results, AffectedResult{
-				RepoName:   r.Name,
-				RepoPath:   r.Path,
-				Branch:     branch,
-				HasChanges: true,
-				Services:   services,
-			})
-			continue
-		}
-
-		// Phase 2: per-service path-prefix matching.
-		result := matchServicePaths(r.Name, services, changed, pathMap)
-		result.RepoPath = r.Path
-		result.Branch = branch
-		results = append(results, result)
-	}
-
-	return results, nil
+	return repos, repoBranch, nil
 }
 
-// promptPushOrAbort prompts to push unpushed repos (interactive) or aborts
-// (non-interactive). Mirrors the push-check pattern from review.go.
-func promptPushOrAbort(ctx context.Context, g vcs.VCS, needsPush []unpushedRepo) error {
+// hasRemoteBranch reports whether this repo's branch exists on the
+// remote — true when it was already pushed (unpushed != -1) or got
+// pushed during this run. review uses it to decide whether a PR can
+// be opened: a never-pushed branch has no remote head ref to base a
+// PR on.
+func (rr repoReadiness) hasRemoteBranch() bool {
+	return rr.unpushed != -1 || rr.pushed
+}
+
+// emitWorkspaceReadiness gathers each repo's pre-deploy git state
+// (current branch, unpushed-commit count, dirty tree) under a per-repo
+// "Checking …" spinner, then renders the "Workspace Readiness" section
+// — the consolidated state for every workspace repo, with the push
+// offer folded in. The gather and render phases share a single section
+// title so the whole flow follows the Services section's grammar —
+// stable title through gather/prompt/spinners/final card, one row per
+// repo, worst-first aggregate glyph:
+//
+//	✓  extracker                       (in sync, clean)
+//	✓  extracker · pushed 3 commits    (pushed during this run)
+//	▲  legacy-api · 3 unpushed commits, uncommitted changes
+//	▲  host-ui · not yet pushed
+//
+// Prompt structure: an answered question is never re-asked, and the
+// two possible prompts ask about different things —
+//
+//   - Unpushed commits → one bulk Yes/No push offer (default Yes,
+//     the safe action: local work ends up in the deploy) listing
+//     the unpushed repos. The ANSWER consumes the caveat for gating
+//     purposes: a "No" means those commits never trigger the
+//     continue gate (the user already chose to proceed without
+//     them), though the rows still show them.
+//   - Dirty trees → Continue/Cancel confirm over the readiness
+//     rows, Cancel focused. There's no fix-it action bosun could
+//     offer for uncommitted work, so proceeding past it must be
+//     deliberate. This fires regardless of the push answer — the
+//     push offer never asked about dirty trees.
+//
+// Worst case (unpushed + dirty) is two prompts, but never the same
+// question twice. Cancel aborts with ErrCancelled. Non-interactive
+// runs proceed with the static card (warning rows only). A fully-
+// ready workspace renders the static ✓ card with no prompts. Only
+// an accepted push that then fails is an error.
+func emitWorkspaceReadiness(ctx context.Context, g vcs.VCS, repos []Repository) ([]repoReadiness, map[string]string, error) {
+	readiness := make([]repoReadiness, len(repos))
+	repoBranch := make(map[string]string, len(repos))
+
+	// Raw / non-interactive mode: gather sequentially, print the
+	// static summary, return. No spinners, no prompts.
 	if !isInteractive() {
-		names := make([]string, len(needsPush))
-		for i, up := range needsPush {
-			names[i] = up.repo.Name
+		for i := range repos {
+			r := repos[i]
+			if rr, err := gatherRepoReadiness(ctx, g, r); err != nil {
+				return nil, nil, err
+			} else {
+				readiness[i] = rr
+				repoBranch[r.Name] = rr.branch
+			}
 		}
-		return fmt.Errorf(
-			"unpushed commits in %s — push first or use --service to bypass detection",
-			strings.Join(names, ", "),
-		)
+		buildWorkspaceReadinessCard(readiness).Print()
+		return readiness, repoBranch, nil
 	}
 
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-	var repoLines []string
-	for _, up := range needsPush {
-		status := "not yet pushed"
-		if up.count > 0 {
-			status = fmt.Sprintf("%d unpushed commit(s)", up.count)
+	// Interactive: RunGroup with a per-repo Spinner child that resolves
+	// to a result row showing the repo's branch state. Mirrors the
+	// cleanup-readiness pattern.
+	var gatherErr error
+	ui.RunGroup("workspace readiness", func(grp ui.Reporter) {
+		for i := range repos {
+			r := repos[i]
+			err := grp.Spinner(ui.PreserveCase(r.Name), func() error {
+				rr, err := gatherRepoReadiness(ctx, g, r)
+				if err != nil {
+					return err
+				}
+				readiness[i] = rr
+				repoBranch[r.Name] = rr.branch
+				return nil
+			})
+			if err != nil {
+				if gatherErr == nil {
+					gatherErr = err
+				}
+				grp.FailValue(ui.PreserveCase(r.Name), err.Error())
+				continue
+			}
+			emitReadinessRow(grp, ui.PreserveCase(r.Name), readiness[i])
 		}
-		repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-			mutedStyle.Render(up.repo.Name),
-			mutedStyle.Render(ui.Palette.Dot),
-			normalStyle.Render(status)))
+	})
+	if gatherErr != nil {
+		return nil, nil, gatherErr
 	}
 
-	promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-		"\n\n" + strings.Join(repoLines, "\n")
-
-	slot := ui.NewSlot()
-	slot.Show(ui.NewCard(ui.CardInput, "unpushed commits detected").Tight())
-
-	confirmed := true
-	if err := runForm(
-		newConfirm().
-			Title(promptContent).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirmed),
-	); err != nil {
-		return err
-	}
-	if !confirmed {
-		slot.Show(ui.NewCard(ui.CardSkipped, "push declined"))
-		slot.Finalize()
-		return fmt.Errorf("aborted: unpushed commits")
-	}
-
-	for _, up := range needsPush {
-		if err := slot.Run(fmt.Sprintf("pushing %s", up.repo.Name), func() error {
-			return g.Push(ctx, up.repo.Path, up.branch)
-		}); err != nil {
-			return fmt.Errorf("pushing %s: %w", up.repo.Name, err)
+	var anyUnpushed, anyDirty bool
+	for _, rr := range readiness {
+		if rr.unpushed != 0 {
+			anyUnpushed = true
+		}
+		if rr.dirty {
+			anyDirty = true
 		}
 	}
-	pushedPairs := make([]string, 0, len(needsPush)*2)
-	for _, up := range needsPush {
-		pushedPairs = append(pushedPairs, up.repo.Name, up.branch)
+	if !anyUnpushed && !anyDirty {
+		return readiness, repoBranch, nil
 	}
-	slot.Show(ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...))
-	slot.Finalize()
 
-	return nil
+	// Push offer via Dialog — interventional, but Dialog fits because
+	// the question reduces to "perform this action, yes/no?". Default
+	// to Push (the safer answer: local work ends up on the remote).
+	pushAccepted := false
+	if anyUnpushed {
+		confirmed, err := NewDialog("Push to remote?").
+			Description("Some branches have unpushed commits. Push them before continuing?").
+			Affirmative("Push").
+			Negative("Skip").
+			Default(true).
+			Show()
+		if err != nil {
+			return nil, nil, err
+		}
+		pushAccepted = confirmed
+	}
+
+	// Push action runs as its own RunGroup so each repo's push gets a
+	// per-repo spinner-then-result row alongside the gather group.
+	if pushAccepted {
+		var pushErr error
+		ui.RunGroup("pushing", func(grp ui.Reporter) {
+			for i := range readiness {
+				rr := &readiness[i]
+				if rr.unpushed == 0 {
+					continue
+				}
+				err := grp.Spinner(ui.PreserveCase(rr.repo.Name), func() error {
+					return g.Push(ctx, rr.repo.Path, rr.branch)
+				})
+				label := ui.PreserveCase(rr.repo.Name)
+				if err != nil {
+					if pushErr == nil {
+						pushErr = fmt.Errorf("pushing %s: %w", rr.repo.Name, err)
+					}
+					grp.FailValue(label, err.Error())
+					continue
+				}
+				rr.pushed = true
+				grp.Complete(label)
+			}
+		})
+		if pushErr != nil {
+			return nil, nil, pushErr
+		}
+	}
+
+	// Dirty Dialog runs whenever any worktree is dirty — independent
+	// of whether a push happened. The push offer never asked about
+	// dirty trees, so this gate stands on its own.
+	if anyDirty {
+		confirmed, err := NewDialog("Warning").
+			Description("Not all readiness checks passed, continue anyway?").
+			Affirmative("Continue").
+			Negative("Cancel").
+			Default(false).
+			Show()
+		if err != nil {
+			return nil, nil, err
+		}
+		if !confirmed {
+			return nil, nil, ErrCancelled
+		}
+	}
+	return readiness, repoBranch, nil
+}
+
+// gatherRepoReadiness runs the per-repo git probes that the readiness
+// gather phase needs: current branch, unpushed commit count, dirty
+// worktree state. Pulled out so both the raw-mode and interactive
+// paths share one probe implementation.
+func gatherRepoReadiness(ctx context.Context, g vcs.VCS, r Repository) (repoReadiness, error) {
+	branch, err := g.GetCurrentBranch(ctx, r.Path)
+	if err != nil {
+		return repoReadiness{}, fmt.Errorf("%s: getting current branch: %w", r.Name, err)
+	}
+	n, err := g.UnpushedCommits(ctx, r.Path, branch)
+	if err != nil {
+		return repoReadiness{}, fmt.Errorf("%s: checking unpushed commits: %w", r.Name, err)
+	}
+	dirty, _ := g.IsDirty(ctx, r.Path)
+	return repoReadiness{repo: r, branch: branch, unpushed: n, dirty: dirty}, nil
+}
+
+// emitReadinessRow renders one repo's readiness state into a parent
+// group: ✓ when clean, ▲ with a comma-joined caveat list otherwise.
+// Shape mirrors buildWorkspaceReadinessCard's per-row logic so the
+// raw-mode card and the interactive group rows stay consistent.
+func emitReadinessRow(grp ui.Reporter, label string, rr repoReadiness) {
+	caveats := readinessCaveats(rr)
+	if len(caveats) == 0 {
+		grp.Complete(label)
+		return
+	}
+	grp.SkipValue(label, strings.Join(caveats, ", "))
+}
+
+// readinessCaveats composes the muted-value caveat list shown next to
+// a repo's readiness row when its state isn't clean. Shared between
+// the interactive group emission and buildWorkspaceReadinessCard.
+func readinessCaveats(rr repoReadiness) []string {
+	var caveats []string
+	if rr.pushed {
+		n := rr.unpushed
+		switch {
+		case n == 1:
+			caveats = append(caveats, "pushed 1 commit")
+		case n > 1:
+			caveats = append(caveats, fmt.Sprintf("pushed %d commits", n))
+		default:
+			caveats = append(caveats, "pushed")
+		}
+	} else if rr.unpushed != 0 {
+		switch {
+		case rr.unpushed < 0:
+			caveats = append(caveats, "not yet pushed")
+		case rr.unpushed == 1:
+			caveats = append(caveats, "1 unpushed commit")
+		default:
+			caveats = append(caveats, fmt.Sprintf("%d unpushed commits", rr.unpushed))
+		}
+	}
+	if rr.dirty {
+		caveats = append(caveats, "uncommitted changes")
+	}
+	return caveats
+}
+
+// buildWorkspaceReadinessCard composes the final static "Workspace Readiness"
+// card: one Item row per repo, ready rows bare ✓, caveat rows ▲ with
+// the caveats joined into the muted value. Same row vocabulary as
+// buildServicesCard.
+func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
+	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+
+	sorted := append([]repoReadiness{}, readiness...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].repo.Name < sorted[j].repo.Name })
+
+	type row struct {
+		glyph, content string
+	}
+	rows := make([]row, 0, len(sorted))
+	state := ui.CardSuccess
+
+	for _, rr := range sorted {
+		caveats := readinessCaveats(rr)
+
+		warn := (rr.unpushed != 0 && !rr.pushed) || rr.dirty
+		glyph := glyphOK
+		if warn {
+			glyph = glyphWarn
+			state = ui.CardSkipped
+		}
+
+		content := repoStyle.Render(rr.repo.Name)
+		if len(caveats) > 0 {
+			content += muted.Render(" · " + strings.Join(caveats, ", "))
+		}
+		rows = append(rows, row{glyph, content})
+	}
+
+	card := ui.NewCard(state, "workspace readiness")
+	for _, r := range rows {
+		card.Item(r.glyph, r.content)
+	}
+	return card
+}
+
+// detectRepoAffected computes the change-detection outcome for one
+// repo. The second return is false when the repo has no services
+// configured (excluded from results entirely). Resolves the default
+// branch and fetches it for an accurate merge-base, then diffs against
+// it — callers should run this under a spinner.
+func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch string) (AffectedResult, bool, error) {
+	services := resolveRepoServiceNames(r.Name)
+	if len(services) == 0 {
+		return AffectedResult{}, false, nil
+	}
+
+	defaultBranch, err := g.GetDefaultBranch(ctx, r.Path)
+	if err != nil {
+		return AffectedResult{}, false, fmt.Errorf("%s: getting default branch: %w", r.Name, err)
+	}
+	// Fetch latest to ensure an accurate merge-base for the diff. A
+	// failed fetch (offline, auth) still detects against the local
+	// origin ref, but marks the result so the card says the diff may
+	// be stale instead of silently presenting it as current.
+	staleRemote := g.Fetch(ctx, r.Path, "origin", defaultBranch) != nil
+
+	changed, err := g.ChangedFiles(ctx, r.Path, "origin/"+defaultBranch)
+	if err != nil {
+		return AffectedResult{}, false, fmt.Errorf("%s: %w", r.Name, err)
+	}
+
+	if len(changed) == 0 {
+		return AffectedResult{
+			RepoName:    r.Name,
+			RepoPath:    r.Path,
+			Branch:      branch,
+			Skipped:     services,
+			StaleRemote: staleRemote,
+		}, true, nil
+	}
+
+	// Per-service path filtering when configured (map form);
+	// otherwise any change includes all services.
+	pathMap := resolveServicePaths(r.Name)
+	if pathMap == nil {
+		return AffectedResult{
+			RepoName:    r.Name,
+			RepoPath:    r.Path,
+			Branch:      branch,
+			HasChanges:  true,
+			Services:    services,
+			StaleRemote: staleRemote,
+		}, true, nil
+	}
+
+	result := matchServicePaths(r.Name, services, changed, pathMap)
+	result.RepoPath = r.Path
+	result.Branch = branch
+	result.StaleRemote = staleRemote
+	return result, true, nil
 }
 
 // resolveServicePaths returns the path-prefix map from the services config
@@ -280,26 +483,415 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 	return false
 }
 
-// printAffectedSummary displays the change detection results.
-func printAffectedSummary(results []AffectedResult) {
-	for _, r := range results {
-		if !r.HasChanges && len(r.Skipped) > 0 {
-			ui.Skip(fmt.Sprintf("%s: no changes, skipping (%s)",
-				r.RepoName, strings.Join(r.Skipped, ", ")))
-			continue
+// sourceRepo bundles one repo's detection + PR-lookup outcome while
+// emitDeploymentSources moves between its phases.
+type sourceRepo struct {
+	res      AffectedResult
+	identity gh.RepositoryIdentity
+	pr       code.PullRequest
+	prErr    error
+}
+
+// detFail records a repo whose change detection errored — rendered
+// as a ✗ row in the final Services card.
+type detFail struct {
+	repo string
+	err  error
+}
+
+// prResolved reports whether this repo's services can be folded into
+// a deployment when PR resolution applies: the lookup succeeded and a
+// PR exists for the branch. Always true when withPRs is false (the
+// release path needs no image tags). Note this deliberately does NOT
+// require HasChanges — an unchanged repo with a live PR is still
+// deployable, which is what makes redeploy-after-external-cleanup
+// expressible through the selection form.
+func (sr sourceRepo) prResolved(withPRs bool) bool {
+	return !withPRs || (sr.prErr == nil && sr.pr.Number > 0)
+}
+
+// emitDeploymentSources renders the Observe-phase "Services" section
+// that precedes the deploy plan, in three phases:
+//
+//  1. Detection + PR lookup. All repos run as steps of ONE spinner
+//     program (RunCardSteps) — stable "Services" title, per-repo
+//     status on the muted body line — whose final frame morphs into
+//     phase 2's form header or phase 3's card, so the whole cycle
+//     has zero TUI program boundaries (no blank-frame seams between
+//     repos). Prompts can't run during this phase, which is why
+//     prepareAffectedRepos (push offer, readiness gate) stays a
+//     separate pre-flight step.
+//
+//  2. Optional selection form. When interactive, not auto-approved
+//     (-y), and the caller passed no --service values, a multi-select
+//     opens pre-checked to detection's picks — affected services
+//     checked, everything else (path-map skips AND services of
+//     unchanged repos) listed unchecked. Unchanged repos stay
+//     toggleable on purpose: a preview env that was externally
+//     cleaned up needs a redeploy with zero new commits, and the
+//     form is where that intent gets expressed. One Enter accepts
+//     detection as-is. Only repos without a resolvable PR (withPRs)
+//     are excluded from toggling.
+//
+//  3. Final static card. The flat, alphabetically-sorted repo·service
+//     list (single-service repos show just the repo name), rendered
+//     as one Card with Item rows — a plain print, so there's no TUI
+//     program boundary (and no blank-frame seam) anywhere in the
+//     sequence:
+//
+//	✓  extracker · activity-api      (deploying)
+//	▲  extracker · pdfgen            (excluded — path map or toggle)
+//	▲  web · no changes
+//	▲  repo · no PR for branch "x"
+//	✗  repo · <error>                (detection or remote failure)
+//
+// Returns the (selection-adjusted) detection results for the caller's
+// services list, the overrides map (service → "pr-N", withPRs only),
+// and the repoPR list feeding the deploy action. A detection failure
+// renders a ✗ row and surfaces as the returned error; PR-lookup
+// failures render a ✗ row but stay non-fatal. Cancelling the form
+// aborts with the form's error.
+func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, repos []Repository, repoBranch map[string]string, withPRs bool) ([]AffectedResult, map[string]string, []repoPR, error) {
+	var host code.Host
+	if withPRs {
+		h, err := newCodeHost()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
 		}
-		if len(r.Skipped) > 0 {
-			ui.Complete(fmt.Sprintf("%s: %d of %d services affected",
-				r.RepoName, len(r.Services), len(r.Services)+len(r.Skipped)))
-			for _, s := range r.Services {
-				ui.Item("deploy", s)
+		host = h
+	}
+
+	// --- Phase 1: detection + PR lookup, one program over all repos ---
+
+	var sources []sourceRepo
+	var detFails []detFail
+	var firstDetErr error
+
+	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	steps := make([]ui.CardStep, 0, len(repos))
+	for _, repo := range repos {
+		spin := ui.NewCard(ui.CardRunning, "services").
+			Raw(statusMuted.Render("Detecting changes in ") +
+				ui.Keyword(repo.Name) +
+				statusMuted.Render("..."))
+		steps = append(steps, ui.CardStep{
+			Card: spin,
+			// Errors ride on detErr/prErr rather than the step's error
+			// path — a failed repo becomes a ✗ row in the final card
+			// and the sequence continues to the remaining repos.
+			Run: func() error {
+				var (
+					sr      sourceRepo
+					tracked bool
+					detErr  error
+				)
+				sr.res, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
+				if detErr != nil {
+					if firstDetErr == nil {
+						firstDetErr = detErr
+					}
+					detFails = append(detFails, detFail{repo.Name, detErr})
+					return nil
+				}
+				if !tracked {
+					return nil
+				}
+				// PR lookup runs for unchanged repos too — their services
+				// are toggleable in the selection form (redeploy after an
+				// env was externally cleaned up), and a toggled-on service
+				// needs its pr-N tag just like a changed one.
+				if withPRs {
+					sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
+					if sr.prErr == nil {
+						sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+					}
+				}
+				sources = append(sources, sr)
+				return nil
+			},
+		})
+	}
+
+	// --- Phase 2: optional selection form ---
+
+	type toggle struct {
+		src      int // index into sources
+		svc      string
+		selected bool
+	}
+	buildToggles := func() []toggle {
+		var toggles []toggle
+		for i, sr := range sources {
+			if !sr.prResolved(withPRs) {
+				continue
 			}
-			for _, s := range r.Skipped {
-				ui.Item("skip", s)
+			// Services = detection's picks (pre-checked); Skipped = the
+			// rest, unchecked but toggleable. For unchanged repos every
+			// service sits in Skipped, so they appear unchecked — checking
+			// one expresses "redeploy this even though nothing changed".
+			for _, svc := range sr.res.Services {
+				toggles = append(toggles, toggle{i, svc, true})
 			}
-		} else if len(r.Services) > 0 {
-			ui.Complete(fmt.Sprintf("%s: all services affected (%s)",
-				r.RepoName, strings.Join(r.Services, ", ")))
+			for _, svc := range sr.res.Skipped {
+				toggles = append(toggles, toggle{i, svc, false})
+			}
+		}
+		return toggles
+	}
+
+	flagServices, _ := cmd.Flags().GetStringSlice("service")
+	formGate := func() bool {
+		return len(buildToggles()) > 0 && len(flagServices) == 0 &&
+			isInteractive() && !isAutoApprove(cmd)
+	}
+
+	// The spinner program's final frame morphs into whatever comes
+	// next — the selection form's header when the form will show, the
+	// final Services card otherwise — so the program's exit paints
+	// content instead of clearing to blank.
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if formGate() {
+			return ui.NewCard(ui.CardInput, "services").Tight()
+		}
+		return buildServicesCard(sources, detFails, withPRs)
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	formShown := formGate()
+	if formShown {
+		toggles := buildToggles()
+		sort.SliceStable(toggles, func(i, j int) bool {
+			ri, rj := sources[toggles[i].src].res.RepoName, sources[toggles[j].src].res.RepoName
+			if ri != rj {
+				return ri < rj
+			}
+			return toggles[i].svc < toggles[j].svc
+		})
+
+		// Bold the repo segment so it visually separates from the
+		// service name (same color otherwise). Raw SGR bold-on/off
+		// (1/22) rather than a lipgloss render: lipgloss closes with a
+		// full reset, which would wipe huh's own selection/focus
+		// styling for the rest of the line; intensity toggles compose
+		// with whatever foreground huh applies.
+		opts := make([]huh.Option[string], len(toggles))
+		for i, t := range toggles {
+			r := sources[t.src].res
+			label := "\x1b[1m" + r.RepoName + "\x1b[22m"
+			if len(r.Services)+len(r.Skipped) > 1 {
+				label += " · " + t.svc
+			}
+			opts[i] = huh.NewOption(label, strconv.Itoa(i)).Selected(t.selected)
+		}
+
+		var picked []string
+		// The header was painted by the spinner program's final frame
+		// (not via Print), so suppress the spacer manually the way
+		// Tight-on-Print would have.
+		ui.ClearSpacer()
+		// Full height — no viewport cap. The submitted form is
+		// replaced by the final Services card listing the same rows,
+		// so matching the form's height to the list makes the
+		// swap read as in-place rather than an expand/collapse.
+		if err := runForm(
+			huh.NewMultiSelect[string]().
+				Options(opts...).
+				Height(len(opts)).
+				Value(&picked),
+		); err != nil {
+			ui.RequestSpacer()
+			return nil, nil, nil, err
+		}
+
+		pickedSet := make(map[int]bool, len(picked))
+		for _, p := range picked {
+			if i, err := strconv.Atoi(p); err == nil {
+				pickedSet[i] = true
+			}
+		}
+		// Rebuild each deployable repo's Services/Skipped from the
+		// selection, preserving detection order within each list.
+		chosen := make(map[int]map[string]bool, len(sources))
+		for i, t := range toggles {
+			if chosen[t.src] == nil {
+				chosen[t.src] = make(map[string]bool)
+			}
+			chosen[t.src][t.svc] = pickedSet[i]
+		}
+		for src, sel := range chosen {
+			r := &sources[src].res
+			all := append(append([]string{}, r.Services...), r.Skipped...)
+			r.Services = r.Services[:0]
+			r.Skipped = r.Skipped[:0]
+			for _, svc := range all {
+				if sel[svc] {
+					r.Services = append(r.Services, svc)
+				} else {
+					r.Skipped = append(r.Skipped, svc)
+				}
+			}
 		}
 	}
+
+	// --- Phase 3: final card + outputs ---
+
+	var results []AffectedResult
+	overrides := make(map[string]string)
+	var prs []repoPR
+	for _, sr := range sources {
+		if withPRs && !sr.prResolved(withPRs) && len(sr.res.Services) > 0 {
+			// The card renders this repo as not-deployable ("no PR for
+			// branch") and the form never offered its services — the
+			// returned result set must agree, or preview would deploy
+			// them with no pr-N override (i.e. the provider's default
+			// image tag). Local mutation only: sr is a copy, so the
+			// card built from sources is unaffected.
+			sr.res.Skipped = append(append([]string{}, sr.res.Services...), sr.res.Skipped...)
+			sr.res.Services = nil
+		}
+		results = append(results, sr.res)
+		if withPRs && sr.prResolved(withPRs) && len(sr.res.Services) > 0 {
+			tag := fmt.Sprintf("pr-%d", sr.pr.Number)
+			for _, svc := range sr.res.Services {
+				overrides[svc] = tag
+			}
+			prs = append(prs, repoPR{
+				RepoName: sr.res.RepoName,
+				Branch:   sr.res.Branch,
+				Owner:    sr.identity.Owner,
+				Repo:     sr.identity.Name,
+				PR:       sr.pr,
+			})
+		}
+	}
+
+	if formShown {
+		// The no-form path's final card was already painted by the
+		// spinner program's final frame; the form path erases its
+		// header and prints the selection-adjusted card.
+		rewind()
+		buildServicesCard(sources, detFails, withPRs).Print()
+	}
+
+	if len(overrides) == 0 {
+		return results, nil, prs, firstDetErr
+	}
+	return results, overrides, prs, firstDetErr
+}
+
+// buildServicesCard composes the final static "Services" card: the
+// flat sorted repo·service list as Item rows, with the card glyph
+// aggregated worst-first (fail > skipped > success) the same way
+// group parents aggregate their children.
+//
+// Row severity follows what the row means, not just "included or
+// not": excluded services and no-changes repos are a normal,
+// intentional outcome — they render fully de-emphasized (muted ○
+// glyph, muted text), not as warnings. The ▲ warning glyph is
+// reserved for rows the user might *expect* to deploy but that
+// can't (no PR for the branch); ✗ for actual failures.
+func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *ui.Card {
+	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	glyphOff := muted.Render("○")
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
+
+	type row struct {
+		repo, svc, glyph, content string
+	}
+	var rows []row
+	var nOK, nSkip, nFail int
+
+	pair := func(r AffectedResult, svc string) string {
+		if len(r.Services)+len(r.Skipped) == 1 {
+			return repoStyle.Render(r.RepoName)
+		}
+		return repoStyle.Render(r.RepoName) + muted.Render(" · "+svc)
+	}
+	// pairOff/noteOff: the fully-muted variants for not-included
+	// rows — the repo segment drops its primary color so the whole
+	// row recedes.
+	pairOff := func(r AffectedResult, svc string) string {
+		if len(r.Services)+len(r.Skipped) == 1 {
+			return muted.Render(r.RepoName)
+		}
+		return muted.Render(r.RepoName + " · " + svc)
+	}
+	note := func(repoName, text string) string {
+		return repoStyle.Render(repoName) + muted.Render(" · "+text)
+	}
+	noteOff := func(repoName, text string) string {
+		return muted.Render(repoName + " · " + text)
+	}
+
+	for _, f := range detFails {
+		nFail++
+		rows = append(rows, row{f.repo, "", glyphFail, note(f.repo, f.err.Error())})
+	}
+	for _, sr := range sources {
+		r := sr.res
+		if r.StaleRemote {
+			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, "remote fetch failed — diff may be stale")})
+		}
+		switch {
+		case withPRs && len(r.Services) == 0 && sr.prErr != nil:
+			// PR lookup failed — surface it regardless of whether the
+			// repo had changes. An unchanged repo whose lookup errored
+			// would otherwise mask as a plain "no changes" row and
+			// silently keep itself out of the selection form (a PR is
+			// what makes a repo selectable). ✗ so the user can retry.
+			nFail++
+			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
+		case !r.HasChanges && len(r.Services) == 0:
+			// Unchanged and nothing toggled on — one compact receded
+			// row instead of a ○ row per service. When the user DID
+			// toggle services on (redeploy without changes), the
+			// default branch renders the per-service pairs instead.
+			// A "no PR" note when the branch has none, since under
+			// PR-backed selection that's why it wasn't offered.
+			nSkip++
+			msg := "no changes"
+			if withPRs && sr.pr.Number == 0 {
+				msg = "no changes · no PR"
+			}
+			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, msg)})
+		case withPRs && r.HasChanges && sr.pr.Number == 0:
+			nSkip++
+			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
+		default:
+			for _, svc := range r.Services {
+				nOK++
+				rows = append(rows, row{r.RepoName, svc, glyphOK, pair(r, svc)})
+			}
+			for _, svc := range r.Skipped {
+				nSkip++
+				rows = append(rows, row{r.RepoName, svc, glyphOff, pairOff(r, svc)})
+			}
+		}
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].repo != rows[j].repo {
+			return rows[i].repo < rows[j].repo
+		}
+		return rows[i].svc < rows[j].svc
+	})
+
+	state := ui.CardSuccess
+	switch {
+	case nFail > 0:
+		state = ui.CardFailed
+	case nSkip > 0 && nOK == 0:
+		state = ui.CardSkipped
+	}
+
+	card := ui.NewCard(state, "services")
+	for _, r := range rows {
+		card.Item(r.glyph, r.content)
+	}
+	return card
 }

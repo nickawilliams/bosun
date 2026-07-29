@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -130,6 +131,66 @@ func TestRemoveBlockedByDirtyRepository(t *testing.T) {
 	// Should succeed with force.
 	if err := mgr.Remove(ctx, "dirty-branch", repositories, true); err != nil {
 		t.Fatalf("Remove(force=true) error: %v", err)
+	}
+}
+
+func TestRemoveRepositories(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Remove only "api"; "web" should remain.
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() error: %v", err)
+	}
+
+	wsPath := filepath.Join(wsRoot, "branch")
+	if _, err := os.Stat(filepath.Join(wsPath, "api")); !os.IsNotExist(err) {
+		t.Error("api worktree should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(wsPath, "web")); err != nil {
+		t.Errorf("web worktree should remain: %v", err)
+	}
+	if _, err := os.Stat(wsPath); err != nil {
+		t.Errorf("workspace directory should remain: %v", err)
+	}
+}
+
+func TestRemoveRepositoriesBlockedByDirty(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Dirty up "api"; ask to remove both "api" and "web".
+	_ = os.WriteFile(filepath.Join(wsRoot, "branch", "api", "dirty.txt"), []byte("x"), 0o644)
+
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api", "web"}, false); err == nil {
+		t.Error("RemoveRepositories() should fail with dirty named repo")
+	}
+
+	// Force overrides.
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api", "web"}, true); err != nil {
+		t.Fatalf("RemoveRepositories(force=true) error: %v", err)
+	}
+}
+
+func TestRemoveRepositoriesIgnoresUnaffectedDirty(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api", "web")
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+
+	_ = mgr.Create(ctx, "branch", repositories, true)
+
+	// Dirty up "web"; only remove "api". Should succeed without force —
+	// dirty checks only consider the targeted repos.
+	_ = os.WriteFile(filepath.Join(wsRoot, "branch", "web", "dirty.txt"), []byte("x"), 0o644)
+
+	if err := mgr.RemoveRepositories(ctx, "branch", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() error: %v", err)
 	}
 }
 
@@ -259,5 +320,55 @@ func TestDetectNameFromSubdirectory(t *testing.T) {
 	}
 	if name != filepath.Join("feature", "PROJ-456") {
 		t.Errorf("DetectName() = %q, want %q", name, "feature/PROJ-456")
+	}
+}
+
+// TestRemoveRepositoriesRefusesUnpushed locks the unpushed-commits
+// guard: a branch with a remote tracking counterpart and local commits
+// ahead of it refuses removal (the commits exist nowhere else), and
+// pushing clears the refusal without --force.
+func TestRemoveRepositoriesRefusesUnpushed(t *testing.T) {
+	wsRoot, repositories := setupTestProject(t, "api")
+	repositoryPath := repositories[0].Path
+
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %s\n%s", args, err, out)
+		}
+	}
+
+	// Give the source repo a real origin so the workspace branch can
+	// have a remote tracking counterpart.
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	gitRun("init", "--bare", bare)
+	gitRun("-C", repositoryPath, "remote", "add", "origin", bare)
+
+	mgr := NewManager(git.New(), wsRoot)
+	ctx := context.Background()
+	if err := mgr.Create(ctx, "feature-x", repositories, true); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	wtPath := filepath.Join(wsRoot, "feature-x", "api")
+	gitRun("-C", wtPath, "push", "-u", "origin", "feature-x")
+	gitRun("-C", wtPath, "commit", "--allow-empty", "-m", "local only")
+
+	err := mgr.RemoveRepositories(ctx, "feature-x", repositories, []string{"api"}, false)
+	if err == nil || !strings.Contains(err.Error(), "not pushed") {
+		t.Fatalf("RemoveRepositories() = %v, want unpushed-commits refusal", err)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("worktree should survive a refused removal: %v", statErr)
+	}
+
+	// Pushing the commit clears the refusal — no --force needed.
+	gitRun("-C", wtPath, "push", "origin", "feature-x")
+	if err := mgr.RemoveRepositories(ctx, "feature-x", repositories, []string{"api"}, false); err != nil {
+		t.Fatalf("RemoveRepositories() after push error: %v", err)
+	}
+	if _, statErr := os.Stat(wtPath); statErr == nil {
+		t.Fatal("worktree should be removed once the branch is fully pushed")
 	}
 }

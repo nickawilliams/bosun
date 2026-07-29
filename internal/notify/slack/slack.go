@@ -183,12 +183,23 @@ func truncate(s string, max int) string {
 type Adapter struct {
 	client *slackapi.Client
 	cache  apiCache
+	self   selfIdentity
+}
+
+// selfIdentity caches the authenticated identity (resolved once via
+// auth.test). Used to recognize bosun's own messages when matching by
+// author — the upsert fallback for xoxc/user tokens, which can't persist
+// readable message metadata.
+type selfIdentity struct {
+	resolved bool
+	userID   string
+	botID    string
 }
 
 // apiCache stores results from Slack API calls to avoid redundant requests
 // within a single command invocation. No TTL — the adapter is short-lived.
 type apiCache struct {
-	channels map[string]string          // channel name → ID
+	channels map[string]string           // channel name → ID
 	threads  map[string]notify.ThreadRef // "channelID:issueKey" → ThreadRef
 }
 
@@ -224,7 +235,6 @@ func (a *Adapter) Close() {
 	saveCache(a.cache)
 }
 
-
 func (a *Adapter) AuthTest(ctx context.Context) (string, error) {
 	resp, err := a.client.AuthTestContext(ctx)
 	if err != nil {
@@ -240,16 +250,38 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	}
 
 	hash := notify.ContentHash(msg.Content)
-	meta := bosunMetadata(msg.IssueKey)
+	meta := bosunMetadata(msg.IssueKey, hash)
 	opts := buildMsgOptions(msg.Content)
 	opts = append(opts, slackapi.MsgOptionMetadata(meta))
 
-	// Upsert: update existing message if one exists for this issue.
-	// The findThreadInChannel call is cached, so repeated calls from
-	// Assess → Notify don't hit the API twice.
+	// Upsert: update an existing message only when bosun owns it —
+	// matched on bosun metadata, or (for xoxc/user tokens that can't
+	// persist readable metadata) on a message bosun itself authored that
+	// mentions the issue key. See findOwnThread. The author scope is what
+	// keeps this safe: we never update/delete a message we don't own, so
+	// a stale match on someone else's message can't destroy it. A failed
+	// history fetch is an error, not "no existing message" — posting
+	// blind would duplicate the announcement the fetch failed to see.
+	//
+	// Two update strategies depending on what the API accepts:
+	//   - Block content (review/preview): chat.update works cleanly.
+	//   - markdown_text content (prerelease): chat.update rejects
+	//     markdown_text with internal_error in practice (despite the
+	//     docs listing it as supported). When chat.update fails we
+	//     fall back to chat.postMessage + chat.delete — post first, so
+	//     a failed post leaves the old announcement standing instead
+	//     of destroying it with nothing in its place. Subscribers see
+	//     a re-notification — that's desirable for "the announcement
+	//     was updated, look again". If the trailing delete fails, the
+	//     superseded message is orphaned; better than a hard failure
+	//     on the announcement path.
+	var replaceTS string // superseded message; deleted after a successful post
 	if msg.IssueKey != "" {
-		cacheKey := channelID + ":" + msg.IssueKey
-		existing, _ := a.findThreadInChannel(ctx, channelID, msg.IssueKey)
+		cacheKey := channelID + ":own:" + msg.IssueKey
+		existing, ferr := a.findOwnThread(ctx, channelID, msg.IssueKey)
+		if ferr != nil {
+			return notify.ThreadRef{}, fmt.Errorf("locating existing notification: %w", ferr)
+		}
 		if existing.Timestamp != "" {
 			// Skip update if content hasn't changed.
 			if existing.ContentHash == hash {
@@ -259,18 +291,14 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 			if err == nil {
 				// Update the cached hash so subsequent runs detect no change.
 				existing.ContentHash = hash
-				if a.cache.threads == nil {
-					a.cache.threads = make(map[string]notify.ThreadRef)
-				}
-				a.cache.threads[cacheKey] = existing
+				a.rememberThread(channelID, msg.IssueKey, existing)
 				return existing, nil
 			}
-			// Message was deleted — invalidate cache and fall through to post.
-			if strings.Contains(err.Error(), "message_not_found") {
-				delete(a.cache.threads, cacheKey)
-			} else {
-				return notify.ThreadRef{}, fmt.Errorf("updating message: %w", err)
+			if !strings.Contains(err.Error(), "message_not_found") {
+				replaceTS = existing.Timestamp
 			}
+			delete(a.cache.threads, cacheKey)
+			delete(a.cache.threads, channelID+":"+msg.IssueKey)
 		}
 	}
 
@@ -278,18 +306,36 @@ func (a *Adapter) Notify(ctx context.Context, msg notify.Message) (notify.Thread
 	if err != nil {
 		return notify.ThreadRef{}, fmt.Errorf("posting message: %w", err)
 	}
+	if replaceTS != "" {
+		// Best-effort removal of the superseded message — the fresh
+		// post above already carries the announcement.
+		_, _, _ = a.client.DeleteMessageContext(ctx, channelID, replaceTS)
+	}
 
-	// Cache the new message with its content hash.
+	// Cache the new message under both lookup keys so a subsequent
+	// upsert or FindThread in this session finds the message we just
+	// posted instead of a stale "not found".
 	ref := notify.ThreadRef{Channel: channelID, Timestamp: ts, ContentHash: hash}
-	cacheKey := channelID + ":" + msg.IssueKey
 	if msg.IssueKey != "" {
-		if a.cache.threads == nil {
-			a.cache.threads = make(map[string]notify.ThreadRef)
-		}
-		a.cache.threads[cacheKey] = ref
+		a.rememberThread(channelID, msg.IssueKey, ref)
 	}
 
 	return ref, nil
+}
+
+// rememberThread caches ref under both keys an issue's notification is
+// looked up by: the upsert key (":own:", read by findOwnThread) and the
+// plain key (read by FindThread). Writing both keeps an Assess-side
+// FindThread consistent with what Apply just posted or updated — within
+// this session, and across runs for the xoxc adapter's persistent cache,
+// where a run-1 Assess caches "not found", run 1 then posts, and a
+// run-2 Assess would otherwise read the stale negative back from disk.
+func (a *Adapter) rememberThread(channelID, issueKey string, ref notify.ThreadRef) {
+	if a.cache.threads == nil {
+		a.cache.threads = make(map[string]notify.ThreadRef)
+	}
+	a.cache.threads[channelID+":own:"+issueKey] = ref
+	a.cache.threads[channelID+":"+issueKey] = ref
 }
 
 func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (notify.ThreadRef, error) {
@@ -299,6 +345,123 @@ func (a *Adapter) FindThread(ctx context.Context, channel, issueKey string) (not
 	}
 
 	return a.findThreadInChannel(ctx, channelID, issueKey)
+}
+
+// findOwnThread locates a bosun-owned notification for the upsert path.
+// It matches on bosun metadata first (exact, app tokens). When that
+// finds nothing — the xoxc/user-token case, where Slack does not persist
+// readable message metadata — it falls back to a message authored by the
+// authenticated identity that mentions the issue key.
+//
+// BOTH passes are author-scoped. Metadata proves "a bosun posted this
+// for this issue", not "this principal's bosun posted it" — teammate
+// B's bosun writes the same event type and issue key, and an unscoped
+// metadata match would hand B's message to A's update/delete (which a
+// workspace-admin user token can actually destroy). When the identity
+// can't be resolved at all, ownership can't be verified, so nothing
+// matches — the caller posts fresh rather than touching a message that
+// might be someone else's.
+func (a *Adapter) findOwnThread(ctx context.Context, channelID, issueKey string) (notify.ThreadRef, error) {
+	cacheKey := channelID + ":own:" + issueKey
+	if !notify.NoCache(ctx) {
+		if ref, ok := a.cache.threads[cacheKey]; ok {
+			return ref, nil
+		}
+	}
+
+	params := &slackapi.GetConversationHistoryParameters{
+		ChannelID:          channelID,
+		Limit:              200,
+		IncludeAllMetadata: true,
+	}
+
+	resp, err := a.client.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		return notify.ThreadRef{}, fmt.Errorf("fetching channel history: %w", err)
+	}
+
+	var result notify.ThreadRef
+	selfUser, selfBot := a.resolveSelf(ctx)
+	selfKnown := selfUser != "" || selfBot != ""
+
+	// Metadata pass — exact key + hash (app tokens), gated on
+	// authorship like everything else here.
+	if selfKnown {
+		for _, msg := range resp.Messages {
+			if !messageAuthoredBy(msg, selfUser, selfBot) {
+				continue
+			}
+			if msg.Metadata.EventType != metadataEventType {
+				continue
+			}
+			key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+			if key != issueKey {
+				continue
+			}
+			hash, _ := msg.Metadata.EventPayload["content_hash"].(string)
+			result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp, ContentHash: hash}
+			break
+		}
+	}
+
+	// Author-scoped fallback — xoxc/user tokens can't persist readable
+	// metadata, so recognize our own prior message by author + mention.
+	if result.Timestamp == "" && selfKnown {
+		for _, msg := range resp.Messages {
+			if messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, issueKey) {
+				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
+				break
+			}
+		}
+	}
+
+	if a.cache.threads == nil {
+		a.cache.threads = make(map[string]notify.ThreadRef)
+	}
+	a.cache.threads[cacheKey] = result
+	return result, nil
+}
+
+// resolveSelf returns the authenticated identity's user and bot IDs,
+// resolved once via auth.test and cached for the adapter's lifetime.
+// Returns empty strings when auth.test fails (the author-scoped fallback
+// then no-ops, leaving metadata matching as the only path).
+func (a *Adapter) resolveSelf(ctx context.Context) (userID, botID string) {
+	if a.self.resolved {
+		return a.self.userID, a.self.botID
+	}
+	a.self.resolved = true
+	if resp, err := a.client.AuthTestContext(ctx); err == nil {
+		a.self.userID = resp.UserID
+		a.self.botID = resp.BotID
+	}
+	return a.self.userID, a.self.botID
+}
+
+// messageAuthoredBy reports whether msg was posted by the given identity.
+func messageAuthoredBy(msg slackapi.Message, userID, botID string) bool {
+	return (userID != "" && msg.User == userID) || (botID != "" && msg.BotID == botID)
+}
+
+// messageMentions reports whether issueKey appears in the message's
+// fallback text or its section/header blocks.
+func messageMentions(msg slackapi.Message, issueKey string) bool {
+	if strings.Contains(msg.Text, issueKey) {
+		return true
+	}
+	for _, block := range msg.Blocks.BlockSet {
+		switch b := block.(type) {
+		case *slackapi.SectionBlock:
+			if b.Text != nil && strings.Contains(b.Text.Text, issueKey) {
+				return true
+			}
+		case *slackapi.HeaderBlock:
+			if b.Text != nil && strings.Contains(b.Text.Text, issueKey) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findThreadInChannel searches recent messages in a resolved channel ID for
@@ -340,31 +503,16 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	// sent before metadata was added, or by other tools).
 	if result.Timestamp == "" {
 		for _, msg := range resp.Messages {
-			if strings.Contains(msg.Text, issueKey) {
+			if messageMentions(msg, issueKey) {
 				result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-				break
-			}
-			for _, block := range msg.Blocks.BlockSet {
-				if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
-					if strings.Contains(section.Text.Text, issueKey) {
-						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-						break
-					}
-				}
-				if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
-					if strings.Contains(header.Text.Text, issueKey) {
-						result = notify.ThreadRef{Channel: channelID, Timestamp: msg.Timestamp}
-						break
-					}
-				}
-			}
-			if result.Timestamp != "" {
 				break
 			}
 		}
 	}
 
-	// Cache the result (including zero refs — "not found" is also cached).
+	// Cache the result (including zero refs — "not found" is also cached,
+	// but only for this session: saveCache skips negatives, so a later
+	// run re-scans instead of trusting a stale "not found").
 	if a.cache.threads == nil {
 		a.cache.threads = make(map[string]notify.ThreadRef)
 	}
@@ -373,20 +521,100 @@ func (a *Adapter) findThreadInChannel(ctx context.Context, channelID, issueKey s
 	return result, nil
 }
 
+// HasAnnouncement searches the channel's recent history for any
+// message containing query (typically a release URL). Reuses the
+// same GetConversationHistory pull that FindThread uses — no
+// search.messages call, so no extra scope requirements.
+//
+// excludeIssueKey scopes the dedup: messages whose bosun metadata
+// names that issue key are NOT counted as matches, so same-workspace
+// re-runs fall through to Notify (which upserts). Empty string means
+// "any message matches."
+//
+// Soft-fail policy: errors return (false, err) so callers can choose
+// to log and proceed; a false result on error means "we don't know,
+// announce conservatively." Empty query → (false, nil) without a
+// network call (defensive — nothing useful to match against).
+func (a *Adapter) HasAnnouncement(ctx context.Context, channel, query, excludeIssueKey string) (bool, error) {
+	if query == "" {
+		return false, nil
+	}
+	channelID, err := a.resolveChannelID(ctx, channel)
+	if err != nil {
+		return false, err
+	}
+
+	params := &slackapi.GetConversationHistoryParameters{
+		ChannelID:          channelID,
+		Limit:              200,
+		IncludeAllMetadata: excludeIssueKey != "",
+	}
+	resp, err := a.client.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("fetching channel history: %w", err)
+	}
+
+	var selfUser, selfBot string
+	if excludeIssueKey != "" {
+		selfUser, selfBot = a.resolveSelf(ctx)
+	}
+	isOwn := func(msg slackapi.Message) bool {
+		if excludeIssueKey == "" {
+			return false
+		}
+		if msg.Metadata.EventType == metadataEventType {
+			key, _ := msg.Metadata.EventPayload["issue_key"].(string)
+			if key == excludeIssueKey {
+				return true
+			}
+		}
+		// xoxc/user tokens can't read message metadata back, so an
+		// announcement this identity posted would otherwise read as a
+		// foreign match and the caller would skip the upsert, leaving
+		// the stale announcement in place. Mirror findOwnThread's
+		// author + mention recognition.
+		return messageAuthoredBy(msg, selfUser, selfBot) && messageMentions(msg, excludeIssueKey)
+	}
+
+	for _, msg := range resp.Messages {
+		if isOwn(msg) {
+			continue
+		}
+		if strings.Contains(msg.Text, query) {
+			return true, nil
+		}
+		for _, block := range msg.Blocks.BlockSet {
+			if section, ok := block.(*slackapi.SectionBlock); ok && section.Text != nil {
+				if strings.Contains(section.Text.Text, query) {
+					return true, nil
+				}
+			}
+			if header, ok := block.(*slackapi.HeaderBlock); ok && header.Text != nil {
+				if strings.Contains(header.Text.Text, query) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 const metadataEventType = "bosun_notification"
 
-// bosunMetadata builds the Slack message metadata for a bosun notification.
-// Note: metadata is only readable with app tokens, not xoxc- user tokens.
-// The text-search fallback in findThreadInChannel handles xoxc- tokens.
-func bosunMetadata(issueKey string) slackapi.SlackMetadata {
+// bosunMetadata builds the Slack message metadata for a bosun
+// notification. The content_hash lets the upsert skip an unchanged
+// message without re-rendering. Note: metadata is only readable with app
+// tokens, not xoxc- user tokens — for those, findOwnThread falls back to
+// matching bosun's own authored message by issue-key mention.
+func bosunMetadata(issueKey, contentHash string) slackapi.SlackMetadata {
 	return slackapi.SlackMetadata{
 		EventType: metadataEventType,
 		EventPayload: map[string]any{
-			"issue_key": issueKey,
+			"issue_key":    issueKey,
+			"content_hash": contentHash,
 		},
 	}
 }
-
 
 func (a *Adapter) ReplyToThread(ctx context.Context, ref notify.ThreadRef, msg notify.Message) error {
 	opts := buildMsgOptions(msg.Content)
@@ -452,12 +680,28 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 
 // buildMsgOptions constructs Slack message options from notification content.
 // When block fields are set, it renders Block Kit blocks (not client-editable
-// but richer formatting). When only Text is set, it posts plain mrkdwn
-// (client-editable).
+// but richer formatting). When only Text is set, it sends the text via the
+// top-level `markdown_text` parameter — Slack's native renderer for
+// standard Markdown, which handles headings, bullets, links, and tables
+// that classic mrkdwn in the `text` field doesn't render. We use the
+// parameter rather than wrapping in a Block Kit markdown block because
+// the parameter is documented as supported on both `chat.postMessage`
+// and `chat.update` (the block isn't accepted by `chat.update`, which
+// rejects it with internal_error). Slack derives the notification preview
+// from `markdown_text` directly, so no separate `text` fallback is needed
+// — and the parameter is documented as mutually exclusive with `text`.
 func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 	if !c.HasBlocks() {
+		// markdown_text renders standard CommonMark, where a single `\n`
+		// is a soft break that joins lines into one paragraph. The
+		// generic content layer above us treats each `\n` as a visible
+		// line break (matching classic mrkdwn intuition); convert
+		// non-empty lines to end with the two-space Markdown hard-break
+		// marker so each line renders on its own line, leaving blank
+		// lines intact so paragraph breaks (`\n\n`) survive.
+		text := forceHardLineBreaks(c.Text)
 		return []slackapi.MsgOption{
-			slackapi.MsgOptionText(c.Text, false),
+			slackapi.MsgOptionMarkdownText(text),
 		}
 	}
 
@@ -533,4 +777,21 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 		slackapi.MsgOptionBlocks(blocks...),
 		slackapi.MsgOptionText(fallback, false),
 	}
+}
+
+// forceHardLineBreaks rewrites text so every visible line ends with a
+// Markdown hard-break marker (two trailing spaces). The markdown block
+// renders standard CommonMark, where consecutive non-blank lines join
+// into one paragraph; the generic content layer's intent is "each `\n` is
+// a visible line break" (matching mrkdwn semantics). Appending the marker
+// to non-empty lines makes each render on its own line while leaving
+// blank lines intact, so `\n\n` paragraph breaks survive.
+func forceHardLineBreaks(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = line + "  "
+		}
+	}
+	return strings.Join(lines, "\n")
 }

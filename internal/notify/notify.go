@@ -105,6 +105,22 @@ type Notifier interface {
 	// containing the issue key. Returns a zero ThreadRef if not found.
 	FindThread(ctx context.Context, channel, issueKey string) (ThreadRef, error)
 
+	// HasAnnouncement searches a channel for any recent message
+	// containing query (typically a release URL). Returns true when
+	// at least one match is found in the channel's recent history.
+	// Used by prerelease to detect whether a release-cut-by-someone-
+	// else has already been announced before posting a duplicate.
+	//
+	// excludeIssueKey scopes the dedup to messages NOT bearing that
+	// issue key in their bosun metadata — letting same-workspace
+	// re-runs fall through to Notify, which upserts the user's own
+	// prior message. Empty string means "match any message".
+	//
+	// Failures (missing scopes, network errors) return false + the
+	// error so callers can soft-fail; a false result on error keeps
+	// the announcement path conservative ("post when in doubt").
+	HasAnnouncement(ctx context.Context, channel, query, excludeIssueKey string) (bool, error)
+
 	// ReplyToThread sends a reply to an existing notification thread.
 	ReplyToThread(ctx context.Context, ref ThreadRef, msg Message) error
 

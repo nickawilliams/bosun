@@ -51,8 +51,9 @@ func Group(key string, children ...*TreeNode) *TreeNode {
 // The tree integrates with the card timeline by rendering its
 // connectors in the timeline column position.
 type Tree struct {
-	nodes       []*TreeNode
-	valueColumn int // 0 = auto from widest leaf; >0 = align values at this column
+	nodes          []*TreeNode
+	valueColumn    int  // 0 = auto from widest leaf; >0 = align values at this column
+	continuesBelow bool // outermost last node renders with ├── instead of └──
 }
 
 // NewTree creates an empty tree.
@@ -63,6 +64,21 @@ func NewTree() *Tree {
 // Add appends root-level nodes to the tree.
 func (t *Tree) Add(nodes ...*TreeNode) *Tree {
 	t.nodes = append(t.nodes, nodes...)
+	return t
+}
+
+// IsEmpty reports whether the tree has no root-level nodes.
+func (t *Tree) IsEmpty() bool { return len(t.nodes) == 0 }
+
+// ContinuesBelow signals that the tree is part of a larger timeline
+// segment — the outermost last node renders with the ├── tee instead
+// of the └── terminator, and the spine continues down (│) past its
+// children. Use when the row below the tree is another card in the
+// timeline (a summary card, etc.). Default (terminator) shape is
+// correct for self-contained trees whose footer is a legend / key
+// rather than a continuing card.
+func (t *Tree) ContinuesBelow() *Tree {
+	t.continuesBelow = true
 	return t
 }
 
@@ -94,7 +110,7 @@ func (t *Tree) Render() string {
 	}
 
 	var b strings.Builder
-	renderTreeNodes(&b, t.nodes, "", 0, globalMax)
+	renderTreeNodes(&b, t.nodes, "", 0, globalMax, t.continuesBelow)
 	return b.String()
 }
 
@@ -134,19 +150,24 @@ func maxEffectiveKeyWidth(nodes []*TreeNode, depth int) int {
 	return max
 }
 
-func renderTreeNodes(b *strings.Builder, nodes []*TreeNode, indent string, depth, globalMax int) {
+// renderTreeNodes recursively renders the tree. lastIsContinuation
+// applies only at this call's level: when true, the last node uses
+// the ├── tee + treeDown child-indent so the timeline visually
+// continues into whatever follows. Recursive calls into a node's
+// children always pass false — the continuation flag only governs
+// the outermost last branch.
+func renderTreeNodes(b *strings.Builder, nodes []*TreeNode, indent string, depth, globalMax int, lastIsContinuation bool) {
 	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	keyStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	dotStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 
 	for i, node := range nodes {
 		isLast := i == len(nodes)-1
+		terminates := isLast && !lastIsContinuation
 
-		var branch string
-		if isLast {
+		branch := treeBranch
+		if terminates {
 			branch = treeLast
-		} else {
-			branch = treeBranch
 		}
 
 		glyph := lipgloss.NewStyle().Foreground(node.GlyphColor).Render(node.Glyph)
@@ -177,13 +198,11 @@ func renderTreeNodes(b *strings.Builder, nodes []*TreeNode, indent string, depth
 		}
 
 		if len(node.Children) > 0 {
-			var childIndent string
-			if isLast {
+			childIndent := indent + connStyle.Render(treeDown)
+			if terminates {
 				childIndent = indent + connStyle.Render(treeBlank)
-			} else {
-				childIndent = indent + connStyle.Render(treeDown)
 			}
-			renderTreeNodes(b, node.Children, childIndent, depth+1, globalMax)
+			renderTreeNodes(b, node.Children, childIndent, depth+1, globalMax, false)
 		}
 	}
 }

@@ -3,16 +3,27 @@ package issue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrNotFound reports that the tracker definitively knows no issue by
+// the given key — as opposed to a transient failure where the issue's
+// existence couldn't be determined. Callers that mutate state keyed on
+// the issue (start's workspace provisioning) branch on this to abort
+// before creating anything for a typo'd key, while degrading
+// gracefully on mere connectivity problems.
+var ErrNotFound = errors.New("issue not found")
 
 // Issue represents an issue from a tracker.
 type Issue struct {
-	Key      string // e.g., "PROJ-123"
-	Title    string
-	Status   string // Current status name (e.g., "In Progress")
-	StatusID string // Provider status ID (e.g., "10219")
-	Type     string // e.g., "Story", "Bug"
-	URL      string // Web link to the issue
+	Key         string // e.g., "PROJ-123"
+	Title       string
+	Description string // Plain-text issue body. Empty when the tracker has none.
+	Status      string // Current status name (e.g., "In Progress")
+	StatusID    string // Provider status ID (e.g., "10219")
+	Type        string // e.g., "Story", "Bug"
+	TypeIconURL string // Issue-type icon image URL. Empty when none.
+	URL         string // Web link to the issue
 }
 
 // BoardColumn represents a column on an agile board.
@@ -44,8 +55,7 @@ type CreateRequest struct {
 	Project     string // Project key, e.g., "PROJ"
 	Title       string
 	Description string
-	Type        string // "story" or "bug"
-	Size        string // "small", "medium", "large"
+	Type        string // "story" | "bug" | "task"
 }
 
 // Tracker defines issue tracking operations needed by bosun.

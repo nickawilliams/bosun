@@ -128,7 +128,6 @@ type providerBuilder struct {
 	urlPattern  string
 	targets     []Target
 	inputName   func(subStage, concept string) string
-	info        *[]string
 	targetsFunc func(context.Context, string) ([]Target, error)
 }
 
@@ -160,12 +159,6 @@ func (b *providerBuilder) build(t *testing.T) preview.Provider {
 		URLTemplate: tmpl,
 		Targets:     targetsFunc,
 		InputName:   b.inputName,
-	}
-	if b.info != nil {
-		info := b.info
-		opts.OnInfo = func(action, value string) {
-			*info = append(*info, action+": "+value)
-		}
 	}
 	return New(opts)
 }
@@ -242,32 +235,37 @@ func TestGet_Alive(t *testing.T) {
 	}
 }
 
-func TestGet_DeadAutoClears(t *testing.T) {
+func TestGet_DeadKeepsBinding(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 
 	tracker := newFakeTracker().withName("brave-falcon")
-	var infos []string
 	p := newBuilder().
 		withTracker(tracker).
 		withURLPattern(server.URL + "/{{.Name}}").
-		withInfo(&infos).
 		build(t)
 
-	_, err := p.Get(context.Background(), "PROJ-1")
-	if !errors.Is(err, preview.ErrNoEnvironment) {
-		t.Fatalf("err = %v, want ErrNoEnvironment", err)
+	// Get is a pure read: a definitive-dead probe reports the binding as
+	// probed-but-not-alive without deleting it (the env may be torn down
+	// or a just-triggered deploy may still be in flight — a read must not
+	// clobber the binding).
+	env, err := p.Get(context.Background(), "PROJ-1")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
 	}
-	if tracker.deleteCalls != 1 {
-		t.Errorf("DeleteProperty called %d times, want 1", tracker.deleteCalls)
+	if env.Name != "brave-falcon" || env.IssueKey != "PROJ-1" {
+		t.Errorf("env = %+v", env)
 	}
-	if tracker.prop != nil {
-		t.Errorf("property not cleared: %s", tracker.prop)
+	if !env.Probed || env.Alive {
+		t.Errorf("Probed=%v, Alive=%v, want Probed=true, Alive=false", env.Probed, env.Alive)
 	}
-	if len(infos) != 1 || infos[0] != "cleared stale metadata: brave-falcon" {
-		t.Errorf("OnInfo messages = %v, want one cleared-metadata message", infos)
+	if tracker.deleteCalls != 0 {
+		t.Errorf("DeleteProperty called %d times, want 0 (read must not mutate)", tracker.deleteCalls)
+	}
+	if tracker.prop == nil {
+		t.Error("binding was cleared; want it preserved")
 	}
 }
 
@@ -641,9 +639,5 @@ func (b *providerBuilder) withURLPattern(s string) *providerBuilder {
 }
 func (b *providerBuilder) withTargets(ts []Target) *providerBuilder {
 	b.targets = ts
-	return b
-}
-func (b *providerBuilder) withInfo(out *[]string) *providerBuilder {
-	b.info = out
 	return b
 }

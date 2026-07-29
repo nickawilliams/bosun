@@ -3,9 +3,25 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
 )
+
+// DetailRef is a render-safe, apply-writable detail slot. Apply
+// closures run on a worker goroutine while the plan card's render
+// loop reads the item every frame, so the value goes through an
+// atomic rather than a bare string the two goroutines would race on.
+type DetailRef struct{ v atomic.Value }
+
+// Set stores the resolved detail. Safe from any goroutine.
+func (r *DetailRef) Set(s string) { r.v.Store(s) }
+
+// Get returns the resolved detail, or "" while unresolved.
+func (r *DetailRef) Get() string {
+	s, _ := r.v.Load().(string)
+	return s
+}
 
 // PlanOp represents what kind of change a plan item describes.
 type PlanOp int
@@ -16,6 +32,7 @@ const (
 	PlanDestroy                // - destroy resource
 	PlanNoChange               // = no change (already exists)
 	PlanDetail                 // + informational sub-item (not counted in summaries)
+	PlanFailed                 // ✗ assessment failed (rendered for visibility, never applied)
 )
 
 // PlanItem describes a single action in a plan. The four core fields (Op,
@@ -27,6 +44,15 @@ type PlanItem struct {
 	Type   string // subject category: "repo", "env", "channel", "issue"
 	Name   string // subject identifier: "api", "brave-falcon", "#reviews"
 	Detail string // free-form qualifier: transition, state, description
+
+	// DetailRef, when set and non-empty, overrides Detail at render
+	// time. It lets an Apply closure resolve a value that's only known
+	// after the action runs (a created issue key, a returned URL) —
+	// the plan card's final success frame renders after apply, so the
+	// resolved text lands in the same row that previously showed a
+	// "known after apply" placeholder. Sibling of Action.OpRef, which
+	// does the same for the operation glyph at assess time.
+	DetailRef *DetailRef
 }
 
 // Plan collects planned actions and renders them as a diff-style list.
@@ -45,6 +71,16 @@ func (p *Plan) Add(op PlanOp, action, subjectType, name, detail string) *Plan {
 	return p
 }
 
+// AddWithDetailRef appends a plan item whose detail can be superseded
+// after apply: while ref is unset the static detail renders (typically
+// carrying a "known after apply" placeholder); once an Apply closure
+// calls ref.Set, subsequent renders — including the card's final
+// success frame — show the resolved text instead.
+func (p *Plan) AddWithDetailRef(op PlanOp, action, subjectType, name, detail string, ref *DetailRef) *Plan {
+	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail, DetailRef: ref})
+	return p
+}
+
 // IsEmpty returns true if the plan has no items.
 func (p *Plan) IsEmpty() bool {
 	return len(p.items) == 0
@@ -53,7 +89,17 @@ func (p *Plan) IsEmpty() bool {
 // HasChanges returns true if the plan has any actionable items.
 func (p *Plan) HasChanges() bool {
 	for _, item := range p.items {
-		if item.Op != PlanNoChange && item.Op != PlanDetail {
+		if item.Op != PlanNoChange && item.Op != PlanDetail && item.Op != PlanFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFailures returns true if any item failed assessment.
+func (p *Plan) HasFailures() bool {
+	for _, item := range p.items {
+		if item.Op == PlanFailed {
 			return true
 		}
 	}
@@ -68,12 +114,22 @@ func (p *Plan) Render() string {
 		return ""
 	}
 	card := NewCard(CardInfo, "Plan").Value(p.Summary())
+	p.AppendItemsToCard(card)
+	return card.Render()
+}
+
+// AppendItemsToCard adds one Card.Item row per plan item to the
+// given card and returns the card for chaining. Lets callers
+// compose a card (with their choice of title/state/etc.) and then
+// drop the plan's items into it without reaching into the plan's
+// private column-width or item-formatting helpers.
+func (p *Plan) AppendItemsToCard(c *Card) *Card {
 	widths := p.columnWidths()
 	for _, item := range p.items {
 		glyph, content := planItemParts(item, widths)
-		card.Item(glyph, content)
+		c.Item(glyph, content)
 	}
-	return card.Render()
+	return c
 }
 
 // Print writes the plan to stdout.
@@ -142,6 +198,9 @@ func (p *Plan) Summary() string {
 	if n := counts[PlanNoChange]; n > 0 {
 		parts = append(parts, unchangedStyle.Render(fmt.Sprintf("%d unchanged", n)))
 	}
+	if n := counts[PlanFailed]; n > 0 {
+		parts = append(parts, destroyStyle.Render(fmt.Sprintf("%d failed", n)))
+	}
 
 	return strings.Join(parts, ", ")
 }
@@ -171,6 +230,9 @@ func (p *Plan) SummaryPastTense() string {
 	}
 	if n := counts[PlanNoChange]; n > 0 {
 		parts = append(parts, unchangedStyle.Render(fmt.Sprintf("%d unchanged", n)))
+	}
+	if n := counts[PlanFailed]; n > 0 {
+		parts = append(parts, destroyStyle.Render(fmt.Sprintf("%d failed", n)))
 	}
 
 	return strings.Join(parts, ", ")
@@ -261,11 +323,17 @@ func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
 		actionStyle, typeStyle, nameStyle, detailStyle = muted, muted, muted, muted
 	}
 
+	detail := item.Detail
+	if item.DetailRef != nil {
+		if d := item.DetailRef.Get(); d != "" {
+			detail = d
+		}
+	}
 	c := fmt.Sprintf("%s  %s  %s  %s",
 		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),
 		typeStyle.Render(fmt.Sprintf("%-*s", w.typ, item.Type)),
 		nameStyle.Render(fmt.Sprintf("%-*s", w.name, item.Name)),
-		detailStyle.Render(item.Detail),
+		detailStyle.Render(detail),
 	)
 	return g, c
 }
@@ -292,6 +360,8 @@ func planSymbol(op PlanOp) (string, lipgloss.Style) {
 		return "=", lipgloss.NewStyle().Foreground(Palette.Muted)
 	case PlanDetail:
 		return "+", lipgloss.NewStyle().Foreground(Palette.Success)
+	case PlanFailed:
+		return "\u2717", lipgloss.NewStyle().Foreground(Palette.Error)
 	}
 	return " ", lipgloss.NewStyle()
 }

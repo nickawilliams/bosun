@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
@@ -182,11 +183,47 @@ func walkWorkspaces(path, root string, workspaces *[]string) {
 	}
 }
 
-// Remove removes a workspace: worktrees, local branches, remote branches.
-// repositories maps repository names to their source paths (needed to run git
-// worktree remove and branch delete against the source repository). Returns an
-// error if any repository has uncommitted changes (unless force is true).
+// Remove removes a workspace: every repo's worktree + branch, then the
+// workspace directory itself. repositories maps repo names to their
+// source paths (needed to run git worktree remove and branch delete
+// against the source repository). Refuses if any repository has
+// uncommitted changes unless force is true.
 func (m *Manager) Remove(ctx context.Context, name string, repositories []Repository, force bool) error {
+	wsPath := filepath.Join(m.workspaceRoot, name)
+
+	statuses, err := m.Status(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	// Remove every repo currently in the workspace via the shared
+	// per-repo cleanup. Passing the full status list as the target set
+	// removes them all.
+	targets := make([]string, len(statuses))
+	for i, s := range statuses {
+		targets[i] = s.Name
+	}
+	if err := m.RemoveRepositories(ctx, name, repositories, targets, force); err != nil {
+		return err
+	}
+
+	// Clean up workspace directory (and empty parent dirs).
+	if err := os.RemoveAll(wsPath); err != nil {
+		return fmt.Errorf("removing workspace directory: %w", err)
+	}
+	cleanEmptyParents(m.workspaceRoot, wsPath)
+
+	return nil
+}
+
+// RemoveRepositories removes the named repos from a workspace: each
+// repo's worktree, local branch, and remote branch. The workspace
+// directory itself stays. repositories supplies the source-path lookup
+// (same shape as Remove). Refuses if any of the named repos is dirty
+// or has commits not pushed to its remote tracking branch, unless
+// force is true. Names that aren't currently in the workspace are
+// silently skipped.
+func (m *Manager) RemoveRepositories(ctx context.Context, name string, repositories []Repository, names []string, force bool) error {
 	wsPath := filepath.Join(m.workspaceRoot, name)
 
 	statuses, err := m.Status(ctx, name)
@@ -200,10 +237,23 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 		repositoryPath[r.Name] = r.Path
 	}
 
-	// Check for dirty repositories unless force is set.
+	// Build the set of repo names to act on; intersect against repos
+	// actually present in the workspace.
+	targetSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		targetSet[n] = true
+	}
+	var targets []RepositoryStatus
+	for _, s := range statuses {
+		if targetSet[s.Name] {
+			targets = append(targets, s)
+		}
+	}
+
+	// Check for dirty repositories among the targets unless force is set.
 	if !force {
 		var dirty []string
-		for _, s := range statuses {
+		for _, s := range targets {
 			if s.Dirty {
 				dirty = append(dirty, s.Name)
 			}
@@ -214,14 +264,49 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 				strings.Join(dirty, ", "),
 			)
 		}
+
+		// Unpushed commits are as unrecoverable as a dirty tree once
+		// the branch is force-deleted below. Only the remote-tracking
+		// case is checked: without a remote counterpart, Ahead counts
+		// against the default branch, which reads nonzero for every
+		// squash-merged branch — a false positive on the everyday
+		// flow. Sync errors also skip the check; this layer has no
+		// host data to disambiguate, and `bosun cleanup` runs the
+		// full readiness gate for the cases that need it.
+		var unpushed []string
+		for _, s := range targets {
+			if s.Branch == "" || s.Branch == "(unknown)" {
+				continue
+			}
+			sync, err := m.vcs.GetBranchSync(ctx, s.Path, s.Branch)
+			if err == nil && sync.HasRemote && sync.Ahead > 0 {
+				unpushed = append(unpushed, fmt.Sprintf("%s (%d commit(s))", s.Name, sync.Ahead))
+			}
+		}
+		if len(unpushed) > 0 {
+			return fmt.Errorf(
+				"repositories have commits not pushed to their remote branch: %s (use --force to override)",
+				strings.Join(unpushed, ", "),
+			)
+		}
+	}
+
+	// Validate every target's source path BEFORE destroying anything —
+	// erroring mid-loop would leave a partially-removed workspace with
+	// some branches already deleted.
+	var missing []string
+	for _, s := range targets {
+		if _, ok := repositoryPath[s.Name]; !ok {
+			missing = append(missing, s.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("source repository path unknown for %s: provide it via repositories config", strings.Join(missing, ", "))
 	}
 
 	// Remove worktrees and branches.
-	for _, s := range statuses {
-		srcPath, ok := repositoryPath[s.Name]
-		if !ok {
-			return fmt.Errorf("source repository path unknown for %q: provide it via repositories config", s.Name)
-		}
+	for _, s := range targets {
+		srcPath := repositoryPath[s.Name]
 		worktreePath := filepath.Join(wsPath, s.Name)
 
 		if err := m.vcs.RemoveWorktree(ctx, srcPath, worktreePath, force); err != nil {
@@ -239,12 +324,6 @@ func (m *Manager) Remove(ctx context.Context, name string, repositories []Reposi
 			return fmt.Errorf("deleting branch in %s: %w", s.Name, err)
 		}
 	}
-
-	// Clean up workspace directory (and empty parent dirs).
-	if err := os.RemoveAll(wsPath); err != nil {
-		return fmt.Errorf("removing workspace directory: %w", err)
-	}
-	cleanEmptyParents(m.workspaceRoot, wsPath)
 
 	return nil
 }
@@ -341,10 +420,12 @@ func cleanEmptyParents(stopAt, child string) {
 	dir := filepath.Dir(child)
 	for dir != stopAt && dir != filepath.Dir(dir) {
 		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
+		if err != nil || fsutil.HasMeaningfulEntries(entries) {
 			break
 		}
-		_ = os.Remove(dir)
+		// Junk-only (or empty) parent: RemoveAll so a lingering
+		// .DS_Store doesn't leave the directory behind.
+		_ = os.RemoveAll(dir)
 		dir = filepath.Dir(dir)
 	}
 }

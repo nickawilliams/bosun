@@ -47,22 +47,20 @@ schema model.
   currently means "accept the default" — there's no way to express "leave
   this unset")
 
-### Confirmation Flag Consolidation
+### Confirmation Flag Consolidation — RESOLVED (split, not merged)
 
-Unify `--yes` and `--force` across the CLI. Today they're orthogonal but
-overlapping: `--yes` auto-confirms prompts (init, plan, workspace rm),
-`--force` overrides safety checks (cleanup, workspace rm). The new `--force`
-on `preview` blurs the line by combining "auto-confirm" with "prefer
-destructive/replace."
+Resolved on the `26-refine-command-output` remediation pass, in the
+opposite direction the original scope guessed: the two consents are
+genuinely different questions, so they got distinct flags instead of
+one merged one.
 
-**Why:** Two flags with overlapping semantics is a recipe for "which one do
-I need?" confusion. A single flag with a clear mental model is easier to
-teach and document.
-
-**Scope:** Pick one canonical name (likely `--force`) and migrate all
-commands; keep the other as a deprecated alias for one release. Audit each
-call site to confirm the merged semantic ("auto-confirm + override safety")
-is correct everywhere or needs separation.
+- `--approve` / `-a` (persistent; renamed from `--yes`) answers the
+  plan confirmation — "apply this plan". The plan confirm button says
+  Approve to match.
+- `--force` (per-command) bypasses safety checks only — dirty trees,
+  unpushed work, readiness blockers. It no longer implies approval:
+  a forced destructive run still confirms its plan (or passes
+  `--approve` explicitly).
 
 ### Status Command — CI/CD Integration
 
@@ -83,6 +81,41 @@ piped invocations still get styled chrome.
   should emit the resolved config as YAML when non-interactive.
 - Consider a `--output {auto,text,yaml,json}` convention so users can opt into
   structured output explicitly even from a TTY.
+
+### Help Output in Shared UI Language
+
+`--help` and `bosun help <command>` currently render through fang's default help
+template, palette-mapped via `FangColorScheme` (`internal/cli/help.go`) but
+laid out in fang's own grammar — a different visual program from `bosun status`
+or any other interactive command. The header logo box, breadcrumb, timeline
+spine, glyphs, and card vocabulary all stay behind for help.
+
+**Why:** Visual consistency across the whole CLI. A user typing `bosun --help`
+should see the same chrome as `bosun status` — same logo, same breadcrumb, same
+spine, same card patterns. Today they read as two different programs that
+happen to share a color palette.
+
+**Scope:**
+- [ ] Custom `cmd.SetHelpFunc` on root (cascades to subcommands); takes
+  precedence over fang's auto-generated help.
+- [ ] Breadcrumb routing: `Bosun › Help` for root, `Bosun › Help › Status` for
+  subcommands, via `headerAnnotationTitle` or a synthetic title resolver.
+- [ ] Section renderers mapped onto bosun's card vocabulary:
+  description / usage / examples / commands / flags / footer, with one `Item`
+  row per subcommand or flag (keyword-styled name + muted description), columns
+  aligned via existing `Card.AlignWidth`.
+- [ ] Raw-mode fallback (`ui.IsRaw()`) returns plain text — help under `--raw`
+  must stay greppable.
+- [ ] Preserve fang's other surfaces (error handling, version output,
+  manpage-disable). Trim `FangColorScheme` to just the colors still consumed.
+
+**Decisions to make before starting:** width strategy (logo-box width vs full
+terminal); glyph for command/flag rows (`▸` is the natural pick); how to handle
+hidden commands (keep them hidden, same as today); whether to inline the short
+description into the header subtitle or give it its own card.
+
+**Estimate:** 1–2 days of focused work. Not on the path of anything functional
+— polish item, defer until the lifecycle commands themselves stabilize.
 
 ### Man Pages and Shell Completions
 
@@ -119,6 +152,37 @@ print a "now run `cd …`" hint.
 
 - [ ] Combobox-style picker with server-side search (OptionsFunc or custom
   bubbletea model) replacing the current select + manual-entry two-step
+
+### Dialog / Prompt Primitive
+
+A prompt primitive that owns both the heading card and the form together,
+generalizing today's `Dialog` (which only wraps a binary `huh.Confirm`).
+
+**Why:** Two recurring gaps. (1) `huh.Confirm` caps at two buttons, so 3+-button
+prompts aren't expressible — e.g. the preview adopt-conflict prompt wants
+`[Adopt] [New Name] [Cancel]` but currently ships as a binary `[Adopt] [New
+Name]` with ctrl+c standing in for Cancel. (2) The single-input timeline rule
+(when a form has one input, the whole card spine reads accent, not just the
+focused field) is a manual convention: hand-rolled `slot.Show(card)` + `runForm`
+prompts must remember `Card.AccentBody()`, and silently deviate when they don't
+(the preview adopt card regressed this until fixed). The card can't infer it
+because it doesn't know whether a single- or multi-input form follows.
+
+**Scope:**
+- [ ] N-button selector field (horizontal chips using the theme's button styles,
+  left/right + tab + enter, esc/ctrl+c cancel) — or a custom bubbletea model —
+  since huh has no native 3+-button or horizontal-button widget.
+- [ ] Primitive owns the card + form; applies `AccentBody()` automatically for
+  single-input forms and leaves it off for multi-input, so the timeline rule
+  can't be violated by hand-rolling.
+- [ ] Codify button ordering for consistency. Today order is convention only:
+  `huh.Confirm` renders affirmative-left / negative-right, and callers happen to
+  assign the dismiss action (Cancel/Stop/No) to negative so it lands rightmost —
+  but nothing enforces it, and a caller could put Cancel on the left. Decide and
+  enforce a rule (e.g. a dedicated dismiss slot that always renders last) so
+  proceed/dismiss positions are stable across every prompt.
+- [ ] Fold the existing binary `Dialog` into it, and migrate hand-rolled prompts
+  (preview adopt, typeahead helpers) onto it.
 
 ## Future Ideas
 

@@ -45,9 +45,9 @@ func NewWithClient(client *http.Client, baseURL, email, token string) *Adapter {
 func (a *Adapter) CreateIssue(ctx context.Context, req issue.CreateRequest) (issue.Issue, error) {
 	body := map[string]any{
 		"fields": map[string]any{
-			"project":   map[string]string{"key": req.Project},
-			"summary":   req.Title,
-			"issuetype": map[string]string{"name": jiraIssueType(req.Type)},
+			"project":     map[string]string{"key": req.Project},
+			"summary":     req.Title,
+			"issuetype":   map[string]string{"name": jiraIssueType(req.Type)},
 			"description": adfDocument(req.Description),
 		},
 	}
@@ -69,9 +69,12 @@ func (a *Adapter) CreateIssue(ctx context.Context, req issue.CreateRequest) (iss
 }
 
 func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, error) {
-	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,status,issuetype", issueKey)
+	path := fmt.Sprintf("/rest/api/3/issue/%s?fields=summary,status,issuetype,description", issueKey)
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, issue.ErrNotFound)
+		}
 		return issue.Issue{}, fmt.Errorf("getting issue %s: %w", issueKey, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -79,9 +82,13 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	var result struct {
 		Key    string `json:"key"`
 		Fields struct {
-			Summary   string `json:"summary"`
-			Status    struct{ Name string } `json:"status"`
-			IssueType struct{ Name string } `json:"issuetype"`
+			Summary     string                `json:"summary"`
+			Description map[string]any        `json:"description"`
+			Status      struct{ Name string } `json:"status"`
+			IssueType   struct {
+				Name    string `json:"name"`
+				IconURL string `json:"iconUrl"`
+			} `json:"issuetype"`
 		} `json:"fields"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -89,12 +96,48 @@ func (a *Adapter) GetIssue(ctx context.Context, issueKey string) (issue.Issue, e
 	}
 
 	return issue.Issue{
-		Key:    result.Key,
-		Title:  result.Fields.Summary,
-		Status: result.Fields.Status.Name,
-		Type:   result.Fields.IssueType.Name,
-		URL:    a.baseURL + "/browse/" + result.Key,
+		Key:         result.Key,
+		Title:       result.Fields.Summary,
+		Description: adfPlainText(result.Fields.Description),
+		Status:      result.Fields.Status.Name,
+		Type:        result.Fields.IssueType.Name,
+		TypeIconURL: a.typeIconURL(result.Fields.IssueType.IconURL),
+		URL:         a.baseURL + "/browse/" + result.Key,
 	}, nil
+}
+
+// jiraDefaultIssueTypeAvatars maps Jira's built-in issue types to their
+// platform-default universal_avatar IDs. Built-in types (always Epic, and
+// on older instances Story/Task/Bug/Sub-task) expose only a legacy
+// /images/icons/issuetypes/<name>.svg icon with no avatar record. These
+// IDs are Jira Cloud platform defaults — stable across instances, each
+// verified against the live avatar endpoint — used to upgrade the small
+// legacy icon to the full-size avatar.
+var jiraDefaultIssueTypeAvatars = map[string]string{
+	"epic":     "10307",
+	"story":    "10315",
+	"task":     "10318",
+	"bug":      "10303",
+	"subtask":  "10316",
+	"sub-task": "10316",
+}
+
+// typeIconURL upgrades a legacy issue-type icon to its full-size
+// universal_avatar when the type is a known Jira built-in. Most issue
+// types already point iconUrl at a universal_avatar (returned unchanged);
+// only the legacy /images/icons/issuetypes/<name>.svg system icons —
+// which are a fixed ~16px and have no avatar record — are remapped.
+func (a *Adapter) typeIconURL(iconURL string) string {
+	const legacyPrefix = "/images/icons/issuetypes/"
+	_, after, found := strings.Cut(iconURL, legacyPrefix)
+	if !found {
+		return iconURL
+	}
+	name := strings.TrimSuffix(strings.ToLower(after), ".svg")
+	if id, ok := jiraDefaultIssueTypeAvatars[name]; ok {
+		return a.baseURL + "/rest/api/2/universal_avatar/view/type/issuetype/avatar/" + id
+	}
+	return iconURL
 }
 
 func (a *Adapter) SetStatus(ctx context.Context, issueKey, statusName string) error {
@@ -391,6 +434,44 @@ func jiraIssueType(t string) string {
 		return "Task"
 	default:
 		return "Story"
+	}
+}
+
+// adfPlainText extracts readable plain text from an ADF (Atlassian Document
+// Format) document. Walks the node tree, concatenating "text" nodes and
+// inserting paragraph breaks between block-level nodes. Lossy by design —
+// notification cards need a short readable summary, not faithful markup.
+func adfPlainText(doc map[string]any) string {
+	if len(doc) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	adfWalk(doc, &b)
+	return strings.TrimSpace(b.String())
+}
+
+func adfWalk(node map[string]any, b *strings.Builder) {
+	switch node["type"] {
+	case "text":
+		if t, ok := node["text"].(string); ok {
+			b.WriteString(t)
+		}
+		return
+	case "hardBreak":
+		b.WriteString("\n")
+		return
+	}
+
+	content, _ := node["content"].([]any)
+	for _, child := range content {
+		if m, ok := child.(map[string]any); ok {
+			adfWalk(m, b)
+		}
+	}
+
+	switch node["type"] {
+	case "paragraph", "heading", "bulletList", "orderedList", "listItem", "blockquote", "codeBlock":
+		b.WriteString("\n")
 	}
 }
 

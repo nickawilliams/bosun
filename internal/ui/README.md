@@ -27,7 +27,7 @@ annotations (`"output": "raw"`) override.
 
 - A command that needs input but has no flag value to use **errors
   with a missing-flag message**. No silent guessing.
-- A Plan Card with confirmation enabled **requires `--yes`** to
+- A Plan Card with confirmation enabled **requires `--approve`** to
   apply. Without it, the command errors before applying. `--dry-run`
   is always safe in raw mode (no mutation).
 - Errors are written to stderr as plain text (`error: <message>`).

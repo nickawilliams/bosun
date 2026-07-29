@@ -35,6 +35,10 @@ func (s *Slot) Run(title string, fn func() error) error {
 	return nil
 }
 
+// NOTE: sequences of spinner cards in the same slot position should
+// use ui.RunCardSteps, not repeated Run calls — each Run is its own
+// TUI program, and every program boundary flashes a blank frame.
+
 // Show replaces the current display with a static card. The card
 // remains rewindable until Clear or Finalize is called.
 func (s *Slot) Show(card *Card) {

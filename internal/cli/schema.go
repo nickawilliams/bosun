@@ -94,6 +94,7 @@ var configSchema = map[string]ConfigGroup{
 		Keys: []ConfigKey{
 			{Key: "provider", Label: "provider", Options: []string{"github"}, Required: true},
 			{Key: "token", Label: "personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
+			{Key: "merge_method", Label: "PR merge method", Options: []string{"squash", "merge", "rebase"}, Default: "squash"},
 		},
 	},
 	"pull_request": {
@@ -132,9 +133,8 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "workflows.preview.up.inputs.name", Label: "preview up name input"},
 			{Key: "workflows.preview.down.target", Label: "preview down workflow", Example: "org/repo/.github/workflows/teardown-preview.yml"},
 			{Key: "workflows.preview.down.inputs.name", Label: "preview down name input"},
-			{Key: "workflows.release.target", Label: "release workflow", Example: "org/repo/.github/workflows/deploy.yml"},
-			{Key: "workflows.release.inputs.services", Label: "release services input", Default: "services-to-deploy"},
-			{Key: "workflows.release.inputs.issue", Label: "release issue input"},
+			{Key: "workflows.release.target", Label: "release production workflow(s)", Example: "per repo: a workflow path string, or a per-service {workflow, environment} map"},
+			{Key: "workflows.release.inputs.version", Label: "release version input", Default: "version"},
 		},
 	},
 	"display": {

@@ -11,6 +11,14 @@ import (
 // ErrCancelled is returned when the user cancels or interrupts.
 var ErrCancelled = errors.New("cancelled")
 
+// errPlanCancelled marks a cancellation the plan card has already
+// rendered — the Cancelled-state card is on screen, so HandleError
+// suppresses its trailing "user cancelled" card (which would say the
+// same thing twice) while the non-zero exit and abort semantics are
+// preserved. Wraps ErrCancelled so every existing errors.Is check
+// still matches.
+var errPlanCancelled = fmt.Errorf("plan %w", ErrCancelled)
+
 // PlanAction is a function that executes one step of a plan.
 type PlanAction func() error
 
@@ -46,9 +54,19 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 
 	pc := ui.NewPlanCard(plan)
 
-	// All items are no-ops — nothing to do.
+	// All items are no-ops — nothing to do. PlanVerified is a sibling
+	// of PlanSuccess (same ✓ glyph + success color) with a different
+	// title word — "Success" carries an action-verb feel that misreads
+	// when no work was performed; "Verified" affirms the check happened
+	// and the state already matches what was wanted. When the only
+	// rows are failed assessments, though, nothing was verified —
+	// render the failure state (the caller returns the assess error).
 	if !plan.HasChanges() {
-		pc.SetState(ui.PlanSuccess)
+		if plan.HasFailures() {
+			pc.SetState(ui.PlanFailure)
+		} else {
+			pc.SetState(ui.PlanVerified)
+		}
 		pc.Print()
 		return nil
 	}
@@ -66,21 +84,21 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 
 	// Confirmation required but we can't surface a form to a human:
 	// either stdin can't be read (CI / piped input) or stdout can't
-	// render the prompt visibly (piped stdout). Require --yes.
+	// render the prompt visibly (piped stdout). Require --approve.
 	if !isInteractive() || !ui.CanRenderInteractively() {
-		return fmt.Errorf("confirmation required (pass --yes to approve, or --dry-run to preview)")
+		return fmt.Errorf("confirmation required (pass --approve, or --dry-run to preview)")
 	}
 
 	// Interactive confirmation gate: show the plan as a CardInput,
 	// run huh confirm. Normal cancel: rewind prompt, show cancelled
 	// card in place. Ctrl+c interrupt: don't rewind, just bail.
-	rewind := ui.NewCard(ui.CardInput, "pending: "+plan.Summary()).Tight().PrintRewindable()
+	rewind := newPlanPendingHeader(plan).PrintRewindable()
 
 	var confirmed bool
 	err := runForm(
 		newConfirm().
 			Title(plan.RenderItems()).
-			Affirmative("Apply").
+			Affirmative("Approve").
 			Negative("Cancel").
 			Value(&confirmed),
 	)
@@ -92,9 +110,11 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	rewind()
 
 	if !confirmed {
+		// The Cancelled plan card IS the cancellation record —
+		// errPlanCancelled tells HandleError not to add another.
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
-		return ErrCancelled
+		return errPlanCancelled
 	}
 
 	return applyPlanCard(pc, actions)
@@ -110,15 +130,20 @@ func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 	return pc.RunApply(wrappedActions)
 }
 
-// isAutoApprove returns true if the --yes or --force flag is set. Commands
-// that don't define one of the flags get a false from cobra (with an
-// ignored error), so the check is safe to apply uniformly.
+// newPlanPendingHeader builds the title-bar-only card shown above
+// the confirmation form during runPlanCard's interactive gate. Both
+// runPlanCard and the demo snapshot route through this so the
+// pending header can't visually drift from the live render.
+func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
+	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
+}
+
+// isAutoApprove reports whether the run pre-approved plan
+// confirmation. Only --approve counts: --force is the SAFETY bypass
+// (dirty trees, readiness blockers) and deliberately does not answer
+// the plan prompt — "I accept the data risk" and "apply this plan"
+// are two separate consents.
 func isAutoApprove(cmd *cobra.Command) bool {
-	if v, _ := cmd.Flags().GetBool("yes"); v {
-		return true
-	}
-	if v, _ := cmd.Flags().GetBool("force"); v {
-		return true
-	}
-	return false
+	v, _ := cmd.Flags().GetBool("approve")
+	return v
 }

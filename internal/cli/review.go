@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	gh "github.com/nickawilliams/bosun/internal/code/github"
-	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -16,15 +18,446 @@ import (
 	"github.com/spf13/viper"
 )
 
+// repoContext is one workspace repo resolved for review: its remote
+// identity, the branch under review, the PR currently associated with
+// that branch (zero value when none), and whether the user selected it
+// for PR creation. pr/prErr/include are filled by selectReviewTargets;
+// the rest by the identity-resolution loop.
+type repoContext struct {
+	repo     Repository
+	branch   string
+	owner    string
+	repoName string
+
+	pr      code.PullRequest // existing PR for branch (zero value = none)
+	prErr   error            // lookup failure, surfaced as a ✗ plan row
+	include bool             // selected for PR creation (creatable repos)
+}
+
+// activePR reports whether rc's branch already has an open or draft PR
+// — the only state that takes the in-place "update reviewers" path
+// rather than creating a fresh PR.
+func (rc *repoContext) activePR() bool {
+	return rc.pr.Number > 0 &&
+		(rc.pr.State == "open" || rc.pr.State == "draft")
+}
+
+// creatable reports whether rc is a candidate for PR creation: its
+// lookup succeeded and it has no active PR (none, or only a
+// closed/merged one). These are the repos the selection form offers.
+func (rc *repoContext) creatable() bool {
+	return rc.prErr == nil && !rc.activePR()
+}
+
+// preselect reports whether a creatable repo should be pre-checked in
+// the selection form (and included by default when no form shows). A
+// merged PR is the opt-in case — its work already landed, so creating a
+// fresh PR is left unchecked; everything else creatable pre-checks.
+func (rc *repoContext) preselect() bool {
+	return rc.creatable() && rc.pr.State != "merged"
+}
+
+// statusNote returns a "#N (state)" descriptor for the repo's existing PR,
+// or "" when no PR exists. Shared by the selection form and the result
+// card so the two surfaces describe each repo identically — the checkbox
+// (form) and glyph (card) convey the action; the plan is the single
+// source of truth for what create/update/no-op each row resolves to.
+func (rc *repoContext) statusNote() string {
+	if rc.pr.Number == 0 {
+		return ""
+	}
+	return fmt.Sprintf("#%d (%s)", rc.pr.Number, rc.pr.State)
+}
+
+// selectReviewTargets fetches each repo's PR status under a spinner
+// sequence, then — when interactive — offers a multi-select of the
+// creatable repos so the user can choose which get a PR created. Repos
+// with an active PR aren't offered (they're updated in place); merged
+// repos appear unchecked. Mutates resolved in place: sets pr/prErr on
+// every repo and include on the creatable ones.
+//
+// Either way the section ends with a static "Pull Requests" card
+// recording the outcome per repo (create / update / skipped) — the
+// spinner program morphs into the form header when the form shows and
+// into that card otherwise, and the submitted form is replaced by it.
+func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host, resolved []repoContext) error {
+	if host == nil || len(resolved) == 0 {
+		return nil
+	}
+
+	// --- Phase 1: PR status lookup, one program over all repos ---
+	//
+	// Accumulating gather (the release-command pattern): each step's
+	// card carries the repo rows resolved so far plus a pending row —
+	// the in-flight repo with the live spinner in its glyph slot — so
+	// the list materializes in place and then swaps into the form (or
+	// record card). Rows render via reviewTargetRow, the record card's
+	// own renderer. Mutating later cards from a step's Run is race-free
+	// (RunCardSteps' channel happens-before; see release_gate.go).
+
+	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	n := len(resolved)
+	pendingRow := func(c *ui.Card, i int) {
+		c.Item(ui.GlyphSlot, statusMuted.Render(resolved[i].repo.Name))
+	}
+	cards := make([]*ui.Card, n)
+	for i := range cards {
+		cards[i] = ui.NewCard(ui.CardRunning, "pull requests")
+	}
+	pendingRow(cards[0], 0)
+
+	steps := make([]ui.CardStep, 0, n)
+	for i := range resolved {
+		rc := &resolved[i]
+		steps = append(steps, ui.CardStep{
+			Card: cards[i],
+			// Per-repo errors ride on prErr (surfaced as a ✗ plan row),
+			// not the step error path, so the sequence finishes.
+			Run: func() error {
+				rc.pr, rc.prErr = host.GetPRForBranch(ctx, rc.owner, rc.repoName, rc.branch)
+				glyph, content := reviewTargetRow(rc, rc.preselect())
+				for j := i + 1; j < n; j++ {
+					cards[j].Item(glyph, content)
+				}
+				if i+1 < n {
+					pendingRow(cards[i+1], i+1)
+				}
+				return nil
+			},
+		})
+	}
+
+	formGate := func() bool {
+		if !isInteractive() || isAutoApprove(cmd) {
+			return false
+		}
+		for i := range resolved {
+			if resolved[i].creatable() || resolved[i].activePR() {
+				return true
+			}
+		}
+		return false
+	}
+
+	// applyDefaults seeds include whenever no form shows (non-interactive,
+	// -y, or no selectable repo). Passing --repository is an explicit
+	// "operate on these repos" — every resolved repo (already narrowed to
+	// the named set upstream) is acted on, so non-interactive runs can
+	// update existing open PRs. Without it, fall back to the pre-selection
+	// policy: create missing PRs, leave open PRs untouched.
+	explicitRepos := cmd.Flags().Changed("repository")
+	applyDefaults := func() {
+		for i := range resolved {
+			resolved[i].include = explicitRepos || resolved[i].preselect()
+		}
+	}
+
+	// --- Phase 2: selection form over creatable repos ---
+	//
+	// Built inside a closure because the steps program's final frame
+	// paints the form header plus the form's EXACT first frame
+	// (formFirstFrame — same construction as runForm), so the takeover
+	// below repaints identical bytes and the gather → form transition
+	// has no collapse and no flash.
+
+	var (
+		picked      []string
+		msField     *huh.MultiSelect[string]
+		formFrame   string
+		headerLines int
+		idxs        []int
+	)
+	buildSelectionForm := func() {
+		for i := range resolved {
+			if resolved[i].creatable() || resolved[i].activePR() {
+				idxs = append(idxs, i)
+			}
+		}
+		sort.SliceStable(idxs, func(a, b int) bool {
+			return resolved[idxs[a]].repo.Name < resolved[idxs[b]].repo.Name
+		})
+
+		// Bold the repo segment (raw SGR 1/22, not lipgloss, so huh's own
+		// selection styling for the rest of the line survives — lipgloss
+		// would close with a full reset). Each row shows only the repo's PR
+		// status (#N (state), or nothing when none); the checkbox conveys
+		// whether we act on it, and the plan spells out create vs. update.
+		opts := make([]huh.Option[string], len(idxs))
+		for j, i := range idxs {
+			rc := &resolved[i]
+			label := "\x1b[1m" + rc.repo.Name + "\x1b[22m"
+			if note := rc.statusNote(); note != "" {
+				label += " · " + note
+			}
+			opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rc.preselect())
+		}
+		msField = huh.NewMultiSelect[string]().
+			Options(opts...).
+			Height(len(opts)).
+			Value(&picked)
+		formFrame = formFirstFrame(msField)
+		if !strings.HasSuffix(formFrame, "\n") {
+			formFrame += "\n"
+		}
+	}
+
+	err := ui.RunCardStepsInto(steps, func() string {
+		if formGate() {
+			buildSelectionForm()
+			header := ui.NewCard(ui.CardInput, "pull requests").Tight().Render()
+			headerLines = strings.Count(header, "\n")
+			return header + formFrame
+		}
+		applyDefaults()
+		return buildReviewTargetsCard(resolved).Render()
+	})
+	if err != nil {
+		return err
+	}
+
+	if !formGate() {
+		// No form — the successor card already recorded the outcome
+		// (except in raw mode, which skips it); re-apply defaults so the
+		// action loop sees them there too.
+		applyDefaults()
+		return nil
+	}
+
+	// Seamless takeover: the form's first frame is already on screen —
+	// move the cursor to its origin and let huh repaint the same bytes
+	// in place. ClearSpacer: the header was painted by the spinner
+	// program's final frame (not via Print), so suppress the spacer the
+	// way Tight-on-Print would.
+	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+	ui.ClearSpacer()
+	if err := runForm(msField); err != nil {
+		ui.RequestSpacer()
+		return err
+	}
+
+	pickedSet := make(map[int]bool, len(picked))
+	for _, p := range picked {
+		if i, err := strconv.Atoi(p); err == nil {
+			pickedSet[i] = true
+		}
+	}
+	for _, i := range idxs {
+		resolved[i].include = pickedSet[i]
+	}
+
+	// huh cleared its frame on submit, leaving the cursor at the form's
+	// origin (the line below the header). Erase the header above and
+	// drop the record card in its place. ClearSpacer first: runForm's
+	// prologue armed the spacer flag, but the gather program's original
+	// spacer line is still on screen above the header — printing another
+	// would double-space.
+	if headerLines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
+	}
+	ui.ClearSpacer()
+	buildReviewTargetsCard(resolved).Print()
+	return nil
+}
+
+// buildReviewTargetsCard composes the static "Pull Requests" card: one
+// row per PR-able repo. Each row mirrors its selection-form counterpart —
+// the repo plus its PR status (#N (state), or nothing when none) — with
+// the glyph carrying whether the repo is acted on (✓) or skipped (○). The
+// plan that follows is the single source for create vs. update vs. no-op.
+// The card glyph aggregates worst-first (fail > skipped > success) the way
+// group parents aggregate children.
+func buildReviewTargetsCard(resolved []repoContext) *ui.Card {
+	idx := make([]int, len(resolved))
+	for i := range resolved {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return resolved[idx[a]].repo.Name < resolved[idx[b]].repo.Name
+	})
+
+	var nOK, nSkip, nFail int
+	for i := range resolved {
+		switch {
+		case resolved[i].prErr != nil:
+			nFail++
+		case resolved[i].include:
+			nOK++
+		default:
+			nSkip++
+		}
+	}
+	state := ui.CardSuccess
+	switch {
+	case nFail > 0:
+		state = ui.CardFailed
+	case nSkip > 0 && nOK == 0:
+		state = ui.CardSkipped
+	}
+
+	card := ui.NewCard(state, "pull requests")
+	for _, i := range idx {
+		glyph, content := reviewTargetRow(&resolved[i], resolved[i].include)
+		card.Item(glyph, content)
+	}
+	return card
+}
+
+// reviewTargetRow renders one repo's status row — the shared shape
+// between the gather's progressively-filling card and the record card,
+// so the two can't drift. on is the effective inclusion (the
+// pre-selection during gather, the user's choice afterward). Included
+// rows keep the repo in primary color; skipped rows recede entirely
+// (repo segment drops to muted too). A blank note (repo with no PR)
+// renders the repo name alone, no trailing " · ".
+func reviewTargetRow(rc *repoContext, on bool) (glyph, content string) {
+	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	sel := func(name, note string) string {
+		if note == "" {
+			return primary.Render(name)
+		}
+		return primary.Render(name) + muted.Render(" · "+note)
+	}
+	unsel := func(name, note string) string {
+		if note == "" {
+			return muted.Render(name)
+		}
+		return muted.Render(name + " · " + note)
+	}
+
+	name := rc.repo.Name
+	switch {
+	case rc.prErr != nil:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+			sel(name, rc.prErr.Error())
+	case on:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+			sel(name, rc.statusNote())
+	default:
+		return muted.Render("○"), unsel(name, rc.statusNote())
+	}
+}
+
+// prState carries per-repo PR discoveries from a pr-action's Assess
+// to its Apply: the existing PR (zero value when none) and the
+// per-axis deltas to apply.
+//
+// For a create, add* hold the full requested sets and remove* are empty.
+// For an in-place update, add*/remove* reconcile the PR's reviewers,
+// teams, and assignees to exactly the requested state, and
+// contentChanged (with title/body/base) drives an EditPR overwrite.
+type prState struct {
+	pr code.PullRequest
+
+	addRevs  []string
+	addTeams []string
+	addAsns  []string
+
+	contentChanged bool
+	title          string
+	body           string
+	base           string
+}
+
+// planSync computes the deltas needed to reconcile an existing PR to
+// the requested state: reviewers/teams/assignees to ADD, plus whether
+// title/body/base differ and must be overwritten.
+//
+// Reconciliation is deliberately additive-only: config and flags say
+// who must be on the PR, not who may be. A reviewer or assignee a
+// teammate added out-of-band is collaboration signal, not config
+// drift — stripping them (which reconcile-to-config did) silently
+// undid a human's decision on every re-run.
+//
+// A wanted reviewer counts as satisfied when they're pending
+// (RequestedReviewers) OR have already submitted a review (ReviewedBy)
+// — GitHub drops submitters from the pending list, so diffing against
+// pending alone re-requested completed reviewers on every run,
+// resetting their review state.
+func planSync(existing code.PullRequest, reviewers, teamReviewers, assignees []string, title, body, base string) *prState {
+	satisfiedRevs := append(append([]string{}, existing.RequestedReviewers...), existing.ReviewedBy...)
+	return &prState{
+		pr:       existing,
+		addRevs:  diffCaseInsensitive(reviewers, satisfiedRevs),
+		addTeams: diffCaseInsensitive(teamReviewers, existing.RequestedTeams),
+		addAsns:  diffCaseInsensitive(assignees, existing.Assignees),
+		title:    title,
+		body:     body,
+		base:     base,
+		contentChanged: existing.Title != title ||
+			existing.Body != body ||
+			existing.BaseRef != base,
+	}
+}
+
+// hasChanges reports whether a sync has any delta to apply.
+func (s *prState) hasChanges() bool {
+	return s.contentChanged ||
+		len(s.addRevs)+len(s.addTeams)+len(s.addAsns) > 0
+}
+
+// syncSummary renders a compact delta summary for an in-place PR update,
+// e.g. "content +2/-1 rev +1 asn".
+func syncSummary(s *prState) string {
+	var parts []string
+	if s.contentChanged {
+		parts = append(parts, "content")
+	}
+	if a := len(s.addRevs) + len(s.addTeams); a > 0 {
+		parts = append(parts, countPair(a, 0)+" rev")
+	}
+	if a := len(s.addAsns); a > 0 {
+		parts = append(parts, countPair(a, 0)+" asn")
+	}
+	return strings.Join(parts, " ")
+}
+
+// countPair formats an add/remove pair, omitting a zero side.
+func countPair(add, rem int) string {
+	switch {
+	case add > 0 && rem > 0:
+		return fmt.Sprintf("+%d/-%d", add, rem)
+	case rem > 0:
+		return fmt.Sprintf("-%d", rem)
+	default:
+		return fmt.Sprintf("+%d", add)
+	}
+}
+
+// diffCaseInsensitive returns elements of want that don't appear in
+// have, comparing case-insensitively but preserving want's original
+// casing in the result (so GitHub's API gets the value the user
+// configured, not a lowercased echo of theirs).
+func diffCaseInsensitive(want, have []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	haveSet := make(map[string]struct{}, len(have))
+	for _, h := range have {
+		haveSet[strings.ToLower(h)] = struct{}{}
+	}
+	var out []string
+	for _, w := range want {
+		if _, ok := haveSet[strings.ToLower(w)]; !ok {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func newReviewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "review",
 		Short: "Submit issue for code review",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "code review",
+			headerAnnotationTitle: "submit for review",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
 			if err := cc.RequireIssue(); err != nil {
 				return err
 			}
@@ -35,15 +468,7 @@ func newReviewCmd() *cobra.Command {
 
 			// --- Resolve ---
 
-			var detail issuepkg.Issue
-			var err error
-			tracker, trackerErr := newIssueTracker()
-			if trackerErr == nil {
-				detail, err = fetchIssue(ctx, tracker, issue)
-				if err != nil {
-					ui.Skip(fmt.Sprintf("issue details: %v", err))
-				}
-			}
+			detail, _ := emitLifecyclePreamble(ctx, issue)
 
 			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
 			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
@@ -56,46 +481,60 @@ func newReviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("code host: %v", hostErr))
 			}
 
-			// --- Pre-flight: resolve repos, branches, remotes ---
+			// --- Pre-flight: Workspace Readiness + repo identities ---
+			//
+			// Shared readiness section (same as preview/release): one
+			// card per repo with the push offer + dirty gate folded in.
+			// Pushing is optional here too, but with a review-specific
+			// consequence — a never-pushed branch has no remote head
+			// ref, so it can't be the base of a PR. Those repos drop out
+			// of PR creation with a note; pushed-but-behind repos open
+			// PRs that simply lag their local commits.
 
 			gitClient := git.New()
-			r := ui.Default()
 
-			type repoContext struct {
-				repo     Repository
-				branch   string
-				owner    string
-				repoName string
-			}
 			var resolved []repoContext
 
-			r.Group("resolve repository identities", func(g ui.Reporter) {
-				for _, repo := range repositories {
-					branch, err := gitClient.GetCurrentBranch(ctx, repo.Path)
-					if err != nil {
-						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
-						continue
-					}
+			readiness, _, err := emitWorkspaceReadiness(ctx, gitClient, repositories)
+			if err != nil {
+				return err // ErrCancelled (dirty gate) propagates as a clean abort
+			}
 
-					identity, err := gh.ParseRemote(ctx, repo.Path)
-					if err != nil {
-						g.Fail(fmt.Sprintf("%s: %v", repo.Name, err))
-						continue
-					}
-
-					resolved = append(resolved, repoContext{
-						repo: repo, branch: branch,
-						owner: identity.Owner, repoName: identity.Name,
-					})
-					g.Selected(repo.Name, fmt.Sprintf("%s → %s/%s", branch, identity.Owner, identity.Name))
+			// Resolve identities for the repos that can actually be
+			// reviewed. A never-pushed-and-not-pushed branch is skipped:
+			// GitHub has no head ref to open a PR against.
+			for i := range readiness {
+				rr := &readiness[i]
+				if !rr.hasRemoteBranch() {
+					ui.SkipValue(ui.PreserveCase(rr.repo.Name), "not pushed — no remote branch to review")
+					continue
 				}
-			})
+				identity, err := gh.ParseRemote(ctx, rr.repo.Path)
+				if err != nil {
+					ui.Fail(fmt.Sprintf("%s: %v", rr.repo.Name, err))
+					continue
+				}
+				resolved = append(resolved, repoContext{
+					repo: rr.repo, branch: rr.branch,
+					owner: identity.Owner, repoName: identity.Name,
+				})
+			}
 
 			// Use first repo's identity for API calls (list endpoints).
 			var apiOwner, apiRepo string
 			if len(resolved) > 0 {
 				apiOwner = resolved[0].owner
 				apiRepo = resolved[0].repoName
+			}
+
+			// --- Observe + select: which repos get a PR created ---
+			//
+			// Look up each branch's PR status, then (interactively) let
+			// the user pick which repos to open a PR for, pre-checking
+			// the ones that should have one. Repos with an active PR are
+			// updated in place; merged repos are unchecked by default.
+			if err := selectReviewTargets(ctx, cmd, host, resolved); err != nil {
+				return err // ErrCancelled (form abort) propagates as a clean abort
 			}
 
 			// --- Resolve PR metadata from flags, config, and interactive prompts ---
@@ -107,16 +546,17 @@ func newReviewCmd() *cobra.Command {
 			if baseBranch == "" {
 				baseBranch = "main"
 			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("base") && host != nil {
-				selected, err := typeaheadSelect("Base Branch", baseBranch, func() ([]string, error) {
-					return host.ListBranches(ctx, apiOwner, apiRepo)
-				})
+			// Open-ended text input (current value as placeholder, Enter
+			// accepts it). A single base applies to every repo's PR — see
+			// the deferred "per-repo PR metadata" overhaul for the
+			// mixed-base / per-repo-branch-list case this intentionally
+			// doesn't cover yet.
+			if forceInteractive(cmd) && !cmd.Flags().Changed("base") {
+				val, err := typeaheadInput("Base Branch", baseBranch)
 				if err != nil {
 					return err
 				}
-				if selected != "" {
-					baseBranch = selected
-				}
+				baseBranch = val
 			}
 
 			// Build PR title and body from templates.
@@ -156,6 +596,19 @@ func newReviewCmd() *cobra.Command {
 				prBody = val
 			}
 
+			// Resolve the authenticated user once; reused to exclude the
+			// author from the reviewer list (GitHub forbids self-review),
+			// float them to the top of the assignee list, and honor
+			// --self-assign below.
+			var selfUser string
+			if host != nil {
+				if u, err := host.GetAuthenticatedUser(ctx); err != nil {
+					ui.Fail(fmt.Sprintf("authenticated user: %v", err))
+				} else {
+					selfUser = u
+				}
+			}
+
 			// Resolve reviewers and assignees from config + flags.
 			reviewers := viper.GetStringSlice("pull_request.reviewers")
 			if flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer"); len(flagReviewers) > 0 {
@@ -164,7 +617,7 @@ func newReviewCmd() *cobra.Command {
 			if forceInteractive(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
 				selected, err := typeaheadMultiSelect("Reviewers", reviewers, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
-				})
+				}, excludeUser(selfUser))
 				if err != nil {
 					return err
 				}
@@ -196,105 +649,41 @@ func newReviewCmd() *cobra.Command {
 			if cmd.Flags().Changed("self-assign") {
 				selfAssign, _ = cmd.Flags().GetBool("self-assign")
 			}
-			if selfAssign && host != nil {
-				username, err := host.GetAuthenticatedUser(ctx)
-				if err != nil {
-					ui.Fail(fmt.Sprintf("self-assign: %v", err))
-				} else if username != "" {
-					duplicate := false
-					for _, a := range assignees {
-						if strings.EqualFold(a, username) {
-							duplicate = true
-							break
-						}
+			if selfAssign && selfUser != "" {
+				duplicate := false
+				for _, a := range assignees {
+					if strings.EqualFold(a, selfUser) {
+						duplicate = true
+						break
 					}
-					if !duplicate {
-						assignees = append(assignees, username)
-					}
+				}
+				if !duplicate {
+					assignees = append(assignees, selfUser)
 				}
 			}
 
 			if forceInteractive(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
 				selected, err := typeaheadMultiSelect("Assignees", assignees, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
-				})
+				}, promoteUser(selfUser))
 				if err != nil {
 					return err
 				}
 				assignees = selected
 			}
 
-			// --- Pre-flight: push check ---
-
-			type unpushedRepo struct {
-				rc    repoContext
-				count int // -1 = never pushed, >0 = commits ahead
-			}
-			var needsPush []unpushedRepo
-
-			for _, rc := range resolved {
-				n, err := gitClient.UnpushedCommits(ctx, rc.repo.Path, rc.branch)
-				if err != nil {
-					ui.Fail(fmt.Sprintf("%s: %v", rc.repo.Name, err))
-					continue
-				}
-				if n != 0 {
-					needsPush = append(needsPush, unpushedRepo{rc: rc, count: n})
-				}
-			}
-
-			if len(needsPush) > 0 {
-				mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-				normalStyle := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg)
-				var repoLines []string
-				for _, up := range needsPush {
-					status := "not yet pushed"
-					if up.count > 0 {
-						status = fmt.Sprintf("%d unpushed commit(s)", up.count)
-					}
-					repoLines = append(repoLines, fmt.Sprintf("  %s %s %s",
-						mutedStyle.Render(up.rc.repo.Name),
-						mutedStyle.Render(ui.Palette.Dot),
-						normalStyle.Render(status)))
-				}
-
-				promptContent := mutedStyle.Render("Do you want to push before continuing?") +
-					"\n\n" + strings.Join(repoLines, "\n")
-
-				slot := ui.NewSlot()
-				slot.Show(ui.NewCard(ui.CardInput, "unpushed commits detected").Tight())
-
-				confirmed := true
-				if isInteractive() {
-					if err := runForm(
-						newConfirm().
-							Title(promptContent).
-							Affirmative("Yes").
-							Negative("No").
-							Value(&confirmed),
-					); err != nil {
-						return err
+			// GitHub forbids requesting a review from the PR author
+			// (422). The typeahead already filters self out, but the
+			// config / --reviewer / -y paths bypass it — drop the
+			// author from the FINAL list so every path agrees.
+			if selfUser != "" {
+				kept := reviewers[:0]
+				for _, r := range reviewers {
+					if !strings.EqualFold(r, selfUser) {
+						kept = append(kept, r)
 					}
 				}
-				if !confirmed {
-					slot.Show(ui.NewCard(ui.CardSkipped, "push declined"))
-					slot.Finalize()
-					return fmt.Errorf("aborted: unpushed commits")
-				}
-
-				for _, up := range needsPush {
-					if err := slot.Run(fmt.Sprintf("pushing %s", up.rc.repo.Name), func() error {
-						return gitClient.Push(ctx, up.rc.repo.Path, up.rc.branch)
-					}); err != nil {
-						return fmt.Errorf("pushing %s: %w", up.rc.repo.Name, err)
-					}
-				}
-				pushedPairs := make([]string, 0, len(needsPush)*2)
-				for _, up := range needsPush {
-					pushedPairs = append(pushedPairs, up.rc.repo.Name, up.rc.branch)
-				}
-				slot.Show(ui.NewCard(ui.CardSuccess, "pushed").KV(pushedPairs...))
-				slot.Finalize()
+				reviewers = kept
 			}
 
 			// --- Plan + Apply ---
@@ -317,48 +706,155 @@ func newReviewCmd() *cobra.Command {
 					branch := rc.branch
 					repoDisplayName := rc.repo.Name
 
+					// PR status pre-fetched by selectReviewTargets, along
+					// with whether the user selected this repo for
+					// creation.
+					existing := rc.pr
+					prErr := rc.prErr
+					include := rc.include
+
+					// prOp switches between PlanCreate (selected repo with
+					// no active PR) and PlanModify (open PR needing
+					// reviewers/teams/assignees filled in).
+					prOp := ui.PlanCreate
+
+					// state carries the per-repo discoveries from Assess
+					// into Apply. The pr field is non-zero only when the
+					// PR already existed (and we don't need to create
+					// it); the add*/remove*/content fields are the deltas
+					// to apply regardless of which path Assess took.
+					state := &prState{}
+
 					actions = append(actions, Action{
 						Op:     ui.PlanCreate,
+						OpRef:  &prOp,
 						Action: "pr",
 						Type:   "repo",
 						Name:   repoDisplayName,
 						Assess: func(ctx context.Context) (ActionState, string, error) {
-							existing, err := host.GetPRForBranch(ctx, owner, repoName, branch)
-							if err != nil {
-								return 0, "", err
+							if prErr != nil {
+								return 0, "", prErr
 							}
-							if existing.Number > 0 {
-								// Capture existing PR so notifications have data
-								// even when no new PRs are created.
+
+							// An open/draft PR is a candidate for in-place
+							// update; anything else (none, closed, merged) is
+							// a creation candidate. Both are gated by the
+							// user's selection.
+							active := existing.Number > 0 &&
+								(existing.State == "open" || existing.State == "draft")
+
+							// Every open/draft PR in the workspace is recorded
+							// for the notification, whether or not we mutate
+							// it. When we will update it, the record carries
+							// the desired title/body/base so the notification
+							// reflects the post-update state.
+							if active {
+								rec := existing
+								if include {
+									rec.Title = prTitle
+									rec.Body = prBody
+									rec.BaseRef = baseBranch
+								}
 								prResults = append(prResults, prResult{
-									repo: repoDisplayName, pr: existing,
+									repo: repoDisplayName, pr: rec,
 									owner: owner, repoName: repoName, branch: branch,
 								})
-								return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 							}
+
+							if active {
+								if !include {
+									// Left unchecked — report the open PR,
+									// touch nothing.
+									return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
+								}
+
+								// Checked for update — reconcile reviewers,
+								// teams, and assignees to exactly the requested
+								// state (add missing, remove unwanted) and
+								// overwrite title/body/base when they differ.
+								*state = *planSync(existing, reviewers, teamReviewers, assignees, prTitle, prBody, baseBranch)
+								if !state.hasChanges() {
+									return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
+								}
+								prOp = ui.PlanModify
+								return ActionNeeded, fmt.Sprintf("#%d %s", existing.Number, syncSummary(state)), nil
+							}
+
+							// No active PR. Creatable but left out — show an
+							// unchanged row so the plan still covers every
+							// repo. A prior closed/merged PR is named so the
+							// no-op reads as intentional rather than an
+							// oversight.
+							if !include {
+								// Plan-detail grammar: persisting state first
+								// (the PR that stays as-is), why parenthesized.
+								if existing.Number > 0 {
+									return ActionCompleted, fmt.Sprintf("#%d %s (not selected)", existing.Number, existing.State), nil
+								}
+								return ActionCompleted, "(not selected)", nil
+							}
+
+							// Selected for creation — Apply opens a new PR
+							// and applies all requested reviewers/teams/
+							// assignees fresh.
+							state.addRevs = reviewers
+							state.addTeams = teamReviewers
+							state.addAsns = assignees
 							detail := fmt.Sprintf("%s → %s", branch, baseBranch)
 							if draft {
 								detail += " (draft)"
 							}
+							prOp = ui.PlanCreate
 							return ActionNeeded, detail, nil
 						},
 						Apply: func(ctx context.Context) error {
-							pr, err := host.CreatePR(ctx, code.CreatePRRequest{
-								Owner:      owner,
-								Repository: repoName,
-								Head:       branch,
-								Base:       baseBranch,
-								Title:      prTitle,
-								Body:       prBody,
-								Draft:      draft,
-							})
-							if err != nil {
-								return err
+							pr := state.pr
+							if pr.Number == 0 {
+								created, err := host.CreatePR(ctx, code.CreatePRRequest{
+									Owner:      owner,
+									Repository: repoName,
+									Head:       branch,
+									Base:       baseBranch,
+									Title:      prTitle,
+									Body:       prBody,
+									Draft:      draft,
+								})
+								if err != nil {
+									return err
+								}
+								pr = created
+								prResults = append(prResults, prResult{
+									repo: repoDisplayName, pr: created,
+									owner: owner, repoName: repoName, branch: branch,
+								})
+							} else if state.contentChanged {
+								// In-place update: overwrite title/body/base.
+								if err := host.EditPR(ctx, code.EditPRRequest{
+									Owner:      owner,
+									Repository: repoName,
+									Number:     pr.Number,
+									Title:      state.title,
+									Body:       state.body,
+									Base:       state.base,
+								}); err != nil {
+									ui.Fail(fmt.Sprintf("%s: edit pr: %v", repoDisplayName, err))
+								}
 							}
-							prResults = append(prResults, prResult{
-								repo: repoDisplayName, pr: pr,
-								owner: owner, repoName: repoName, branch: branch,
-							})
+
+							// Reviewer/assignee writes are best-effort: the PR
+							// already exists, so a failure here shouldn't
+							// abort the rest of the run. Surface failures as
+							// Fail cards and continue.
+							if len(state.addRevs) > 0 || len(state.addTeams) > 0 {
+								if err := host.RequestReviewers(ctx, owner, repoName, pr.Number, state.addRevs, state.addTeams); err != nil {
+									ui.Fail(fmt.Sprintf("%s: reviewers: %v", repoDisplayName, err))
+								}
+							}
+							if len(state.addAsns) > 0 {
+								if err := host.AddAssignees(ctx, owner, repoName, pr.Number, state.addAsns); err != nil {
+									ui.Fail(fmt.Sprintf("%s: assignees: %v", repoDisplayName, err))
+								}
+							}
 							return nil
 						},
 					})
@@ -366,6 +862,7 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			if !draft {
+				tracker, _ := newIssueTracker()
 				if sa, ok := statusAction(tracker, issue, detail.Status, "review"); ok {
 					actions = append(actions, sa)
 				}
@@ -378,12 +875,46 @@ func newReviewCmd() *cobra.Command {
 				defer notifier.Close()
 			}
 
-			// Resolve GitHub avatar for card icons.
+			// Resolve GitHub avatar for card icons — from the login the
+			// reviewer-exclusion pass already fetched (best-effort; an
+			// empty selfUser just means no avatar).
 			var avatarURL string
-			if host != nil {
-				if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-					avatarURL = fmt.Sprintf("https://github.com/%s.png?size=36", user)
+			if selfUser != "" {
+				avatarURL = githubAvatarURL(selfUser)
+			}
+
+			// notifyItems renders every open PR in the workspace (existing
+			// or freshly created) as a notification row, sorted by repo so
+			// the content — and thus its hash — is stable across runs
+			// regardless of the order PRs were discovered or applied.
+			notifyItems := func() []notify.Item {
+				sort.Slice(prResults, func(i, j int) bool {
+					return prResults[i].repo < prResults[j].repo
+				})
+				items := make([]notify.Item, len(prResults))
+				for i, r := range prResults {
+					items[i] = notify.Item{
+						Label:     r.repo,
+						URL:       r.pr.URL,
+						Detail:    fmt.Sprintf("#%d", r.pr.Number),
+						Body:      r.pr.Body,
+						BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
+					}
 				}
+				return items
+			}
+
+			// willCreate reports whether this run opens a new PR. A created
+			// PR isn't in prResults until Apply, so the notify Assess can't
+			// hash it in — force a refresh instead of risking a stale "no
+			// change" when the pre-existing set's hash happens to match.
+			willCreate := func() bool {
+				for i := range resolved {
+					if resolved[i].include && resolved[i].creatable() {
+						return true
+					}
+				}
+				return false
 			}
 
 			if !draft && reviewChannel != "" && notifierErr == nil {
@@ -395,28 +926,32 @@ func newReviewCmd() *cobra.Command {
 					Type:   "channel",
 					Name:   reviewChannel,
 					Assess: func(ctx context.Context) (ActionState, string, error) {
-						ref, _ := notifier.FindThread(ctx, reviewChannel, issue)
+						// A failed lookup must not read as "no thread"
+						// — Apply would post a duplicate instead of
+						// updating the existing notification. ✗-row it.
+						ref, err := notifier.FindThread(ctx, reviewChannel, issue)
+						if err != nil {
+							return 0, "", fmt.Errorf("finding notification thread: %w", err)
+						}
 						if ref.Timestamp == "" {
 							return ActionNeeded, "new notification", nil
 						}
-						// Check if content has changed by comparing hashes.
-						items := make([]notify.Item, len(prResults))
-						for i, r := range prResults {
-							items[i] = notify.Item{
-								Label:     r.repo,
-								URL:       r.pr.URL,
-								Detail:    fmt.Sprintf("#%d", r.pr.Number),
-								Body:      r.pr.Body,
-								BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
-							}
+						if willCreate() {
+							notifyOp = ui.PlanModify
+							return ActionNeeded, "update notification", nil
 						}
+						// No new PR this run, so prResults already holds the
+						// full open-PR set — compare hashes to detect a real
+						// change.
 						content := buildNotifyContent("review", notifyTemplateData{
-							IssueKey:   issue,
-							IssueTitle: detail.Title,
-							IssueType:  detail.Type,
-							IssueURL:   detail.URL,
-							IconURL:    avatarURL,
-							Items:      items,
+							IssueKey:         issue,
+							IssueTitle:       detail.Title,
+							IssueType:        detail.Type,
+							IssueURL:         detail.URL,
+							IssueDescription: detail.Description,
+							IssueIconURL:     detail.TypeIconURL,
+							IconURL:          avatarURL,
+							Items:            notifyItems(),
 						})
 						hash := notify.ContentHash(content)
 						if ref.ContentHash == hash {
@@ -430,31 +965,7 @@ func newReviewCmd() *cobra.Command {
 						if len(prResults) == 0 {
 							return nil
 						}
-						// Request reviewers and add assignees (best-effort).
-						if host != nil {
-							for _, r := range prResults {
-								if len(reviewers) > 0 || len(teamReviewers) > 0 {
-									if err := host.RequestReviewers(ctx, r.owner, r.repoName, r.pr.Number, reviewers, teamReviewers); err != nil {
-										ui.Fail(fmt.Sprintf("%s: reviewers: %v", r.repo, err))
-									}
-								}
-								if len(assignees) > 0 {
-									if err := host.AddAssignees(ctx, r.owner, r.repoName, r.pr.Number, assignees); err != nil {
-										ui.Fail(fmt.Sprintf("%s: assignees: %v", r.repo, err))
-									}
-								}
-							}
-						}
-						items := make([]notify.Item, len(prResults))
-						for i, r := range prResults {
-							items[i] = notify.Item{
-								Label:     r.repo,
-								URL:       r.pr.URL,
-								Detail:    fmt.Sprintf("#%d", r.pr.Number),
-								Body:      r.pr.Body,
-								BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
-							}
-						}
+						items := notifyItems()
 						_, err := notifier.Notify(ctx, notify.Message{
 							Channel:  reviewChannel,
 							IssueKey: issue,
@@ -462,12 +973,14 @@ func newReviewCmd() *cobra.Command {
 							IssueURL: detail.URL,
 							Items:    items,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:   issue,
-								IssueTitle: detail.Title,
-								IssueType:  detail.Type,
-								IssueURL:   detail.URL,
-								IconURL:    avatarURL,
-								Items:      items,
+								IssueKey:         issue,
+								IssueTitle:       detail.Title,
+								IssueType:        detail.Type,
+								IssueURL:         detail.URL,
+								IssueDescription: detail.Description,
+								IssueIconURL:     detail.TypeIconURL,
+								IconURL:          avatarURL,
+								Items:            items,
 							}),
 						})
 						return err

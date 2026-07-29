@@ -55,14 +55,32 @@ func newCaptainCmd() *cobra.Command {
 		Use:    "captain on deck",
 		Hidden: true,
 		Annotations: map[string]string{
-			headerAnnotationTitle: "Captain On Deck!",
+			headerAnnotationTitle:       "Captain On Deck!",
+			headerAnnotationHideOnError: "true",
 		},
-		Args: cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if args[0] == "on" && args[1] == "deck" {
-				printCaptainArt()
-				audio.Play()
+		Args: func(cmd *cobra.Command, args []string) error {
+			expected := []string{"on", "deck"}
+			// Validate provided args positionally so each wrong word
+			// surfaces a specific "no orders for X" message rather than
+			// a generic count error. Missing args fall through to the
+			// count check below.
+			for i, got := range args {
+				if i >= len(expected) || got != expected[i] {
+					return fmt.Errorf("captain has no orders for %q", got)
+				}
 			}
+			if missing := len(expected) - len(args); missing > 0 {
+				word := "orders"
+				if missing == 1 {
+					word = "order"
+				}
+				return fmt.Errorf("captain awaits %d more %s", missing, word)
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			printCaptainArt()
+			audio.Play()
 			return nil
 		},
 	}

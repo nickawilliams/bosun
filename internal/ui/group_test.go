@@ -22,9 +22,9 @@ func TestGroupAggregate(t *testing.T) {
 			want:   CardFailed,
 		},
 		{
-			name:   "success and skipped mix yields success",
+			name:   "success and skipped mix yields skipped (warnings propagate)",
 			counts: groupCounts{success: 1, skipped: 2},
-			want:   CardSuccess,
+			want:   CardSkipped,
 		},
 		{
 			name:   "all skipped yields skipped",

@@ -13,6 +13,66 @@ import (
 // formTheme is the shared huh theme derived from the app palette.
 var formTheme = ui.FormTheme()
 
+// recordExcerptLines is how many lines of a multi-line answer the
+// post-submit record keeps (via ui.Excerpt) before collapsing the rest
+// into a "… +K lines" marker. Shared by every record shape that can
+// carry textarea input (create's KV card, typeaheadText's Selected).
+const recordExcerptLines = 3
+
+// transformFieldTitle normalizes a form-field title to the app's
+// title-case convention so labels stay consistent across forms
+// regardless of how the caller wrote them. Wrap a label with
+// ui.PreserveCase to opt out — useful for acronyms, brand names,
+// or other casing that shouldn't be normalized.
+func transformFieldTitle(s string) string {
+	if rest, verbatim := ui.StripPreserveCase(s); verbatim {
+		return rest
+	}
+	return ui.TitleCase(s)
+}
+
+// newInput is the cli's standard huh.Input constructor. Same as
+// huh.NewInput().Title(title) but the title is normalized via
+// transformFieldTitle so casing is consistent across forms, and the
+// prompt uses the shared focus marker. Use instead of huh.NewInput
+// when setting a Title.
+func newInput(title string) *huh.Input {
+	return huh.NewInput().Title(transformFieldTitle(title)).Prompt(ui.FocusMarker)
+}
+
+// rawInput is huh.NewInput() with only the shared focus-marker prompt
+// applied — for inputs that don't set a Title through newInput (secret
+// fields, value-only prompts) but still need the consistent cursor.
+func rawInput() *huh.Input {
+	return huh.NewInput().Prompt(ui.FocusMarker)
+}
+
+// newText — see newInput. All textareas route through here (or
+// rawText) so the focus marker (and any future textarea-wide behavior)
+// lands in one place. The `❭` marker comes via
+// applyTextareaFocusMarker — a guarded bridge around huh v2.0.3's
+// missing textarea-prompt API; see its doc for the mechanism and the
+// exit plan.
+func newText(title string) *huh.Text {
+	t := huh.NewText().Title(transformFieldTitle(title))
+	applyTextareaFocusMarker(t)
+	return t
+}
+
+// rawText is huh.NewText() without a Title — for textareas whose title
+// lives on a wrapping card (typeahead editors). Carries the same focus
+// marker as newText.
+func rawText() *huh.Text {
+	t := huh.NewText()
+	applyTextareaFocusMarker(t)
+	return t
+}
+
+// newSelect — see newInput. Generic over the option value type.
+func newSelect[T comparable](title string) *huh.Select[T] {
+	return huh.NewSelect[T]().Title(transformFieldTitle(title))
+}
+
 // isInteractive returns true when the current input stream supports
 // prompting (real TTY stdin or an injected reader in tests).
 func isInteractive() bool {
@@ -45,18 +105,8 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
-	ui.FlushSpacer()
-	// WithWidth is critical when the output isn't a real terminal —
-	// huh's bubbletea program never receives a resize message in that
-	// case and otherwise crashes inside textinput on a 0-width slice.
-	err := huh.NewForm(huh.NewGroup(fields...)).
-		WithTheme(formTheme).
-		WithLayout(ui.NewTimelineLayout()).
-		WithShowHelp(true).
-		WithInput(ui.Input()).
-		WithOutput(ui.Output()).
-		WithWidth(ui.TermWidth()).
-		Run()
+	prologueLines := emitFormPrologue(fields)
+	err := buildForm(fields).Run()
 	if errors.Is(err, huh.ErrUserAborted) {
 		// BubbleTea leaves a trailing blank line on exit; move the
 		// cursor up so the cancel card (or its comfy connector)
@@ -64,7 +114,89 @@ func runForm(fields ...huh.Field) error {
 		_, _ = fmt.Fprint(ui.Output(), "\x1b[A")
 		return ErrCancelled
 	}
+	// Undo the prologue lines so any wrapping PrintRewindable's rewind
+	// closure sees the cursor in the same position as if no form had
+	// run. Without this, multi-field forms leave their prologue spacer
+	// above the form's render area, and the rewind (which moves up by
+	// the card's line count only) can't reach back over it — leaving
+	// a stranded spacer above the card that the next emit then stacks
+	// against.
+	if prologueLines > 0 {
+		_, _ = fmt.Fprintf(ui.Output(), "\x1b[%dF\x1b[J", prologueLines)
+	}
 	return err
+}
+
+// snapshotForm renders a form as a static visual snapshot — used by
+// the demo command to illustrate form layouts without requiring an
+// interactive session. Shares its prologue (leading spacer) and
+// construction (theme, layout, help, I/O) with runForm, so the
+// snapshot stays in visual parity with what a real interactive run
+// produces. Skips runForm's interactivity guard since snapshots are
+// intentionally non-interactive.
+//
+// Unlike runForm, the snapshot doesn't undo the prologue — the
+// caller wants the leading spacer visible in the captured output,
+// not cleaned up.
+func snapshotForm(fields ...huh.Field) {
+	_ = emitFormPrologue(fields)
+	_, _ = fmt.Fprint(ui.Output(), formFirstFrame(fields...))
+	_, _ = fmt.Fprint(ui.Output(), "\n\n")
+}
+
+// formFirstFrame renders the exact first frame runForm's program will
+// paint for fields — buildForm + Init + View, the same construction
+// path — for seamless-takeover flows: paint this as the previous
+// program's final frame, cursor-up over it, and huh's first repaint is
+// byte-identical (no flash). Deterministic for cursor-less fields
+// (selects, multi-selects); text inputs blink a cursor, so takeover
+// callers should stick to select-shaped forms.
+func formFirstFrame(fields ...huh.Field) string {
+	f := buildForm(fields)
+	_ = f.Init()
+	return f.View()
+}
+
+// buildForm constructs a huh.Form with the app's theme, layout,
+// help, and I/O bindings. Single source of truth so any change to
+// the form's chrome (theme, layout, help, width) flows to every
+// caller — interactive runs via runForm and static snapshots via
+// snapshotForm — without manual parity maintenance.
+//
+// WithWidth is critical when the output isn't a real terminal —
+// huh's bubbletea program never receives a resize message in that
+// case and otherwise crashes inside textinput on a 0-width slice.
+func buildForm(fields []huh.Field) *huh.Form {
+	return huh.NewForm(huh.NewGroup(fields...)).
+		WithTheme(formTheme).
+		WithLayout(ui.NewTimelineLayout()).
+		WithShowHelp(true).
+		WithInput(ui.Input()).
+		WithOutput(ui.Output()).
+		WithWidth(ui.TermWidth())
+}
+
+// emitFormPrologue emits the leading visual break before a form
+// renders. Multi-field forms get an unconditional recessed │ row
+// so the form's first field doesn't sit flush against any heading
+// above it (Tight cards intentionally clear needsSpacer, so the
+// default FlushSpacer path doesn't help here). Single-field forms
+// stay on the existing FlushSpacer behavior — only emit if one is
+// pending — since a leading row would create awkward whitespace
+// above a bare Confirm with no description.
+//
+// Returns the number of stdout lines actually written so runForm can
+// undo them on exit, restoring the cursor to its pre-runForm position
+// for any wrapping rewind.
+func emitFormPrologue(fields []huh.Field) int {
+	if len(fields) > 1 {
+		ui.ClearSpacer()
+		_, _ = fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
+		ui.RequestSpacer()
+		return 1
+	}
+	ui.FlushSpacer()
+	return 0
 }
 
 // newConfirm creates a huh Confirm field with app defaults (left-aligned buttons).
@@ -75,38 +207,85 @@ func newConfirm() *huh.Confirm {
 // promptRequired prompts for a value if stdin is a terminal. If stdin is not
 // a terminal (piped/scripted), returns empty string and the caller should
 // error.
+//
+// Wraps the input in a rewindable CardInput header so the spacer state
+// resets cleanly on submit — passing the label as the form's own Title
+// would orphan the prologue `│` after huh clears its content, leaving a
+// double-spacer above the next card.
 func promptRequired(label string) string {
 	if !isInteractive() {
 		return ""
 	}
 
 	var value string
-	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
+	rewind := ui.NewCard(ui.CardInput, label).Tight().PrintRewindable()
+	if err := runForm(rawInput().Value(&value)); err != nil {
 		return ""
 	}
+	rewind()
 	return value
 }
 
-// promptConfirm shows a yes/no confirmation. Returns true if confirmed.
-// Defaults to the provided value. Returns (defaultVal, nil) in
-// non-interactive mode. Returns ErrCancelled if the user presses ctrl+c.
+// promptConfirm shows a yes/no confirmation as a Dialog with the
+// label as its title. Returns the user's choice (or the default in
+// non-interactive mode). Returns ErrCancelled if the user presses
+// ctrl+c.
 func promptConfirm(label string, defaultVal bool) (bool, error) {
+	return NewDialog(label).Default(defaultVal).Show()
+}
+
+// promptIntegrationGate shows the gate form for one integration: a
+// single Select widget over the provider Options with "Skip" merged
+// in as the first (default-selected) entry. Returns (provider,
+// skipped, err).
+//
+// Merging Skip into the same widget as the provider choices means
+// the form has exactly one input — Skip is the default focus and
+// hitting Enter immediately skips, preserving the fluid "tap Enter
+// through the integrations I don't care about" rhythm. Picking any
+// other option commits to that provider and proceeds to the
+// per-field silent resolve loop. The empty string is used as the
+// Skip sentinel because real provider names are always non-empty.
+//
+// Non-interactive mode returns ("", true, nil) — no prompt to
+// render against, so the safest path is to skip.
+//
+// Ctrl+c surfaces as the underlying form's error (typically
+// ErrCancelled). Form residue stays on screen so the caller's
+// cancellation card reads as a response to the abandoned question.
+func promptIntegrationGate(label string, providerKey ConfigKey) (provider string, skipped bool, err error) {
 	if !isInteractive() {
-		return defaultVal, nil
+		return "", true, nil
 	}
 
-	confirmed := defaultVal
-	err := runForm(
-		newConfirm().
-			Title(label).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirmed),
-	)
-	if err != nil {
-		return defaultVal, err
+	opts := make([]huh.Option[string], 0, len(providerKey.Options)+1)
+	// "- skip -" with surrounding dashes signals the option as a
+	// meta-action rather than a concrete provider — distinguishes it
+	// from any hypothetical provider that might literally be named
+	// "skip" and reads as a structural choice ("don't configure
+	// this") next to the data-shaped provider rows below it.
+	opts = append(opts, huh.NewOption("- skip -", ""))
+	for _, p := range providerKey.Options {
+		opts = append(opts, huh.NewOption(p, p))
 	}
-	return confirmed, nil
+
+	choice := "" // Default-select Skip via the empty sentinel.
+
+	rewind := ui.NewCard(ui.CardInput, label).AccentBody().Tight().PrintRewindable()
+	formErr := runForm(
+		huh.NewSelect[string]().Options(opts...).Value(&choice),
+	)
+
+	if formErr != nil {
+		ui.RequestSpacer()
+		return "", false, formErr
+	}
+
+	rewind()
+	if choice == "" {
+		return "", true, nil
+	}
+	return choice, false, nil
 }
 
 // promptValue displays a prompt with a default value.
@@ -117,7 +296,7 @@ func promptValue(label, defaultVal string) (string, error) {
 	}
 
 	value := defaultVal
-	if err := runForm(huh.NewInput().Title(label).Value(&value)); err != nil {
+	if err := runForm(huh.NewInput().Title(label).Prompt(ui.FocusMarker).Value(&value)); err != nil {
 		return defaultVal, err
 	}
 	return value, nil
@@ -145,7 +324,7 @@ func (f *defaultField) Resolved() string {
 // returned input.
 func newDefaultInput(fallback string) (*huh.Input, *defaultField) {
 	f := &defaultField{fallback: fallback}
-	return huh.NewInput().Placeholder(fallback).Value(&f.value), f
+	return huh.NewInput().Placeholder(fallback).Prompt(ui.FocusMarker).Value(&f.value), f
 }
 
 // promptDefault displays a prompt with a default shown as placeholder text.

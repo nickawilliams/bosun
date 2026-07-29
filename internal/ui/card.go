@@ -105,6 +105,9 @@ type Card struct {
 	tight         bool // suppress comfy spacing (e.g. single-field prompts)
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
+	plainTitle    bool // render the title without bold (group children)
+	alignWidth    int  // pad styled title to this visual width before " · " when Value is set; 0 = natural
+	accentBody    bool // render body-line connectors in Palette.Accent rather than the default Palette.Recessed
 
 	// breadcrumb is the root-header component. Non-nil only for
 	// CardRoot; lazy-initialized when any breadcrumb-related
@@ -141,9 +144,15 @@ type cardItem struct {
 	content string
 }
 
-// NewCard creates a card with the given state and title.
+// NewCard creates a card with the given state and title. A title
+// wrapped with ui.PreserveCase keeps its original casing (same
+// sentinel convention the cli's form-field constructors honor) —
+// the escape hatch for identifier-shaped titles (repo names, slugs)
+// flowing through Reporter methods that don't otherwise expose a
+// PreserveCase toggle, e.g. group children via CompleteValue.
 func NewCard(state CardState, title string) *Card {
-	return &Card{state: state, title: title}
+	clean, verbatim := StripPreserveCase(title)
+	return &Card{state: state, title: clean, preserveTitle: verbatim}
 }
 
 // Tight suppresses the comfy-mode timeline padding after this card.
@@ -209,10 +218,35 @@ func (c *Card) Breadcrumb(s string) *Card {
 	return c
 }
 
-// Value sets an inline value rendered after the title, separated by a colon.
-// The value is not title-cased and uses muted non-bold style.
+// Value sets an inline value rendered after the title, separated by
+// a muted middle-dot. The value is not title-cased and uses muted
+// non-bold style. When the value contains newlines, the first line
+// renders inline and subsequent lines indent to align under the
+// first value character.
 func (c *Card) Value(s string) *Card {
 	c.value = s
+	return c
+}
+
+// AlignWidth sets a target visual column width for the title when
+// combined with Value. The title is padded with spaces so the " · "
+// separator (and the first character of the value) lines up with
+// sibling cards using the same alignment width. If the title is
+// already wider than w, alignment has no effect on that card. Zero
+// (the default) means natural title width — no padding.
+func (c *Card) AlignWidth(w int) *Card {
+	c.alignWidth = w
+	return c
+}
+
+// AccentBody flips the body-line connector color from the default
+// recessed timeline gray to Palette.Accent. Use when this card is
+// the heading of a single-input active prompt and the card body +
+// the form below it should read as one continuous accent-colored
+// section (e.g., Dialog confirmations). Multi-input forms should
+// leave this default so only the focused field renders in accent.
+func (c *Card) AccentBody() *Card {
+	c.accentBody = true
 	return c
 }
 
@@ -371,10 +405,21 @@ func (c *Card) PrintRewindable() func() {
 	}
 }
 
+// GlyphSlot is a placeholder for a body-item glyph that should track
+// the card's live glyph at render time — the animated spinner frame
+// while the card is running, the state glyph otherwise. Gather cards
+// use it to put the spinner on the in-flight row (the item being
+// resolved) while completed rows keep their final glyphs. U+E000
+// (private use) can't collide with real content.
+const GlyphSlot = "\uE000"
+
 // renderWithGlyph renders the card with a custom leading glyph.
 // Used by the spinner to animate the state indicator in place.
 func (c *Card) renderWithGlyph(glyph string) string {
 	out := c.renderInner(glyph)
+	if strings.Contains(out, GlyphSlot) {
+		out = strings.ReplaceAll(out, GlyphSlot, glyph)
+	}
 	if c.indent <= 0 {
 		return out
 	}
@@ -416,15 +461,56 @@ func (c *Card) renderInner(glyph string) string {
 	if c.titleColor != nil {
 		titleFg = c.titleColor
 	}
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleFg)
+	titleStyle := lipgloss.NewStyle().Bold(!c.plainTitle).Foreground(titleFg)
 	if !c.preserveTitle {
 		titleStyle = titleStyle.Transform(titleCase)
 	}
 
 	if c.value != "" {
 		valueStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
-		lines = append(lines, titleStyle.Render(c.title+":")+
-			" "+valueStyle.Render(c.value))
+		titleRendered := titleStyle.Render(c.title)
+
+		// Title column alignment: when c.alignWidth is set and exceeds
+		// the title's natural visual width, pad the styled title with
+		// spaces so the " · " separator lines up with sibling cards.
+		naturalW := lipgloss.Width(titleRendered)
+		alignW := c.alignWidth
+		if alignW < naturalW {
+			alignW = naturalW
+		}
+		if alignW > naturalW {
+			titleRendered += strings.Repeat(" ", alignW-naturalW)
+		}
+
+		// Multi-line value support: first line renders inline after
+		// the title separator; subsequent lines align under the first
+		// value character (4-char conn prefix is added by the outer
+		// loop, so we add alignW + 3 spaces here so total leading
+		// padding matches the first line's value column). Overlong
+		// lines wrap HERE, to the width left of that column, so every
+		// fragment keeps it — these lines never pass through
+		// wrapForTimeline, and a physical terminal wrap would break
+		// both the gutter and the rewind's line count.
+		valueWidth := TermWidth() - timelineConnWidth - alignW - 3
+		if valueWidth < 20 {
+			valueWidth = 20
+		}
+		contPad := strings.Repeat(" ", alignW+3)
+		first := true
+		for _, logical := range strings.Split(c.value, "\n") {
+			frags := []string{logical}
+			if lipgloss.Width(logical) > valueWidth {
+				frags = strings.Split(lipgloss.Wrap(logical, valueWidth, " ,.-"), "\n")
+			}
+			for _, frag := range frags {
+				if first {
+					lines = append(lines, titleRendered+valueStyle.Render(" · "+frag))
+					first = false
+					continue
+				}
+				lines = append(lines, contPad+valueStyle.Render(frag))
+			}
+		}
 	} else if c.title != "" {
 		lines = append(lines, titleStyle.Render(c.title))
 	}
@@ -568,9 +654,17 @@ func (c *Card) glyph() string {
 }
 
 // renderConnector returns the styled left-gutter connector for this
-// card's continuation lines.
+// card's continuation lines. Defaults to the recessed timeline gray
+// so most cards' body lines visually recede behind their glyph row.
+// Cards that opt in via AccentBody() use Palette.Accent instead —
+// used by Dialog and similar single-input prompts where the whole
+// card-plus-form reads as one continuous active section.
 func (c *Card) renderConnector() string {
-	return lipgloss.NewStyle().Foreground(Palette.Recessed).Render(cardConnector)
+	color := Palette.Recessed
+	if c.accentBody {
+		color = Palette.Accent
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(cardConnector)
 }
 
 // maxKVKeyWidth returns the widest KV key across all cardBodyKV
@@ -620,12 +714,15 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 	case cardBodyRaw:
 		return b.lines
 	case cardBodyItem:
-		// One leading space so the glyph lands at col 6, aligning
-		// with Group child glyphs (which sit one column right of
-		// the parent's │ + 2-space gap).
+		// Item rows are level-1 content. The body connector prefix
+		// (" │  ") already advances to ContentCol(0); this lead then
+		// carries the glyph to GlyphCol(1) and the gap puts content at
+		// ContentCol(1) — the shared L1 grid (see layout.go).
+		lead := strings.Repeat(" ", GlyphCol(1)-ContentCol(0)) // 6-5 = 1
+		gap := strings.Repeat(" ", GlyphGap)
 		out := make([]string, len(b.items))
 		for i, item := range b.items {
-			out[i] = " " + item.glyph + "  " + item.content
+			out[i] = lead + item.glyph + gap + item.content
 		}
 		return out
 	case cardBodyTable:
@@ -677,21 +774,69 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 		// Prefix width: padded key + " · " (dot with spaces), minus one
 		// because the continuation format "% *s %s" adds its own space.
 		prefixWidth := maxKey + 2
+		// Long values wrap HERE, to the width left of the value column,
+		// so every fragment keeps the hanging indent. Left to the
+		// generic body pass, wrapForTimeline would re-break overlong
+		// lines at the content margin, losing the column. Lines emitted
+		// at this width always fit, so that pass leaves them alone —
+		// the degraded narrow case below keeps that invariant true
+		// rather than assuming it.
+		maxContent := TermWidth() - timelineConnWidth
+		if maxContent < 20 {
+			maxContent = 20
+		}
+		valueWidth := maxContent - prefixWidth - 1
+		contIndent := prefixWidth
+		keyOwnLine := false
+		if valueWidth < 20 {
+			// The full hanging indent leaves no readable value column
+			// (very wide key or very narrow terminal). Degrade: the
+			// key takes its own line and value fragments wrap at a
+			// reduced indent that still guarantees 20 columns —
+			// clamping the width alone emitted lines wider than the
+			// timeline, which the generic pass then re-broke at the
+			// content margin, losing the column entirely.
+			valueWidth = 20
+			contIndent = maxContent - 21
+			if contIndent < 0 {
+				contIndent = 0
+			}
+			keyOwnLine = true
+		}
 		var out []string
 		for _, p := range b.pairs {
-			lines := strings.Split(p[1], "\n")
 			paddedKey := fmt.Sprintf("%-*s", maxKey, p[0])
-			out = append(out, fmt.Sprintf("%s %s %s",
-				mutedStyle.Render(paddedKey),
-				mutedStyle.Render(Palette.Dot),
-				normalStyle.Render(lines[0]),
-			))
-			// Continuation lines aligned under the value column.
-			for _, cont := range lines[1:] {
-				out = append(out, fmt.Sprintf("%*s %s",
-					prefixWidth, "",
-					mutedStyle.Render(cont),
-				))
+			first := true
+			if keyOwnLine {
+				out = append(out, mutedStyle.Render(p[0])+" "+mutedStyle.Render(Palette.Dot))
+				first = false
+			}
+			// Every value line renders in the normal style — a
+			// multi-line value is all equally content. Meta lines
+			// (Excerpt's "… +K lines" marker) arrive pre-styled muted
+			// by their producer; normalStyle wrapping leaves embedded
+			// styling in charge (same convention as init's pre-styled
+			// "(none)" secret placeholders).
+			for _, logical := range strings.Split(p[1], "\n") {
+				frags := []string{logical}
+				if lipgloss.Width(logical) > valueWidth {
+					frags = strings.Split(lipgloss.Wrap(logical, valueWidth, " ,.-"), "\n")
+				}
+				for _, frag := range frags {
+					if first {
+						out = append(out, fmt.Sprintf("%s %s %s",
+							mutedStyle.Render(paddedKey),
+							mutedStyle.Render(Palette.Dot),
+							normalStyle.Render(frag),
+						))
+						first = false
+						continue
+					}
+					out = append(out, fmt.Sprintf("%*s %s",
+						contIndent, "",
+						normalStyle.Render(frag),
+					))
+				}
 			}
 		}
 		return out
@@ -714,11 +859,20 @@ func wrapForTimeline(s string) []string {
 	if maxWidth < 20 {
 		maxWidth = 20
 	}
-	if lipgloss.Width(s) <= maxWidth {
-		return []string{s}
+	// Split embedded newlines first: a short multi-line value (an
+	// Excerpt-bounded record, a textarea body) measured whole would
+	// come back as ONE element, and the render loop prefixes only the
+	// first physical line of each element with the timeline connector
+	// — lines 2+ would print flush at column 0.
+	var out []string
+	for _, part := range strings.Split(s, "\n") {
+		if lipgloss.Width(part) <= maxWidth {
+			out = append(out, part)
+			continue
+		}
+		out = append(out, strings.Split(lipgloss.Wrap(part, maxWidth, " ,.-"), "\n")...)
 	}
-	wrapped := lipgloss.Wrap(s, maxWidth, " ,.-")
-	return strings.Split(wrapped, "\n")
+	return out
 }
 
 // --- Running card with animated spinner glyph ---
@@ -731,6 +885,7 @@ type cardSpinnerModel struct {
 	resultCh    <-chan error
 	successCard func() *Card   // optional: if set, render this instead of card on success
 	prefix      string         // rendered before the first frame (e.g., comfy connector)
+	vanish      bool           // render an empty final frame on success (spinner clears itself)
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {
@@ -778,6 +933,13 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m cardSpinnerModel) View() tea.View {
 	if m.done {
+		if m.err == nil && m.vanish {
+			// Empty final frame: BubbleTea clears the spinner's render
+			// area (prefix included) on exit, leaving the cursor where
+			// the card began — no render-then-rewind flash for callers
+			// whose next output replaces this card entirely.
+			return tea.NewView("")
+		}
 		if m.err == nil && m.successCard != nil {
 			return tea.NewView(m.prefix + m.successCard().Render())
 		}
@@ -924,12 +1086,100 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 // the success card, restoring the terminal to its pre-call state.
 // On failure the card is printed normally and a nil rewind is returned.
 func RunCardRewindable(title string, fn func() error) (func(), error) {
+	return RunPreparedCardRewindable(NewCard(CardRunning, title), fn)
+}
+
+// RunCardMorph runs fn with spinCard animating; on success the same
+// BubbleTea program's final frame renders finalCard in place — no
+// program-boundary blank and no wrong-state ✓ flash — and the
+// returned rewind erases it later. Use when the spinner's successor
+// is known up front (e.g. a prompt header the spinner morphs into
+// while a huh form boots beneath it).
+//
+// finalCard nil means vanish: the final frame is empty, the spinner
+// area clears atomically on exit, and the rewind is a no-op spacer
+// restore. On failure the failed spinCard renders and stays; the
+// rewind is nil.
+func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
+	if IsRaw() {
+		return func() {}, fn()
+	}
+
+	spinCard.state = CardRunning
+
+	resultCh := make(chan error, 1)
+	go func() {
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		resultCh <- err
+	}()
+
+	prevSpacer := needsSpacer
+	prefix := spacerPrefix()
+
+	sm := newCardSpinnerModel(spinCard, resultCh)
+	sm.prefix = prefix
+	if finalCard != nil {
+		sm.successCard = func() *Card { return finalCard }
+	} else {
+		sm.vanish = true
+	}
+	p := tea.NewProgram(sm)
+	model, err := p.Run()
+
+	var taskErr error
+	if err != nil {
+		// Non-interactive fallback — wait for the result synchronously.
+		taskErr = <-resultCh
+		if taskErr != nil {
+			spinCard.state = CardFailed
+			spinCard.Subtitle(taskErr.Error())
+			spinCard.Print()
+		} else if finalCard != nil {
+			finalCard.Print()
+		}
+	} else {
+		taskErr = model.(cardSpinnerModel).err
+	}
+
+	if taskErr != nil {
+		return nil, taskErr
+	}
+
+	if finalCard == nil {
+		// Nothing was left on screen; restore the spacer state the
+		// vanished prefix consumed so the next card's connector logic
+		// behaves as if this spinner never rendered.
+		needsSpacer = prevSpacer
+		return func() {}, nil
+	}
+
+	rendered := finalCard.Render()
+	totalLines := strings.Count(prefix+rendered, "\n")
+	return func() {
+		if totalLines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
+		}
+		needsSpacer = prevSpacer
+	}, nil
+}
+
+// RunPreparedCardRewindable is RunCardRewindable taking a pre-built
+// card. The caller constructs the card with whatever Value /
+// Subtitle / AlignWidth they want visible on the spinner; the
+// state is reset to CardRunning during the call and transitions
+// to CardSuccess (or CardFailed on error) when fn returns. Use
+// when the per-call name is an identifier that must not be
+// title-cased — title-cased identifiers like repo names get
+// mangled, but Value preserves casing.
+func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 	if IsRaw() {
 		err := fn()
 		return func() {}, err
 	}
 
-	card := NewCard(CardRunning, title)
+	card.state = CardRunning
 
 	resultCh := make(chan error, 1)
 	go func() {

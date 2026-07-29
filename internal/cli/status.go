@@ -23,17 +23,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// newStatusCmd is the scope-aware status command. The annotation
-// title is set dynamically per scope in RunE before the root card
-// renders (Workspace Status / Project Status), so the breadcrumb
-// reflects the current scope.
+// newStatusCmd is the scope-aware status command. A title resolver
+// renders "Workspace Status" or "Project Status" in the breadcrumb
+// based on the resolved scope, so the header reflects what the
+// command will actually show.
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show what wants your attention at workspace or project scope",
-		Annotations: map[string]string{
-			headerAnnotationTitle: "Status",
-		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -49,16 +46,19 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			// Scope detection: workspace if resolved, else project.
 			if cc.Workspace != "" {
-				cmd.Annotations[headerAnnotationTitle] = "Workspace Status"
 				return runStatusWorkspace(ctx, cc, mgr)
 			}
-
-			cmd.Annotations[headerAnnotationTitle] = "Project Status"
 			return runStatusProject(ctx)
 		},
 	}
+
+	setTitleResolver(cmd, func(cc CommandContext) string {
+		if cc.Workspace != "" {
+			return "Workspace Status"
+		}
+		return "Project Status"
+	})
 
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
@@ -90,39 +90,27 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 	host, _ := newCodeHost()
 	g := git.New()
 
-	// Issue card — async fetch via RunCardReplace. Spinner shows
-	// chained after the project name; on completion the issue card
-	// (with KV body of facets) absorbs as the next data segment and
-	// renders below the breadcrumb. The preview-env binding and
-	// last-activity timestamp are fetched in parallel so they land
-	// inside the same spinner.
-	//
-	// Provider OnInfo events (stale-metadata cleanup, etc.) buffer
-	// here so they emit after the issue card prints, not racing with
-	// the loading spinner.
+	// Meta block — the Status + issue cards render inside the shared
+	// preamble helper (single tracker fetch feeds both); the
+	// preview-env binding and last-activity timestamp are fetched
+	// alongside the issue so they land inside the same spinner.
 	tracker, _ := newIssueTracker()
 	if tracker != nil && issueKey != "" {
 		var (
-			detail       issuepkg.Issue
-			previewEnv   preview.Environment
-			previewErr   error
-			updatedAt    time.Time
-			updatedMu    sync.Mutex
-			infoMessages []previewInfoEvent
+			previewEnv preview.Environment
+			previewErr error
+			updatedAt  time.Time
+			updatedMu  sync.Mutex
 		)
-		previewProvider, _ := newPreviewProviderWithInfo(wsName, func(action, value string) {
-			infoMessages = append(infoMessages, previewInfoEvent{action: action, value: value})
-		})
-		_ = ui.RunCardReplace("", func() error {
+		// A failed provider construction renders "(unavailable)" via
+		// previewErr — "(none)" would misread a misconfigured provider
+		// as "no env bound".
+		previewProvider, provErr := newPreviewProvider(wsName)
+		if previewProvider == nil && provErr != nil {
+			previewErr = provErr
+		}
+		_, _ = emitWorkspaceIssuePreamble(ctx, issueKey, func() {
 			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				d, e := tracker.GetIssue(ctx, issueKey)
-				if e == nil {
-					detail = d
-				}
-			}()
 			if previewProvider != nil {
 				wg.Add(1)
 				go func() {
@@ -149,15 +137,14 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 				}()
 			}
 			wg.Wait()
-			return nil
-		}, func() *ui.Card {
-			return buildWorkspaceIssueCard(detail, wsName, previewEnv, previewErr, updatedAt)
 		})
-		// Drain captured events into the timeline now that the card
-		// has printed.
-		for _, msg := range infoMessages {
-			ui.NewCard(ui.CardSuccess, msg.action).Value(msg.value).Print()
-		}
+		// Order: Story → Preview → Workspace. Now that each meta card
+		// uses the title-plus-body layout (no inline " · value" to
+		// align), they read better separated than stacked tight — so
+		// none are Tight, and the normal connector break sits between
+		// each, matching the spacing of the per-repo cards below.
+		buildWorkspacePreviewCard(previewEnv, previewErr).Print()
+		buildWorkspaceBranchCard(wsName, updatedAt).Print()
 	}
 
 	// Per-repo cards.
@@ -266,13 +253,6 @@ func runStatusProject(ctx context.Context) error {
 
 	for _, ws := range results {
 		buildProjectWorkspaceCard(ws).Print()
-		// Emit any incidental events captured during this workspace's
-		// fetch (e.g., stale-metadata cleanup) after the card so the
-		// timeline reads card → notice → next card. Card style with
-		// title + value keeps action heading-cased and value raw.
-		for _, msg := range ws.infoMessages {
-			ui.NewCard(ui.CardSuccess, msg.action).Value(msg.value).Print()
-		}
 	}
 
 	renderProjectSummary(results)
@@ -298,25 +278,10 @@ type workspaceState struct {
 	// repos. Zero value when no repo lookup succeeded (workspace will
 	// render without an Updated row).
 	updatedAt time.Time
-
-	// infoMessages captures incidental events (e.g., "cleared stale
-	// metadata") emitted by the preview provider during this
-	// workspace's fetch. Buffered here so the command can render
-	// them after the workspace's card prints rather than letting
-	// them race with the loading spinner.
-	infoMessages []previewInfoEvent
-}
-
-// previewInfoEvent carries a preview-provider incidental event for
-// deferred rendering. Split into action + value so the card render
-// can title-case the action and keep the value raw-cased and muted.
-type previewInfoEvent struct {
-	action string
-	value  string
 }
 
 type workspaceRepoCounts struct {
-	repos                                int
+	repos                                 int
 	done, ready, blocked, pending, broken int
 }
 
@@ -324,11 +289,6 @@ type workspaceRepoCounts struct {
 // workspace card at project scope: its issue, its repos, the per-
 // repo state, and the aggregate rollup. Errors are swallowed —
 // partial fetch leaves fields zero so the row still renders.
-//
-// The preview provider is constructed per workspace with an OnInfo
-// callback that captures incidental events (stale-metadata cleanup,
-// etc.) into ws.infoMessages, so the command can emit them after
-// the workspace's card prints instead of racing with the spinner.
 func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
 	ws := workspaceState{name: wsName}
 
@@ -350,13 +310,8 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 
 	// Preview-env binding. ErrNoEnvironment is the empty-state signal;
 	// ProbeError carries a partial Environment we still want to render.
-	// Build a per-workspace provider whose OnInfo writes into this
-	// workspace's buffer (no shared state with other goroutines, since
-	// each fetch has its own ws value).
 	if ws.issueKey != "" {
-		if provider, err := newPreviewProviderWithInfo(wsName, func(action, value string) {
-			ws.infoMessages = append(ws.infoMessages, previewInfoEvent{action: action, value: value})
-		}); err == nil && provider != nil {
+		if provider, err := newPreviewProvider(wsName); err == nil && provider != nil {
 			ws.previewEnv, ws.previewErr = provider.Get(ctx, ws.issueKey)
 		}
 	}
@@ -376,7 +331,7 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 		if rs.lastCommit.After(ws.updatedAt) {
 			ws.updatedAt = rs.lastCommit
 		}
-		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr) {
+		switch resolveRepoCardState(branchStateString(rs.sync), rs.pr, rs.checks) {
 		case ui.CardSuccess:
 			ws.counts.done++
 		case ui.CardReady:
@@ -429,8 +384,13 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	}
 	styledTitle := lipgloss.NewStyle().Foreground(titleColor).Render(value)
 
+	// State-context card: keep glyph color and title color in sync so
+	// the project-scope workspace row reads consistently with the
+	// workspace-scope meta block. statusCardStateColor already returns
+	// the Role* role color for the resolved CardState.
 	card := ui.NewCard(ws.rollup, title).
 		PreserveCase().
+		GlyphColor(titleColor).
 		TitleColor(titleColor).
 		Value(styledTitle)
 
@@ -458,47 +418,56 @@ func buildProjectWorkspaceCard(ws workspaceState) *ui.Card {
 	return card
 }
 
+// pluralize returns singular when n == 1, otherwise plural. Keeps
+// summary headings grammatically correct ("1 repository" vs.
+// "3 repositories").
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
 // workspaceRepoBreakdown composes a colored single-line summary of
 // the workspace's repos. Same vocabulary and color story as the
 // project-level summary, just scoped to one workspace.
+//
+// State-context call site — each label is a state bucket, so colors
+// route through the Role* palette aliases (see state_grammar.go).
 func workspaceRepoBreakdown(c workspaceRepoCounts) string {
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral)
+	doneStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleDone)
+	openStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleOpen)
+	attentionStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleAttention)
+	closedStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleClosed)
+	inFlightStyle := lipgloss.NewStyle().Foreground(ui.Palette.RoleInFlight)
 
 	parts := []string{
-		muted.Render(fmt.Sprintf("%d repos", c.repos)),
+		muted.Render(fmt.Sprintf("%d %s", c.repos, pluralize(c.repos, "repository", "repositories"))),
 	}
 	if c.done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", c.done)))
+		parts = append(parts, doneStyle.Render(fmt.Sprintf("%d done", c.done)))
 	}
 	if c.ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", c.ready)))
+		parts = append(parts, openStyle.Render(fmt.Sprintf("%d ready", c.ready)))
 	}
 	if c.blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", c.blocked)))
+		parts = append(parts, attentionStyle.Render(fmt.Sprintf("%d blocked", c.blocked)))
 	}
 	if c.pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", c.pending)))
+		parts = append(parts, inFlightStyle.Render(fmt.Sprintf("%d pending", c.pending)))
 	}
 	if c.broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", c.broken)))
+		parts = append(parts, closedStyle.Render(fmt.Sprintf("%d broken", c.broken)))
 	}
 	return strings.Join(parts, muted.Render(", "))
 }
 
-// renderProjectSummary prints the muted recap card at the bottom of
-// project status — single-line tally of workspaces by their resolved
-// state.
+// renderProjectSummary prints the recap card at the bottom of project
+// status — tally of workspaces by their resolved state. Segments are
+// ordered ascending by severity (info-ish first, error last) so the
+// order-based glyph rollup in Reporter.Summary picks the worst case.
 func renderProjectSummary(states []workspaceState) {
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-
 	var done, ready, blocked, pending, broken int
 	for _, ws := range states {
 		switch ws.rollup {
@@ -515,29 +484,16 @@ func renderProjectSummary(states []workspaceState) {
 		}
 	}
 
-	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d workspaces", len(states))),
-	}
-	if done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
-	}
-	if ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", ready)))
-	}
-	if blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", blocked)))
-	}
-	if pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", pending)))
-	}
-	if broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
-	}
-
-	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).
-		PreserveCase().
-		GlyphColor(ui.Palette.Muted).
-		Print()
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "workspace", "workspaces")),
+		[]ui.SummarySegment{
+			{Count: done, Label: "done", Color: ui.Palette.RoleDone},
+			{Count: ready, Label: "ready", Color: ui.Palette.RoleOpen},
+			{Count: pending, Label: "pending", Color: ui.Palette.RoleInFlight},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.RoleAttention},
+			{Count: broken, Label: "broken", Color: ui.Palette.RoleClosed},
+		},
+	)
 }
 
 // projectRepos returns the project's configured repositories with
@@ -558,46 +514,94 @@ func projectRepos() []projectRepoEntry {
 	return out
 }
 
-
-// buildWorkspaceIssueCard constructs the issue header card with a
-// three-section KV body: (1) Type/title + Status — what kind of work
-// and where it is in the lifecycle; (2) Preview — the deployment
-// state; (3) Workspace + Updated — where the code lives and when it
-// was last touched. Sections are separated by blank lines for
-// breathing room. Used as the success-card finalizer for the issue
-// fetch's RunCardReplace.
-func buildWorkspaceIssueCard(detail issuepkg.Issue, branch string, previewEnv preview.Environment, previewErr error, updatedAt time.Time) *ui.Card {
-	workspacePath := workspaceFilesystemPath(branch)
-	workspaceValue := branch
-	if workspacePath != "" {
-		workspaceValue = osc8Link("file://"+workspacePath, branch)
-	}
-
-	// Build the title value as "KEY: Title" with the key as a
-	// clickable link to the issue tracker.
-	issueRef := detail.Key
-	if detail.URL != "" {
-		issueRef = osc8Link(detail.URL, detail.Key)
-	}
-	boldTitle := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
-
+// buildWorkspaceStoryCard renders the issue/story meta card in the
+// standard title-plus-body layout: the title row carries the issue
+// type alone (Story / Bug / Task / etc., "Issue" if unknown); the
+// body stacks the bold OSC8-linked issue key + title, a blank
+// spacer, then the lifecycle stepper — all at the standard body
+// indent, no value-column alignment math.
+//
+// When the tracker fetch failed (fetchOK false), the card renders
+// its degraded variant: ▲ warning glyph, body line with the issue
+// key (falling back to issueKey when detail is zero) + muted
+// "(title unavailable)", no stepper.
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK bool) *ui.Card {
 	typeLabel := detail.Type
 	if typeLabel == "" {
 		typeLabel = "Issue"
 	}
 
-	return ui.NewCard(ui.CardSuccess, "").
-		KV(
-			typeLabel, boldTitle,
-			"Status", detail.Status,
-		).
-		Text("").
-		KV("Preview", statusPreviewValue(previewEnv, previewErr)).
-		Text("").
-		KV(
-			"Workspace", workspaceValue,
-			"Updated", statusUpdatedValue(updatedAt),
-		)
+	if !fetchOK {
+		key := detail.Key
+		if key == "" {
+			key = issueKey
+		}
+		muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+		line := lipgloss.NewStyle().Bold(true).Render(key) +
+			muted.Render(" · (title unavailable)")
+		return ui.NewCard(ui.CardSkipped, typeLabel).Raw(line)
+	}
+
+	issueRef := detail.Key
+	if detail.URL != "" {
+		issueRef = osc8Link(detail.URL, detail.Key)
+	}
+	issueLine := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+
+	key := lifecycleKeyForStatus(detail.Status)
+	var stepper string
+	if stepperSlotIndex(key) < 0 {
+		stepper = renderLifecycleStepperUnmapped(detail.Status)
+	} else {
+		stepper = renderLifecycleStepper(key)
+	}
+
+	body := make([]string, 0, 4)
+	body = append(body, issueLine, "")
+	body = append(body, strings.Split(stepper, "\n")...)
+
+	return ui.NewCard(ui.CardReady, typeLabel).Raw(body...)
+}
+
+// buildWorkspacePreviewCard renders the preview-environment meta
+// card in the standard title-plus-body layout: title "Preview", the
+// preview URL/name (or a muted "(none)" sentinel from
+// statusPreviewValue) on the body line beneath. The text carries the
+// existence contrast on its own, so the glyph stays a structural ●
+// with no state-color override.
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspacePreviewCard(env preview.Environment, err error) *ui.Card {
+	return ui.NewCard(ui.CardReady, "Preview").Raw(statusPreviewValue(env, err))
+}
+
+// buildWorkspaceBranchCard renders the workspace-branch meta card in
+// the standard title-plus-body layout: title "Workspace", and on the
+// body line the branch name (file:// linked to its worktree path when
+// resolvable) plus a colored age parenthetical at the end.
+//
+// Renders as a CardReady (●) with the dot color overridden per
+// staleness bucket (see [stalenessColor]).
+//
+// Layout (Tight, ordering) is the caller's concern.
+func buildWorkspaceBranchCard(branch string, updatedAt time.Time) *ui.Card {
+	dotColor := stalenessColor(updatedAt)
+	workspacePath := workspaceFilesystemPath(branch)
+	value := branch
+	if workspacePath != "" {
+		value = osc8Link("file://"+workspacePath, branch)
+	}
+
+	if !updatedAt.IsZero() {
+		parens := lipgloss.NewStyle().Foreground(dotColor).Render("(" + humanizeAge(time.Since(updatedAt)) + ")")
+		value += " " + parens
+	}
+
+	return ui.NewCard(ui.CardReady, "Workspace").
+		GlyphColor(dotColor).
+		Raw(value)
 }
 
 // repoState bundles all the per-repo data fetched during status
@@ -672,35 +676,37 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 // gutter glyph, state-tinted title, and three body rows (Branch /
 // Checks / PR). Used as the success-card finalizer for the per-repo
 // RunCardThen.
+//
+// Gutter glyph + title color come from repoCardGlyphVisual, which
+// applies the state-context grammar (●  for active states colored
+// to role; ✓ purple for terminal merged; ✗ red for terminal closed).
 func buildWorkspaceRepoCard(s workspace.RepositoryStatus, rs repoState) *ui.Card {
 	branchState := branchStateString(rs.sync)
-	state := resolveRepoCardState(branchState, rs.pr)
+	state, glyphCol := repoCardGlyphVisual(branchState, rs.pr, rs.checks)
 
 	branchGlyph, branchValue := statusBranchRow(s.Branch, rs.branchURL, rs.sync, s.Dirty)
 	checksGlyph, checksValue := statusChecksRow(rs.checks, rs.checksURL)
-	prGlyph, prValue := statusPRRow(rs.pr)
+	prGlyph, prValue := statusPRRow(rs.pr, rs.checks)
 
 	return ui.NewCard(state, s.Name).
 		PreserveCase().
-		TitleColor(statusCardStateColor(state)).
+		GlyphColor(glyphCol).
+		TitleColor(glyphCol).
 		Item(branchGlyph, statusRowKV("Branch", branchValue)).
 		Item(checksGlyph, statusRowKV("Checks", checksValue)).
 		Item(prGlyph, statusRowKV("PR", prValue))
 }
 
-// renderWorkspaceSummary prints the muted recap card at the bottom
-// — single-line tally of repos by their resolved state.
+// renderWorkspaceSummary prints the recap card at the bottom of
+// workspace status — tally of repos by their resolved state.
+// Segments are ordered ascending by severity (info-ish first, error
+// last) so the order-based glyph rollup in Reporter.Summary picks
+// the worst case.
 func renderWorkspaceSummary(states []repoState) {
-	successStyle := lipgloss.NewStyle().Foreground(ui.Palette.Success)
-	warningStyle := lipgloss.NewStyle().Foreground(ui.Palette.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
-	infoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Info)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-
 	var done, ready, blocked, pending, broken int
 	for _, rs := range states {
 		branchState := branchStateString(rs.sync)
-		switch resolveRepoCardState(branchState, rs.pr) {
+		switch resolveRepoCardState(branchState, rs.pr, rs.checks) {
 		case ui.CardSuccess:
 			done++
 		case ui.CardReady:
@@ -714,29 +720,16 @@ func renderWorkspaceSummary(states []repoState) {
 		}
 	}
 
-	parts := []string{
-		mutedStyle.Render(fmt.Sprintf("%d repos", len(states))),
-	}
-	if done > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d done", done)))
-	}
-	if ready > 0 {
-		parts = append(parts, successStyle.Render(fmt.Sprintf("%d ready", ready)))
-	}
-	if blocked > 0 {
-		parts = append(parts, warningStyle.Render(fmt.Sprintf("%d blocked", blocked)))
-	}
-	if pending > 0 {
-		parts = append(parts, infoStyle.Render(fmt.Sprintf("%d pending", pending)))
-	}
-	if broken > 0 {
-		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d broken", broken)))
-	}
-
-	ui.NewCard(ui.CardInfo, strings.Join(parts, ", ")).
-		PreserveCase().
-		GlyphColor(ui.Palette.Muted).
-		Print()
+	ui.Default().Summary(
+		fmt.Sprintf("%d %s", len(states), pluralize(len(states), "repository", "repositories")),
+		[]ui.SummarySegment{
+			{Count: done, Label: "done", Color: ui.Palette.RoleDone},
+			{Count: ready, Label: "ready", Color: ui.Palette.RoleOpen},
+			{Count: pending, Label: "pending", Color: ui.Palette.RoleInFlight},
+			{Count: blocked, Label: "blocked", Color: ui.Palette.RoleAttention},
+			{Count: broken, Label: "broken", Color: ui.Palette.RoleClosed},
+		},
+	)
 }
 
 // workspaceFilesystemPath returns the absolute filesystem path for a
@@ -753,4 +746,3 @@ func workspaceFilesystemPath(branch string) string {
 	}
 	return filepath.Join(wsRoot, branch)
 }
-

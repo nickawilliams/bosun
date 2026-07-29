@@ -40,7 +40,7 @@ func TestStart(t *testing.T) {
 			Key: "EX-1", Title: "Add provider lookup", Type: "Story",
 		})
 
-		if err := h.Run("start", "--issue", "EX-1", "--slug", "provider-lookup", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-1", "--slug", "provider-lookup", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 
@@ -100,7 +100,7 @@ func TestStart(t *testing.T) {
 
 		if err := h.Run(
 			"start", "--issue", "EX-3", "--slug", "wire-upload",
-			"--repository", "api", "--yes",
+			"--repository", "api", "--approve",
 		); err != nil {
 			t.Fatalf("start: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestStart(t *testing.T) {
 		branch := "story/EX-4_retry-policy"
 
 		// First run creates the branch + worktree + sets status.
-		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--approve"); err != nil {
 			t.Fatalf("first run: %v", err)
 		}
 		if !api.HasBranch(branch) {
@@ -136,7 +136,7 @@ func TestStart(t *testing.T) {
 		// performs no further work — the whole point of idempotency.
 		before := append([]string(nil), h.Tracker.Calls()...)
 
-		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--approve"); err != nil {
 			t.Fatalf("second run: %v", err)
 		}
 
@@ -167,7 +167,7 @@ func TestStart(t *testing.T) {
 		// what this scenario is checking.
 		h.Type("\r")
 
-		if err := h.Run("start", "--issue", "EX-5", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-5", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 
@@ -191,11 +191,11 @@ func TestStart(t *testing.T) {
 		})
 
 		// " " toggles first option; "\x1b[B" is down-arrow; second " "
-		// toggles next; "\r" submits the multi-select; --yes skips the
+		// toggles next; "\r" submits the multi-select; --approve skips the
 		// plan confirmation that follows.
 		h.Type(" \x1b[B \r")
 
-		if err := h.Run("start", "--issue", "EX-11", "--slug", "both", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-11", "--slug", "both", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 
@@ -209,7 +209,7 @@ func TestStart(t *testing.T) {
 	})
 
 	t.Run("plan_confirmation/confirmed_applies", func(t *testing.T) {
-		// Without --yes the plan confirmation gate runs as a huh form.
+		// Without --approve the plan confirmation gate runs as a huh form.
 		// Affirmative is "Apply", negative is "Cancel"; with an empty
 		// stdin and the form's default at "Apply" position, pressing
 		// Enter accepts. \r is what bubbletea's input parser sees for
@@ -272,7 +272,7 @@ func TestStart(t *testing.T) {
 			Key: "EX-9", Title: "Tweak", Type: "Story", Status: "In Progress",
 		})
 
-		if err := h.Run("start", "--issue", "EX-9", "--slug", "tweak", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-9", "--slug", "tweak", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 
@@ -292,7 +292,7 @@ func TestStart(t *testing.T) {
 		})
 		t.Setenv("BOSUN_ISSUE", "EX-10")
 
-		if err := h.Run("start", "--slug", "env-resolved", "--yes"); err != nil {
+		if err := h.Run("start", "--slug", "env-resolved", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 
@@ -307,7 +307,7 @@ func TestStart(t *testing.T) {
 		h.Workspace.AddRepo("api")
 		// Don't seed EX-99 — the tracker should return not-found.
 
-		err := h.Run("start", "--issue", "EX-99", "--slug", "missing", "--yes")
+		err := h.Run("start", "--issue", "EX-99", "--slug", "missing", "--approve")
 		if err == nil {
 			t.Fatalf("expected error for missing issue; got nil")
 		}
@@ -327,7 +327,7 @@ func TestStart(t *testing.T) {
 			Key: "EX-6", Title: "X", Type: "Story",
 		})
 
-		if err := h.Run("start", "--issue", "EX-6", "--slug", "x", "--yes"); err != nil {
+		if err := h.Run("start", "--issue", "EX-6", "--slug", "x", "--approve"); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 

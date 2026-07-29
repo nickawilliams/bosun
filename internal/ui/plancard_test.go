@@ -12,6 +12,7 @@ func TestPlanCard_TitleWord(t *testing.T) {
 		want  string
 	}{
 		{PlanProposed, "Pending"},
+		{PlanVerified, "Verified"},
 		{PlanApplying, "Applying"},
 		{PlanSuccess, "Success"},
 		{PlanPartial, "Partial"},
@@ -125,6 +126,7 @@ func TestPlanCard_Glyph(t *testing.T) {
 		wantRune string // the raw glyph character embedded in styled output
 	}{
 		{PlanProposed, cardGlyphInput},
+		{PlanVerified, cardGlyphSuccess},
 		{PlanApplying, cardGlyphPending},
 		{PlanSuccess, cardGlyphSuccess},
 		{PlanPartial, cardGlyphSkipped},

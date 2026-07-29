@@ -81,13 +81,51 @@ type VCS interface {
 	// to the count of commits ahead of the project's default branch.
 	GetBranchSync(ctx context.Context, repositoryPath, branchName string) (BranchSync, error)
 
-	// ChangedFiles returns the file paths changed on the current branch
-	// relative to the default branch (origin/<default>...HEAD). Paths are
-	// relative to the repository root. Returns nil when no files differ.
-	ChangedFiles(ctx context.Context, repositoryPath string) ([]string, error)
+	// ChangedFiles returns the file paths changed between base and HEAD
+	// (i.e. `git diff <base>...HEAD --name-only`). The base ref is the
+	// caller's policy choice — preview uses `origin/<default-branch>`,
+	// prerelease uses the previous release tag. Paths are relative to
+	// the repository root. Returns nil when no files differ. Callers
+	// that need a fresh remote base should call Fetch first.
+	ChangedFiles(ctx context.Context, repositoryPath, base string) ([]string, error)
+
+	// Fetch updates a remote ref. Best-effort sibling of ChangedFiles
+	// for callers that diff against a remote-tracking branch and want
+	// the latest before computing the merge-base. Returns an error from
+	// the underlying git command, which callers typically swallow since
+	// the diff itself is the load-bearing call.
+	Fetch(ctx context.Context, repositoryPath, remote, ref string) error
 
 	// LastCommitTime returns the commit timestamp of the most recent
 	// commit on branchName. Returns the zero time and an error when
 	// the branch doesn't exist or the lookup fails.
 	LastCommitTime(ctx context.Context, repositoryPath, branchName string) (time.Time, error)
+
+	// IsMergedInto reports whether branch's tip is an ancestor of base.
+	// True when every commit on branch is reachable from base (e.g.
+	// merged, fast-forwarded, rebased onto base). Used by the cleanup
+	// safety check to confirm work is preserved in base before allowing
+	// the branch to be deleted. base may be a local or remote-tracking
+	// ref (e.g. "origin/main").
+	IsMergedInto(ctx context.Context, repositoryPath, branch, base string) (bool, error)
+
+	// HeadSHA returns the commit SHA at HEAD for the given repository
+	// or worktree path. Used to compare a worktree's current commit
+	// against a PR's head SHA when classifying cleanup safety.
+	HeadSHA(ctx context.Context, repositoryPath string) (string, error)
+
+	// TagsContaining returns every tag whose history reaches sha.
+	// Wraps `git tag --contains <sha>` — a single local syscall, no
+	// network. Used by prerelease to detect when a workspace's HEAD
+	// is already in an existing release tag (so we can skip the
+	// CreateRelease call and surface the containing release in the
+	// result card). Empty slice means no tag contains the commit.
+	TagsContaining(ctx context.Context, repositoryPath, sha string) ([]string, error)
+
+	// FetchTags refreshes tag refs from remote (`git fetch <remote>
+	// --tags --quiet`). Used before TagsContaining so tags pushed by
+	// other users in the last few minutes are visible locally —
+	// without this the contains check is only as fresh as the user's
+	// last manual fetch.
+	FetchTags(ctx context.Context, repositoryPath, remote string) error
 }

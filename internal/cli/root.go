@@ -1,14 +1,8 @@
 package cli
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-
-	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const groupLifecycle = "lifecycle"
@@ -25,55 +19,18 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Thread cmd's I/O streams to the UI layer. Tests that call
-			// cmd.SetIn/SetOut/SetErr flow through to runForm and
-			// rendering automatically. In production, these resolve to
-			// the process streams.
-			ui.SetStreams(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
-
-			// --project must resolve before config.Load() because
-			// Load() calls FindProjectRoot() to locate .bosun/config.yaml.
-			if f := cmd.Flags().Lookup("project"); f != nil && f.Changed {
-				abs, err := filepath.Abs(f.Value.String())
-				if err != nil {
-					return fmt.Errorf("--project: %w", err)
-				}
-				info, err := os.Stat(filepath.Join(abs, ".bosun"))
-				if err != nil || !info.IsDir() {
-					return fmt.Errorf("--project: no .bosun/ directory found in %s", abs)
-				}
-				config.ProjectRootOverride = abs
-			}
-
-			if err := config.Load(); err != nil {
+			// Bootstrap is idempotent: in production main() already
+			// ran it, so this call no-ops; in tests that bypass main
+			// and call cmd.Execute directly, this is the entry point
+			// that loads config and configures the UI. Either way,
+			// SetCurrentCommand inside Bootstrap refreshes to the
+			// authoritative cmd cobra is dispatching now.
+			if err := Bootstrap(cmd); err != nil {
 				return err
 			}
-			ui.ApplyColorMode(viper.GetString("display.color"))
-
-			// Determine output mode: raw when stdout isn't a TTY, or
-			// when the command explicitly declares raw output (annotation
-			// or --output flag).
-			raw := !ui.IsTerminal() ||
-				cmd.Annotations["output"] == "raw" ||
-				(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != "")
-
-			if raw {
-				ui.SetDefault(ui.NewRawReporter())
-			} else {
-				ui.SetCompactHeader(viper.GetBool("display.compact_header"))
-				ui.BeginTimeline()
-			}
-
-			// Resolve context and render header. Runs for every
-			// command so the breadcrumb is always present before
-			// any RunE logic (including errors). Raw-mode commands
-			// skip the header via SetContext's IsRaw() guard.
 			cc, ccErr := resolveCommandContext(cmd)
 			initHeader(cmd, cc)
-			if ccErr != nil {
-				return ccErr
-			}
-			return nil
+			return ccErr
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
 			if !ui.IsRaw() {
@@ -83,7 +40,7 @@ func NewRootCmd(version string) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().Bool("dry-run", false, "show what would happen without making changes")
-	cmd.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompt")
+	cmd.PersistentFlags().BoolP("approve", "a", false, "approve the plan without prompting")
 	cmd.PersistentFlags().Bool("interactive", false, "prompt for configurable values")
 
 	cmd.AddGroup(
@@ -119,5 +76,16 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(newDemoCmd())
 	cmd.AddCommand(newCaptainCmd())
 
+	// extraCommands holds locally-registered, out-of-tree commands (e.g.
+	// the untracked notify_demo.go sample-data command). The tracked tree
+	// builds with this empty; local files append via init().
+	cmd.AddCommand(extraCommands...)
+
 	return cmd
 }
+
+// extraCommands is appended to the root command after the built-in set.
+// It exists so untracked, local-only command files (kept out of version
+// control) can register themselves via init() without modifying this
+// tracked file. Empty in a clean checkout.
+var extraCommands []*cobra.Command

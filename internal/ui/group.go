@@ -96,6 +96,10 @@ type groupCounts struct {
 func (g *group) sendChild(state CardState, c *Card) {
 	c.Indent(g.indent)
 	c.tight = true
+	// Children are list entries under the group's bold parent title,
+	// not headings themselves — render their titles without bold so
+	// the parent stays the row that carries the visual weight.
+	c.plainTitle = true
 	g.msgCh <- groupChildMsg{rendered: c.Render(), state: state}
 	switch state {
 	case CardSuccess:
@@ -119,12 +123,35 @@ func (g *group) CompleteDetail(label string, items []string) {
 	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Muted(items...))
 }
 
+func (g *group) CompleteValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardSuccess, alignedValueCard(CardSuccess, label, value, alignWidth))
+}
+
 func (g *group) Skip(label string) {
 	g.sendChild(CardSkipped, NewCard(CardSkipped, label))
 }
 
+func (g *group) SkipValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardSkipped, alignedValueCard(CardSkipped, label, value, alignWidth))
+}
+
 func (g *group) Fail(label string) {
 	g.sendChild(CardFailed, NewCard(CardFailed, label))
+}
+
+func (g *group) FailValue(label, value string, alignWidth ...int) {
+	g.sendChild(CardFailed, alignedValueCard(CardFailed, label, value, alignWidth))
+}
+
+// alignedValueCard constructs a value-form card with optional title
+// alignment. Pulled out so the three value-form group methods share
+// the same construction logic.
+func alignedValueCard(state CardState, label, value string, alignWidth []int) *Card {
+	card := NewCard(state, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	return card
 }
 
 func (g *group) Success(format string, args ...any) {
@@ -152,15 +179,19 @@ func (g *group) Saved(label, value string) {
 }
 
 func (g *group) Selected(label, value string) {
+	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Subtitle(value))
+}
+
+func (g *group) SelectedIdentifier(label, value string) {
 	g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Subtitle(value))
 }
 
 func (g *group) SelectedMulti(label string, values []string) {
 	if len(values) == 0 {
-		g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Subtitle("(none)"))
+		g.sendChild(CardSuccess, NewCard(CardSuccess, label).Subtitle("(none)"))
 		return
 	}
-	g.sendChild(CardSuccess, NewCard(CardSuccess, label).PreserveCase().Muted(values...))
+	g.sendChild(CardSuccess, NewCard(CardSuccess, label).Muted(values...))
 }
 
 func (g *group) Task(title string, fn func() error) error {
@@ -173,14 +204,20 @@ func (g *group) Task(title string, fn func() error) error {
 
 		card := NewCard(CardSuccess, title).Indent(g.indent)
 		card.tight = true
+		card.plainTitle = true
 		state := CardSuccess
 		if err != nil {
 			card.state = CardFailed
 			card.Subtitle(err.Error())
 			state = CardFailed
 		}
-		doneCh <- err
+		// The done message must land on msgCh BEFORE the caller
+		// unblocks: once doneCh is sent, the caller's next Task/Spinner
+		// pushes its start message, and a stale done arriving after it
+		// would clear the NEW task's spinner row — or silently drop a
+		// later task's result card via the activeTask guard.
 		g.msgCh <- groupTaskDoneMsg{err: err, rendered: card.Render(), state: state}
+		doneCh <- err
 	}()
 	err := <-doneCh
 	if err != nil {
@@ -189,6 +226,28 @@ func (g *group) Task(title string, fn func() error) error {
 		g.counts.success++
 	}
 	return err
+}
+
+// Spinner shows an inline running indicator at the child level for
+// title while fn executes, then clears the indicator without emitting
+// any terminal card — the caller renders the final result. Counts
+// are NOT incremented; the caller's subsequent Complete/Fail/Skip
+// (or value-form variant) drives count aggregation.
+func (g *group) Spinner(title string, fn func() error) error {
+	doneCh := make(chan error, 1)
+	g.msgCh <- groupTaskStartMsg{title: title, indent: g.indent}
+	go func() {
+		start := time.Now()
+		err := fn()
+		holdSpinner(start)
+		// Empty rendered string signals the message handler to clear
+		// the active task without appending a child card. Sent before
+		// doneCh for the same ordering reason as Task: the caller's
+		// next start message must not beat this done message to msgCh.
+		g.msgCh <- groupTaskDoneMsg{err: err, rendered: "", state: CardSuccess}
+		doneCh <- err
+	}()
+	return <-doneCh
 }
 
 func (g *group) Details(heading string, fields Fields) {
@@ -203,6 +262,12 @@ func (g *group) Details(heading string, fields Fields) {
 		heading = "Details"
 	}
 	g.sendChild(CardData, NewCard(CardData, heading).KV(pairs...))
+}
+
+func (g *group) Summary(total string, segments []SummarySegment) {
+	g.sendChild(CardInfo, NewCard(CardInfo, renderSummaryText(total, segments)).
+		PreserveCase().
+		GlyphColor(summaryGlyphColor(segments)))
 }
 
 func (g *group) Group(title string, fn func(Reporter)) {
@@ -224,14 +289,18 @@ func (g *group) aggregate() CardState {
 }
 
 func aggregateCounts(c groupCounts) CardState {
+	// Worst child state dominates: failures first, then skipped/warn
+	// (so warnings propagate visibly to the group glyph even when
+	// most children succeeded), then success. The empty group falls
+	// through to CardSuccess as a no-op default.
 	if c.failed > 0 {
 		return CardFailed
 	}
-	if c.success > 0 {
-		return CardSuccess
-	}
 	if c.skipped > 0 {
 		return CardSkipped
+	}
+	if c.success > 0 {
+		return CardSuccess
 	}
 	return CardSuccess
 }
@@ -348,13 +417,20 @@ func (m *groupModel) processMsg(msg groupMsg) {
 
 	case groupTaskDoneMsg:
 		if m.current.activeTask != nil {
-			m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
-			m.current.activeTask = nil
-			if msg.err != nil {
-				m.current.counts.failed++
-			} else {
-				m.current.counts.success++
+			// Empty rendered = spinner-only (group.Spinner). Clear the
+			// active task and skip both the child append and the count
+			// update — the caller will emit its own terminal card via a
+			// follow-up Complete/Fail/Skip (or value-form variant),
+			// which handles counts through its own message path.
+			if msg.rendered != "" {
+				m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
+				if msg.err != nil {
+					m.current.counts.failed++
+				} else {
+					m.current.counts.success++
+				}
 			}
+			m.current.activeTask = nil
 		}
 
 	case groupBeginMsg:
@@ -412,6 +488,7 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 	if node.activeTask != nil {
 		taskCard := NewCard(CardRunning, node.activeTask.title).Indent(node.activeTask.indent)
 		taskCard.tight = true
+		taskCard.plainTitle = true
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))
 	}
 }

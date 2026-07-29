@@ -42,32 +42,94 @@ func statusStyledGlyph(glyph string, c color.Color) string {
 	return lipgloss.NewStyle().Foreground(c).Render(glyph)
 }
 
-// statusCardStateColor returns the palette color associated with a
-// resolved aggregate card state — the same hue used by the gutter
-// glyph — so a card's title can be tinted to match.
+// statusCardStateColor returns the palette role color associated
+// with a resolved aggregate card state — the same hue used by the
+// gutter glyph — so a card's title can be tinted to match.
+//
+// State-context call site — see state_grammar.go. CardSuccess maps
+// to RoleDone (purple) because in the status context, CardSuccess
+// represents a terminal-positive resolution (e.g., merged-PR rollup),
+// not just "an action just succeeded".
 func statusCardStateColor(state ui.CardState) color.Color {
 	switch state {
 	case ui.CardSuccess:
-		return ui.Palette.Success
+		return ui.Palette.RoleDone
 	case ui.CardReady:
-		return ui.Palette.Success
+		return ui.Palette.RoleOpen
 	case ui.CardSkipped:
-		return ui.Palette.Warning
+		return ui.Palette.RoleAttention
 	case ui.CardWaiting:
-		return ui.Palette.Info
+		return ui.Palette.RoleInFlight
 	case ui.CardFailed:
-		return ui.Palette.Error
+		return ui.Palette.RoleClosed
 	}
 	return ui.Palette.Primary
 }
 
+// repoCardGlyphVisual returns the (CardState, color) pair used to
+// render a repo card's gutter glyph + title color under the
+// state-context grammar (state_grammar.go). Most states render as ●
+// colored to the appropriate role; the two terminal PR outcomes use
+// their event-shaped glyphs (✓ purple for merged, ✗ red for closed).
+//
+// Kept distinct from resolveRepoCardState below, which retains its
+// 5-bucket CardState distinctions for the workspace and project
+// tally code (CardSuccess / CardReady / CardSkipped / CardWaiting /
+// CardFailed map to done / ready / blocked / pending / broken in
+// the summary). Two functions, two jobs: one for rendering the row,
+// one for categorizing it.
+func repoCardGlyphVisual(branchState string, pr code.PullRequest, checks code.CheckRollup) (ui.CardState, color.Color) {
+	switch pr.State {
+	case "merged":
+		return ui.CardSuccess, ui.Palette.RoleDone
+	case "closed":
+		return ui.CardFailed, ui.Palette.RoleClosed
+	case "draft":
+		return ui.CardReady, ui.Palette.RoleNeutral
+	}
+	if strings.HasPrefix(branchState, "diverged") || strings.HasPrefix(branchState, "behind") {
+		return ui.CardReady, ui.Palette.RoleAttention
+	}
+	if pr.State == "open" {
+		switch pr.MergeableState {
+		case "clean", "has_hooks":
+			return ui.CardReady, ui.Palette.RoleOpen
+		case "blocked":
+			if prWaitingOnOthers(pr, checks) {
+				return ui.CardReady, ui.Palette.RoleInFlight
+			}
+			return ui.CardReady, ui.Palette.RoleAttention
+		case "dirty", "behind", "unstable":
+			return ui.CardReady, ui.Palette.RoleAttention
+		}
+		return ui.CardReady, ui.Palette.RoleInFlight
+	}
+	return ui.CardReady, ui.Palette.RoleInFlight
+}
+
+// prWaitingOnOthers reports whether an open PR's "blocked"
+// mergeable_state is a benign wait rather than a user-actionable
+// block: required checks still running, or a requested review not yet
+// submitted (with no checks failing). Mirrors the two in-flight
+// branches of statusPRDominant's blocked case so the repo card's
+// glyph/tally and the PR row's label always agree on which side of
+// the pending/blocked line a PR falls.
+func prWaitingOnOthers(pr code.PullRequest, checks code.CheckRollup) bool {
+	return checks.State == "running" ||
+		(pr.Review == "awaiting" && checks.State != "failing")
+}
+
 // resolveRepoCardState maps a repo's branch + PR state onto the
-// 5-state aggregate vocabulary used at the gutter level. Mirrors the
-// scratchpad's resolveWstatRepoCardState. Precedence: terminal PR
-// states (merged → done, closed → broken) win; then branch problems
-// (diverged / behind) → blocked; then PR mergeability (clean → ready,
-// dirty/behind/blocked/unstable → blocked); else pending.
-func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState {
+// 5-state aggregate vocabulary used by the workspace tally code.
+// Mirrors the scratchpad's resolveWstatRepoCardState. Precedence:
+// terminal PR states (merged → done, closed → broken) win; then
+// branch problems (diverged / behind) → blocked; then PR
+// mergeability (clean → ready, dirty/behind/unstable → blocked,
+// blocked → pending when the PR is just waiting on others — see
+// prWaitingOnOthers — otherwise blocked); else pending. Used for
+// counting only — glyph rendering for repo cards goes through
+// repoCardGlyphVisual above.
+func resolveRepoCardState(branchState string, pr code.PullRequest, checks code.CheckRollup) ui.CardState {
 	switch pr.State {
 	case "merged":
 		return ui.CardSuccess
@@ -83,7 +145,12 @@ func resolveRepoCardState(branchState string, pr code.PullRequest) ui.CardState 
 		switch pr.MergeableState {
 		case "clean":
 			return ui.CardReady
-		case "dirty", "behind", "blocked", "unstable":
+		case "blocked":
+			if prWaitingOnOthers(pr, checks) {
+				return ui.CardWaiting
+			}
+			return ui.CardSkipped
+		case "dirty", "behind", "unstable":
 			return ui.CardSkipped
 		}
 		return ui.CardWaiting
@@ -114,25 +181,31 @@ func branchStateString(sync vcs.BranchSync) string {
 // 1 char glyph + 2 cells for an optional commit count (single digit
 // + space, "9+" for double-digit, or two spaces when no count
 // applies). Keeps repo cards' glyph columns aligned across the run.
+//
+// State-context call site — see state_grammar.go. The directional
+// glyphs (↕ ↑ ↓ +) are domain-specific state markers that encode
+// info ● can't carry (direction + commit count); the grammar allows
+// these specialized state glyphs. Only "in sync" uses the default
+// ● state glyph since there's no count to carry there.
 func statusBranchGlyph(sync vcs.BranchSync) (string, color.Color) {
 	if !sync.HasRemote {
 		// + means "additions" — N local commits ahead of base, no
 		// remote yet. Pairs cleanly with digits and reads directly
 		// as "N to push."
-		return "+" + countToken(sync.Ahead), ui.Palette.Muted
+		return "+" + countToken(sync.Ahead), ui.Palette.RoleNeutral
 	}
 	switch {
 	case sync.Ahead == 0 && sync.Behind == 0:
-		return "✓  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case sync.Ahead > 0 && sync.Behind > 0:
 		// Sum of ahead + behind — magnitude of divergence, not its
 		// split. The glyph says "two-way", the number says "this
 		// much to reconcile."
-		return "↕" + countToken(sync.Ahead+sync.Behind), ui.Palette.Error
+		return "↕" + countToken(sync.Ahead+sync.Behind), ui.Palette.RoleClosed
 	case sync.Ahead > 0:
-		return "↑" + countToken(sync.Ahead), ui.Palette.Info
+		return "↑" + countToken(sync.Ahead), ui.Palette.RoleInFlight
 	default:
-		return "↓" + countToken(sync.Behind), ui.Palette.Warning
+		return "↓" + countToken(sync.Behind), ui.Palette.RoleAttention
 	}
 }
 
@@ -172,95 +245,134 @@ func statusBranchRow(branch, branchURL string, sync vcs.BranchSync, dirty bool) 
 // 6-state display label in parens: merged / approved / open /
 // changes_requested / draft / closed (folding review state into
 // "open" subdivisions).
-func statusPRRow(pr code.PullRequest) (string, string) {
+func statusPRRow(pr code.PullRequest, checks code.CheckRollup) (string, string) {
 	if pr.Number == 0 {
 		// No PR exists — muted "(none)".
-		glyph := statusStyledGlyph(statusPRGlyph("", ""))
+		glyph := statusStyledGlyph(statusPRGlyph("", "", "", code.CheckRollup{}))
 		return glyph, lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(none)")
 	}
 
-	glyph := statusStyledGlyph(statusPRGlyph(pr.State, pr.MergeableState))
+	label, col, glyphChar := statusPRDominant(pr.State, pr.MergeableState, pr.Review, checks)
+	glyph := statusStyledGlyph(glyphChar+"  ", col)
 
 	number := fmt.Sprintf("#%d", pr.Number)
 	v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(number)
 	if pr.URL != "" {
 		v = osc8Link(pr.URL, v)
 	}
-	if label := statusPRStatusLabel(pr.State, pr.Review); label != "" {
-		styled := lipgloss.NewStyle().
-			Foreground(statusPRStatusColor(pr.State, pr.Review)).
-			Render("(" + label + ")")
+	if label != "" {
+		styled := lipgloss.NewStyle().Foreground(col).Render("(" + label + ")")
 		v += " " + styled
 	}
 	return glyph, v
 }
 
-// statusPRGlyph returns the 3-cell glyph token for the PR row.
-// Aligns with the 5-state vocab (✓ ● ▲ ⧗ ✗) with a single meta-state
-// exception: `?` for open + unknown mergeable_state.
-func statusPRGlyph(state, mergeState string) (string, color.Color) {
+// statusPRDominant folds state, mergeable_state, review state, and
+// the check rollup into a single dominant condition: a parenthetical
+// label, a palette color, and the bare glyph character. The same
+// condition drives all three, so the glyph color and parenthetical
+// color always agree — "approved" no longer reads green next to a
+// warning glyph because the row is behind base, has changes
+// requested, or is awaiting required checks.
+//
+// The check rollup disambiguates the "blocked" mergeable_state: when
+// at least one required check is still running (no failures yet), the
+// PR is awaiting CI rather than truly blocked, so the row renders as
+// in-flight instead of attention.
+//
+// Per the state-context grammar (state_grammar.go), only the two
+// terminal PR outcomes keep their event-shaped glyphs:
+//
+//	merged → ✓ + RoleDone (purple)  — terminal positive resolution
+//	closed → ✗ + RoleClosed (red)   — terminal negative resolution
+//
+// Every other case is a current state, so the row uses ● and the
+// color carries the role (RoleOpen / RoleAttention / RoleInFlight /
+// RoleNeutral). Glyph and color always agree by construction —
+// removing the "approved is green but glyph is yellow" class of
+// inconsistency we hit before.
+//
+// Precedence for open PRs (high → low):
+//
+//  1. review = changes_requested  → "changes requested" / attention
+//  2. mergeable = blocked + checks running
+//     → "required checks pending" / in-flight
+//  3. mergeable = blocked + review = awaiting + checks not failing
+//     → "awaiting review" / in-flight
+//  4. mergeable in {dirty, behind, unstable, blocked}
+//     → mapped label / attention
+//  5. mergeable in {clean, has_hooks} + review = approved
+//     → "approved" / open
+//  6. mergeable in {clean, has_hooks} + review = awaiting
+//     → "awaiting review" / in-flight
+//  7. mergeable = unknown → "unknown" / neutral
+//  8. else → "open" / in-flight
+func statusPRDominant(state, mergeableState, reviewState string, checks code.CheckRollup) (label string, col color.Color, glyph string) {
 	switch state {
 	case "merged":
-		return "✓  ", ui.Palette.Success
+		return "merged", ui.Palette.RoleDone, "✓"
+	case "draft":
+		return "draft", ui.Palette.RoleNeutral, "●"
+	case "closed":
+		return "closed", ui.Palette.RoleClosed, "✗"
 	case "open":
-		switch mergeState {
-		case "clean":
-			return "●  ", ui.Palette.Success
-		case "dirty", "behind", "unstable", "blocked":
-			return "▲  ", ui.Palette.Warning
+		if reviewState == "changes_requested" {
+			return "changes requested", ui.Palette.RoleAttention, "●"
+		}
+		switch mergeableState {
+		case "dirty":
+			return "conflicts", ui.Palette.RoleAttention, "●"
+		case "behind":
+			return "behind base", ui.Palette.RoleAttention, "●"
+		case "unstable":
+			return "checks failing", ui.Palette.RoleAttention, "●"
+		case "blocked":
+			// "blocked" most often means "required check failing or
+			// missing", but it also covers "required check still
+			// running" — same opaque enum either way. If the check
+			// rollup says we're mid-run with nothing failing, surface
+			// that as an in-flight signal instead of attention.
+			if checks.State == "running" {
+				return "required checks pending", ui.Palette.RoleInFlight, "●"
+			}
+			// The other benign "blocked" cause: a requested review not
+			// yet submitted. The author has done their part — the wait
+			// is on the reviewer, who isn't necessarily the person
+			// running status — so it reads as in-flight, not attention.
+			// Only a *requested* review softens the state ("" means no
+			// reviewer was asked, and asking is on the user), and
+			// failing checks still dominate.
+			if reviewState == "awaiting" && checks.State != "failing" {
+				return "awaiting review", ui.Palette.RoleInFlight, "●"
+			}
+			return "blocked", ui.Palette.RoleAttention, "●"
 		case "unknown":
-			return "?  ", ui.Palette.Muted
+			return "unknown", ui.Palette.RoleNeutral, "●"
+		case "clean", "has_hooks":
+			if reviewState == "approved" {
+				return "approved", ui.Palette.RoleOpen, "●"
+			}
+			// Mergeable without a required review, but one was
+			// requested — say where the PR actually sits instead of
+			// the generic "open". Same in-flight role either way.
+			if reviewState == "awaiting" {
+				return "awaiting review", ui.Palette.RoleInFlight, "●"
+			}
+			return "open", ui.Palette.RoleInFlight, "●"
 		}
-		return "⧗  ", ui.Palette.Info
-	case "draft":
-		return "⧗  ", ui.Palette.Info
-	case "closed":
-		return "✗  ", ui.Palette.Error
-	default: // "" (no PR)
-		return "⧗  ", ui.Palette.Info
+		return "open", ui.Palette.RoleInFlight, "●"
 	}
+	// No PR — caller short-circuits before reaching here; provide a
+	// safe in-flight glyph for the empty-state path.
+	return "", ui.Palette.RoleInFlight, "●"
 }
 
-// statusPRStatusLabel returns the display state for the parenthetical
-// after the PR number. Folds review state into "open" as
-// subdivisions: open + approved → "approved", + changes_requested →
-// "changes requested", else bare "open".
-func statusPRStatusLabel(state, reviewState string) string {
-	switch state {
-	case "merged", "draft", "closed":
-		return state
-	case "open":
-		switch reviewState {
-		case "approved":
-			return "approved"
-		case "changes_requested":
-			return "changes requested"
-		}
-		return "open"
-	}
-	return ""
-}
-
-// statusPRStatusColor returns the palette color for the unified PR
-// display state, echoing GitHub's badge palette.
-func statusPRStatusColor(state, reviewState string) color.Color {
-	switch state {
-	case "merged":
-		return ui.Palette.Primary // indigo, our purple-family
-	case "open":
-		switch reviewState {
-		case "approved":
-			return ui.Palette.Success
-		case "changes_requested":
-			return ui.Palette.Warning
-		}
-		return ui.Palette.Info
-	case "draft":
-		return ui.Palette.Muted
-	case "closed":
-		return ui.Palette.Error
-	}
-	return ui.Palette.Muted
+// statusPRGlyph returns the 3-cell glyph token for the PR row.
+// Thin wrapper over statusPRDominant so the existing call sites
+// (and the glyph unit tests) keep their shape.
+func statusPRGlyph(state, mergeableState, reviewState string, checks code.CheckRollup) (string, color.Color) {
+	_, col, glyph := statusPRDominant(state, mergeableState, reviewState, checks)
+	return glyph + "  ", col
 }
 
 // statusChecksRow returns the (glyph, value) pair for a repo card's
@@ -283,18 +395,21 @@ func statusChecksRow(rollup code.CheckRollup, checksURL string) (string, string)
 }
 
 // statusChecksGlyph maps a checks rollup state onto the 3-cell glyph
-// token. Aligns with the 5-state vocab — passing → ✓, failing → ▲
-// (blocked), running / none → ⧗ (pending).
+// token. All states render as ● colored to severity — checks are an
+// ongoing aspect (new commits can change the result), so the row is
+// always state-context, never terminal.
+//
+// State-context call site — see state_grammar.go.
 func statusChecksGlyph(state string) (string, color.Color) {
 	switch state {
 	case "passing":
-		return "✓  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case "failing":
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	case "running":
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleInFlight
 	default: // "none" or unknown
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleNeutral
 	}
 }
 
@@ -352,6 +467,12 @@ func statusPreviewValue(env preview.Environment, err error) string {
 	if env.URL != "" {
 		v = osc8Link(env.URL, v)
 	}
+	if env.Probed && !env.Alive {
+		// Bound but the probe got a definitive 404 — torn down, or a
+		// just-triggered deploy still in flight. Surface the binding so
+		// it isn't lost, marked so the reader knows it isn't reachable.
+		v += " " + muted.Render("(unreachable)")
+	}
 	return v
 }
 
@@ -360,27 +481,31 @@ func statusPreviewValue(env preview.Environment, err error) string {
 // decides whether to skip vs render "(none)" based on scope).
 //
 // Render shapes:
-//   - alive (probed + alive)        → ✓ Success, name (linked to URL)
-//   - indeterminate (ProbeError)    → ? Muted, name (linked) + (unverified) muted suffix
-//   - unprobable (no URL template)  → ◦ Muted, name (no link)
-//   - bound but probed dead         → handled by adapter auto-clear; surfaces as no-env
+//   - alive (probed + alive)        → ● RoleOpen, name (linked to URL)
+//   - indeterminate (ProbeError)    → ● RoleNeutral, name (linked) + (unverified) suffix
+//   - bound but probed dead (404)   → ● RoleNeutral, name (linked) + (unreachable) suffix
+//   - unprobable (no URL template)  → ● RoleNeutral, name (no link)
 //   - no env bound (ErrNoEnvironment or any other error) → ("", "") signaling skip
 func statusPreviewRow(env preview.Environment, err error) (string, string) {
 	if errors.Is(err, preview.ErrNoEnvironment) {
 		return "", ""
 	}
 
+	// State-context call site — see state_grammar.go. All present-env
+	// outcomes are current states (not events), so the row uses ●
+	// colored to role: alive → RoleOpen, indeterminate / unprobable
+	// → RoleNeutral.
 	var probeErr *preview.ProbeError
 	if errors.As(err, &probeErr) {
 		if env.Name == "" {
 			return "", ""
 		}
-		glyph := statusStyledGlyph("?  ", ui.Palette.Muted)
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
 		}
-		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("(unverified)")
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render("(unverified)")
 		return glyph, v
 	}
 
@@ -390,16 +515,28 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 
 	switch {
 	case env.Probed && env.Alive:
-		glyph := statusStyledGlyph("✓  ", ui.Palette.Success)
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleOpen)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
 		}
 		return glyph, v
+	case env.Probed && !env.Alive:
+		// Bound but probed dead (definitive 404) — torn down, or a
+		// just-triggered deploy still in flight. Surface the binding so
+		// it isn't lost, marked unreachable.
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
+		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+		if env.URL != "" {
+			v = osc8Link(env.URL, v)
+		}
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render("(unreachable)")
+		return glyph, v
 	default:
-		// Unprobable (no URL template): show the name muted so the
-		// reader can see what's bound without implying it's verified.
-		glyph := statusStyledGlyph("◦  ", ui.Palette.Muted)
+		// Unprobable (no URL template): show the name in neutral so
+		// the reader can see what's bound without implying it's
+		// verified.
+		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -412,54 +549,224 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 // matching the body-row glyph slot width used in workspace cards.
 // Used at project scope for the Repos rollup body row (its glyph
 // echoes the workspace's gutter state).
+//
+// State-context call site — see state_grammar.go. CardSuccess /
+// CardFailed keep their event-shaped glyphs because at the rollup
+// level they encode the same terminal-positive / terminal-negative
+// resolution distinction (all-merged → ✓ RoleDone, all-broken →
+// ✗ RoleClosed). The intermediate states (CardReady / CardSkipped
+// / CardWaiting) collapse to ● colored to role.
 func statusStateGlyph(state ui.CardState) (string, color.Color) {
 	switch state {
 	case ui.CardSuccess:
-		return "✓  ", ui.Palette.Success
+		return "✓  ", ui.Palette.RoleDone
 	case ui.CardReady:
-		return "●  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case ui.CardSkipped:
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	case ui.CardWaiting:
-		return "⧗  ", ui.Palette.Info
+		return "●  ", ui.Palette.RoleInFlight
 	case ui.CardFailed:
-		return "✗  ", ui.Palette.Error
+		return "✗  ", ui.Palette.RoleClosed
 	}
-	return "◦  ", ui.Palette.Muted
+	return "●  ", ui.Palette.RoleNeutral
 }
 
 // lifecycleKeyGlyph maps a bosun lifecycle key (one of the keys in
-// lifecycleStatusKeys, plus "done") onto the 5-state vocab for the
-// Status body row. Keyed on the canonical bosun lifecycle vocab
-// rather than provider-specific workflow strings — callers do the
-// reverse-lookup via lifecycleKeyForStatus first, so user overrides
-// in the `statuses.*` config flow through naturally. Unknown keys
-// (including "" when the status isn't mapped) fall back to pending.
+// lifecycleStatusKeys, plus "done") onto a 3-cell glyph + color.
+// Keyed on the canonical bosun lifecycle vocab rather than
+// provider-specific workflow strings — callers do the reverse-lookup
+// via lifecycleKeyForStatus first, so user overrides in the
+// `statuses.*` config flow through naturally. Unknown keys (including
+// "" when the status isn't mapped) fall back to in-flight.
+//
+// State-context call site — see state_grammar.go. Only "done"
+// uses ✓ (terminal positive resolution, RoleDone/purple); every
+// other lifecycle stage is an active state and renders as ● colored
+// to its role.
 func lifecycleKeyGlyph(key string) (string, color.Color) {
 	switch key {
 	case "done":
-		return "✓  ", ui.Palette.Success
+		return "✓  ", ui.Palette.RoleDone
 	case "ready_for_release":
-		return "●  ", ui.Palette.Success
+		return "●  ", ui.Palette.RoleOpen
 	case "blocked":
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	}
-	return "⧗  ", ui.Palette.Info
+	return "●  ", ui.Palette.RoleInFlight
 }
 
 // statusUpdatedGlyph buckets a workspace's age-in-days into a
 // freshness glyph for the Updated body row. Fresh (<7 days) reads
-// as muted; stale (7-30 days) warns; very stale (>30 days) treats
-// as broken (cleanup candidate).
+// as healthy; stale (7-30 days) needs attention; very stale (>30
+// days) treats as closed (cleanup candidate).
+//
+// State-context call site — see state_grammar.go. Staleness is a
+// state, not an event outcome, so the row uses ● colored to role.
 func statusUpdatedGlyph(days int) (string, color.Color) {
 	switch {
 	case days >= 30:
-		return "✗  ", ui.Palette.Error
+		return "●  ", ui.Palette.RoleClosed
 	case days >= 7:
-		return "▲  ", ui.Palette.Warning
+		return "●  ", ui.Palette.RoleAttention
 	default:
-		return "◦  ", ui.Palette.Muted
+		return "●  ", ui.Palette.RoleOpen
 	}
+}
+
+// The workspace meta cards (Story, Workspace, Preview) all render as
+// a colored ● dot — they're state indicators, not action results.
+// The dot color carries the semantic; shape stays uniform across the
+// block so the meta row reads as a scannable status strip. The
+// per-aspect color helpers below feed Card.GlyphColor on a CardReady
+// card to produce the dot.
+
+// stalenessColor returns the dot color for the Workspace meta card
+// (and for the age parenthetical in its value). Fresh reads as an
+// active/healthy workspace, stale needs attention, very stale is a
+// terminal "closed/abandoned" signal; an unknown timestamp renders
+// as neutral.
+//
+// State-context call site — see state_grammar.go.
+func stalenessColor(t time.Time) color.Color {
+	if t.IsZero() {
+		return ui.Palette.RoleNeutral
+	}
+	days := int(time.Since(t).Hours() / 24)
+	switch {
+	case days >= 30:
+		return ui.Palette.RoleClosed
+	case days >= 7:
+		return ui.Palette.RoleAttention
+	default:
+		return ui.Palette.RoleOpen
+	}
+}
+
+// lifecycleKeyDotColor returns the dot color for the Story meta
+// card. Done / ready_for_release read as open-healthy (action
+// available or finalized in tracker); blocked needs attention;
+// everything else (in flight) reads as in-flight blue.
+//
+// Note that "done" maps to RoleOpen (green) on the dot, not RoleDone
+// (purple). The "done" lifecycle stage shows as a green ● because
+// the *card glyph itself* is a state-active marker; if we ever
+// promote done to a terminal ✓, that's the place to use RoleDone.
+//
+// State-context call site — see state_grammar.go.
+func lifecycleKeyDotColor(key string) color.Color {
+	switch key {
+	case "done", "ready_for_release":
+		return ui.Palette.RoleOpen
+	case "blocked":
+		return ui.Palette.RoleAttention
+	}
+	return ui.Palette.RoleInFlight
+}
+
+// stepperSlotKeys is the fixed slot order of the workspace Status
+// card's lifecycle stepper — lifecycleStatusKeys minus "acceptance"
+// (excluded in v1; statuses mapped to it render the unavailable
+// fallback) plus the terminal "done".
+var stepperSlotKeys = []string{
+	"ready",
+	"in_progress",
+	"blocked",
+	"review",
+	"preview",
+	"ready_for_release",
+	"done",
+}
+
+// stepperSlotWidth is the column span of one stepper slot: a 1-cell
+// dot plus the 5-cell " ─── " connector that follows it. Used to
+// position the elbow + label under the active dot.
+const stepperSlotWidth = 6
+
+// stepperSlotIndex returns the slot position of a lifecycle key in
+// the stepper track, or -1 when the key has no slot ("" for unmapped
+// statuses, and "acceptance" — the documented v1 exclusion).
+func stepperSlotIndex(key string) int {
+	for i, k := range stepperSlotKeys {
+		if k == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// renderLifecycleStepper renders the 7-slot lifecycle stepper as a
+// two-line string for Card.Value: the dot track on the first line,
+// a colored elbow + status label pointing at the active slot on the
+// second. The active dot, elbow, and label share the lifecycle role
+// color (lifecycleKeyDotColor); inactive slots and connectors stay
+// muted, so the single colored slot is the card's state signal — this
+// row doubles as the color legend for the meta block. Blocked renders
+// its active dot as ✗: the slot is a real column in the sprint-board
+// model, but the work in it is negatively interrupted.
+//
+// Every segment is styled explicitly (no reliance on the Card value
+// style) so embedded ANSI resets can't bleed the colors. Callers must
+// pass a key with a stepper slot (stepperSlotIndex >= 0);
+// buildWorkspaceStatusCard owns the unavailable fallback.
+func renderLifecycleStepper(currentKey string) string {
+	idx := stepperSlotIndex(currentKey)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	activeStyle := lipgloss.NewStyle().Foreground(lifecycleKeyDotColor(currentKey))
+
+	var track strings.Builder
+	for i, key := range stepperSlotKeys {
+		if i > 0 {
+			track.WriteString(mutedStyle.Render(" ─── "))
+		}
+		switch {
+		case i == idx && key == "blocked":
+			track.WriteString(activeStyle.Render("✗"))
+		case i == idx:
+			track.WriteString(activeStyle.Render("●"))
+		default:
+			track.WriteString(mutedStyle.Render("○"))
+		}
+	}
+
+	label, err := resolveStatus(currentKey)
+	if err != nil {
+		label = currentKey
+	}
+	elbow := strings.Repeat(" ", idx*stepperSlotWidth) + activeStyle.Render("╰─ "+label)
+
+	return track.String() + "\n" + elbow
+}
+
+// renderLifecycleStepperUnmapped renders the default stepper visual
+// for a status the tracker returned but we don't have mapped to a
+// lifecycle slot — every dot stays open ○ (none filled) and the
+// elbow points at slot 0 with the raw status text as its label.
+// Every segment renders muted, so the whole row reads as "we got
+// something, we don't know where it sits."
+//
+// Distinct from buildWorkspaceStatusCard's !fetchOK collapsed row,
+// which uses ▲ + "(unavailable)" to signal "we couldn't fetch at
+// all" — the two cases now look different so the user can tell
+// "tracker is down" from "tracker is fine, this status is novel."
+func renderLifecycleStepperUnmapped(statusText string) string {
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	var track strings.Builder
+	for i := range stepperSlotKeys {
+		if i > 0 {
+			track.WriteString(mutedStyle.Render(" ─── "))
+		}
+		track.WriteString(mutedStyle.Render("○"))
+	}
+
+	label := statusText
+	if label == "" {
+		label = "(unknown)"
+	}
+	elbow := mutedStyle.Render("╰─ " + label)
+
+	return track.String() + "\n" + elbow
 }
 
 // humanizeAge formats a duration into a coarse "N unit ago" label

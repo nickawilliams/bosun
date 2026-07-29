@@ -15,6 +15,11 @@ type cardReporter struct{}
 
 func newCardReporter() Reporter { return &cardReporter{} }
 
+// NewCardReporter returns a fresh card (non-raw) Reporter. Exposed
+// so tests can restore non-raw rendering after a previous test set
+// the default to a raw reporter via SetDefault.
+func NewCardReporter() Reporter { return newCardReporter() }
+
 // Header emits a CardRoot that opens the timeline for a command run.
 func (r *cardReporter) Header(command string, context ...string) {
 	card := NewCard(CardRoot, command)
@@ -34,14 +39,46 @@ func (r *cardReporter) CompleteDetail(label string, items []string) {
 	NewCard(CardSuccess, label).Muted(items...).Print()
 }
 
+// CompleteValue emits a CardSuccess with the label as title and the
+// value rendered inline on the same line ("label · value"), label in
+// title style, value muted. Optional alignWidth pads the title to a
+// fixed visual column for alignment with sibling cards.
+func (r *cardReporter) CompleteValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardSuccess, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
+}
+
 // Skip emits a CardSkipped for a step that was not attempted.
 func (r *cardReporter) Skip(label string) {
 	NewCard(CardSkipped, label).Print()
 }
 
+// SkipValue emits a CardSkipped with the label as title and the value
+// inline on the same line — same shape as CompleteValue.
+func (r *cardReporter) SkipValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardSkipped, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
+}
+
 // Fail emits a CardFailed for a step that errored.
 func (r *cardReporter) Fail(label string) {
 	NewCard(CardFailed, label).Print()
+}
+
+// FailValue emits a CardFailed with the label as title and the value
+// inline on the same line — same shape as CompleteValue.
+func (r *cardReporter) FailValue(label, value string, alignWidth ...int) {
+	card := NewCard(CardFailed, label).Value(value)
+	if len(alignWidth) > 0 && alignWidth[0] > 0 {
+		card = card.AlignWidth(alignWidth[0])
+	}
+	card.Print()
 }
 
 // Success emits a CardSuccess with the formatted message as title.
@@ -79,9 +116,17 @@ func (r *cardReporter) Saved(label, value string) {
 }
 
 // Selected emits a CardSuccess with the label as title and the chosen
-// value as a subtitle. The label preserves its original casing since
-// it represents a chosen value or identifier, not a heading.
+// value as a subtitle. The label is treated as a heading and gets the
+// default title-case transform — use SelectedIdentifier when the
+// label is an identifier whose casing must be preserved.
 func (r *cardReporter) Selected(label, value string) {
+	NewCard(CardSuccess, label).Subtitle(value).Print()
+}
+
+// SelectedIdentifier is Selected but preserves the label's original
+// casing — for repo names, slugs, branches, and other identifier-
+// shaped labels where titleCase would mangle the value.
+func (r *cardReporter) SelectedIdentifier(label, value string) {
 	NewCard(CardSuccess, label).PreserveCase().Subtitle(value).Print()
 }
 
@@ -100,6 +145,16 @@ func (r *cardReporter) SelectedMulti(label string, values []string) {
 // success or failure.
 func (r *cardReporter) Task(title string, fn func() error) error {
 	return RunCard(title, fn)
+}
+
+// Spinner at the top level has no containing group to show a child
+// spinner in, so it just runs fn synchronously. The use case for
+// Spinner — "show a running indicator for this work, then let the
+// caller render the result" — is meaningful inside a Group (where
+// group.Spinner overrides this). Outside a group the caller can
+// reach for RunCard family directly if they want top-level animation.
+func (r *cardReporter) Spinner(_ string, fn func() error) error {
+	return fn()
 }
 
 // Group renders a Timeline Card with children via a single BubbleTea
@@ -177,5 +232,16 @@ func (r *cardReporter) Details(heading string, fields Fields) {
 		heading = "Details"
 	}
 	NewCard(CardData, heading).KV(pairs...).Print()
+}
+
+// Summary emits an end-of-run rollup card: muted total head, then
+// comma-joined non-zero segments each styled with its own color.
+// The card glyph color is the color of the last non-zero segment
+// (order ascending by severity for the worst case to dominate).
+func (r *cardReporter) Summary(total string, segments []SummarySegment) {
+	NewCard(CardInfo, renderSummaryText(total, segments)).
+		PreserveCase().
+		GlyphColor(summaryGlyphColor(segments)).
+		Print()
 }
 

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -41,39 +43,61 @@ func newDoctorCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			// Groups mirror MODEL.md phases: environment, project,
-			// integrations, CI/CD. Each check runs inline; the
-			// group's parent spinner provides activity feedback.
+			// Groups organize checks by kind: local environment,
+			// project configuration, and external integrations. Each
+			// check runs inline; the group's parent spinner provides
+			// activity feedback, and the per-check Spinner shows which
+			// check is currently in flight.
 			groups := []struct {
 				label  string
 				checks []healthCheck
 			}{
 				{"environment", environmentChecks()},
 				{"project", projectChecks()},
-				{"integrations", append(append(
-					issueTrackerChecks(), codeHostChecks()...), notificationChecks()...)},
-				{"CI/CD", cicdChecks()},
+				{"integrations", slices.Concat(
+					issueTrackerChecks(),
+					codeHostChecks(),
+					notificationChecks(),
+					cicdChecks(),
+				)},
 			}
+
+			// Pre-compute the global title alignment width across every
+			// check in every group so all rows in the doctor output
+			// share the same value column.
+			var allChecks []healthCheck
+			for _, dg := range groups {
+				allChecks = append(allChecks, dg.checks...)
+			}
+			alignWidth := maxCheckTitleWidth(allChecks)
 
 			passed, warned, failed := 0, 0, 0
 			for _, dg := range groups {
 				r.Group(dg.label, func(g ui.Reporter) {
 					for _, hc := range dg.checks {
-						detail, checkErr := hc.Check(ctx)
-						emitCheckResult(g, hc, detail, checkErr, &passed, &warned, &failed)
+						var detail string
+						checkErr := g.Spinner(hc.Name, func() error {
+							var err error
+							detail, err = hc.Check(ctx)
+							return err
+						})
+						emitCheckResult(g, hc, detail, checkErr, alignWidth, &passed, &warned, &failed)
 					}
 				})
 			}
 
-			// Summary.
-			parts := []string{fmt.Sprintf("%d passed", passed)}
-			if warned > 0 {
-				parts = append(parts, fmt.Sprintf("%d warnings", warned))
-			}
-			if failed > 0 {
-				parts = append(parts, fmt.Sprintf("%d failed", failed))
-			}
-			r.Info("%s", strings.Join(parts, ", "))
+			// Summary card — segments ordered ascending by severity
+			// so the last non-zero one (failed > warned > passed)
+			// drives the glyph color via the order-based rollup.
+			total := passed + warned + failed
+			r.Summary(
+				fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+				[]ui.SummarySegment{
+					{Count: passed, Label: "passed", Color: ui.Palette.Success},
+					{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+					{Count: failed, Label: "failed", Color: ui.Palette.Error},
+				},
+			)
 
 			return nil
 		},
@@ -86,22 +110,42 @@ func newDoctorCmd() *cobra.Command {
 // --- Providers ---
 
 // emitCheckResult routes a health check outcome through the group
-// Reporter. Detail formatting matches the spec's inline style
-// (e.g. "tracker: authenticated as nick", "code host: auth failed").
-func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, passed, warned, failed *int) {
+// Reporter, rendering every state as a one-line `glyph name · detail`
+// row so passing, warning, and failing checks share the same visual
+// shape. Multi-line details render inline after the separator, with
+// continuation lines aligned under the first value character. The
+// alignWidth pads every row's title to a common column so the value
+// dividers line up across siblings.
+func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, alignWidth int, passed, warned, failed *int) {
 	if checkErr != nil {
-		label := fmt.Sprintf("%s: %s", hc.Name, checkErr.Error())
+		// Prefer the check's detail when it provided one — lets a
+		// check supply a formatted display string alongside an error
+		// that just signals the state. Falls back to the error
+		// message when no detail is set.
+		reason := detail
+		if reason == "" {
+			reason = checkErr.Error()
+		}
+		// Required failures get the hard-fail glyph (✗) and counter;
+		// anything else — not-required failures and errNotConfigured —
+		// counts as a warning and uses the warn glyph (!) so the row's
+		// visible state matches the summary count category.
 		if errors.Is(checkErr, errNotConfigured) {
 			*warned++
-			g.Skip(label)
+			g.SkipValue(hc.Name, reason, alignWidth)
 			return
 		}
 		if hc.Required {
 			*failed++
-		} else {
-			*warned++
+			g.FailValue(hc.Name, reason, alignWidth)
+			return
 		}
-		g.Fail(label)
+		// Optional integration that IS configured but failing — same
+		// warn category (it doesn't gate the run) but labeled: a broken
+		// token and an absent integration are different problems, and
+		// the row must not read as "just not set up".
+		*warned++
+		g.SkipValue(hc.Name, "configured but failing — "+reason, alignWidth)
 		return
 	}
 	*passed++
@@ -109,11 +153,24 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		g.Complete(hc.Name)
 		return
 	}
-	if strings.Contains(detail, "\n") {
-		g.CompleteDetail(hc.Name, strings.Split(detail, "\n"))
-	} else {
-		g.Selected(hc.Name, detail)
+	g.CompleteValue(hc.Name, detail, alignWidth)
+}
+
+// maxCheckTitleWidth computes the maximum visual width across the
+// title-cased rendering of a check group's names. The result is
+// passed as the alignWidth to the Reporter value-form methods so
+// every check in the group renders with the same title column.
+func maxCheckTitleWidth(checks []healthCheck) int {
+	var maxW int
+	for _, hc := range checks {
+		// titleCase only uppercases fully-lowercase words; visual
+		// width is identical to the input string width since no
+		// characters are added or removed.
+		if w := len(hc.Name); w > maxW {
+			maxW = w
+		}
 	}
+	return maxW
 }
 
 func environmentChecks() []healthCheck {
@@ -146,9 +203,7 @@ func codeHostChecks() []healthCheck {
 
 func notificationChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "notification config", Check: checkNotificationConfig},
-		{Name: "notification auth", Check: checkNotificationAuth},
-		{Name: "notification channels", Check: checkNotificationChannels},
+		{Name: "notification", Check: checkNotification},
 	}
 }
 
@@ -298,43 +353,15 @@ func checkCodeHost(ctx context.Context) (string, error) {
 	return fmt.Sprintf("github → %s", username), nil
 }
 
-func checkNotificationConfig(_ context.Context) (string, error) {
-	provider := viper.GetString("notification.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	auth := viper.GetString("notification.auth")
-	if auth == "" {
-		auth = "token"
-	}
-
-	detail := provider + " (auth: " + auth + ")"
-	if auth == "local" {
-		ws := viper.GetString("notification.workspace")
-		if ws == "" {
-			return "", fmt.Errorf("notification.workspace not set (required for local auth)")
-		}
-		detail += "\nworkspace: " + ws
-	}
-
-	var channels []string
-	if ch := viper.GetString("notification.channel_review"); ch != "" {
-		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
-	}
-	if ch := viper.GetString("notification.channel_release"); ch != "" {
-		channels = append(channels, "#"+strings.TrimPrefix(ch, "#"))
-	}
-	if len(channels) > 0 {
-		detail += "\nchannels: " + strings.Join(channels, ", ")
-	} else {
-		detail += "\nno channels configured"
-	}
-
-	return detail, nil
-}
-
-func checkNotificationAuth(ctx context.Context) (string, error) {
+// checkNotification verifies the notification provider end-to-end:
+// it's configured, we can authenticate, and each configured channel
+// is reachable. The result rolls up into one row — auth confirmation
+// on the first line, each channel on its own continuation line —
+// with failed channels rendered in the error color. The overall
+// glyph reflects the aggregate state: ✓ if auth and all channels
+// pass, warn if anything failed (notification isn't a required
+// integration, so failures warn rather than fail the whole run).
+func checkNotification(ctx context.Context) (string, error) {
 	provider := viper.GetString("notification.provider")
 	if provider == "" {
 		return "", errNotConfigured
@@ -351,106 +378,63 @@ func checkNotificationAuth(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
 
-	return fmt.Sprintf("authenticated as %s", user), nil
-}
+	// First line: auth confirmation. Continuation lines: one per
+	// configured channel; failed probes render in the error color so
+	// the per-channel state is visible at a glance.
+	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	lines := []string{fmt.Sprintf("%s → %s", provider, user)}
 
-func checkNotificationChannels(ctx context.Context) (string, error) {
-	provider := viper.GetString("notification.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	notifier, err := newNotifier()
-	if err != nil {
-		return "", err
-	}
-	defer notifier.Close()
-
-	var results []string
+	var failedCount int
 	for _, key := range []string{"notification.channel_review", "notification.channel_release"} {
 		ch := viper.GetString(key)
 		if ch == "" {
 			continue
 		}
-		// FindThread with a bogus issue key just to exercise channel resolution.
 		display := "#" + strings.TrimPrefix(ch, "#")
 		_, err := notifier.FindThread(notify.WithNoCache(ctx), ch, "__bosun_doctor_probe__")
 		if err != nil {
-			results = append(results, fmt.Sprintf("%s ✗ %v", display, err))
+			failedCount++
+			lines = append(lines, errorStyle.Render(display))
 		} else {
-			results = append(results, fmt.Sprintf("%s ✓", display))
+			lines = append(lines, display)
 		}
 	}
 
-	if len(results) == 0 {
-		return "", fmt.Errorf("no channels configured")
+	value := strings.Join(lines, "\n")
+	if failedCount > 0 {
+		return value, fmt.Errorf("%d %s failed", failedCount, pluralize(failedCount, "channel", "channels"))
 	}
-
-	return strings.Join(results, "\n"), nil
+	return value, nil
 }
 
 func cicdChecks() []healthCheck {
 	return []healthCheck{
-		{Name: "CI/CD config", Check: checkCICDConfig},
-		{Name: "CI/CD auth", Check: checkCICDAuth},
+		{Name: "CI/CD", Check: checkCICD},
 	}
 }
 
-func checkCICDConfig(_ context.Context) (string, error) {
+func checkCICD(ctx context.Context) (string, error) {
 	provider := viper.GetString("cicd.provider")
 	if provider == "" {
 		return "", errNotConfigured
 	}
-
-	var details []string
-	details = append(details, "provider: "+provider)
-
-	if up := viper.GetString("cicd.workflows.preview.up.target"); up != "" {
-		details = append(details, "preview up: "+up)
-	}
-
-	if down := viper.GetString("cicd.workflows.preview.down.target"); down != "" {
-		details = append(details, "preview down: "+down)
-	}
-
-	release := viper.Get("cicd.workflows.release.target")
-	switch v := release.(type) {
-	case string:
-		details = append(details, "release: "+v)
-	case map[string]any:
-		details = append(details, fmt.Sprintf("release: %d repos configured", len(v)))
-	}
-
-	if input := stageInputName("preview.up", "services"); input != "" {
-		details = append(details, "service input: "+input)
-	}
-
-	return strings.Join(details, "\n"), nil
-}
-
-func checkCICDAuth(ctx context.Context) (string, error) {
-	provider := viper.GetString("cicd.provider")
-	if provider == "" {
-		return "", errNotConfigured
-	}
-
-	pipeline, err := newCICD()
-	if err != nil {
+	if _, err := newCICD(); err != nil {
 		return "", fmt.Errorf("cannot initialize: %w", err)
 	}
-
-	// Use the code host to verify the GitHub token works, since the
-	// CI/CD adapter uses the same token.
+	// TODO(arch #28): provider-specific leak. The GitHub Actions
+	// adapter shares the code host's token, so cli verifies CI/CD
+	// auth by reaching into the code host — and the result string
+	// hardcodes "github actions" regardless of which CI/CD provider
+	// is configured. cicd.CICD should expose AuthTest returning a
+	// display string so the provider owns its auth verification and
+	// its identity in the result.
 	host, err := newCodeHost()
 	if err != nil {
 		return "", fmt.Errorf("cannot verify token: %w", err)
 	}
-
 	username, err := host.GetAuthenticatedUser(ctx)
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
-
-	_ = pipeline // validated by newCICD succeeding
 	return fmt.Sprintf("github actions → %s", username), nil
 }

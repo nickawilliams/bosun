@@ -3,9 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"text/template"
 
@@ -88,16 +91,28 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 		for _, n := range filterNames {
 			filter[n] = true
 		}
+		matched := make(map[string]bool, len(filterNames))
 		var filtered []Repository
 		for _, r := range repositories {
 			if filter[r.Name] {
+				matched[r.Name] = true
 				filtered = append(filtered, r)
 			}
 		}
-		if len(filtered) == 0 {
+		// Every requested name must match — silently dropping a typo'd
+		// name while its siblings proceed reads as success for an
+		// operation that never happened (`workspace rm api typo`
+		// removed api and said nothing about typo).
+		var unknown []string
+		for _, n := range filterNames {
+			if !matched[n] {
+				unknown = append(unknown, n)
+			}
+		}
+		if len(unknown) > 0 {
 			return nil, fmt.Errorf(
-				"no repositories matched filter %v (available: %s)",
-				filterNames, repositoryNames(repositories),
+				"no repositories matched %s (available: %s)",
+				strings.Join(unknown, ", "), repositoryNames(repositories),
 			)
 		}
 		repositories = filtered
@@ -110,41 +125,84 @@ func resolveRepositories(filterNames []string) ([]Repository, error) {
 	return repositories, nil
 }
 
-// fetchIssue fetches issue details from the tracker and renders a
-// RunCardReplace card showing issue type, key, and title on success.
-// An optional decorate callback can customize the success card with
-// additional content (e.g., KV pairs) using the fetched detail.
-func fetchIssue(ctx context.Context, tracker issue.Tracker, issueKey string, decorate ...func(issue.Issue, *ui.Card)) (issue.Issue, error) {
+// emitWorkspaceIssuePreamble fetches the issue and renders the
+// two-card preamble shared by `bosun status` workspace mode and
+// every lifecycle command: the Status card (lifecycle stepper)
+// followed by the issue card. A single tracker fetch populates both —
+// the Status card morphs in via RunCardReplace (its spinner doubles
+// as the loading affordance for both cards), and the issue card
+// prints once the fetch resolves.
+//
+// alongside, when non-nil, runs inside the spinner concurrently with
+// the issue fetch — status uses it to fold its preview-env and
+// last-activity lookups into the same loading phase. Pass nil when
+// there is nothing else to fetch.
+//
+// Tolerates a missing tracker (returns zero detail; nothing rendered)
+// and a failed fetch (both cards render their degraded variants:
+// Status collapses to "(unavailable)", the issue card keeps the key
+// with a muted "(title unavailable)"). The uniform render-and-continue
+// posture matters because every lifecycle command behaves the same
+// when issue-tracker connectivity is degraded — no command quietly
+// aborts while a sibling carries on. Commands that have a hard
+// dependency on detail fields can still short-circuit by checking
+// `detail.Key == ""`.
+// The fetch error is returned alongside the detail (nil when no
+// tracker is configured) so commands whose mutations are keyed on the
+// issue can branch on issue.ErrNotFound — a definitive "no such key"
+// — without giving up the render-and-continue posture for transient
+// failures.
+func emitWorkspaceIssuePreamble(ctx context.Context, issueKey string, alongside func()) (issue.Issue, error) {
 	var detail issue.Issue
-	err := ui.RunCardReplace("", func() error {
-		var e error
-		detail, e = tracker.GetIssue(ctx, issueKey)
-		return e
-	}, func() *ui.Card {
-		card := ui.NewCard(ui.CardSuccess, "").
-			Subtitle(detail.Title)
-		if len(decorate) > 0 {
-			decorate[0](detail, card)
-		}
-		return card
-	})
-	return detail, err
-}
+	var fetchErr error
 
-// resolveActiveRepositories resolves repositories scoped to the current
-// workspace, falling back to resolveRepositories (global config patterns)
-// when no workspace context is available. Resolution uses the standard
-// workspace chain (--workspace flag → env → CWD detection). Commands
-// that operate on worktrees (review, prerelease) should use this instead
-// of resolveRepositories so they stay scoped to the workspace context.
-func resolveActiveRepositories(ctx context.Context, workspace string, filterNames []string) ([]Repository, error) {
-	if workspace == "" {
-		return resolveRepositories(filterNames)
+	tracker, err := newIssueTracker()
+	if err != nil || tracker == nil {
+		return detail, nil
 	}
 
+	// fn always returns nil so RunCardReplace takes the successCard
+	// path on success AND failure — buildWorkspaceStoryCard renders
+	// the designed degraded variant instead of the generic failed card.
+	_ = ui.RunCardReplace("", func() error {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			detail, fetchErr = tracker.GetIssue(ctx, issueKey)
+		}()
+		if alongside != nil {
+			alongside()
+		}
+		wg.Wait()
+		return nil
+	}, func() *ui.Card {
+		return buildWorkspaceStoryCard(detail, issueKey, fetchErr == nil)
+	})
+
+	return detail, fetchErr
+}
+
+// emitLifecyclePreamble renders the visual preamble shown at the
+// start of every lifecycle command (start, review, preview,
+// prerelease, release, cleanup) — a thin wrapper over
+// emitWorkspaceIssuePreamble with no alongside work, kept as a named
+// symbol so call sites read as intent rather than mechanics. Future
+// expansion of the preamble lands in the shared helper and every
+// command inherits the change.
+func emitLifecyclePreamble(ctx context.Context, issueKey string) (issue.Issue, error) {
+	return emitWorkspaceIssuePreamble(ctx, issueKey, nil)
+}
+
+// resolveActiveRepositories resolves repositories scoped to the given
+// workspace. Workspace-required lifecycle commands (review, prerelease)
+// use this to stay scoped to the workspace's worktrees rather than
+// every configured repository. Callers must ensure workspace is
+// non-empty (via cc.RequireWorkspace()); resolution does not fall back.
+func resolveActiveRepositories(ctx context.Context, workspace string, filterNames []string) ([]Repository, error) {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
-		return resolveRepositories(filterNames)
+		return nil, err
 	}
 
 	wsName := workspace
@@ -435,26 +493,84 @@ func buildPRBody(data prTemplateData) string {
 	return result
 }
 
-// notifyTemplateData holds the fields available to notification templates.
-type notifyTemplateData struct {
-	IssueKey    string
-	IssueTitle  string
-	IssueType   string        // e.g., "Story", "Bug".
-	IssueURL    string
-	IconURL     string        // Avatar or icon URL for card blocks.
-	Items       []notify.Item // Per-repository items (PRs, releases, etc.).
-	PreviewName string        // Ephemeral environment name (e.g., "brave-falcon").
-	PreviewURL  string        // Rendered preview environment URL.
+// Card icons render at a fixed display size in Slack, so these govern
+// source crispness (and relative footprint), not on-screen dimensions.
+// We request one shared size from every source so GitHub avatars and
+// Jira issue-type icons sit at the same scale on a card.
+const (
+	// cardIconPixels is the source resolution requested for raster card
+	// icons that accept a pixel size (GitHub avatars).
+	cardIconPixels = 48
+	// cardIconJiraSize is the Jira universal_avatar named size closest to
+	// cardIconPixels — Jira's avatar endpoint takes named sizes
+	// (xsmall/small/medium/large/xlarge), not pixel counts.
+	cardIconJiraSize = "large"
+)
+
+// githubAvatarURL builds the avatar image URL for a GitHub login at the
+// shared card-icon size.
+func githubAvatarURL(user string) string {
+	return fmt.Sprintf("https://github.com/%s.png?size=%d", user, cardIconPixels)
 }
 
-// Default block templates per notification type.
+// slackIconURL normalizes a Jira issue-type icon URL into something
+// Slack's image proxy can actually render, returning "" only when there
+// is nothing usable (in which case the card falls back to the :jira:
+// glyph).
+//
+// Slack fetches image_url server-side through its proxy and does NOT
+// render SVG (browsers do — which is why an SVG icon opens fine in a
+// browser but shows as a broken image on a card). Jira hands us icons in
+// two shapes:
+//
+//   - universal_avatar URLs (most issue types) default to SVG but accept
+//     a `format=png` parameter; we add it plus a `size` so Slack gets a
+//     card-sized raster.
+//   - legacy /images/icons/issuetypes/<name>.svg system icons (e.g. the
+//     built-in Epic, which has no avatar record). Jira serves a PNG
+//     sibling at the same path; we swap the extension. These are fixed
+//     ~16px — there is no larger variant Jira will serve.
+func slackIconURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	switch {
+	case strings.Contains(u.Path, "/universal_avatar/"):
+		// SVG by default; force a card-sized PNG.
+		q := u.Query()
+		q.Set("size", cardIconJiraSize)
+		q.Set("format", "png")
+		u.RawQuery = q.Encode()
+	case strings.HasSuffix(strings.ToLower(u.Path), ".svg"):
+		// Legacy system icon — swap to the PNG sibling Slack can render.
+		u.Path = u.Path[:len(u.Path)-len(".svg")] + ".png"
+	}
+	return u.String()
+}
+
+// notifyTemplateData holds the fields available to notification templates.
+type notifyTemplateData struct {
+	IssueKey         string
+	IssueTitle       string
+	IssueType        string // e.g., "Story", "Bug".
+	IssueURL         string
+	IssueDescription string        // Issue body text, plain. Empty when tracker has none.
+	IssueIconURL     string        // Issue-type icon URL for the Jira card. Empty falls back to a glyph.
+	IconURL          string        // Avatar or icon URL for card blocks.
+	Items            []notify.Item // Per-repository items (PRs, releases, etc.).
+	PreviewName      string        // Ephemeral environment name (e.g., "brave-falcon").
+	PreviewURL       string        // Rendered preview environment URL.
+}
+
+// Default block templates per notification type. Used when the type
+// falls through the text-default path below and no map config is set.
 var defaultNotifyTemplates = map[string]map[string]string{
 	"review": {
 		"header":  "Ready for Review",
-		"context": "via bosun",
-	},
-	"release": {
-		"header":  "Release",
 		"context": "via bosun",
 	},
 	"preview": {
@@ -462,20 +578,41 @@ var defaultNotifyTemplates = map[string]map[string]string{
 	},
 }
 
+// Default text templates per notification type. Routes a type through the
+// plain-text Content.Text path (no block fields) when no map config is set
+// — provider-agnostic content rather than a Slack card. Release matches
+// the #release_coordination convention: one block per item with the
+// host-generated notes (CreateReleaseRequest.GenerateNotes) inline.
+// Templates emit standard Markdown; provider adapters render it to their
+// native format (the Slack adapter posts it as a markdown block so
+// headings, bullets, links, and tables all render natively).
+var defaultTextNotifyTemplates = map[string]string{
+	"release": "{{range $i, $item := .Items}}{{if $i}}\n\n{{end}}going out `{{$item.Label}}`: {{$item.URL}}\n{{$item.Body}}{{end}}",
+}
+
 // buildNotifyContent reads the template config for a notification type and
-// renders it with the given data. Supports two config shapes:
+// renders it with the given data. Resolution order:
 //
-//	slack.templates.review: "plain text template"     → Content.Text (no blocks)
-//	slack.templates.review:                           → Content with block fields
-//	  header: "..."
-//	  body: "..."
-//	  context: "..."
+//  1. Config as a string: notification.templates.<type>: "…" → Content.Text
+//  2. Built-in text default (defaultTextNotifyTemplates) → Content.Text
+//  3. Config as a map of block fields, or built-in block default → Block-
+//     shaped Content (header/body/context + per-card sections)
+//
+// The text path keeps content provider-agnostic; the block path is the
+// Slack-shaped escape hatch for richer presentation.
 func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
 	key := "notification.templates." + notifType
 
 	// Check if it's a simple string template.
 	if s := viper.GetString(key); s != "" {
 		return notify.Content{Text: renderTemplate(s, data)}
+	}
+
+	// Built-in text default — overridden by a map config for this type.
+	if s, ok := defaultTextNotifyTemplates[notifType]; ok {
+		if sub := viper.GetStringMapString(key); len(sub) == 0 {
+			return notify.Content{Text: renderTemplate(s, data)}
+		}
 	}
 
 	// Check if it's a map of block fields.
@@ -511,9 +648,21 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 				Style: "primary",
 			})
 		}
+		// Prefer the real issue-type icon (e.g. the Story/Bug avatar) as
+		// the card image, mirroring the GitHub avatar on PR cards. When
+		// there's no usable icon, fall back to the :jira: glyph prefixed
+		// on the title so the card still reads as a Jira ticket. Key the
+		// fallback off the normalized icon, not the raw URL.
+		icon := slackIconURL(data.IssueIconURL)
+		text := title
+		if icon == "" {
+			text = ":jira: " + title
+		}
 		sections = append(sections, notify.Section{
-			Text:     ":jira: " + title,
+			Text:     text,
 			Subtitle: issueType,
+			Body:     descriptionOrPlaceholder(data.IssueDescription),
+			IconURL:  icon,
 			Buttons:  buttons,
 		})
 	}
@@ -565,7 +714,7 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		sections = append(sections, notify.Section{
 			Text:     title,
 			Subtitle: subtitle,
-			Body:     item.Body,
+			Body:     descriptionOrPlaceholder(item.Body),
 			IconURL:  data.IconURL,
 			Buttons:  buttons,
 		})
@@ -577,6 +726,17 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		Sections: sections,
 		Context:  renderTemplate(get("context"), data),
 	}
+}
+
+// descriptionOrPlaceholder returns body when non-empty, otherwise an
+// italicized "no description" placeholder. Italics render as a softer
+// muted style in Slack mrkdwn, signalling "this slot is intentionally
+// empty" rather than "the field is missing entirely."
+func descriptionOrPlaceholder(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return "_no description_"
+	}
+	return body
 }
 
 // renderTemplate parses and executes a Go text/template. Returns empty
@@ -658,29 +818,14 @@ func newCICDImpl() (cicd.CICD, error) {
 	}
 }
 
-// newPreviewProvider creates a preview.Provider with the default
-// OnInfo callback that renders incidental events inline as a success
-// card with a title (the action, title-cased by default) and a muted
-// raw-cased value. Suitable for commands where side-effect notifications
-// can fire immediately alongside other output (e.g., the preview command
-// itself).
-func newPreviewProvider(workspace string) (preview.Provider, error) {
-	return newPreviewProviderWithInfo(workspace, func(action, value string) {
-		ui.NewCard(ui.CardSuccess, action).Value(value).Print()
-	})
-}
-
-// newPreviewProviderWithInfo creates a preview.Provider with a custom
-// OnInfo sink — useful when callers want to buffer side-effect events
-// (e.g., the status command at project scope, which captures
-// per-workspace cleanup notices and prints them after the relevant
-// card so they don't race with the loading spinner).
+// newPreviewProviderImpl creates a preview.Provider for the given
+// workspace.
 //
 // The pipeline and tracker are optional — if either is unavailable,
 // the returned provider still supports the read paths (Get, Inspect)
 // and gracefully reports ErrNoPipeline / nothing-to-write on the
 // write paths.
-func newPreviewProviderWithInfoImpl(workspace string, onInfo func(action, value string)) (preview.Provider, error) {
+func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
@@ -716,7 +861,6 @@ func newPreviewProviderWithInfoImpl(workspace string, onInfo func(action, value 
 			return out, nil
 		},
 		InputName: stageInputName,
-		OnInfo:    onInfo,
 	}), nil
 }
 
@@ -831,6 +975,151 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, stage string)
 	return targets, nil
 }
 
+// defaultReleaseVersionInput is the workflow_dispatch input name that
+// carries the git tag to deploy. Overridable via
+// cicd.workflows.release.inputs.version for the rare non-"version" name.
+const defaultReleaseVersionInput = "version"
+
+// releaseVersionInput returns the configured version input name, or the
+// default "version".
+func releaseVersionInput() string {
+	if v := viper.GetString("cicd.workflows.release.inputs.version"); v != "" {
+		return v
+	}
+	return defaultReleaseVersionInput
+}
+
+// DeployTarget is one resolved per-service production deploy target: the
+// workflow to dispatch and the GitHub Deployments environment to read
+// the currently-live version from. A single-service repo yields one
+// target (Service == RepoName, Environment "production"); a monorepo
+// yields one per service.
+type DeployTarget struct {
+	Owner       string // GitHub owner (from ParseRemote of the local repo)
+	Repo        string // GitHub repo name
+	RepoName    string // bosun local repo name — keys tag/affected lookups
+	Service     string // bosun service name; == RepoName for single-service repos
+	Workflow    string // workflow filename for the dispatch API
+	Environment string // GitHub Deployments environment (default "production")
+	Label       string // display: "repo" or "repo · service"
+}
+
+// resolveReleaseDeployTargets resolves per-service production deploy
+// targets from cicd.workflows.release.target, a per-repo map whose value
+// is either a workflow-path string (single-service; env "production") or
+// a per-service map {service: workflow-string | {workflow, environment}}.
+// Env for a map entry defaults to "<service>-production" unless overridden.
+// Returns nil when unconfigured. Only active workspace repos are included.
+func resolveReleaseDeployTargets(ctx context.Context, workspace string) ([]DeployTarget, error) {
+	raw := viper.Get("cicd.workflows.release.target")
+	m, ok := raw.(map[string]any)
+	if !ok {
+		// Unset, or a bare global-string (not supported by the
+		// deployment-aware path). Caller reports "no targets".
+		return nil, nil
+	}
+
+	repos, err := resolveActiveRepositories(ctx, workspace, nil)
+	if err != nil {
+		return nil, err
+	}
+	repoByName := make(map[string]Repository, len(repos))
+	for _, r := range repos {
+		repoByName[r.Name] = r
+	}
+
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var targets []DeployTarget
+	for _, repoName := range names {
+		repo, active := repoByName[repoName]
+		if !active {
+			continue
+		}
+		ts, err := parseServiceDeployValue(ctx, repo, repoName, m[repoName])
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, ts...)
+	}
+	return targets, nil
+}
+
+// parseServiceDeployValue turns one repo's release.target value into
+// deploy targets. String → a single-service target (service == repo, env
+// "production"). Map → one target per service key (value: workflow-path
+// string, or {workflow, environment}); env defaults to
+// "<service>-production".
+func parseServiceDeployValue(ctx context.Context, repo Repository, repoName string, v any) ([]DeployTarget, error) {
+	switch val := v.(type) {
+	case string:
+		wt, err := resolveWorkflowFilename(ctx, repo, val)
+		if err != nil {
+			return nil, err
+		}
+		return []DeployTarget{{
+			Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
+			Service: repoName, Workflow: wt.Workflow,
+			Environment: "production", Label: repoName,
+		}}, nil
+	case map[string]any:
+		svcs := make([]string, 0, len(val))
+		for s := range val {
+			svcs = append(svcs, s)
+		}
+		sort.Strings(svcs)
+
+		var out []DeployTarget
+		for _, svc := range svcs {
+			var workflow, env string
+			switch sv := val[svc].(type) {
+			case string:
+				workflow = sv
+			case map[string]any:
+				workflow, _ = sv["workflow"].(string)
+				env, _ = sv["environment"].(string)
+			default:
+				continue
+			}
+			if workflow == "" {
+				continue
+			}
+			wt, err := resolveWorkflowFilename(ctx, repo, workflow)
+			if err != nil {
+				return nil, err
+			}
+			if env == "" {
+				env = svc + "-production"
+			}
+			out = append(out, DeployTarget{
+				Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
+				Service: svc, Workflow: wt.Workflow,
+				Environment: env, Label: repoName + " · " + svc,
+			})
+		}
+		return out, nil
+	}
+	return nil, nil
+}
+
+// resolveWorkflowFilename resolves a workflow path (absolute
+// owner/repo/.github/... or relative .github/...) into a WorkflowTarget,
+// resolving relative paths through the repo's git remote.
+func resolveWorkflowFilename(ctx context.Context, repo Repository, path string) (WorkflowTarget, error) {
+	if strings.HasPrefix(path, ".github/") {
+		identity, err := gh.ParseRemote(ctx, repo.Path)
+		if err != nil {
+			return WorkflowTarget{}, err
+		}
+		path = fmt.Sprintf("%s/%s/%s", identity.Owner, identity.Name, path)
+	}
+	return parseWorkflowPath(path)
+}
+
 // resolveRepoServiceNames returns the service names configured for a single
 // repository. Supports string, list, and map config shapes. Falls back to
 // the repo name when not configured.
@@ -872,49 +1161,6 @@ func stageInputName(stage, concept string) string {
 	return viper.GetString("cicd.workflows." + stage + ".inputs." + concept)
 }
 
-// buildWorkflowInputs constructs the inputs map for a workflow dispatch.
-// Reads input parameter names from the stage's config
-// (github_actions.workflows.<stage>.inputs.*). Used by the release
-// command; the preview command builds inputs inside its adapter.
-func buildWorkflowInputs(cmd *cobra.Command, ctx context.Context, workspace, stage, issue string) (map[string]string, error) {
-	inputs := make(map[string]string)
-
-	if issueKey := stageInputName(stage, "issue"); issueKey != "" {
-		inputs[issueKey] = issue
-	}
-
-	inputName := stageInputName(stage, "services")
-	if inputName == "" {
-		return inputs, nil
-	}
-
-	// --service flag overrides auto-detection.
-	flagServices, _ := cmd.Flags().GetStringSlice("service")
-	if len(flagServices) > 0 {
-		inputs[inputName] = strings.Join(flagServices, ",")
-		return inputs, nil
-	}
-
-	// Change-based detection: diff branches, filter to affected services.
-	g := git.New()
-	results, err := resolveAffectedServices(ctx, workspace, g)
-	if err != nil {
-		return nil, err
-	}
-
-	printAffectedSummary(results)
-
-	var affected []string
-	for _, r := range results {
-		affected = append(affected, r.Services...)
-	}
-	if len(affected) > 0 {
-		inputs[inputName] = strings.Join(affected, ",")
-	}
-
-	return inputs, nil
-}
-
 // stageURLTemplate holds the data available when rendering a stage URL.
 type stageURLTemplate struct {
 	Name string // Environment name (e.g., "brave-falcon").
@@ -939,4 +1185,3 @@ func renderStageURL(stage, name string) string {
 	}
 	return buf.String()
 }
-

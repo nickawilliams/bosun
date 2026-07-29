@@ -1,5 +1,7 @@
 package ui
 
+import "image/color"
+
 // Reporter is the semantic output surface commands render through.
 // An implementation decides how to present each call — card timeline,
 // JSON, silent, test capture, etc. The interface contains only the
@@ -18,10 +20,25 @@ type Reporter interface {
 	// CompleteDetail marks a step as complete and lists indented
 	// detail items beneath it.
 	CompleteDetail(label string, items []string)
+	// CompleteValue marks a step as complete with a brief inline
+	// value, rendered as "label · value" on one line — label in the
+	// title style, value muted. Use when a step's result is a single
+	// concise datum (a version, a path, a resolved identifier).
+	// Multi-line values are supported: the first line renders
+	// inline, subsequent lines align under the first value character.
+	// An optional alignWidth pads the label to a fixed visual column
+	// so sibling cards line up; 0 (or omitted) means natural width.
+	CompleteValue(label, value string, alignWidth ...int)
 	// Skip marks a step as intentionally skipped.
 	Skip(label string)
+	// SkipValue marks a step as skipped with a brief inline reason,
+	// rendered in the same shape as CompleteValue.
+	SkipValue(label, value string, alignWidth ...int)
 	// Fail marks a step as failed without aborting the command.
 	Fail(label string)
+	// FailValue marks a step as failed with a brief inline reason,
+	// rendered in the same shape as CompleteValue.
+	FailValue(label, value string, alignWidth ...int)
 
 	// --- Free-form messages ---
 
@@ -42,8 +59,15 @@ type Reporter interface {
 	Saved(label, value string)
 	// Selected prints feedback that a single value was chosen
 	// interactively. The label is the field title and value is the
-	// user's selection, rendered as a subtitle.
+	// user's selection, rendered as a subtitle. The label is treated
+	// as a heading and gets the default title-case transform applied;
+	// use SelectedIdentifier when the label is an identifier (repo
+	// name, branch name, etc.) whose original casing must survive.
 	Selected(label, value string)
+	// SelectedIdentifier is Selected for cases where the label is an
+	// identifier (repo name, slug, branch) — its original casing is
+	// preserved instead of being title-cased.
+	SelectedIdentifier(label, value string)
 	// SelectedMulti prints feedback that multiple values were chosen
 	// interactively. The label is the field title and values are the
 	// user's selections, rendered as indented detail items.
@@ -54,6 +78,15 @@ type Reporter interface {
 	// Task runs fn while showing a running indicator, then
 	// finalizes as success or failure. Returns fn's error.
 	Task(title string, fn func() error) error
+
+	// Spinner runs fn while showing a running indicator for the
+	// named work item, then clears the indicator without emitting
+	// any terminal card. The caller is responsible for emitting the
+	// final state via Complete / Fail / Skip (or their value-form
+	// variants). Use when the work's result has a non-default
+	// rendering shape that doesn't fit Task's auto-success /
+	// auto-failure card.
+	Spinner(title string, fn func() error) error
 
 	// --- Grouped output ---
 
@@ -70,6 +103,24 @@ type Reporter interface {
 	// Details renders a Data Card: a heading with key-value body,
 	// no status glyph. Empty fields are suppressed entirely.
 	Details(heading string, fields Fields)
+
+	// Summary renders an end-of-run rollup card: muted total head
+	// followed by a comma-joined colored breakdown of non-zero
+	// segments. The card glyph color is the color of the *last*
+	// non-zero segment, so order segments ascending by severity for
+	// the worst case to dominate. Use for the summary line at the
+	// end of multi-step operations (status, doctor, lifecycle).
+	Summary(total string, segments []SummarySegment)
+}
+
+// SummarySegment is one entry in a Summary card's colored breakdown.
+// Segments render in the order provided, comma-separated, non-zero
+// only. The Color is applied both to the segment's text and to the
+// card glyph if this is the last non-zero segment.
+type SummarySegment struct {
+	Count int
+	Label string
+	Color color.Color
 }
 
 // Fields is an ordered list of key-value pairs. Ordered so that

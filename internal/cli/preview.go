@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -19,28 +19,24 @@ func newPreviewCmd() *cobra.Command {
 		Use:   "preview",
 		Short: "Deploy to preview environment",
 		Annotations: map[string]string{
-			headerAnnotationTitle: "deploy",
+			headerAnnotationTitle: "deploy preview",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
 			if err := cc.RequireIssue(); err != nil {
 				return err
 			}
 			issueKey := cc.Issue
 
 			ctx := cmd.Context()
-			tracker, _ := newIssueTracker()
-			var currentStatus, issueTitle, issueType, issueURL string
-			if tracker != nil {
-				if detail, err := fetchIssue(ctx, tracker, issueKey); err != nil {
-					ui.Fail(fmt.Sprintf("fetching issue: %v", err))
-				} else {
-					currentStatus = detail.Status
-					issueTitle = detail.Title
-					issueType = detail.Type
-					issueURL = detail.URL
-				}
-			}
+			detail, _ := emitLifecyclePreamble(ctx, issueKey)
+			currentStatus := detail.Status
+			issueTitle := detail.Title
+			issueType := detail.Type
+			issueURL := detail.URL
 
 			provider, err := newPreviewProvider(cc.Workspace)
 			if err != nil {
@@ -63,8 +59,8 @@ func newPreviewCmd() *cobra.Command {
 				return err
 			}
 
-			if resolution.previewName != "" {
-				ui.NewCard(ui.CardSuccess, "preview").Value(resolution.previewName).Print()
+			if resolution.previewName != "" && !resolution.cardPainted {
+				ui.Selected("preview", resolution.previewName)
 			}
 
 			// --- Plan + Apply ---
@@ -85,12 +81,16 @@ func newPreviewCmd() *cobra.Command {
 			}
 
 			if resolution.deployName != "" && pipelineErr == nil {
-				deployAction, prs := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
+				deployAction, prs, err := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
+				if err != nil {
+					return err
+				}
 				actions = append(actions, deployAction)
 				actions = append(actions, prDetailActions(prs)...)
 				prData = prs
 			}
 
+			tracker, _ := newIssueTracker()
 			if sa, ok := statusAction(tracker, issueKey, currentStatus, "preview"); ok {
 				actions = append(actions, sa)
 			}
@@ -129,7 +129,7 @@ func newPreviewCmd() *cobra.Command {
 						var iconURL string
 						if host, err := newCodeHost(); err == nil {
 							if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-								iconURL = fmt.Sprintf("https://github.com/%s.png?size=36", user)
+								iconURL = githubAvatarURL(user)
 							}
 						}
 
@@ -137,14 +137,16 @@ func newPreviewCmd() *cobra.Command {
 							Channel:  channel,
 							IssueKey: issueKey,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:    issueKey,
-								IssueTitle:  issueTitle,
-								IssueType:   issueType,
-								IssueURL:    issueURL,
-								IconURL:     iconURL,
-								PreviewName: resolution.previewName,
-								PreviewURL:  resolution.previewURL,
-								Items:       items,
+								IssueKey:         issueKey,
+								IssueTitle:       issueTitle,
+								IssueType:        issueType,
+								IssueURL:         issueURL,
+								IssueDescription: detail.Description,
+								IssueIconURL:     detail.TypeIconURL,
+								IconURL:          iconURL,
+								PreviewName:      resolution.previewName,
+								PreviewURL:       resolution.previewURL,
+								Items:            items,
 							}),
 						})
 						return err
@@ -165,7 +167,7 @@ func newPreviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	cmd.Flags().String("name", "", "ephemeral environment name (e.g., brave-falcon; auto-generated if not set)")
-	cmd.Flags().Bool("force", false, "auto-confirm prompts; replace existing or create missing without asking")
+	cmd.Flags().Bool("force", false, "replace existing or create missing without asking; proceed past failed probes (plan confirmation still applies — see --approve)")
 	return cmd
 }
 
@@ -226,9 +228,30 @@ func currentAction(name string) Action {
 // buildDeployAction returns a single rolled-up deploy action plus the
 // resolved PR data so callers can reuse it for notifications. The
 // adapter fans out the workflow dispatches across all configured
-// targets internally.
-func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR) {
-	services, overrides, prData := resolvePreviewInputs(cmd, ctx, workspace)
+// targets internally. A non-nil error means input resolution was
+// aborted (e.g. the user cancelled the service-selection form) and
+// the command should stop rather than deploy an empty set.
+func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR, error) {
+	services, overrides, prData, err := resolvePreviewInputs(cmd, ctx, workspace)
+	if err != nil {
+		return Action{}, nil, err
+	}
+
+	// Nothing selected to deploy (full deselection in the form, or no
+	// deployable services at all) — render an honest no-op row rather
+	// than a "+ deploy env" that would claim an environment with zero
+	// services behind it.
+	if len(services) == 0 {
+		return Action{
+			Op:     ui.PlanNoChange,
+			Action: "deploy",
+			Type:   "env",
+			Name:   resolution.previewName,
+			Assess: func(_ context.Context) (ActionState, string, error) {
+				return ActionCompleted, "no services selected", nil
+			},
+		}, prData, nil
+	}
 
 	deployOp := ui.PlanCreate
 	if resolution.isRedeploy {
@@ -252,7 +275,7 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 			})
 			return err
 		},
-	}, prData
+	}, prData, nil
 }
 
 // prDetailActions renders one PlanDetail row per affected repo's PR
@@ -277,27 +300,46 @@ func prDetailActions(prs []repoPR) []Action {
 
 // resolvePreviewInputs computes the services list, image overrides, and
 // PR data for a deploy. Services come from --service when set, otherwise
-// from affected-service detection. Overrides always derive from affected
-// detection (PR lookups per repo). UI output (printAffectedSummary) fires
-// during plan build, matching today's flow.
-func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR) {
+// from affected-service detection (selection-adjusted when the user
+// toggled the form). Overrides always derive from detection's PR
+// lookups, rendered as the "Services" observation section via
+// emitDeploymentSources. A non-nil error means the user cancelled the
+// selection form — callers must abort rather than deploy an empty set.
+func resolvePreviewInputs(cmd *cobra.Command, ctx context.Context, workspace string) ([]string, map[string]string, []repoPR, error) {
 	flagServices, _ := cmd.Flags().GetStringSlice("service")
 
 	g := git.New()
-	results, _ := resolveAffectedServices(ctx, workspace, g)
+	repos, repoBranch, err := prepareAffectedRepos(ctx, workspace, g)
+	if err != nil {
+		// Pre-flight aborts (declined push, unresolvable workspace)
+		// abort the command — review and release already do; silently
+		// continuing here produced a plan that "deployed" an env with
+		// zero services.
+		return nil, nil, nil, err
+	}
 
-	var services []string
-	if len(flagServices) > 0 {
-		services = flagServices
-	} else {
-		printAffectedSummary(results)
+	results, overrides, prs, err := emitDeploymentSources(ctx, cmd, g, repos, repoBranch, true)
+	if err != nil {
+		if errors.Is(err, ErrCancelled) {
+			return nil, nil, nil, err
+		}
+		// Detection failures render as ✗ rows in the Services card;
+		// interactively the user sees them and can still cancel at
+		// the plan gate. Under -y nobody gets that look — a repo
+		// silently dropped from the deploy set is exactly what
+		// auto-approve must not gloss over, so fail instead.
+		if isAutoApprove(cmd) {
+			return nil, nil, nil, err
+		}
+	}
+
+	services := flagServices
+	if len(services) == 0 {
 		for _, r := range results {
 			services = append(services, r.Services...)
 		}
 	}
-
-	overrides, prs, _ := buildImageOverrides(ctx, results)
-	return services, overrides, prs
+	return services, overrides, prs, nil
 }
 
 // repoPR pairs a repository with its resolved pull request.
@@ -307,65 +349,5 @@ type repoPR struct {
 	Owner    string
 	Repo     string
 	PR       code.PullRequest
-}
-
-// buildImageOverrides looks up the PR number for each affected repo's
-// branch and produces a service → "pr-N" override map plus the resolved
-// PR data for use in notifications. Returns nil map when no repos have
-// changes that resolve to PRs.
-func buildImageOverrides(ctx context.Context, results []AffectedResult) (map[string]string, []repoPR, error) {
-	var reposWithChanges []AffectedResult
-	for _, r := range results {
-		if r.HasChanges && len(r.Services) > 0 {
-			reposWithChanges = append(reposWithChanges, r)
-		}
-	}
-	if len(reposWithChanges) == 0 {
-		return nil, nil, nil
-	}
-
-	host, err := newCodeHost()
-	if err != nil {
-		return nil, nil, fmt.Errorf("code host (needed for image overrides): %w", err)
-	}
-
-	overrides := make(map[string]string)
-	var prs []repoPR
-	for _, r := range reposWithChanges {
-		identity, err := gh.ParseRemote(ctx, r.RepoPath)
-		if err != nil {
-			ui.Fail(fmt.Sprintf("%s: %v", r.RepoName, err))
-			continue
-		}
-		pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, r.Branch)
-		if err != nil {
-			ui.Fail(fmt.Sprintf("%s: %v", r.RepoName, err))
-			continue
-		}
-		if pr.Number == 0 {
-			ui.Skip(fmt.Sprintf("%s: no PR for branch %q, skipping", r.RepoName, r.Branch))
-			continue
-		}
-
-		tag := fmt.Sprintf("pr-%d", pr.Number)
-		for _, svc := range r.Services {
-			overrides[svc] = tag
-		}
-
-		prs = append(prs, repoPR{
-			RepoName: r.RepoName,
-			Branch:   r.Branch,
-			Owner:    identity.Owner,
-			Repo:     identity.Name,
-			PR:       pr,
-		})
-
-		ui.Complete(fmt.Sprintf("%s: PR #%d → %s", r.RepoName, pr.Number, tag))
-	}
-
-	if len(overrides) == 0 {
-		return nil, prs, nil
-	}
-	return overrides, prs, nil
 }
 

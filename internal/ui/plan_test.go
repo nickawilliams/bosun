@@ -298,3 +298,26 @@ func TestPlanSymbol(t *testing.T) {
 		}
 	})
 }
+
+// TestPlanDetailRef locks the known-after-apply contract: while the ref
+// is empty the static detail (placeholder) renders; once an Apply fills
+// the ref, subsequent renders — the plan card's final frame — show the
+// resolved text instead.
+func TestPlanDetailRef(t *testing.T) {
+	var resolved DetailRef
+	p := NewPlan().AddWithDetailRef(PlanCreate, "issue", "project", "EX", `story: "x" → (known after apply)`, &resolved)
+
+	before := strings.Join(p.RenderItemLines(), "\n")
+	if !strings.Contains(before, "(known after apply)") {
+		t.Errorf("pre-apply render missing placeholder: %q", before)
+	}
+
+	resolved.Set(`story: "x" → EX-123`)
+	after := strings.Join(p.RenderItemLines(), "\n")
+	if !strings.Contains(after, "EX-123") {
+		t.Errorf("post-apply render missing resolved detail: %q", after)
+	}
+	if strings.Contains(after, "(known after apply)") {
+		t.Errorf("post-apply render still shows placeholder: %q", after)
+	}
+}

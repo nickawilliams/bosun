@@ -153,6 +153,96 @@ func TestGetDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestTagsContaining(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	// HEAD here is the initial commit; tag it v0.0.1.
+	if err := run(ctx, repository, "tag", "v0.0.1"); err != nil {
+		t.Fatalf("tag v0.0.1: %v", err)
+	}
+	initialSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	// Add a commit + tag v0.1.0; the new tag contains the initial
+	// commit, and v0.0.1 still also contains it.
+	_ = os.WriteFile(filepath.Join(repository, "a.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "a.txt")
+	_ = run(ctx, repository, "commit", "-m", "add a.txt")
+	if err := run(ctx, repository, "tag", "v0.1.0"); err != nil {
+		t.Fatalf("tag v0.1.0: %v", err)
+	}
+	secondSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	// Initial commit is in both tags.
+	tags, err := a.TagsContaining(ctx, repository, initialSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(initial) error: %v", err)
+	}
+	if len(tags) != 2 || !contains(tags, "v0.0.1") || !contains(tags, "v0.1.0") {
+		t.Errorf("TagsContaining(initial) = %v, want both v0.0.1 and v0.1.0", tags)
+	}
+
+	// Second commit is only in v0.1.0.
+	tags, err = a.TagsContaining(ctx, repository, secondSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(second) error: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "v0.1.0" {
+		t.Errorf("TagsContaining(second) = %v, want [v0.1.0]", tags)
+	}
+
+	// A new commit past every tag → no containing tags.
+	_ = os.WriteFile(filepath.Join(repository, "b.txt"), []byte("y"), 0o644)
+	_ = run(ctx, repository, "add", "b.txt")
+	_ = run(ctx, repository, "commit", "-m", "add b.txt")
+	thirdSHA, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+
+	tags, err = a.TagsContaining(ctx, repository, thirdSHA)
+	if err != nil {
+		t.Fatalf("TagsContaining(third) error: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Errorf("TagsContaining(third) = %v, want empty (no tag reaches the new commit)", tags)
+	}
+}
+
+func TestFetchTags(t *testing.T) {
+	repository := initTestRepositoryWithRemote(t)
+	a := New()
+	ctx := context.Background()
+
+	// initTestRepositoryWithRemote sets up origin already. A fresh
+	// FetchTags should be a no-op (nothing new to fetch) and return
+	// nil; that's enough to lock in the wiring without exercising
+	// "remote has new tags" behavior which requires a more involved
+	// fixture.
+	if err := a.FetchTags(ctx, repository, "origin"); err != nil {
+		t.Fatalf("FetchTags() error: %v", err)
+	}
+}
+
+// contains reports whether a slice contains an exact-match string.
+// Local helper for tag-containment tests where slice order is
+// implementation-defined.
+func contains(s []string, target string) bool {
+	for _, v := range s {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIsDirty(t *testing.T) {
 	repository :=initTestRepository(t)
 	a := New()
@@ -184,7 +274,7 @@ func TestChangedFiles(t *testing.T) {
 	ctx := context.Background()
 
 	// No changes on main — should return nil.
-	files, err := a.ChangedFiles(ctx, repo)
+	files, err := a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() error: %v", err)
 	}
@@ -198,7 +288,7 @@ func TestChangedFiles(t *testing.T) {
 	_ = run(ctx, repo, "add", "new.txt")
 	_ = run(ctx, repo, "commit", "-m", "add new.txt")
 
-	files, err = a.ChangedFiles(ctx, repo)
+	files, err = a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() on feature branch error: %v", err)
 	}
@@ -212,7 +302,7 @@ func TestChangedFiles(t *testing.T) {
 	_ = run(ctx, repo, "add", "cmd/api/main.go")
 	_ = run(ctx, repo, "commit", "-m", "add cmd/api/main.go")
 
-	files, err = a.ChangedFiles(ctx, repo)
+	files, err = a.ChangedFiles(ctx, repo, "origin/main")
 	if err != nil {
 		t.Fatalf("ChangedFiles() after second commit error: %v", err)
 	}
@@ -244,5 +334,122 @@ func TestWorktree(t *testing.T) {
 
 	if err := a.RemoveWorktree(ctx, repository, wtPath, false); err != nil {
 		t.Fatalf("RemoveWorktree() error: %v", err)
+	}
+}
+
+func TestIsMergedInto(t *testing.T) {
+	repository := initTestRepositoryWithRemote(t)
+	a := New()
+	ctx := context.Background()
+
+	// Branch points at the same commit as main → trivially merged.
+	if err := a.CreateBranchFromHead(ctx, repository, "trivial"); err != nil {
+		t.Fatalf("CreateBranchFromHead() error: %v", err)
+	}
+	merged, err := a.IsMergedInto(ctx, repository, "trivial", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(trivial, main) error: %v", err)
+	}
+	if !merged {
+		t.Error("trivial branch (same commit as main) should report merged")
+	}
+
+	// Branch with new commits past main → not merged.
+	if err := run(ctx, repository, "checkout", "-b", "feature/unmerged"); err != nil {
+		t.Fatalf("checkout -b error: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(repository, "f.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "f.txt")
+	_ = run(ctx, repository, "commit", "-m", "unmerged work")
+
+	merged, err = a.IsMergedInto(ctx, repository, "feature/unmerged", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(feature/unmerged, main) error: %v", err)
+	}
+	if merged {
+		t.Error("feature/unmerged has commits past main; should not be merged")
+	}
+
+	// After merging the feature back into main, it should report merged.
+	_ = run(ctx, repository, "checkout", "main")
+	if err := run(ctx, repository, "merge", "--no-ff", "feature/unmerged", "-m", "merge"); err != nil {
+		t.Fatalf("merge error: %v", err)
+	}
+	merged, err = a.IsMergedInto(ctx, repository, "feature/unmerged", "main")
+	if err != nil {
+		t.Fatalf("IsMergedInto(feature/unmerged, main) post-merge error: %v", err)
+	}
+	if !merged {
+		t.Error("feature/unmerged after merge to main should report merged")
+	}
+
+	// Unknown ref → error (not a silent false).
+	if _, err := a.IsMergedInto(ctx, repository, "does-not-exist", "main"); err == nil {
+		t.Error("IsMergedInto on unknown ref should return an error")
+	}
+}
+
+func TestHeadSHA(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	sha, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() error: %v", err)
+	}
+	if len(sha) != 40 {
+		t.Errorf("HeadSHA() = %q, expected 40-char SHA", sha)
+	}
+
+	// Make a new commit and confirm HEAD moves.
+	_ = os.WriteFile(filepath.Join(repository, "x.txt"), []byte("x"), 0o644)
+	_ = run(ctx, repository, "add", "x.txt")
+	_ = run(ctx, repository, "commit", "-m", "second")
+
+	sha2, err := a.HeadSHA(ctx, repository)
+	if err != nil {
+		t.Fatalf("HeadSHA() after second commit error: %v", err)
+	}
+	if sha2 == sha {
+		t.Error("HeadSHA() should change after a new commit")
+	}
+}
+
+// TestCreateWorktree_StaleRegistration covers the case where a worktree
+// directory was deleted on disk (e.g., rm -rf) without `git worktree
+// remove`. Git's worktree admin metadata still references the path, so
+// a fresh `worktree add` at the same path fails with "missing but
+// already registered worktree" unless prune runs first. CreateWorktree
+// prunes implicitly so this works transparently.
+func TestCreateWorktree_StaleRegistration(t *testing.T) {
+	repository := initTestRepository(t)
+	a := New()
+	ctx := context.Background()
+
+	_ = a.CreateBranchFromHead(ctx, repository, "wt-branch")
+
+	wtPath := filepath.Join(t.TempDir(), "worktree")
+	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {
+		t.Fatalf("first CreateWorktree() error: %v", err)
+	}
+
+	// Simulate manual deletion: blow away the directory without telling git.
+	if err := os.RemoveAll(wtPath); err != nil {
+		t.Fatalf("RemoveAll(%q) error: %v", wtPath, err)
+	}
+
+	// Without the implicit prune, this would fail with "missing but
+	// already registered worktree". With prune, it should succeed.
+	if err := a.CreateWorktree(ctx, repository, wtPath, "wt-branch"); err != nil {
+		t.Fatalf("re-CreateWorktree() error after stale registration: %v", err)
+	}
+
+	branch, err := a.GetCurrentBranch(ctx, wtPath)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch() in re-added worktree error: %v", err)
+	}
+	if branch != "wt-branch" {
+		t.Errorf("re-added worktree branch = %q, want %q", branch, "wt-branch")
 	}
 }

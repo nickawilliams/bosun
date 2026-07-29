@@ -13,6 +13,22 @@ import (
 // palette holds the canonical color values for the entire application.
 // Every styled element — output helpers, huh forms, spinners, tables —
 // derives its colors from this struct.
+//
+// Two parallel color vocabularies live here. They alias the same
+// underlying color values; the names communicate intent at the call
+// site, and `grep` finds the right places when you need to audit one
+// context vs the other.
+//
+//	Severity colors (event contexts — Doctor checks, action results):
+//	  Success / Warning / Error / Info / Muted — "what happened"
+//
+//	Resolution-role colors (state contexts — Status rows, lifecycle
+//	indicators):
+//	  RoleOpen / RoleDone / RoleClosed / RoleAttention / RoleInFlight
+//	  / RoleNeutral — "where this aspect is right now"
+//
+// See state_grammar.go for the grammar that ties these to glyph
+// choices and decides which vocabulary applies in which context.
 type palette struct {
 	// Semantic colors.
 	Primary   color.Color // Titles, headings
@@ -27,6 +43,23 @@ type palette struct {
 	Warning  color.Color // Caution, dry-run indicators
 	Muted    color.Color // Secondary text, descriptions
 	NormalFg color.Color // Default foreground
+
+	// Resolution-role colors — for state-context rows (see
+	// state_grammar.go). Alias the severity colors but read as
+	// intent at the call site. Use these when the row describes
+	// "what this aspect currently is", not "what just happened".
+	RoleOpen      color.Color // Active / healthy aspect       (= Success, green)
+	RoleDone      color.Color // Terminal positive resolution  (= Primary, purple)
+	RoleClosed    color.Color // Terminal negative resolution  (= Error, red)
+	RoleAttention color.Color // Needs intervention            (= Warning, yellow)
+	RoleInFlight  color.Color // Transitioning right now       (= Info, blue)
+	RoleNeutral   color.Color // Unknown / unset / not started (= Muted, gray)
+
+	// Keyword marks identifier-shaped tokens that should pop out of
+	// surrounding prose — repo names, service names, branch names,
+	// commands, config keys. Render through ui.Keyword(s) rather
+	// than styling ad hoc so the treatment stays uniform. (= Primary)
+	Keyword color.Color
 
 	// Chrome colors — structural UI elements.
 	Recessed color.Color // Timeline spine, blurred button bg, help separator
@@ -60,12 +93,6 @@ func SetCompactHeader(v bool) {
 // single-line breadcrumb header instead of the full logo box.
 func IsCompactHeader() bool {
 	return compactHeader
-}
-
-// displayPadding returns extra vertical whitespace to insert after a
-// non-timeline block (e.g. Panel) for breathing room.
-func displayPadding() string {
-	return "\n"
 }
 
 // needsSpacer is set after a timeline card prints to signal that
@@ -163,7 +190,7 @@ func lerpColors(a, b color.Color, n int) []color.Color {
 }
 
 func defaultPalette() palette {
-	return palette{
+	p := palette{
 		Primary:   lipgloss.Color("#7571F9"), // Indigo
 		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
 		Brand:      lipgloss.Color("#9997CC"), // Desaturated indigo (app name in breadcrumbs)
@@ -187,10 +214,12 @@ func defaultPalette() palette {
 		Bullet: "•",
 		Dot:    "·",
 	}
+	applyRoleAliases(&p)
+	return p
 }
 
 func ansiPalette() palette {
-	return palette{
+	p := palette{
 		Primary:   lipgloss.BrightBlue,
 		Secondary: lipgloss.Blue,
 		Brand:      lipgloss.Blue,
@@ -210,17 +239,35 @@ func ansiPalette() palette {
 
 		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
+	applyRoleAliases(&p)
+	return p
 }
 
 func noColorPalette() palette {
 	nc := lipgloss.NoColor{}
-	return palette{
+	p := palette{
 		Primary: nc, Secondary: nc, Brand: nc, LogoTop: nc, LogoBottom: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
 
 		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
+	applyRoleAliases(&p)
+	return p
+}
+
+// applyRoleAliases populates the palette's resolution-role color
+// fields from the severity colors. Kept in one place so any future
+// re-wiring (e.g., decoupling RoleDone from Primary) lives in a
+// single spot rather than scattered across each palette constructor.
+func applyRoleAliases(p *palette) {
+	p.RoleOpen = p.Success
+	p.RoleDone = p.Primary
+	p.RoleClosed = p.Error
+	p.RoleAttention = p.Warning
+	p.RoleInFlight = p.Info
+	p.RoleNeutral = p.Muted
+	p.Keyword = p.Primary
 }
 
 // ApplyColorMode sets the active palette based on the given mode string
@@ -250,7 +297,6 @@ func ApplyColorMode(mode string) {
 func rebuildStyles() {
 	errorStyle = lipgloss.NewStyle().Foreground(Palette.Error)
 	mutedStyle = lipgloss.NewStyle().Foreground(Palette.Muted)
-	primaryStyle = lipgloss.NewStyle().Foreground(Palette.Primary)
 }
 
 // BosunTheme implements huh.Theme for use with huh forms.
@@ -269,46 +315,96 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// NewTimelineLayout — see form_layout.go for the rationale.
 	t.FieldSeparator = lipgloss.NewStyle().SetString("\n │\n")
 
-	// Align huh's focused form with the card timeline: 1 space of
-	// left margin, a normal-weight │ border in the accent color,
-	// and 2 spaces of inner padding. Callers that want a "?" glyph
-	// on the first row should print a CardInput title card before
-	// invoking the form; the form itself only draws the connector,
-	// which matches the CardInput card's own connector color.
+	// Align huh's focused form with the card grid (see layout.go).
+	// The form is a card at level 0: 1 space of left margin, then a
+	// normal-weight │ border at GlyphCol(0)=col2 in the accent color,
+	// and ZERO inner padding so a field's leading character lands at
+	// col 3 — GlyphCol(0)+1, the spine-anchored focus-cursor column.
+	// Callers that want a "?" glyph on the first row print a CardInput
+	// title card before the form; the form itself only draws the
+	// connector, matching that card's connector color.
+	//
+	// From the col-3 origin, per-element offsets reach each field's
+	// grid target:
+	//   - Title/description/buttons: MarginLeft(2) → ContentCol(0)=5.
+	//   - Text input / single select: the "> " prompt/selector puts
+	//     ">" at col 3 and the value/option at ContentCol(0)=5.
+	//   - Multi-select: "> " cursor at col 3, then a " ✓  "/" ○  "
+	//     prefix mirroring Card.Item's " glyph  content" cell, landing
+	//     the state glyph at GlyphCol(1)=6 and content at
+	//     ContentCol(1)=9 — identical to the static card that replaces
+	//     the form on submit.
+	// Field titles/descriptions render one column inboard of input and
+	// option rows in huh (the input prompt sits at the base origin;
+	// the title line carries an extra leading column). So the title
+	// compensation to reach ContentCol(0)=5 is one less than an input
+	// row's: titlePad lands the title at col 5, where the value/option
+	// rows already sit via their "> " prompt/selector.
+	titlePad := ContentCol(0) - (LeftPad + 1) - 1 // 5 - 2 - 1 = 2
 	t.Focused.Base = lipgloss.NewStyle().
-		MarginLeft(1).
+		MarginLeft(LeftPad).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderLeft(true).
 		BorderForeground(Palette.Accent).
-		PaddingLeft(2)
+		PaddingLeft(0)
 	t.Focused.Card = t.Focused.Base
-	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true)
-	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1)
+	t.Focused.Title = t.Focused.Title.Foreground(Palette.Primary).Bold(true).MarginLeft(titlePad)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(Palette.Primary).Bold(true).MarginBottom(1).MarginLeft(titlePad)
 	t.Focused.Directory = t.Focused.Directory.Foreground(Palette.Primary)
-	t.Focused.Description = t.Focused.Description.Foreground(Palette.Muted)
+	t.Focused.Description = t.Focused.Description.Foreground(Palette.Muted).MarginLeft(titlePad)
 	t.Focused.ErrorIndicator = t.Focused.ErrorIndicator.Foreground(Palette.Error)
 	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(Palette.Error)
-	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(Palette.Accent)
+	// Single-select: "> " cursor at the spine (col 3), option text at
+	// ContentCol(0)=5 — aligned with the field title, since a select
+	// yields one value like a text input.
+	t.Focused.SelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(FocusMarker)
 	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(Palette.Accent)
 	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(Palette.Accent)
 	t.Focused.Option = t.Focused.Option.Foreground(Palette.NormalFg)
-	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(Palette.Accent)
+	// Multi-select: cursor at the spine (col 3); the prefix's leading
+	// space + glyph + GlyphGap mirrors Card.Item so the state glyph
+	// lands at GlyphCol(1)=6 and content at ContentCol(1)=9. ○/✓ match
+	// the result card's not-included/deploying vocabulary.
+	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(FocusMarker)
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(Palette.Success)
-	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString("✓ ")
-	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString("• ")
+	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" ✓  ")
+	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" ○  ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
+	// Buttons render in a left-aligned row at the base origin (col 3),
+	// which glues the leftmost chip's background to the spine. Indent
+	// the row to ContentCol(0)=5 so the buttons sit off the spine like
+	// every other content row. huh joins the two chips with
+	// JoinHorizontal, so the margin lands on both; drop the chips'
+	// inherited MarginRight to keep the inter-button gap from
+	// widening, leaving one chip's left margin as the only separator.
+	buttonMargin := ContentCol(0) - (LeftPad + 1) - 1 // 5 - 2 - 1 = 2
 	t.Focused.FocusedButton = t.Focused.FocusedButton.
 		Foreground(Palette.ButtonFg).
-		Background(Palette.Accent)
+		Background(Palette.Accent).
+		MarginLeft(buttonMargin).
+		MarginRight(0)
 	t.Focused.Next = t.Focused.FocusedButton
 	t.Focused.BlurredButton = t.Focused.BlurredButton.
 		Foreground(Palette.NormalFg).
-		Background(Palette.Recessed)
+		Background(Palette.Recessed).
+		MarginLeft(buttonMargin).
+		MarginRight(0)
 
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(Palette.Success)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.
 		Foreground(Palette.Border)
-	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(Palette.Accent)
+	// Pin the prompt column to a fixed 2-cell width. The prompt sits at
+	// the post-border origin (GlyphCol(0)+1=col3), so a 2-cell prompt
+	// lands content at ContentCol(0)=col5 — aligned with field titles and
+	// option rows. The single-line input's "❭ " prompt is already 2 cells
+	// wide, so Width is a no-op for it; the multi-line textarea's prompt
+	// is forced empty by huh (field_text.go), and without this its lines
+	// would render flush against the spine. Width pads that empty prompt
+	// out to the same 2 cells on every row.
+	promptWidth := ContentCol(0) - (GlyphCol(0) + 1) // 5 - 3 = 2
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.
+		Foreground(Palette.Accent).
+		Width(promptWidth)
 
 	t.Blurred = t.Focused
 	// Blurred (inactive) fields keep a visible left gutter in the
@@ -319,16 +415,24 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	t.Blurred.Card = t.Blurred.Base
 	t.Blurred.NextIndicator = lipgloss.NewStyle()
 	t.Blurred.PrevIndicator = lipgloss.NewStyle()
+	// The accent ">" marker means "this field has focus." Every field
+	// type must drop it when blurred — a select pulls its selector
+	// from the blurred styles (field_select activeStyles), and without
+	// these overrides it would inherit the focused accent and stay
+	// pink while focus moved elsewhere. NormalFg matches the text
+	// input's blurred prompt, so the focus color flips uniformly
+	// (NormalFg when blurred → Accent when focused) across input,
+	// single-select, and multi-select.
+	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(Palette.NormalFg)
+	t.Blurred.MultiSelectSelector = t.Blurred.MultiSelectSelector.Foreground(Palette.NormalFg)
+	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(Palette.NormalFg)
 
 	t.Group.Title = t.Focused.Title
 	t.Group.Description = t.Focused.Description
 
 	// Help footer: keys + descriptions in recessed muted gray so
 	// the shortcut hints sit quietly beneath the active prompt
-	// without competing with the card timeline above. Indented
-	// with a left margin so it aligns under the prompt content,
-	// matching the 1-space outer pad + 1-col border + 2-col inner
-	// padding used by the focused card.
+	// without competing with the card timeline above.
 	helpKey := lipgloss.NewStyle().Foreground(Palette.Muted)
 	helpDesc := lipgloss.NewStyle().Foreground(Palette.Subtle)
 	helpSep := lipgloss.NewStyle().Foreground(Palette.Recessed)
