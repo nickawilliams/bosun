@@ -86,21 +86,42 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 	}
 
 	// --- Phase 1: PR status lookup, one program over all repos ---
+	//
+	// Accumulating gather (the release-command pattern): each step's
+	// card carries the repo rows resolved so far plus a pending row —
+	// the in-flight repo with the live spinner in its glyph slot — so
+	// the list materializes in place and then swaps into the form (or
+	// record card). Rows render via reviewTargetRow, the record card's
+	// own renderer. Mutating later cards from a step's Run is race-free
+	// (RunCardSteps' channel happens-before; see release_gate.go).
 
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	steps := make([]ui.CardStep, 0, len(resolved))
+	n := len(resolved)
+	pendingRow := func(c *ui.Card, i int) {
+		c.Item(ui.GlyphSlot, statusMuted.Render(resolved[i].repo.Name))
+	}
+	cards := make([]*ui.Card, n)
+	for i := range cards {
+		cards[i] = ui.NewCard(ui.CardRunning, "pull requests")
+	}
+	pendingRow(cards[0], 0)
+
+	steps := make([]ui.CardStep, 0, n)
 	for i := range resolved {
 		rc := &resolved[i]
-		spin := ui.NewCard(ui.CardRunning, "pull requests").
-			Raw(statusMuted.Render("Checking ") +
-				ui.Keyword(rc.repo.Name) +
-				statusMuted.Render("..."))
 		steps = append(steps, ui.CardStep{
-			Card: spin,
+			Card: cards[i],
 			// Per-repo errors ride on prErr (surfaced as a ✗ plan row),
 			// not the step error path, so the sequence finishes.
 			Run: func() error {
 				rc.pr, rc.prErr = host.GetPRForBranch(ctx, rc.owner, rc.repoName, rc.branch)
+				glyph, content := reviewTargetRow(rc, rc.preselect())
+				for j := i + 1; j < n; j++ {
+					cards[j].Item(glyph, content)
+				}
+				if i+1 < n {
+					pendingRow(cards[i+1], i+1)
+				}
 				return nil
 			},
 		})
@@ -131,15 +152,64 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		}
 	}
 
-	// The spinner program's final frame morphs into the selection form's
-	// header when the form will show, and into the result card
-	// otherwise (so the no-form path lands its record without a flash).
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+	// --- Phase 2: selection form over creatable repos ---
+	//
+	// Built inside a closure because the steps program's final frame
+	// paints the form header plus the form's EXACT first frame
+	// (formFirstFrame — same construction as runForm), so the takeover
+	// below repaints identical bytes and the gather → form transition
+	// has no collapse and no flash.
+
+	var (
+		picked      []string
+		msField     *huh.MultiSelect[string]
+		formFrame   string
+		headerLines int
+		idxs        []int
+	)
+	buildSelectionForm := func() {
+		for i := range resolved {
+			if resolved[i].creatable() || resolved[i].activePR() {
+				idxs = append(idxs, i)
+			}
+		}
+		sort.SliceStable(idxs, func(a, b int) bool {
+			return resolved[idxs[a]].repo.Name < resolved[idxs[b]].repo.Name
+		})
+
+		// Bold the repo segment (raw SGR 1/22, not lipgloss, so huh's own
+		// selection styling for the rest of the line survives — lipgloss
+		// would close with a full reset). Each row shows only the repo's PR
+		// status (#N (state), or nothing when none); the checkbox conveys
+		// whether we act on it, and the plan spells out create vs. update.
+		opts := make([]huh.Option[string], len(idxs))
+		for j, i := range idxs {
+			rc := &resolved[i]
+			label := "\x1b[1m" + rc.repo.Name + "\x1b[22m"
+			if note := rc.statusNote(); note != "" {
+				label += " · " + note
+			}
+			opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rc.preselect())
+		}
+		msField = huh.NewMultiSelect[string]().
+			Options(opts...).
+			Height(len(opts)).
+			Value(&picked)
+		formFrame = formFirstFrame(msField)
+		if !strings.HasSuffix(formFrame, "\n") {
+			formFrame += "\n"
+		}
+	}
+
+	err := ui.RunCardStepsInto(steps, func() string {
 		if formGate() {
-			return ui.NewCard(ui.CardInput, "pull requests").Tight()
+			buildSelectionForm()
+			header := ui.NewCard(ui.CardInput, "pull requests").Tight().Render()
+			headerLines = strings.Count(header, "\n")
+			return header + formFrame
 		}
 		applyDefaults()
-		return buildReviewTargetsCard(resolved)
+		return buildReviewTargetsCard(resolved).Render()
 	})
 	if err != nil {
 		return err
@@ -153,43 +223,14 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		return nil
 	}
 
-	// --- Phase 2: selection form over creatable repos ---
-
-	var idxs []int
-	for i := range resolved {
-		if resolved[i].creatable() || resolved[i].activePR() {
-			idxs = append(idxs, i)
-		}
-	}
-	sort.SliceStable(idxs, func(a, b int) bool {
-		return resolved[idxs[a]].repo.Name < resolved[idxs[b]].repo.Name
-	})
-
-	// Bold the repo segment (raw SGR 1/22, not lipgloss, so huh's own
-	// selection styling for the rest of the line survives — lipgloss
-	// would close with a full reset). Each row shows only the repo's PR
-	// status (#N (state), or nothing when none); the checkbox conveys
-	// whether we act on it, and the plan spells out create vs. update.
-	opts := make([]huh.Option[string], len(idxs))
-	for j, i := range idxs {
-		rc := &resolved[i]
-		label := "\x1b[1m" + rc.repo.Name + "\x1b[22m"
-		if note := rc.statusNote(); note != "" {
-			label += " · " + note
-		}
-		opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rc.preselect())
-	}
-
-	var picked []string
-	// The header was painted by the spinner program's final frame (not
-	// via Print), so suppress the spacer the way Tight-on-Print would.
+	// Seamless takeover: the form's first frame is already on screen —
+	// move the cursor to its origin and let huh repaint the same bytes
+	// in place. ClearSpacer: the header was painted by the spinner
+	// program's final frame (not via Print), so suppress the spacer the
+	// way Tight-on-Print would.
+	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
 	ui.ClearSpacer()
-	if err := runForm(
-		huh.NewMultiSelect[string]().
-			Options(opts...).
-			Height(len(opts)).
-			Value(&picked),
-	); err != nil {
+	if err := runForm(msField); err != nil {
 		ui.RequestSpacer()
 		return err
 	}
@@ -204,9 +245,16 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		resolved[i].include = pickedSet[i]
 	}
 
-	// Erase the form header and drop the result card in its place — the
-	// same in-place swap preview uses for its Services card.
-	rewind()
+	// huh cleared its frame on submit, leaving the cursor at the form's
+	// origin (the line below the header). Erase the header above and
+	// drop the record card in its place. ClearSpacer first: runForm's
+	// prologue armed the spacer flag, but the gather program's original
+	// spacer line is still on screen above the header — printing another
+	// would double-space.
+	if headerLines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
+	}
+	ui.ClearSpacer()
 	buildReviewTargetsCard(resolved).Print()
 	return nil
 }
@@ -219,52 +267,25 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 // The card glyph aggregates worst-first (fail > skipped > success) the way
 // group parents aggregate children.
 func buildReviewTargetsCard(resolved []repoContext) *ui.Card {
-	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphOff := muted.Render("○")
-	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
-
-	type row struct {
-		repo, glyph, content string
-	}
-	var rows []row
-	var nOK, nSkip, nFail int
-
-	// on: included rows keep the repo in primary color; off: skipped rows
-	// recede entirely (repo segment drops to muted too). A blank note
-	// (repo with no PR) renders the repo name alone, no trailing " · ".
-	on := func(name, note string) string {
-		if note == "" {
-			return repoStyle.Render(name)
-		}
-		return repoStyle.Render(name) + muted.Render(" · "+note)
-	}
-	off := func(name, note string) string {
-		if note == "" {
-			return muted.Render(name)
-		}
-		return muted.Render(name + " · " + note)
-	}
-
+	idx := make([]int, len(resolved))
 	for i := range resolved {
-		rc := &resolved[i]
-		name := rc.repo.Name
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return resolved[idx[a]].repo.Name < resolved[idx[b]].repo.Name
+	})
+
+	var nOK, nSkip, nFail int
+	for i := range resolved {
 		switch {
-		case rc.prErr != nil:
+		case resolved[i].prErr != nil:
 			nFail++
-			rows = append(rows, row{name, glyphFail, on(name, rc.prErr.Error())})
-		case rc.include:
+		case resolved[i].include:
 			nOK++
-			rows = append(rows, row{name, glyphOK, on(name, rc.statusNote())})
 		default:
 			nSkip++
-			rows = append(rows, row{name, glyphOff, off(name, rc.statusNote())})
 		}
 	}
-
-	sort.Slice(rows, func(i, j int) bool { return rows[i].repo < rows[j].repo })
-
 	state := ui.CardSuccess
 	switch {
 	case nFail > 0:
@@ -274,10 +295,48 @@ func buildReviewTargetsCard(resolved []repoContext) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "pull requests")
-	for _, r := range rows {
-		card.Item(r.glyph, r.content)
+	for _, i := range idx {
+		glyph, content := reviewTargetRow(&resolved[i], resolved[i].include)
+		card.Item(glyph, content)
 	}
 	return card
+}
+
+// reviewTargetRow renders one repo's status row — the shared shape
+// between the gather's progressively-filling card and the record card,
+// so the two can't drift. on is the effective inclusion (the
+// pre-selection during gather, the user's choice afterward). Included
+// rows keep the repo in primary color; skipped rows recede entirely
+// (repo segment drops to muted too). A blank note (repo with no PR)
+// renders the repo name alone, no trailing " · ".
+func reviewTargetRow(rc *repoContext, on bool) (glyph, content string) {
+	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	sel := func(name, note string) string {
+		if note == "" {
+			return primary.Render(name)
+		}
+		return primary.Render(name) + muted.Render(" · "+note)
+	}
+	unsel := func(name, note string) string {
+		if note == "" {
+			return muted.Render(name)
+		}
+		return muted.Render(name + " · " + note)
+	}
+
+	name := rc.repo.Name
+	switch {
+	case rc.prErr != nil:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+			sel(name, rc.prErr.Error())
+	case on:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+			sel(name, rc.statusNote())
+	default:
+		return muted.Render("○"), unsel(name, rc.statusNote())
+	}
 }
 
 // prState carries per-repo PR discoveries from a pr-action's Assess

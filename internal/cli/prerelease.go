@@ -733,6 +733,46 @@ func newPrereleaseCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveReleaseTarget fills one repo's release state: latest tag, next
+// version, configured services + detected-affected narrowing, the
+// multi-user context, and the release gate. Mutates rt in place;
+// failures land on rt.tagErr (surfaced as a ✗ row — siblings
+// unaffected).
+func resolveReleaseTarget(ctx context.Context, g vcs.VCS, host code.Host, bump string, rt *releaseTarget) {
+	if rt.tagErr != nil {
+		return // identity already failed; surfaced as a ✗ row
+	}
+	tag, err := host.GetLatestTag(ctx, rt.owner, rt.repoName)
+	if err != nil {
+		rt.tagErr = err
+		return
+	}
+	rt.currentTag = tag
+	next, err := code.DeriveNextVersion(tag, bump)
+	if err != nil {
+		rt.tagErr = err
+		return
+	}
+	rt.nextVersion = next
+
+	// Service detection: configured set + path-map narrowing.
+	rt.services = resolveRepoServiceNames(rt.repo.Name)
+	if len(rt.services) > 1 {
+		pathMap := resolveServicePaths(rt.repo.Name)
+		rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
+	}
+
+	// Multi-user awareness: detect whether someone else already cut a
+	// release whose range includes our HEAD, and enumerate any "extra"
+	// PRs (work by other contributors) that will get swept into a
+	// release we create. See ROADMAP / plan for the framing.
+	resolveMultiUserContext(ctx, g, host, rt)
+	// Release gate: is the workspace's work on the default branch?
+	// Runs after the above so it can read the PR state and default
+	// branch it resolved.
+	resolveReleaseGate(ctx, g, rt)
+}
+
 // selectReleaseTargets resolves each repo's release state under a
 // spinner sequence — latest tag, next version, configured services, and
 // detected-affected services — then (when interactive) offers a flat
@@ -755,51 +795,44 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 	// Service detection runs alongside the tag fetch because both happen
 	// per repo, both want spinner feedback, and the detection's diff
 	// base IS the just-fetched currentTag.
+	//
+	// Accumulating gather (the release-command pattern): each step's
+	// card carries the repo rows resolved so far plus a pending row —
+	// the in-flight repo with the live spinner in its glyph slot — so
+	// the list materializes in place and then swaps into the form (or
+	// record card). Rows render via releaseTargetRow, the record card's
+	// own renderer. Mutating later cards from a step's Run is race-free
+	// (RunCardSteps' channel happens-before; see release_gate.go).
 	g := git.New()
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	steps := make([]ui.CardStep, 0, len(targets))
+	n := len(targets)
+	pendingRow := func(c *ui.Card, i int) {
+		c.Item(ui.GlyphSlot, statusMuted.Render(targets[i].repo.Name))
+	}
+	cards := make([]*ui.Card, n)
+	for i := range cards {
+		cards[i] = ui.NewCard(ui.CardRunning, "releases")
+	}
+	pendingRow(cards[0], 0)
+
+	steps := make([]ui.CardStep, 0, n)
 	for i := range targets {
 		rt := &targets[i]
-		spin := ui.NewCard(ui.CardRunning, "releases").
-			Raw(statusMuted.Render("Checking ") +
-				ui.Keyword(rt.repo.Name) +
-				statusMuted.Render("..."))
 		steps = append(steps, ui.CardStep{
-			Card: spin,
+			Card: cards[i],
 			Run: func() error {
-				if rt.tagErr != nil {
-					return nil // identity already failed; surfaced as a ✗ row
+				resolveReleaseTarget(ctx, g, host, bump, rt)
+				glyph, content := releaseTargetRow(rt, rt.eligible())
+				eg, ec := releaseExtrasRow(rt)
+				for j := i + 1; j < n; j++ {
+					cards[j].Item(glyph, content)
+					if eg != "" {
+						cards[j].Item(eg, ec)
+					}
 				}
-				tag, err := host.GetLatestTag(ctx, rt.owner, rt.repoName)
-				if err != nil {
-					rt.tagErr = err
-					return nil
+				if i+1 < n {
+					pendingRow(cards[i+1], i+1)
 				}
-				rt.currentTag = tag
-				next, err := code.DeriveNextVersion(tag, bump)
-				if err != nil {
-					rt.tagErr = err
-					return nil
-				}
-				rt.nextVersion = next
-
-				// Service detection: configured set + path-map narrowing.
-				rt.services = resolveRepoServiceNames(rt.repo.Name)
-				if len(rt.services) > 1 {
-					pathMap := resolveServicePaths(rt.repo.Name)
-					rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
-				}
-
-				// Multi-user awareness: detect whether someone else
-				// already cut a release whose range includes our HEAD,
-				// and enumerate any "extra" PRs (work by other
-				// contributors) that will get swept into a release we
-				// create. See ROADMAP / plan for the framing.
-				resolveMultiUserContext(ctx, g, host, rt)
-				// Release gate: is the workspace's work on the default
-				// branch? Runs after the above so it can read the PR
-				// state and default branch it resolved.
-				resolveReleaseGate(ctx, g, rt)
 				return nil
 			},
 		})
@@ -833,23 +866,13 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		}
 	}
 
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
-		if formGate() {
-			return ui.NewCard(ui.CardInput, "releases").Tight()
-		}
-		applyDefaults()
-		return buildReleaseTargetsCard(targets)
-	})
-	if err != nil {
-		return err
-	}
-
-	if !formGate() {
-		applyDefaults()
-		return nil
-	}
-
 	// --- Phase 2: selection form, one row per service ---
+	//
+	// Built inside a closure because the steps program's final frame
+	// paints the form header plus the form's EXACT first frame
+	// (formFirstFrame — same construction as runForm), so the takeover
+	// below repaints identical bytes and the gather → form transition
+	// has no collapse and no flash.
 	//
 	// Rows are flat (`repo · service`) sorted by (repo, service). Repos
 	// without configured services contribute a single fallback row with
@@ -863,85 +886,116 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		preselect  bool
 	}
 	const infoOnlyServiceIdx = -2
-	var rows []optRow
-	for i := range targets {
-		rt := &targets[i]
-		// Containing-release repos surface as info-only rows in the
-		// form: visible (so the user sees we considered them) with
-		// the containing tag appended, but inert — any toggle is
-		// ignored at parse time below. Keeps the picker self-contained
-		// rather than pushing the user to look at two places for the
-		// release plan.
-		if rt.containingRelease != nil {
-			rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
-			continue
+	var (
+		picked      []string
+		msField     *huh.MultiSelect[string]
+		formFrame   string
+		headerLines int
+	)
+	buildSelectionForm := func() {
+		var rows []optRow
+		for i := range targets {
+			rt := &targets[i]
+			// Containing-release repos surface as info-only rows in the
+			// form: visible (so the user sees we considered them) with
+			// the containing tag appended, but inert — any toggle is
+			// ignored at parse time below. Keeps the picker self-contained
+			// rather than pushing the user to look at two places for the
+			// release plan.
+			if rt.containingRelease != nil {
+				rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
+				continue
+			}
+			// Gate-blocked/skipped repos surface the same way — an inert
+			// info row with the reason — so the user sees we considered the
+			// repo and why it's out, without it being selectable.
+			if rt.versionEligible() && rt.gate != gateAllow {
+				rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
+				continue
+			}
+			if !rt.eligible() {
+				continue
+			}
+			// No services configured → single fallback row carrying the
+			// repo name as a synthetic service. applyDefaults / form logic
+			// reads this back as "subjects = [repoName]".
+			if len(rt.services) == 0 {
+				rows = append(rows, optRow{repoIdx: i, serviceIdx: -1, preselect: true})
+				continue
+			}
+			preCheck := preCheckPolicy(rt)
+			for j := range rt.services {
+				rows = append(rows, optRow{repoIdx: i, serviceIdx: j, preselect: preCheck[j]})
+			}
 		}
-		// Gate-blocked/skipped repos surface the same way — an inert
-		// info row with the reason — so the user sees we considered the
-		// repo and why it's out, without it being selectable.
-		if rt.versionEligible() && rt.gate != gateAllow {
-			rows = append(rows, optRow{repoIdx: i, serviceIdx: infoOnlyServiceIdx, preselect: false})
-			continue
-		}
-		if !rt.eligible() {
-			continue
-		}
-		// No services configured → single fallback row carrying the
-		// repo name as a synthetic service. applyDefaults / form logic
-		// reads this back as "subjects = [repoName]".
-		if len(rt.services) == 0 {
-			rows = append(rows, optRow{repoIdx: i, serviceIdx: -1, preselect: true})
-			continue
-		}
-		preCheck := preCheckPolicy(rt)
-		for j, svc := range rt.services {
-			_ = svc
-			rows = append(rows, optRow{repoIdx: i, serviceIdx: j, preselect: preCheck[j]})
-		}
-	}
-	sort.SliceStable(rows, func(a, b int) bool {
-		ra, rb := &targets[rows[a].repoIdx], &targets[rows[b].repoIdx]
-		if ra.repo.Name != rb.repo.Name {
-			return ra.repo.Name < rb.repo.Name
-		}
-		// Stable within a repo: fallback row first (only one), else
-		// services in their config-declared order via serviceIdx.
-		return rows[a].serviceIdx < rows[b].serviceIdx
-	})
+		sort.SliceStable(rows, func(a, b int) bool {
+			ra, rb := &targets[rows[a].repoIdx], &targets[rows[b].repoIdx]
+			if ra.repo.Name != rb.repo.Name {
+				return ra.repo.Name < rb.repo.Name
+			}
+			// Stable within a repo: fallback row first (only one), else
+			// services in their config-declared order via serviceIdx.
+			return rows[a].serviceIdx < rows[b].serviceIdx
+		})
 
-	opts := make([]huh.Option[string], len(rows))
-	for k, row := range rows {
-		rt := &targets[row.repoIdx]
-		// Bold the repo segment (raw SGR 1/22 so huh's selection
-		// styling for the rest of the row survives — lipgloss would
-		// close with a full reset). The current version intentionally
-		// isn't shown here — the form asks "which services?", and the
-		// version transition belongs on the plan card where the user
-		// is being asked to approve the actual change.
-		label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
-		switch {
-		case row.serviceIdx == infoOnlyServiceIdx:
-			// Inert info row (sweep-up or gate-blocked/skipped): append
-			// the reason so the user sees why the repo is out. The pick
-			// is parsed back to a no-op below.
-			label += " · " + rt.infoRowNote()
-		case row.serviceIdx >= 0:
-			label += " · " + rt.services[row.serviceIdx]
+		opts := make([]huh.Option[string], len(rows))
+		for k, row := range rows {
+			rt := &targets[row.repoIdx]
+			// Bold the repo segment (raw SGR 1/22 so huh's selection
+			// styling for the rest of the row survives — lipgloss would
+			// close with a full reset). The current version intentionally
+			// isn't shown here — the form asks "which services?", and the
+			// version transition belongs on the plan card where the user
+			// is being asked to approve the actual change.
+			label := "\x1b[1m" + rt.repo.Name + "\x1b[22m"
+			switch {
+			case row.serviceIdx == infoOnlyServiceIdx:
+				// Inert info row (sweep-up or gate-blocked/skipped): append
+				// the reason so the user sees why the repo is out. The pick
+				// is parsed back to a no-op below.
+				label += " · " + rt.infoRowNote()
+			case row.serviceIdx >= 0:
+				label += " · " + rt.services[row.serviceIdx]
+			}
+			key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
+			opts[k] = huh.NewOption(label, key).Selected(row.preselect)
 		}
-		key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
-		opts[k] = huh.NewOption(label, key).Selected(row.preselect)
-	}
-
-	var picked []string
-	// The header was painted by the spinner program's final frame (not
-	// via Print), so suppress the spacer the way Tight-on-Print would.
-	ui.ClearSpacer()
-	if err := runForm(
-		huh.NewMultiSelect[string]().
+		msField = huh.NewMultiSelect[string]().
 			Options(opts...).
 			Height(len(opts)).
-			Value(&picked),
-	); err != nil {
+			Value(&picked)
+		formFrame = formFirstFrame(msField)
+		if !strings.HasSuffix(formFrame, "\n") {
+			formFrame += "\n"
+		}
+	}
+
+	err := ui.RunCardStepsInto(steps, func() string {
+		if formGate() {
+			buildSelectionForm()
+			header := ui.NewCard(ui.CardInput, "releases").Tight().Render()
+			headerLines = strings.Count(header, "\n")
+			return header + formFrame
+		}
+		applyDefaults()
+		return buildReleaseTargetsCard(targets).Render()
+	})
+	if err != nil {
+		return err
+	}
+	if !formGate() {
+		applyDefaults() // no-op when the closure already ran; needed in raw mode
+		return nil
+	}
+
+	// Seamless takeover: the form's first frame is already on screen —
+	// move the cursor to its origin and let huh repaint the same bytes
+	// in place. ClearSpacer: the header was painted by the spinner
+	// program's final frame (not via Print), so suppress the spacer the
+	// way Tight-on-Print would.
+	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+	ui.ClearSpacer()
+	if err := runForm(msField); err != nil {
 		ui.RequestSpacer()
 		return err
 	}
@@ -975,8 +1029,16 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		rt.include = true
 	}
 
-	// Erase the form header and drop the result card in its place.
-	rewind()
+	// huh cleared its frame on submit, leaving the cursor at the form's
+	// origin (the line below the header). Erase the header above and
+	// drop the record card in its place. ClearSpacer first: runForm's
+	// prologue armed the spacer flag, but the gather program's original
+	// spacer line is still on screen above the header — printing another
+	// would double-space.
+	if headerLines > 0 {
+		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
+	}
+	ui.ClearSpacer()
 	buildReleaseTargetsCard(targets).Print()
 	return nil
 }
@@ -990,72 +1052,25 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 // no-op is a no-op. The card glyph aggregates worst-first (fail > skipped
 // > success).
 func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
-	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphOff := muted.Render("○")
-	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
-
-	type row struct {
-		repo, glyph, content string
-	}
-	var rows []row
-	var nOK, nSkip, nFail int
-
-	// on: included rows keep the repo in primary color; off: skipped rows
-	// recede entirely. A blank note renders the repo name alone.
-	on := func(name, note string) string {
-		if note == "" {
-			return repoStyle.Render(name)
-		}
-		return repoStyle.Render(name) + muted.Render(" · "+note)
-	}
-	off := func(name, note string) string {
-		if note == "" {
-			return muted.Render(name)
-		}
-		return muted.Render(name + " · " + note)
-	}
-
+	idx := make([]int, len(targets))
 	for i := range targets {
-		rt := &targets[i]
-		name := rt.repo.Name
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return targets[idx[a]].repo.Name < targets[idx[b]].repo.Name
+	})
+
+	var nOK, nSkip, nFail int
+	for i := range targets {
 		switch {
-		case rt.tagErr != nil:
+		case targets[i].tagErr != nil:
 			nFail++
-			rows = append(rows, row{name, glyphFail, on(name, rt.tagErr.Error())})
-		case rt.containingRelease != nil:
-			// Sweep-up: another release already contains our work.
-			// Render as a skipped row with "in <tag>" + author so the
-			// user sees who shipped it.
-			nSkip++
-			rows = append(rows, row{name, glyphOff, off(name, rt.infoRowNote())})
-		case rt.versionEligible() && rt.gate != gateAllow:
-			// Blocked or skipped by the release gate (work not on the
-			// default branch, or nothing of ours to release). Skipped
-			// row carrying the gate reason.
-			nSkip++
-			rows = append(rows, row{name, glyphOff, off(name, rt.gateReason)})
-		case rt.include:
+		case targets[i].include:
 			nOK++
-			// Append the user-selected subjects in parens when partial;
-			// full-coverage selections render as just the version (same
-			// shape as today). formatSubjects returns the repo name for
-			// the full case, which we strip back out — we don't want to
-			// echo the repo name we already printed at the row start.
-			note := rt.versionNote()
-			if sel := formatSubjects(rt.repo.Name, rt.services, rt.subjects, ", "); sel != rt.repo.Name {
-				note += " (" + sel + ")"
-			}
-			rows = append(rows, row{name, glyphOK, on(name, note)})
 		default:
 			nSkip++
-			rows = append(rows, row{name, glyphOff, off(name, rt.versionNote())})
 		}
 	}
-
-	sort.Slice(rows, func(i, j int) bool { return rows[i].repo < rows[j].repo })
-
 	state := ui.CardSuccess
 	switch {
 	case nFail > 0:
@@ -1065,24 +1080,84 @@ func buildReleaseTargetsCard(targets []releaseTarget) *ui.Card {
 	}
 
 	card := ui.NewCard(state, "releases")
-	// Build a sorted lookup so extras-continuation rows land
-	// immediately under each repo's primary row, preserving the
-	// alphabetical sort the rows already follow.
-	extrasByRepo := make(map[string]string, len(targets))
-	for i := range targets {
+	for _, i := range idx {
 		rt := &targets[i]
-		if line := formatExtrasNote(rt.extraPRs); line != "" {
-			extrasByRepo[rt.repo.Name] = line
-		}
-	}
-	extrasGlyph := muted.Render("+")
-	for _, r := range rows {
-		card.Item(r.glyph, r.content)
-		if extras, ok := extrasByRepo[r.repo]; ok {
-			card.Item(extrasGlyph, muted.Render(extras))
+		glyph, content := releaseTargetRow(rt, rt.include)
+		card.Item(glyph, content)
+		// Extras-continuation rows land immediately under each repo's
+		// primary row, preserving the alphabetical sort.
+		if eg, ec := releaseExtrasRow(rt); eg != "" {
+			card.Item(eg, ec)
 		}
 	}
 	return card
+}
+
+// releaseTargetRow renders one repo's status row — the shared shape
+// between the gather's progressively-filling card and the record card,
+// so the two can't drift. on is the effective inclusion (eligibility
+// during gather, the user's selection afterward). Included rows keep
+// the repo in primary color; skipped rows recede entirely.
+func releaseTargetRow(rt *releaseTarget, on bool) (glyph, content string) {
+	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+
+	sel := func(name, note string) string {
+		if note == "" {
+			return primary.Render(name)
+		}
+		return primary.Render(name) + muted.Render(" · "+note)
+	}
+	unsel := func(name, note string) string {
+		if note == "" {
+			return muted.Render(name)
+		}
+		return muted.Render(name + " · " + note)
+	}
+
+	name := rt.repo.Name
+	switch {
+	case rt.tagErr != nil:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+			sel(name, rt.tagErr.Error())
+	case rt.containingRelease != nil:
+		// Sweep-up: another release already contains our work.
+		// Render as a skipped row with "in <tag>" + author so the
+		// user sees who shipped it.
+		return muted.Render("○"), unsel(name, rt.infoRowNote())
+	case rt.versionEligible() && rt.gate != gateAllow:
+		// Blocked or skipped by the release gate (work not on the
+		// default branch, or nothing of ours to release). Skipped
+		// row carrying the gate reason.
+		return muted.Render("○"), unsel(name, rt.gateReason)
+	case on:
+		// Append the user-selected subjects in parens when partial;
+		// full-coverage selections render as just the version.
+		// formatSubjects returns the repo name for the full case (and
+		// when subjects aren't chosen yet, as during gather), which we
+		// strip back out — we don't want to echo the repo name we
+		// already printed at the row start.
+		note := rt.versionNote()
+		if subj := formatSubjects(rt.repo.Name, rt.services, rt.subjects, ", "); subj != rt.repo.Name {
+			note += " (" + subj + ")"
+		}
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+			sel(name, note)
+	default:
+		return muted.Render("○"), unsel(name, rt.versionNote())
+	}
+}
+
+// releaseExtrasRow renders the muted continuation row for a repo whose
+// release range sweeps in other contributors' PRs. Empty glyph → no
+// row.
+func releaseExtrasRow(rt *releaseTarget) (glyph, content string) {
+	line := formatExtrasNote(rt.extraPRs)
+	if line == "" {
+		return "", ""
+	}
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	return muted.Render("+"), muted.Render(line)
 }
 
 // formatExtrasNote composes the muted continuation row shown under a
