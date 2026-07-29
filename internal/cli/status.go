@@ -109,7 +109,7 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 		if previewProvider == nil && provErr != nil {
 			previewErr = provErr
 		}
-		emitWorkspaceIssuePreamble(ctx, issueKey, func() {
+		_, _ = emitWorkspaceIssuePreamble(ctx, issueKey, func() {
 			var wg sync.WaitGroup
 			if previewProvider != nil {
 				wg.Add(1)

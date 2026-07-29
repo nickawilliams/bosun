@@ -26,7 +26,7 @@ func PreParseBootstrapFlags(target *cobra.Command, args []string) {
 		return
 	}
 	pre := pflag.NewFlagSet("bootstrap-preparse", pflag.ContinueOnError)
-	pre.ParseErrorsWhitelist.UnknownFlags = true
+	pre.ParseErrorsAllowlist.UnknownFlags = true
 	pre.Usage = func() {}
 	var wired []string
 	for _, name := range []string{"project", "output"} {
