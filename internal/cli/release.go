@@ -99,11 +99,20 @@ func newReleaseCmd() *cobra.Command {
 						return err
 					}
 
+					// Plan granularity: selected services and errors
+					// itemize; unselected services don't — they're the
+					// opt-in default, not a decision worth a row each.
+					// Accounting happens at the REPO level instead: a
+					// repo shipping nothing collapses to one "=" row
+					// with its reason (not selected / already live /
+					// gate block).
 					versionInput := releaseVersionInput()
+					repoHasRow := make(map[string]bool)
 					for i := range states {
 						st := states[i]
 						switch {
 						case st.err != nil:
+							repoHasRow[st.target.RepoName] = true
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
 								Assess: func(_ context.Context) (ActionState, string, error) {
@@ -111,6 +120,7 @@ func newReleaseCmd() *cobra.Command {
 								},
 							})
 						case st.state == deployGo && st.include:
+							repoHasRow[st.target.RepoName] = true
 							actions = append(actions, Action{
 								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
 								Assess: func(_ context.Context) (ActionState, string, error) {
@@ -130,34 +140,24 @@ func newReleaseCmd() *cobra.Command {
 									})
 								},
 							})
-						case st.state == deployGo:
-							// Deployable but deselected in the form. Plan-detail
-							// grammar: persisting state first, why parenthesized.
-							detail := "(not selected)"
-							if st.deployedTag != "" {
-								detail = st.deployedTag + " " + detail
-							}
-							actions = append(actions, Action{
-								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
-								Assess: func(_ context.Context) (ActionState, string, error) {
-									return ActionCompleted, detail, nil
-								},
-							})
-						default:
-							// deploySkip carries grammar'd state already
-							// ("D (already live)"); deployBlock is why-only,
-							// so the plan parenthesizes it.
-							detail := st.reason
-							if st.state == deployBlock {
-								detail = "(" + detail + ")"
-							}
-							actions = append(actions, Action{
-								Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: st.target.Label,
-								Assess: func(_ context.Context) (ActionState, string, error) {
-									return ActionCompleted, detail, nil
-								},
-							})
 						}
+					}
+					// Repo-level no-op rows, in first-appearance order.
+					seenRepo := make(map[string]bool)
+					for i := range states {
+						st := states[i]
+						repo := st.target.RepoName
+						if repoHasRow[repo] || seenRepo[repo] {
+							continue
+						}
+						seenRepo[repo] = true
+						detail := repoNoopDetail(states, repo)
+						actions = append(actions, Action{
+							Op: ui.PlanCreate, Action: "deploy", Type: "repo", Name: repo,
+							Assess: func(_ context.Context) (ActionState, string, error) {
+								return ActionCompleted, detail, nil
+							},
+						})
 					}
 				}
 			}

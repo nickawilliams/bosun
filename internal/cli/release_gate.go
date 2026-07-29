@@ -63,6 +63,47 @@ func classifyServiceDeploy(workTag, deployTag, deployedTag string, deployedKnown
 	return deployGo, deployedTag + " → " + deployTag
 }
 
+// repoNoopDetail composes the plan detail for a repo shipping nothing —
+// the one "=" row that stands in for all of the repo's unselected
+// service targets. Plan-detail grammar: persisting state (the release
+// that would have shipped) first, why parenthesized. Precedence: a
+// gate block is the load-bearing why; else any unselected-deployable
+// means "not selected"; else everything was already live.
+func repoNoopDetail(states []releaseServiceTarget, repo string) string {
+	var workTag string
+	anyDeployable, anyBlocked := false, false
+	blockReason := ""
+	for i := range states {
+		st := &states[i]
+		if st.target.RepoName != repo {
+			continue
+		}
+		if st.workTag != "" {
+			workTag = st.workTag
+		}
+		switch st.state {
+		case deployGo:
+			anyDeployable = true
+		case deployBlock:
+			anyBlocked = true
+			if blockReason == "" {
+				blockReason = st.reason
+			}
+		}
+	}
+	why := "already live"
+	switch {
+	case anyBlocked && !anyDeployable:
+		why = blockReason
+	case anyDeployable:
+		why = "not selected"
+	}
+	if workTag != "" {
+		return workTag + " (" + why + ")"
+	}
+	return "(" + why + ")"
+}
+
 // chooseDeployTag picks the tag a service deploys: an explicit --tag
 // override wins; else the workspace's own release (the one prerelease
 // cut — whose contents, including swept-in extras, are what the team

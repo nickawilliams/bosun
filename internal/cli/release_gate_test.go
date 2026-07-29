@@ -143,3 +143,60 @@ func TestParseServiceDeployValue(t *testing.T) {
 		t.Errorf("label = %q, want 'extracker · account-api'", lbl)
 	}
 }
+
+// TestRepoNoopDetail locks the repo-level rollup row that replaces
+// per-service no-op itemization: gate block is the load-bearing why;
+// any unselected deployable → "not selected"; else already live.
+func TestRepoNoopDetail(t *testing.T) {
+	mk := func(repo string, state deployState, workTag, reason string) releaseServiceTarget {
+		return releaseServiceTarget{
+			target:  DeployTarget{RepoName: repo},
+			state:   state,
+			workTag: workTag,
+			reason:  reason,
+		}
+	}
+	tests := []struct {
+		name   string
+		states []releaseServiceTarget
+		want   string
+	}{
+		{
+			"unselected deployables → not selected",
+			[]releaseServiceTarget{
+				mk("extracker", deployGo, "v1.2.4", "v1.2.3 → v1.2.4"),
+				mk("extracker", deploySkip, "v1.2.4", "v1.2.4 (already live)"),
+			},
+			"v1.2.4 (not selected)",
+		},
+		{
+			"all already live",
+			[]releaseServiceTarget{
+				mk("extracker", deploySkip, "v1.2.4", "v1.2.4 (already live)"),
+			},
+			"v1.2.4 (already live)",
+		},
+		{
+			"all blocked → gate reason, no tag",
+			[]releaseServiceTarget{
+				mk("extracker", deployBlock, "", "no release contains this work — run prerelease"),
+			},
+			"(no release contains this work — run prerelease)",
+		},
+		{
+			"other repos ignored",
+			[]releaseServiceTarget{
+				mk("host-ui", deployGo, "v9.9.9", ""),
+				mk("extracker", deploySkip, "v1.2.4", ""),
+			},
+			"v1.2.4 (already live)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := repoNoopDetail(tt.states, "extracker"); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
