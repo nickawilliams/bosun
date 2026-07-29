@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/fsutil"
@@ -52,6 +53,24 @@ func newCleanupCmd() *cobra.Command {
 			mainPath := make(map[string]string, len(projectRepos))
 			for _, pr := range projectRepos {
 				mainPath[pr.Name] = pr.Path
+			}
+
+			// Every destroy action below runs git against the repo's
+			// main checkout. A workspace repo the project config no
+			// longer matches would look up to an empty path — and git
+			// with Dir="" operates on the caller's cwd, aiming
+			// `branch -D` / `push origin --delete` at whatever repo
+			// the user happens to be standing in. Refuse instead.
+			var unmatched []string
+			for _, r := range workspaceRepos {
+				if mainPath[r.Name] == "" {
+					unmatched = append(unmatched, r.Name)
+				}
+			}
+			if len(unmatched) > 0 {
+				return fmt.Errorf(
+					"workspace repo(s) %s not matched by the project's repositories config; re-add them (or remove the worktrees manually) before cleanup",
+					strings.Join(unmatched, ", "))
 			}
 
 			wsRoot := viper.GetString("workspace.root")
