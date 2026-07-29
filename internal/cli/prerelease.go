@@ -616,7 +616,7 @@ func newPrereleaseCmd() *cobra.Command {
 			}
 
 			tracker, _ := newIssueTracker()
-			if !(anyBlocked && !anyReleaseOutcome) {
+			if !anyBlocked || anyReleaseOutcome {
 				if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
 					actions = append(actions, sa)
 				}

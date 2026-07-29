@@ -13,7 +13,7 @@ import (
 // U+2060 (word joiner) is zero-width, never combines, and is vanishingly
 // unlikely to occur naturally in a label — so leaking the marker would
 // be both invisible and harmless.
-const preserveCaseMarker = "⁠"
+const preserveCaseMarker = "\u2060"
 
 // TitleCase capitalizes the first rune of each space-separated word
 // while leaving words that already contain an uppercase letter

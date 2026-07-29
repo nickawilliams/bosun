@@ -547,7 +547,8 @@ func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 		// eyes): the opt-in model makes unselected the common case,
 		// and the plan below accounts for every target anyway
 		// (= not selected / = already live / block reasons).
-		if st.err == nil && !(st.state == deployGo && st.include) {
+		keep := st.err != nil || (st.state == deployGo && st.include)
+		if !keep {
 			continue
 		}
 		glyph, content := deployStateRow(st, st.include)

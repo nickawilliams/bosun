@@ -73,11 +73,6 @@ func newSelect[T comparable](title string) *huh.Select[T] {
 	return huh.NewSelect[T]().Title(transformFieldTitle(title))
 }
 
-// newMultiSelect — see newInput.
-func newMultiSelect[T comparable](title string) *huh.MultiSelect[T] {
-	return huh.NewMultiSelect[T]().Title(transformFieldTitle(title))
-}
-
 // isInteractive returns true when the current input stream supports
 // prompting (real TTY stdin or an injected reader in tests).
 func isInteractive() bool {
@@ -127,7 +122,7 @@ func runForm(fields ...huh.Field) error {
 	// a stranded spacer above the card that the next emit then stacks
 	// against.
 	if prologueLines > 0 {
-		fmt.Fprintf(ui.Output(), "\x1b[%dF\x1b[J", prologueLines)
+		_, _ = fmt.Fprintf(ui.Output(), "\x1b[%dF\x1b[J", prologueLines)
 	}
 	return err
 }
@@ -145,8 +140,8 @@ func runForm(fields ...huh.Field) error {
 // not cleaned up.
 func snapshotForm(fields ...huh.Field) {
 	_ = emitFormPrologue(fields)
-	fmt.Fprint(ui.Output(), formFirstFrame(fields...))
-	fmt.Fprint(ui.Output(), "\n\n")
+	_, _ = fmt.Fprint(ui.Output(), formFirstFrame(fields...))
+	_, _ = fmt.Fprint(ui.Output(), "\n\n")
 }
 
 // formFirstFrame renders the exact first frame runForm's program will
@@ -196,7 +191,7 @@ func buildForm(fields []huh.Field) *huh.Form {
 func emitFormPrologue(fields []huh.Field) int {
 	if len(fields) > 1 {
 		ui.ClearSpacer()
-		fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
+		_, _ = fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
 		ui.RequestSpacer()
 		return 1
 	}
