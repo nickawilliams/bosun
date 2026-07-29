@@ -820,11 +820,20 @@ func wrapForTimeline(s string) []string {
 	if maxWidth < 20 {
 		maxWidth = 20
 	}
-	if lipgloss.Width(s) <= maxWidth {
-		return []string{s}
+	// Split embedded newlines first: a short multi-line value (an
+	// Excerpt-bounded record, a textarea body) measured whole would
+	// come back as ONE element, and the render loop prefixes only the
+	// first physical line of each element with the timeline connector
+	// — lines 2+ would print flush at column 0.
+	var out []string
+	for _, part := range strings.Split(s, "\n") {
+		if lipgloss.Width(part) <= maxWidth {
+			out = append(out, part)
+			continue
+		}
+		out = append(out, strings.Split(lipgloss.Wrap(part, maxWidth, " ,.-"), "\n")...)
 	}
-	wrapped := lipgloss.Wrap(s, maxWidth, " ,.-")
-	return strings.Split(wrapped, "\n")
+	return out
 }
 
 // --- Running card with animated spinner glyph ---

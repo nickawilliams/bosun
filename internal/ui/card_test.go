@@ -207,3 +207,25 @@ func TestWrapForTimeline(t *testing.T) {
 	})
 }
 
+
+// TestMultiLineSubtitleKeepsConnector locks the timeline gutter on
+// multi-line subtitles: every physical line after the card's first
+// must carry the connector prefix (regression: an embedded-newline
+// subtitle came back from wrapForTimeline as one element, so lines
+// 2+ rendered flush at column 0 — every multi-line textarea record,
+// e.g. PR body excerpts, broke the gutter).
+func TestMultiLineSubtitleKeepsConnector(t *testing.T) {
+	out := NewCard(CardSuccess, "Body").
+		Subtitle("line one\nline two\nline three").
+		Render()
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected 4 rendered lines, got %d:\n%s", len(lines), out)
+	}
+	for i, line := range lines[1:] {
+		if !strings.Contains(line, "│") {
+			t.Errorf("continuation line %d missing timeline connector: %q", i+2, line)
+		}
+	}
+}
