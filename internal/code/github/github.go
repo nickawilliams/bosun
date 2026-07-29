@@ -350,7 +350,7 @@ func (a *Adapter) hasRequestedReviewers(ctx context.Context, owner, repository s
 // flat-listed by this endpoint) and folds them into the 4-state
 // CheckRollup.
 func (a *Adapter) GetChecks(ctx context.Context, owner, repository, ref string) (code.CheckRollup, error) {
-	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repository, ref)
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repository, url.PathEscape(ref))
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return code.CheckRollup{}, fmt.Errorf("fetching check runs: %w", err)
@@ -521,7 +521,7 @@ func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (s
 // run through PrettifyReleaseNotes so consumers see the same
 // display-ready Markdown that CreateRelease returns.
 func (a *Adapter) GetReleaseByTag(ctx context.Context, owner, repository, tag string) (code.Release, error) {
-	path := fmt.Sprintf("/repos/%s/%s/releases/tags/%s", owner, repository, tag)
+	path := fmt.Sprintf("/repos/%s/%s/releases/tags/%s", owner, repository, url.PathEscape(tag))
 	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		if isNotFound(err) {
@@ -654,11 +654,18 @@ func (a *Adapter) MergePR(ctx context.Context, owner, repository string, number 
 	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
-		SHA    string `json:"sha"`
-		Merged bool   `json:"merged"`
+		SHA     string `json:"sha"`
+		Merged  bool   `json:"merged"`
+		Message string `json:"message"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("parsing merge response: %w", err)
+	}
+	if !result.Merged {
+		// A 200 with merged=false is GitHub declining the merge —
+		// returning success with an empty SHA would let a merge-offer
+		// caller proceed as if the PR landed.
+		return "", fmt.Errorf("merging pull request #%d: %s", number, result.Message)
 	}
 	return result.SHA, nil
 }
@@ -687,7 +694,8 @@ func (a *Adapter) PRsInRange(ctx context.Context, owner, repository, baseRef, he
 	}
 
 	var shas []string
-	path := fmt.Sprintf("/repos/%s/%s/compare/%s...%s?per_page=100", owner, repository, baseRef, headRef)
+	path := fmt.Sprintf("/repos/%s/%s/compare/%s...%s?per_page=100",
+		owner, repository, url.PathEscape(baseRef), url.PathEscape(headRef))
 	for path != "" && len(shas) < maxRangeCommits {
 		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
