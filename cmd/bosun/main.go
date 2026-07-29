@@ -7,9 +7,33 @@ import (
 
 	"charm.land/fang/v2"
 	"github.com/nickawilliams/bosun/internal/cli"
+	"github.com/spf13/cobra"
 )
 
 var version = "dev"
+
+// helpLikeInvocation reports whether argv asks for output that must
+// stay available with a broken config: help (flag or command), the
+// version flag, or shell completion.
+func helpLikeInvocation(target *cobra.Command, args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			// Everything after -- is positional.
+			return false
+		case "-h", "--help", "-v", "--version":
+			return true
+		}
+	}
+	if target == nil {
+		return false
+	}
+	switch target.Name() {
+	case "help", "completion", "__complete", "__completeNoDesc":
+		return true
+	}
+	return false
+}
 
 func main() {
 	cmd := cli.NewRootCmd(version)
@@ -26,9 +50,15 @@ func main() {
 	// HandleError, which by then has a fully-configured UI.
 	target, remaining, _ := cmd.Find(os.Args[1:])
 	cli.PreParseBootstrapFlags(target, remaining)
-	if err := cli.Bootstrap(target); err != nil {
-		cli.HandleError(err)
-		os.Exit(1)
+	// Help / version / completion output must work even with a broken
+	// config file — cobra's own help path short-circuits before
+	// PersistentPreRunE ever loads config, and the eager Bootstrap
+	// here would otherwise block `bosun --help` on a YAML parse error.
+	if !helpLikeInvocation(target, os.Args[1:]) {
+		if err := cli.Bootstrap(target); err != nil {
+			cli.HandleError(err)
+			os.Exit(1)
+		}
 	}
 
 	opts := []fang.Option{
