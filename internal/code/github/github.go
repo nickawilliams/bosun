@@ -643,46 +643,69 @@ func (a *Adapter) MergePR(ctx context.Context, owner, repository string, number 
 
 // PRsInRange lists PRs whose commits fall in (baseRef, headRef] for
 // the given repository. Implementation: call the compare endpoint
-// to get the commit list, then call /commits/{sha}/pulls for each
-// commit to find the associated PRs. Deduplicated by PR number.
-// excludeNumbers (typically the workspace's own PR numbers) is
-// filtered out of the result.
+// (paginated — the default page holds only the first commits of the
+// range, which silently under-reported large ranges), then call
+// /commits/{sha}/pulls for each commit to find the associated PRs.
+// Deduplicated by PR number. excludeNumbers (typically the
+// workspace's own PR numbers) is filtered out of the result.
 //
-// API cost: 1 compare call + N per-commit lookups, where N is the
-// number of commits in the range. For typical release ranges (a
-// handful of squash-merged PRs) this stays well under quota.
+// API cost: 1 compare call per 100 commits + N per-commit lookups,
+// where N is the number of commits in the range, capped at
+// maxRangeCommits. For typical release ranges (a handful of
+// squash-merged PRs) this stays well under quota.
 func (a *Adapter) PRsInRange(ctx context.Context, owner, repository, baseRef, headRef string, excludeNumbers []int) ([]code.PullRequest, error) {
+	// Bounds the per-commit lookup fan-out for pathological ranges;
+	// matches the classic compare-view ceiling. A range this size has
+	// bigger problems than a truncated extras list.
+	const maxRangeCommits = 250
+
 	excluded := make(map[int]bool, len(excludeNumbers))
 	for _, n := range excludeNumbers {
 		excluded[n] = true
 	}
 
-	comparePath := fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repository, baseRef, headRef)
-	resp, err := a.doRequest(ctx, http.MethodGet, comparePath, nil)
-	if err != nil {
-		return nil, fmt.Errorf("comparing %s...%s: %w", baseRef, headRef, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	var shas []string
+	path := fmt.Sprintf("/repos/%s/%s/compare/%s...%s?per_page=100", owner, repository, baseRef, headRef)
+	for path != "" && len(shas) < maxRangeCommits {
+		resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("comparing %s...%s: %w", baseRef, headRef, err)
+		}
+		var compareResp struct {
+			Commits []struct {
+				SHA string `json:"sha"`
+			} `json:"commits"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&compareResp); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("parsing compare response: %w", err)
+		}
+		next := nextPagePath(resp.Header.Get("Link"))
+		_ = resp.Body.Close()
 
-	var compareResp struct {
-		Commits []struct {
-			SHA string `json:"sha"`
-		} `json:"commits"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&compareResp); err != nil {
-		return nil, fmt.Errorf("parsing compare response: %w", err)
+		for _, c := range compareResp.Commits {
+			shas = append(shas, c.SHA)
+			if len(shas) >= maxRangeCommits {
+				break
+			}
+		}
+		path = next
 	}
 
 	seen := make(map[int]bool)
 	var out []code.PullRequest
-	for _, c := range compareResp.Commits {
-		prs, err := a.prsForCommit(ctx, owner, repository, c.SHA)
+	for _, sha := range shas {
+		prs, err := a.prsForCommit(ctx, owner, repository, sha)
 		if err != nil {
-			// Single-commit lookup failures aren't fatal — a 404 on a
-			// rebased commit just means "no PR associated", and a
-			// transient network error on one of N commits shouldn't
-			// hide the rest. Skip and continue.
-			continue
+			// A 404 on a rebased/orphaned commit just means "no PR
+			// associated" — skip it. Anything else (auth, rate limit,
+			// network) would hit every remaining lookup too; swallowing
+			// it returned an empty list with err == nil, which callers
+			// read as "no extra PRs in this release".
+			if isNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("resolving PRs for commit %.12s: %w", sha, err)
 		}
 		for _, pr := range prs {
 			if seen[pr.Number] || excluded[pr.Number] {

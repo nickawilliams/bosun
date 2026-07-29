@@ -1174,3 +1174,82 @@ func TestGetLatestDeploymentPaginates(t *testing.T) {
 		t.Errorf("got %+v, want the page-two success (v1.2.3/shaOK)", dep)
 	}
 }
+
+// TestPRsInRangePaginatesCompare locks the compare pagination: a range
+// whose commit list spans multiple pages must surface PRs from the
+// later pages (regression: only the default first page was read, so
+// large ranges silently under-reported swept-in PRs).
+func TestPRsInRangePaginatesCompare(t *testing.T) {
+	page1 := make([]map[string]any, 0, 100)
+	for i := 0; i < 100; i++ {
+		page1 = append(page1, map[string]any{"sha": fmt.Sprintf("sha%03d", i)})
+	}
+	page2 := []map[string]any{{"sha": "shaLAST"}}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/compare/"):
+			if r.URL.Query().Get("page") == "2" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"commits": page2})
+				return
+			}
+			w.Header().Set("Link",
+				"<"+server.URL+r.URL.Path+"?per_page=100&page=2>; rel=\"next\"")
+			_ = json.NewEncoder(w).Encode(map[string]any{"commits": page1})
+		case strings.HasSuffix(r.URL.Path, "/pulls"):
+			// Only the page-two commit has an associated PR.
+			if strings.Contains(r.URL.Path, "shaLAST") {
+				_ = json.NewEncoder(w).Encode([]map[string]any{{
+					"number": 7, "title": "swept in", "state": "closed",
+					"user": map[string]any{"login": "alice"},
+				}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	prs, err := a.PRsInRange(context.Background(), "org", "repo", "v1.0.0", "v2.0.0", nil)
+	if err != nil {
+		t.Fatalf("PRsInRange() error: %v", err)
+	}
+	if len(prs) != 1 || prs[0].Number != 7 {
+		t.Fatalf("PRsInRange() = %+v, want the page-two PR #7", prs)
+	}
+}
+
+// TestPRsInRangePropagatesLookupErrors locks the error classification:
+// a 404 on a commit's /pulls means "no PR associated" and is skipped,
+// but a rate-limit/auth class failure must propagate (regression: all
+// errors were swallowed, so a rate-limited run returned an empty list
+// with err == nil — read as "no extra PRs in this release").
+func TestPRsInRangePropagatesLookupErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"commits": []map[string]any{{"sha": "aaa"}, {"sha": "bbb"}},
+			})
+		case strings.Contains(r.URL.Path, "/commits/aaa/"):
+			http.NotFound(w, r) // rebased commit — skipped
+		default:
+			w.WriteHeader(http.StatusForbidden) // rate limited
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+		}
+	}))
+	defer server.Close()
+	a := NewWithClient(server.Client(), server.URL, "token")
+
+	_, err := a.PRsInRange(context.Background(), "org", "repo", "v1.0.0", "v1.1.0", nil)
+	if err == nil {
+		t.Fatal("expected the rate-limit error to propagate")
+	}
+	if !strings.Contains(err.Error(), "bbb") {
+		t.Errorf("err = %v, want the failing commit identified", err)
+	}
+}
