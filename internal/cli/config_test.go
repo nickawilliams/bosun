@@ -375,3 +375,74 @@ code_host:
 		}
 	})
 }
+
+// TestConfigGetMasksSecrets locks the machine-format masking: Secret-
+// typed keys render masked in every -f dump — including env-derived
+// values that injectSchemaDefaults pulls into the settings map — while
+// an exact-key raw get stays the deliberate escape hatch for scripts.
+func TestConfigGetMasksSecrets(t *testing.T) {
+	const fileSecret = "filesecret123"
+	const envSecret = "envsecret456"
+	const mask = "••••••••"
+	secretConfig := `
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+  token: ` + fileSecret + `
+`
+
+	run := func(t *testing.T, args ...string) (string, error) {
+		t.Helper()
+		t.Setenv("GITHUB_TOKEN", envSecret)
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(secretConfig)
+		err := h.Run(append([]string{"config"}, args...)...)
+		return h.Stdout(), err
+	}
+
+	t.Run("full env dump masks file and env secrets", func(t *testing.T) {
+		out, err := run(t, "get", "-f", "env")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if strings.Contains(out, fileSecret) || strings.Contains(out, envSecret) {
+			t.Errorf("env dump leaks a secret:\n%s", out)
+		}
+		if !strings.Contains(out, mask) {
+			t.Errorf("env dump should render the mask; got:\n%s", out)
+		}
+	})
+
+	t.Run("yaml subtree dump masks the token", func(t *testing.T) {
+		out, err := run(t, "get", "issue_tracker", "-f", "yaml")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if strings.Contains(out, fileSecret) {
+			t.Errorf("yaml subtree leaks the token:\n%s", out)
+		}
+		if !strings.Contains(out, mask) {
+			t.Errorf("yaml subtree should render the mask; got:\n%s", out)
+		}
+	})
+
+	t.Run("json dump masks the token", func(t *testing.T) {
+		out, err := run(t, "get", "issue_tracker", "-f", "json")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if strings.Contains(out, fileSecret) {
+			t.Errorf("json dump leaks the token:\n%s", out)
+		}
+	})
+
+	t.Run("raw exact-key get returns the real value", func(t *testing.T) {
+		out, err := run(t, "get", "issue_tracker.token")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got := strings.TrimSpace(out); got != fileSecret {
+			t.Errorf("stdout = %q, want the real token (raw exact-key is the escape hatch)", got)
+		}
+	})
+}

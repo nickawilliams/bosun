@@ -270,7 +270,7 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []
 			continue
 		}
 		if ck, _, ok := findConfigKey(fk); ok && ck.Secret {
-			value = "••••••••"
+			value = secretMask
 		}
 		glyph, glyphColor := sourceGlyph(source)
 		children = append(children, ui.Leaf(glyph, glyphColor, childKey, value))
@@ -286,7 +286,7 @@ func buildLeafNode(cs *configSources, key string) *ui.TreeNode {
 	}
 	// Mask secrets.
 	if ck, _, ok := findConfigKey(key); ok && ck.Secret {
-		value = "••••••••"
+		value = secretMask
 	}
 	glyph, glyphColor := sourceGlyph(source)
 	return ui.Leaf(glyph, glyphColor, key, formatValue(value))
@@ -455,6 +455,7 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		if format == "raw" {
 			return fmt.Errorf("specify a key or -f yaml|json|env")
 		}
+		maskSecrets(settings)
 		renderSettings(settings, format)
 		return nil
 	}
@@ -476,9 +477,13 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Render the subtree under `key` in the requested format. Wrap
-	// scalar values back into a single-entry map so the format
-	// helpers (which expect a map) handle both shapes uniformly.
+	// Render the subtree under `key` in the requested format. Masked
+	// first — only the raw exact-key path above returns real secret
+	// values. Wrap scalar values back into a single-entry map so the
+	// format helpers (which expect a map) handle both shapes
+	// uniformly.
+	maskSecrets(settings)
+	val = lookupNested(settings, key)
 	var subtree map[string]any
 	if m, isMap := val.(map[string]any); isMap {
 		subtree = map[string]any{key: m}
@@ -487,6 +492,47 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 	}
 	renderSettings(subtree, format)
 	return nil
+}
+
+// secretMask is what renders in place of Secret-typed values anywhere
+// output isn't an explicit request for the real value.
+const secretMask = "••••••••"
+
+// maskSecrets replaces every Secret-typed schema key's value in
+// settings with the mask, in place. The machine formats land in pipes,
+// logs, and CI output — exactly where a leaked token does the most
+// damage — and injectSchemaDefaults pulls env-var tokens into the map,
+// so values that were never written to any config file would otherwise
+// print verbatim. An exact-key `config get` in raw format remains the
+// deliberate escape hatch for scripts that need the real value.
+func maskSecrets(settings map[string]any) {
+	for groupName, group := range configSchema {
+		for _, ck := range group.Keys {
+			if !ck.Secret {
+				continue
+			}
+			parts := strings.Split(fullKey(groupName, ck), ".")
+			m := settings
+			walked := true
+			for _, part := range parts[:len(parts)-1] {
+				next, isMap := m[part].(map[string]any)
+				if !isMap {
+					walked = false
+					break
+				}
+				m = next
+			}
+			if !walked {
+				continue
+			}
+			leaf := parts[len(parts)-1]
+			if v, exists := m[leaf]; exists {
+				if s, isStr := v.(string); !isStr || s != "" {
+					m[leaf] = secretMask
+				}
+			}
+		}
+	}
 }
 
 // getSettings returns the settings map for the requested scope.
