@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestTitleCase(t *testing.T) {
@@ -226,6 +228,42 @@ func TestMultiLineSubtitleKeepsConnector(t *testing.T) {
 	for i, line := range lines[1:] {
 		if !strings.Contains(line, "│") {
 			t.Errorf("continuation line %d missing timeline connector: %q", i+2, line)
+		}
+	}
+}
+
+// TestCardValueWrapsAtValueColumn locks value-line width handling: a
+// value line wider than the space left of the value column wraps
+// inside the renderer with fragments aligned under the first value
+// character (regression: continuation lines were appended untouched,
+// so an overlong line physically wrapped in the terminal — breaking
+// the gutter and the rewind's line count, which trusts strings.Count
+// of the render).
+func TestCardValueWrapsAtValueColumn(t *testing.T) {
+	// TermWidth() == 80 in tests. Title "plan" renders as "Plan"
+	// (width 4), so the value column starts at 4+3=7 and wraps at 68.
+	long := strings.Repeat("alpha beta ", 12) // ~132 cells
+	rendered := ansi.Strip(NewCard(CardSuccess, "plan").Value(long).Render())
+
+	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected the value to wrap onto continuation lines:\n%s", rendered)
+	}
+	for _, l := range lines {
+		if w := len([]rune(l)); w > 80 {
+			t.Errorf("line exceeds terminal width (%d): %q", w, l)
+		}
+	}
+	// Continuation lines align under the first value character: the
+	// connector prefix, then alignW+3 = 7 spaces of padding.
+	for _, l := range lines[1:] {
+		if !strings.Contains(l, "alpha") {
+			continue
+		}
+		trimmed := strings.TrimLeft(l, " │")
+		indent := len([]rune(l)) - len([]rune(trimmed))
+		if indent < 7 {
+			t.Errorf("continuation line lost the value column (indent %d): %q", indent, l)
 		}
 	}
 }

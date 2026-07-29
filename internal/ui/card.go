@@ -486,14 +486,29 @@ func (c *Card) renderInner(glyph string) string {
 		// the title separator; subsequent lines align under the first
 		// value character (4-char conn prefix is added by the outer
 		// loop, so we add alignW + 3 spaces here so total leading
-		// padding matches the first line's value column).
-		valueLines := strings.Split(c.value, "\n")
-		lines = append(lines, titleRendered+
-			valueStyle.Render(" · "+valueLines[0]))
-		if len(valueLines) > 1 {
-			contPad := strings.Repeat(" ", alignW+3)
-			for _, line := range valueLines[1:] {
-				lines = append(lines, contPad+valueStyle.Render(line))
+		// padding matches the first line's value column). Overlong
+		// lines wrap HERE, to the width left of that column, so every
+		// fragment keeps it — these lines never pass through
+		// wrapForTimeline, and a physical terminal wrap would break
+		// both the gutter and the rewind's line count.
+		valueWidth := TermWidth() - timelineConnWidth - alignW - 3
+		if valueWidth < 20 {
+			valueWidth = 20
+		}
+		contPad := strings.Repeat(" ", alignW+3)
+		first := true
+		for _, logical := range strings.Split(c.value, "\n") {
+			frags := []string{logical}
+			if lipgloss.Width(logical) > valueWidth {
+				frags = strings.Split(lipgloss.Wrap(logical, valueWidth, " ,.-"), "\n")
+			}
+			for _, frag := range frags {
+				if first {
+					lines = append(lines, titleRendered+valueStyle.Render(" · "+frag))
+					first = false
+					continue
+				}
+				lines = append(lines, contPad+valueStyle.Render(frag))
 			}
 		}
 	} else if c.title != "" {
@@ -763,15 +778,39 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 		// so every fragment keeps the hanging indent. Left to the
 		// generic body pass, wrapForTimeline would re-break overlong
 		// lines at the content margin, losing the column. Lines emitted
-		// at this width already fit, so that pass leaves them alone.
-		valueWidth := TermWidth() - timelineConnWidth - prefixWidth - 1
+		// at this width always fit, so that pass leaves them alone —
+		// the degraded narrow case below keeps that invariant true
+		// rather than assuming it.
+		maxContent := TermWidth() - timelineConnWidth
+		if maxContent < 20 {
+			maxContent = 20
+		}
+		valueWidth := maxContent - prefixWidth - 1
+		contIndent := prefixWidth
+		keyOwnLine := false
 		if valueWidth < 20 {
+			// The full hanging indent leaves no readable value column
+			// (very wide key or very narrow terminal). Degrade: the
+			// key takes its own line and value fragments wrap at a
+			// reduced indent that still guarantees 20 columns —
+			// clamping the width alone emitted lines wider than the
+			// timeline, which the generic pass then re-broke at the
+			// content margin, losing the column entirely.
 			valueWidth = 20
+			contIndent = maxContent - 21
+			if contIndent < 0 {
+				contIndent = 0
+			}
+			keyOwnLine = true
 		}
 		var out []string
 		for _, p := range b.pairs {
 			paddedKey := fmt.Sprintf("%-*s", maxKey, p[0])
 			first := true
+			if keyOwnLine {
+				out = append(out, mutedStyle.Render(p[0])+" "+mutedStyle.Render(Palette.Dot))
+				first = false
+			}
 			// Every value line renders in the normal style — a
 			// multi-line value is all equally content. Meta lines
 			// (Excerpt's "… +K lines" marker) arrive pre-styled muted
@@ -794,7 +833,7 @@ func renderCardBody(b cardBody, kvKeyWidth int) []string {
 						continue
 					}
 					out = append(out, fmt.Sprintf("%*s %s",
-						prefixWidth, "",
+						contIndent, "",
 						normalStyle.Render(frag),
 					))
 				}

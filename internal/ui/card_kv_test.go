@@ -61,3 +61,62 @@ func TestCardKVWrapsWithHangingIndent(t *testing.T) {
 		}
 	}
 }
+
+// TestCardKVNarrowClampKeepsLinesBounded locks the degraded narrow
+// layout: when the key is so wide that the full hanging indent leaves
+// no readable value column (the old code clamped the wrap width and
+// emitted lines wider than the timeline, which wrapForTimeline then
+// re-broke at the content margin, losing the column), the key takes
+// its own line and every fragment wraps at a reduced indent — with no
+// emitted line exceeding the timeline's content width.
+func TestCardKVNarrowClampKeepsLinesBounded(t *testing.T) {
+	// TermWidth() == 80 in tests → maxContent = 75. A 60-char key
+	// makes prefixWidth 62, leaving 12 (< 20) — the clamp engages.
+	wideKey := strings.Repeat("k", 60)
+	long := strings.Repeat("word ", 30)
+	rendered := ansi.Strip(NewCard(CardSuccess, "record").
+		KV(wideKey, long).Render())
+
+	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	const maxContent = 75
+
+	var keyLine, contLines int
+	for _, l := range lines {
+		body := l
+		// The outer render adds the glyph/connector prefix; measure the
+		// full physical line — nothing may exceed the terminal width
+		// minus nothing (the whole point is no physical wrap).
+		if w := len([]rune(l)); w > 80 {
+			t.Errorf("line exceeds terminal width (%d): %q", w, l)
+		}
+		if strings.Contains(body, wideKey) {
+			keyLine++
+			if strings.Contains(body, "word") {
+				t.Errorf("key line also carries value content: %q", l)
+			}
+		}
+		if strings.Contains(body, "word") {
+			contLines++
+		}
+	}
+	if keyLine != 1 {
+		t.Fatalf("expected the wide key on exactly one line, got %d:\n%s", keyLine, rendered)
+	}
+	if contLines < 2 {
+		t.Fatalf("expected the value wrapped across multiple lines, got %d:\n%s", contLines, rendered)
+	}
+
+	// All value fragments share one indent column (the hanging indent
+	// survives, just reduced).
+	var indents []int
+	for _, l := range lines {
+		if strings.Contains(l, "word") {
+			indents = append(indents, len(l)-len(strings.TrimLeft(l, " │")))
+		}
+	}
+	for _, ind := range indents[1:] {
+		if ind != indents[0] {
+			t.Errorf("value fragments not column-aligned: indents %v", indents)
+		}
+	}
+}
