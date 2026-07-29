@@ -52,8 +52,10 @@ type repoCleanupProbe struct {
 	branch string
 
 	dirty         bool
+	dirtyKnown    bool // false when the IsDirty probe failed
 	headSHA       string
 	branchSync    vcs.BranchSync
+	syncKnown     bool // false when the GetBranchSync probe failed
 	isMerged      bool // branch is ancestor of base
 	isMergedKnown bool // false when IsMergedInto wasn't or couldn't be run
 
@@ -97,11 +99,14 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 	prOpen := p.pr != nil && (p.pr.State == "open" || p.pr.State == "draft")
 	prClosedNoMerge := p.pr != nil && p.pr.State == "closed"
 
-	// Data-preservation BLOCKs — emit at most one "unmerged-work"
-	// finding describing the dominant reason. The three branches all
+	// Data-preservation BLOCKs — emit at most one "unmerged-work"-
+	// shaped finding describing the dominant reason. The branches all
 	// describe the same conceptual danger ("work exists that isn't
 	// in base and isn't represented by a merged PR"); the message
-	// varies so the user knows which probe fired.
+	// varies so the user knows which probe fired. The unverified-work
+	// case fails closed: a never-pushed branch may hold the only copy
+	// of its commits, so an inconclusive merge probe can't clear it.
+	preBlocks := len(out)
 	switch {
 	case prMerged:
 		// PR merged — data is preserved by GitHub's PR history. No
@@ -112,6 +117,12 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  "branch was never pushed and commits aren't in base",
+		})
+	case p.syncKnown && !p.branchSync.HasRemote && !p.isMergedKnown:
+		out = append(out, cleanupFinding{
+			severity: findingBlock,
+			code:     "unverified-work",
+			message:  "branch was never pushed and merge status couldn't be verified",
 		})
 	case p.branchSync.HasRemote && p.pr == nil && p.isMergedKnown && !p.isMerged:
 		out = append(out, cleanupFinding{
@@ -124,6 +135,21 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  fmt.Sprintf("PR #%d was closed without merge and commits aren't in base", p.pr.Number),
+		})
+	}
+	unmergedFired := len(out) > preBlocks
+
+	// Unpushed local commits — the remote branch exists but local
+	// HEAD is ahead of it, so those commits exist nowhere else.
+	// Skipped when an unmerged-work finding already fired (the
+	// dominant reason wins) and for merged PRs, where the HeadSHA
+	// comparison below is the merge-method-correct signal.
+	if !prMerged && !unmergedFired && p.syncKnown &&
+		p.branchSync.HasRemote && p.branchSync.Ahead > 0 {
+		out = append(out, cleanupFinding{
+			severity: findingBlock,
+			code:     "unpushed-commits",
+			message:  fmt.Sprintf("%d local commit(s) aren't on the remote branch", p.branchSync.Ahead),
 		})
 	}
 
@@ -170,6 +196,35 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "host-unreachable",
 			message:  "couldn't reach the code host to check PR state",
+		})
+	}
+
+	// Probe-integrity WARN — a failed probe means a safety signal
+	// above silently didn't run, so "no findings" must not read as
+	// SAFE. Named per missing signal so the user knows what wasn't
+	// checked. prMerged narrows the set: once GitHub holds the merged
+	// PR, only working-tree state and post-merge divergence still
+	// bear on data loss.
+	var unverified []string
+	if !p.dirtyKnown {
+		unverified = append(unverified, "working tree status")
+	}
+	switch {
+	case !prMerged:
+		if !p.syncKnown {
+			unverified = append(unverified, "branch sync")
+		}
+		if !p.isMergedKnown && !unmergedFired {
+			unverified = append(unverified, "merge ancestry")
+		}
+	case p.headSHA == "" || p.pr.HeadSHA == "":
+		unverified = append(unverified, "post-merge divergence")
+	}
+	if len(unverified) > 0 {
+		out = append(out, cleanupFinding{
+			severity: findingWarn,
+			code:     "unverified",
+			message:  fmt.Sprintf("couldn't verify %s; findings may be incomplete", strings.Join(unverified, ", ")),
 		})
 	}
 
@@ -348,10 +403,11 @@ func emitWorkspaceRows(grp ui.Reporter, findings []cleanupFinding) {
 }
 
 // gatherRepoProbe fans out the per-repo probes concurrently. Each
-// probe failure is captured into the probe struct (pr=nil + hostErr)
-// rather than returned as an error — a single transient host hiccup
-// shouldn't tank the whole gather. Hard errors that suggest the repo
-// itself is wrong (e.g. GetCurrentBranch failing) still bubble up.
+// probe failure is captured into the probe struct (pr=nil + hostErr,
+// unset *Known flags, zero values) rather than returned as an error —
+// a single transient hiccup shouldn't tank the whole gather, but
+// classifyRepo surfaces the gap as an unverified finding instead of
+// letting a failed probe silently read as SAFE.
 func gatherRepoProbe(ctx context.Context, g vcs.VCS, host code.Host, r Repository) repoCleanupProbe {
 	p := repoCleanupProbe{repo: r}
 
@@ -365,7 +421,11 @@ func gatherRepoProbe(ctx context.Context, g vcs.VCS, host code.Host, r Repositor
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		p.dirty, _ = g.IsDirty(ctx, r.Path)
+		dirty, err := g.IsDirty(ctx, r.Path)
+		if err == nil {
+			p.dirty = dirty
+			p.dirtyKnown = true
+		}
 	}()
 
 	wg.Add(1)
@@ -380,6 +440,7 @@ func gatherRepoProbe(ctx context.Context, g vcs.VCS, host code.Host, r Repositor
 		sync, err := g.GetBranchSync(ctx, r.Path, p.branch)
 		if err == nil {
 			p.branchSync = sync
+			p.syncKnown = true
 		}
 	}()
 

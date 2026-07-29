@@ -26,8 +26,11 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "safe: merged + remote auto-deleted (happy path)",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 0},
+				syncKnown:     true,
 				pr:            merged,
+				headSHA:       "abc", // matches merged.HeadSHA
 				isMerged:      true,
 				isMergedKnown: true,
 			},
@@ -36,7 +39,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "safe: clean, merged, remote still present",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "abc",
 				isMerged:      true,
@@ -45,14 +50,22 @@ func TestClassifyRepo(t *testing.T) {
 			wantCodes: nil,
 		},
 		{
-			name:      "block: dirty worktree",
-			probe:     repoCleanupProbe{dirty: true},
+			name: "block: dirty worktree",
+			probe: repoCleanupProbe{
+				dirty:         true,
+				dirtyKnown:    true,
+				syncKnown:     true,
+				isMerged:      true,
+				isMergedKnown: true,
+			},
 			wantCodes: []string{"dirty"},
 		},
 		{
 			name: "block: never pushed and not in base",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 3},
+				syncKnown:     true,
 				isMerged:      false,
 				isMergedKnown: true,
 			},
@@ -61,7 +74,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "block: pushed, no PR, not in base",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 2},
+				syncKnown:     true,
 				pr:            nil,
 				isMerged:      false,
 				isMergedKnown: true,
@@ -71,7 +86,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "block: closed-not-merged PR and not in base",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 1},
+				syncKnown:     true,
 				pr:            closed,
 				isMerged:      false,
 				isMergedKnown: true,
@@ -81,7 +98,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "block: post-merge commits — HEAD past merged PR head, remote still present",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 2},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "xyz",
 				isMerged:      true,
@@ -92,7 +111,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "block: post-merge commits — HEAD past merged PR head, remote auto-deleted",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 1},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "xyz",
 				isMerged:      true,
@@ -103,7 +124,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "block: post-merge commits — HEAD diverges with Ahead == 0 (reset/amend)",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "xyz",
 				isMerged:      true,
@@ -120,7 +143,9 @@ func TestClassifyRepo(t *testing.T) {
 			// that's correct here — they match, so this is SAFE.
 			name: "safe: squash-merge — auto-deleted remote, HEAD matches PR head",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 3},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "abc", // matches merged.HeadSHA
 				isMerged:      false, // squash doesn't preserve history
@@ -132,7 +157,9 @@ func TestClassifyRepo(t *testing.T) {
 			// Same shape but with the remote branch still present.
 			name: "safe: squash-merge — remote present, HEAD matches PR head",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
+				syncKnown:     true,
 				pr:            merged,
 				headSHA:       "abc",
 				isMerged:      false,
@@ -143,7 +170,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "warn: open PR",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
 				pr:            open,
 				isMerged:      false,
 				isMergedKnown: true,
@@ -153,7 +182,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "warn: draft PR is treated as open",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
 				pr:            draft,
 				isMerged:      false,
 				isMergedKnown: true,
@@ -163,7 +194,9 @@ func TestClassifyRepo(t *testing.T) {
 		{
 			name: "warn: closed-not-merged but commits are in base",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
 				pr:            closed,
 				isMerged:      true,
 				isMergedKnown: true,
@@ -171,19 +204,25 @@ func TestClassifyRepo(t *testing.T) {
 			wantCodes: []string{"closed-pr"},
 		},
 		{
+			// The failed merge probe surfaces alongside the host error —
+			// they're independent signals (git-local vs code host).
 			name: "warn: host unreachable",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
 				hostErr:       fakeErr("connection refused"),
 				isMergedKnown: false,
 			},
-			wantCodes: []string{"host-unreachable"},
+			wantCodes: []string{"host-unreachable", "unverified"},
 		},
 		{
 			name: "block + warn: dirty plus open PR (worst-first ordering)",
 			probe: repoCleanupProbe{
 				dirty:         true,
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
 				pr:            open,
 				isMerged:      false,
 				isMergedKnown: true,
@@ -191,14 +230,93 @@ func TestClassifyRepo(t *testing.T) {
 			wantCodes: []string{"dirty", "open-pr"},
 		},
 		{
-			name: "no isMergedKnown skips unmerged-work BLOCK (host unreachable already warns)",
+			// Regression (was: silent SAFE reading): merge probe failed
+			// on a pushed-and-ahead branch — the unpushed commits BLOCK
+			// regardless, and the failed probe reads as unverified.
+			name: "block: merge probe unknown, pushed branch ahead of remote",
 			probe: repoCleanupProbe{
+				dirtyKnown:    true,
 				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 1},
+				syncKnown:     true,
 				pr:            nil,
 				hostErr:       fakeErr("network"),
 				isMergedKnown: false,
 			},
-			wantCodes: []string{"host-unreachable"},
+			wantCodes: []string{"unpushed-commits", "host-unreachable", "unverified"},
+		},
+		{
+			// Regression: merge probe failure (origin/HEAD unset) with no
+			// PR and no host error must not read as SAFE.
+			name: "warn: merge probe failed, everything else clean",
+			probe: repoCleanupProbe{
+				dirtyKnown:    true,
+				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 0},
+				syncKnown:     true,
+				isMergedKnown: false,
+			},
+			wantCodes: []string{"unverified"},
+		},
+		{
+			// Fail closed: a never-pushed branch may hold the only copy
+			// of its commits, so an inconclusive merge probe BLOCKs.
+			name: "block: never pushed and merge probe failed",
+			probe: repoCleanupProbe{
+				dirtyKnown:    true,
+				branchSync:    vcs.BranchSync{HasRemote: false},
+				syncKnown:     true,
+				isMergedKnown: false,
+			},
+			wantCodes: []string{"unverified-work"},
+		},
+		{
+			// Regression (was: WARN-only): an open PR doesn't preserve
+			// commits that were never pushed to its branch.
+			name: "block: open PR with unpushed local commits",
+			probe: repoCleanupProbe{
+				dirtyKnown:    true,
+				branchSync:    vcs.BranchSync{HasRemote: true, Ahead: 2},
+				syncKnown:     true,
+				pr:            open,
+				isMerged:      false,
+				isMergedKnown: true,
+			},
+			wantCodes: []string{"unpushed-commits", "open-pr"},
+		},
+		{
+			// A merged PR with the working tree and HEAD verified is
+			// safe even when the sync probe failed — HeadSHA equality
+			// already proves the local commits are captured.
+			name: "safe: merged PR, sync probe failed but HEAD matches",
+			probe: repoCleanupProbe{
+				dirtyKnown:    true,
+				pr:            merged,
+				headSHA:       "abc",
+				isMerged:      true,
+				isMergedKnown: true,
+			},
+			wantCodes: nil,
+		},
+		{
+			// Merged PR but the HEAD probe failed: post-merge divergence
+			// can't be checked, so the gap surfaces instead of reading
+			// as SAFE.
+			name: "warn: merged PR but HEAD unknown",
+			probe: repoCleanupProbe{
+				dirtyKnown:    true,
+				branchSync:    vcs.BranchSync{HasRemote: true},
+				syncKnown:     true,
+				pr:            merged,
+				isMerged:      true,
+				isMergedKnown: true,
+			},
+			wantCodes: []string{"unverified"},
+		},
+		{
+			// The zero-value probe (every probe failed) fails closed as
+			// unverified rather than silently SAFE.
+			name:      "warn: zero-value probe is unverified, not safe",
+			probe:     repoCleanupProbe{},
+			wantCodes: []string{"unverified"},
 		},
 	}
 
@@ -314,11 +432,14 @@ func TestStrayFilesMessage(t *testing.T) {
 func TestClassifyAllAggregatesWorst(t *testing.T) {
 	// One repo BLOCKed, one clean, workspace WARN → worst is BLOCK.
 	probes := []repoCleanupProbe{
-		{dirty: true, repo: Repository{Name: "a"}},
+		{dirty: true, dirtyKnown: true, repo: Repository{Name: "a"}},
 		{
 			repo:          Repository{Name: "b"},
+			dirtyKnown:    true,
 			branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 0},
-			pr:            &code.PullRequest{Number: 1, State: "merged"},
+			syncKnown:     true,
+			pr:            &code.PullRequest{Number: 1, State: "merged", HeadSHA: "abc"},
+			headSHA:       "abc",
 			isMerged:      true,
 			isMergedKnown: true,
 		},
@@ -333,8 +454,11 @@ func TestClassifyAllAggregatesWorst(t *testing.T) {
 	probes = []repoCleanupProbe{
 		{
 			repo:          Repository{Name: "a"},
+			dirtyKnown:    true,
 			branchSync:    vcs.BranchSync{HasRemote: false, Ahead: 0},
-			pr:            &code.PullRequest{Number: 1, State: "merged"},
+			syncKnown:     true,
+			pr:            &code.PullRequest{Number: 1, State: "merged", HeadSHA: "abc"},
+			headSHA:       "abc",
 			isMerged:      true,
 			isMergedKnown: true,
 		},
