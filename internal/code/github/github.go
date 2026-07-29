@@ -441,7 +441,9 @@ func (a *Adapter) CreateRelease(ctx context.Context, req code.CreateReleaseReque
 	}, nil
 }
 
-var semverTag = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+// End-anchored so a prerelease tag (v1.2.3-rc.1) can't parse as its
+// final release and win the "latest" pick over the real v1.2.3.
+var semverTag = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 // GetLatestTag returns the most recent semver tag for a repository.
 // Resolution order:

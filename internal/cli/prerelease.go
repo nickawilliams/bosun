@@ -1200,7 +1200,12 @@ func formatExtrasNote(prs []code.PullRequest) string {
 // can ignore non-release tags (feature flags, infra refs, etc.) when
 // walking TagsContaining results. Capture groups expose the
 // major/minor/patch components for compareSemverTag's ordering.
-var releaseTagPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+// End-anchored: without the anchor, v1.2.3-rc.1 parsed identically to
+// v1.2.3 — an RC deployment classified the final release "already
+// live", and the lowest-containing-release pick between the two was
+// nondeterministic. Prerelease-suffixed tags are deliberately NOT
+// release-shaped here.
+var releaseTagPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 // compareSemverTag orders two release-shaped tags by their
 // (major, minor, patch) triple. Returns -1 if a < b, 0 if equal,

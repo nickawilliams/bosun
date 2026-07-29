@@ -13,7 +13,7 @@ func releaseTagsInSemverOrder(tags []string) []string {
 			ordered = append(ordered, t)
 		}
 	}
-	sort.Slice(ordered, func(i, j int) bool {
+	sort.SliceStable(ordered, func(i, j int) bool {
 		return compareSemverTag(ordered[i], ordered[j]) < 0
 	})
 	return ordered
