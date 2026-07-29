@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
@@ -35,8 +36,36 @@ type Harness struct {
 	Tracker *fakes.Tracker
 
 	stdin  *bytes.Buffer
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+	stdout *syncBuffer
+	stderr *syncBuffer
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer. Run wires the same
+// buffer as a cobra command stream (written from the test goroutine)
+// AND as the captureFD pipe sink (written from the copy goroutine) —
+// a bare bytes.Buffer would race whenever a command writes through
+// both os.Stdout and cmd.OutOrStdout.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
 }
 
 // New constructs a Harness with a fresh workspace, a fake tracker, and
@@ -61,8 +90,8 @@ func New(t *testing.T) *Harness {
 		Workspace: NewWorkspace(t),
 		Tracker:   fakes.NewTracker(),
 		stdin:     &bytes.Buffer{},
-		stdout:    &bytes.Buffer{},
-		stderr:    &bytes.Buffer{},
+		stdout:    &syncBuffer{},
+		stderr:    &syncBuffer{},
 	}
 
 	// Isolate viper, ui streams, and the project-root override so
@@ -129,6 +158,12 @@ func (h *Harness) Run(args ...string) error {
 	// disk but the get returns the pre-set value from the cached viper.
 	viper.Reset()
 	cli.ResetBootstrap()
+
+	// Fresh-process semantics extend to the output buffers: Stdout()
+	// documents "the most recent Run call", so prior runs' output
+	// must not accumulate into this one's assertions.
+	h.stdout.Reset()
+	h.stderr.Reset()
 
 	cmd := cli.NewRootCmd("test")
 	cmd.SetIn(h.stdin)
