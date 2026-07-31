@@ -243,12 +243,11 @@ func setConfigValue(path, key string, value any) error {
 // changed and where.
 func printConfigWriteConfirmation(verb, key, prep, file string) {
 	verbStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary)
 	fileStyle := lipgloss.NewStyle().Foreground(ui.Palette.Subtle)
 
 	ui.SuccessLine(fmt.Sprintf("%s %s %s %s",
 		verbStyle.Render(verb),
-		keyStyle.Render(key),
+		ui.Keyword(key),
 		verbStyle.Render(prep),
 		fileStyle.Render(shortPath(file)),
 	))

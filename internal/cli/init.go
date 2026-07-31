@@ -256,9 +256,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// primary) so it pops against the muted surrounding wording —
 	// the user's eye lands on what to type before reading why.
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	cmdStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary)
 	hint := func(command, purpose string) string {
-		return mutedStyle.Render("Run ") + cmdStyle.Render(command) + mutedStyle.Render(" "+purpose)
+		return mutedStyle.Render("Run ") + ui.Keyword(command) + mutedStyle.Render(" "+purpose)
 	}
 
 	ui.NewCard(ui.CardInfo, "next steps").
