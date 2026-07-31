@@ -168,6 +168,9 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		idxs        []int
 	)
 	buildSelectionForm := func() {
+		if msField != nil {
+			return
+		}
 		for i := range resolved {
 			if resolved[i].creatable() || resolved[i].activePR() {
 				idxs = append(idxs, i)
