@@ -539,7 +539,7 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 			key = issueKey
 		}
 		muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-		line := lipgloss.NewStyle().Bold(true).Render(key) +
+		line := ui.Keyword(key) +
 			muted.Render(" · (title unavailable)")
 		return ui.NewCard(ui.CardSkipped, typeLabel).Raw(line)
 	}
@@ -548,7 +548,7 @@ func buildWorkspaceStoryCard(detail issuepkg.Issue, issueKey string, fetchOK boo
 	if detail.URL != "" {
 		issueRef = osc8Link(detail.URL, detail.Key)
 	}
-	issueLine := lipgloss.NewStyle().Bold(true).Render(issueRef + ": " + detail.Title)
+	issueLine := ui.Keyword(issueRef) + ": " + detail.Title
 
 	key := lifecycleKeyForStatus(detail.Status)
 	var stepper string
