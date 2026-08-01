@@ -17,62 +17,47 @@ type Message struct {
 	Content  Content // Rendered notification content.
 }
 
-// Content holds the rendered notification text. When Block fields are set,
-// the adapter renders Block Kit blocks. When only Text is set, the adapter
-// posts plain mrkdwn (editable in client).
+// Content is a provider-agnostic notification. It carries structured data
+// (the issue, per-repo items, an optional preview deployment) plus
+// pre-rendered override strings from the user's templates — but no
+// provider-specific presentation. Each adapter renders it into its own
+// shape: the Slack adapter builds Block Kit cards; a plain-text provider
+// would render prose. When only Text is set, the adapter posts it as-is
+// (standard Markdown, editable in client).
 type Content struct {
-	Text     string       // Plain mrkdwn text (used when no block fields are set).
-	Header   string       // PlainText header block (large bold text).
-	Body     string       // mrkdwn section block (main content, below header).
-	Actions  []CardButton // Link buttons rendered as an actions block.
-	Table    []TableRow   // Info table rendered before cards.
-	Fields   []Field      // Two-column key/value fields rendered as section fields.
-	Sections []Section    // Per-item card blocks.
-	Context  string       // mrkdwn context block (small muted text, after cards).
+	Text    string      `json:",omitempty"` // Full pre-rendered body (flat-text path, e.g. release).
+	Header  string      `json:",omitempty"` // Rendered header override (structured path).
+	Body    string      `json:",omitempty"` // Rendered body override (structured path).
+	Context string      `json:",omitempty"` // Rendered footer/context override (structured path).
+	Issue   *IssueRef   `json:",omitempty"` // Tracker ticket the notification is about.
+	Items   []Item      `json:",omitempty"` // Per-repository items (PRs, releases).
+	Preview *PreviewRef `json:",omitempty"` // Ephemeral preview deployment.
+	IconURL string      `json:",omitempty"` // Author avatar (raw URL) for item cards.
 }
 
-// TableRow is a row in an info table.
-type TableRow struct {
-	Cells []TableCell
+// IssueRef is the tracker ticket a notification is about. The adapter
+// normalizes IconURL for its own image proxy.
+type IssueRef struct {
+	Key         string // e.g., "PROJ-123".
+	Title       string // Issue summary.
+	Type        string // e.g., "Story", "Bug"; adapters default to "Issue".
+	URL         string // Link to the issue.
+	Description string // Issue body, plain. Empty when the tracker has none.
+	IconURL     string // Raw issue-type icon URL; adapter normalizes it.
 }
 
-// TableCell is a cell in a table row. Supports text with optional
-// formatting, links, and emoji.
-type TableCell struct {
-	Text     string // Cell text content.
-	Subtitle string // Second line of text (rendered after a newline).
-	Emoji    string // Emoji shortcode (without colons), e.g., "jira".
-	URL      string // If set, text is rendered as a link.
-	Bold     bool
-	Italic   bool
+// PreviewRef is an ephemeral preview deployment.
+type PreviewRef struct {
+	Name string // Environment name (e.g., "brave-falcon").
+	URL  string // Rendered preview environment URL.
 }
 
-// Field is a key/value pair rendered in a two-column layout.
-// Both Key and Value support mrkdwn (links, bold, code, etc.).
-type Field struct {
-	Key   string
-	Value string
-}
-
-// CardButton is a link button rendered in a card's actions area.
-type CardButton struct {
-	Text  string // Button label.
-	URL   string // Link URL.
-	Style string // "primary" (green), "danger" (red), or "" (default).
-}
-
-// Section represents a card block in the notification.
-type Section struct {
-	Text     string       // Card title (mrkdwn).
-	Subtitle string       // Card subtitle (mrkdwn).
-	Body     string       // Card body (truncated to 200 chars by adapter).
-	IconURL  string       // Small icon image URL.
-	Buttons  []CardButton // Action buttons.
-}
-
-// HasBlocks returns true if any block-level fields are set.
-func (c Content) HasBlocks() bool {
-	return c.Header != "" || c.Body != "" || len(c.Actions) > 0 || len(c.Table) > 0 || len(c.Fields) > 0 || len(c.Sections) > 0 || c.Context != ""
+// Structured reports whether the content carries structured data or
+// override strings a provider should render into rich presentation. When
+// false, only Text is set and the adapter posts it as plain Markdown.
+func (c Content) Structured() bool {
+	return c.Issue != nil || len(c.Items) > 0 || c.Preview != nil ||
+		c.Header != "" || c.Body != "" || c.Context != ""
 }
 
 // Item represents a single line item in a notification (one per repository).

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -493,63 +492,17 @@ func buildPRBody(data prTemplateData) string {
 	return result
 }
 
-// Card icons render at a fixed display size in Slack, so these govern
-// source crispness (and relative footprint), not on-screen dimensions.
-// We request one shared size from every source so GitHub avatars and
-// Jira issue-type icons sit at the same scale on a card.
-const (
-	// cardIconPixels is the source resolution requested for raster card
-	// icons that accept a pixel size (GitHub avatars).
-	cardIconPixels = 48
-	// cardIconJiraSize is the Jira universal_avatar named size closest to
-	// cardIconPixels — Jira's avatar endpoint takes named sizes
-	// (xsmall/small/medium/large/xlarge), not pixel counts.
-	cardIconJiraSize = "large"
-)
+// cardIconPixels is the source resolution requested for raster card icons
+// that accept a pixel size (GitHub avatars). Card icons render at a fixed
+// display size in Slack, so this governs source crispness, not on-screen
+// dimensions. The Slack adapter requests a matching size from Jira icons so
+// the two sources sit at the same scale on a card.
+const cardIconPixels = 48
 
 // githubAvatarURL builds the avatar image URL for a GitHub login at the
 // shared card-icon size.
 func githubAvatarURL(user string) string {
 	return fmt.Sprintf("https://github.com/%s.png?size=%d", user, cardIconPixels)
-}
-
-// slackIconURL normalizes a Jira issue-type icon URL into something
-// Slack's image proxy can actually render, returning "" only when there
-// is nothing usable (in which case the card falls back to the :jira:
-// glyph).
-//
-// Slack fetches image_url server-side through its proxy and does NOT
-// render SVG (browsers do — which is why an SVG icon opens fine in a
-// browser but shows as a broken image on a card). Jira hands us icons in
-// two shapes:
-//
-//   - universal_avatar URLs (most issue types) default to SVG but accept
-//     a `format=png` parameter; we add it plus a `size` so Slack gets a
-//     card-sized raster.
-//   - legacy /images/icons/issuetypes/<name>.svg system icons (e.g. the
-//     built-in Epic, which has no avatar record). Jira serves a PNG
-//     sibling at the same path; we swap the extension. These are fixed
-//     ~16px — there is no larger variant Jira will serve.
-func slackIconURL(rawURL string) string {
-	if rawURL == "" {
-		return ""
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	switch {
-	case strings.Contains(u.Path, "/universal_avatar/"):
-		// SVG by default; force a card-sized PNG.
-		q := u.Query()
-		q.Set("size", cardIconJiraSize)
-		q.Set("format", "png")
-		u.RawQuery = q.Encode()
-	case strings.HasSuffix(strings.ToLower(u.Path), ".svg"):
-		// Legacy system icon — swap to the PNG sibling Slack can render.
-		u.Path = u.Path[:len(u.Path)-len(".svg")] + ".png"
-	}
-	return u.String()
 }
 
 // notifyTemplateData holds the fields available to notification templates.
@@ -591,15 +544,17 @@ var defaultTextNotifyTemplates = map[string]string{
 }
 
 // buildNotifyContent reads the template config for a notification type and
-// renders it with the given data. Resolution order:
+// renders it into a provider-agnostic notify.Content. Resolution order:
 //
 //  1. Config as a string: notification.templates.<type>: "…" → Content.Text
 //  2. Built-in text default (defaultTextNotifyTemplates) → Content.Text
-//  3. Config as a map of block fields, or built-in block default → Block-
-//     shaped Content (header/body/context + per-card sections)
+//  3. Config as a map of override fields, or built-in defaults → structured
+//     Content (rendered header/body/context + issue/items/preview data)
 //
-// The text path keeps content provider-agnostic; the block path is the
-// Slack-shaped escape hatch for richer presentation.
+// The text path emits a flat body; the structured path carries data the
+// provider adapter renders into its own presentation (the Slack adapter
+// builds cards). This function owns content and config only — no cards,
+// button labels, or glyphs live here.
 func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
 	key := "notification.templates." + notifType
 
@@ -615,12 +570,9 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		}
 	}
 
-	// Check if it's a map of block fields.
+	// Structured path: a map of override fields, falling back to defaults.
 	sub := viper.GetStringMapString(key)
-
-	// Fall back to defaults.
 	defaults := defaultNotifyTemplates[notifType]
-
 	get := func(field string) string {
 		if v, ok := sub[field]; ok {
 			return v
@@ -628,115 +580,27 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		return defaults[field]
 	}
 
-	var sections []notify.Section
-
-	// Jira ticket card.
+	c := notify.Content{
+		Header:  renderTemplate(get("header"), data),
+		Body:    renderTemplate(get("body"), data),
+		Context: renderTemplate(get("context"), data),
+		Items:   data.Items,
+		IconURL: data.IconURL,
+	}
 	if data.IssueKey != "" {
-		issueType := "Issue"
-		if data.IssueType != "" {
-			issueType = data.IssueType
+		c.Issue = &notify.IssueRef{
+			Key:         data.IssueKey,
+			Title:       data.IssueTitle,
+			Type:        data.IssueType,
+			URL:         data.IssueURL,
+			Description: data.IssueDescription,
+			IconURL:     data.IssueIconURL,
 		}
-		title := data.IssueKey
-		if data.IssueTitle != "" {
-			title = fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
-		}
-		var buttons []notify.CardButton
-		if data.IssueURL != "" {
-			buttons = append(buttons, notify.CardButton{
-				Text:  "View Issue",
-				URL:   data.IssueURL,
-				Style: "primary",
-			})
-		}
-		// Prefer the real issue-type icon (e.g. the Story/Bug avatar) as
-		// the card image, mirroring the GitHub avatar on PR cards. When
-		// there's no usable icon, fall back to the :jira: glyph prefixed
-		// on the title so the card still reads as a Jira ticket. Key the
-		// fallback off the normalized icon, not the raw URL.
-		icon := slackIconURL(data.IssueIconURL)
-		text := title
-		if icon == "" {
-			text = ":jira: " + title
-		}
-		sections = append(sections, notify.Section{
-			Text:     text,
-			Subtitle: issueType,
-			Body:     descriptionOrPlaceholder(data.IssueDescription),
-			IconURL:  icon,
-			Buttons:  buttons,
-		})
 	}
-
-	// Ephemeral deployment card.
 	if data.PreviewName != "" || data.PreviewURL != "" {
-		name := data.PreviewName
-		if name == "" {
-			name = "Preview"
-		}
-		var buttons []notify.CardButton
-		if data.PreviewURL != "" {
-			buttons = append(buttons, notify.CardButton{
-				Text:  "View Deployment",
-				URL:   data.PreviewURL,
-				Style: "primary",
-			})
-		}
-		sections = append(sections, notify.Section{
-			Text:     ":cloud: " + name,
-			Subtitle: "Ephemeral preview",
-			Buttons:  buttons,
-		})
+		c.Preview = &notify.PreviewRef{Name: data.PreviewName, URL: data.PreviewURL}
 	}
-
-	// Per-repo PR card sections.
-	for _, item := range data.Items {
-		// Card title: PR title (same as what we set on the PR).
-		title := data.IssueKey
-		if data.IssueTitle != "" {
-			title = fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
-		}
-		// Card subtitle: repo name + PR number.
-		subtitle := fmt.Sprintf("`%s` %s", item.Label, item.Detail)
-		var buttons []notify.CardButton
-		if item.URL != "" {
-			buttons = append(buttons, notify.CardButton{
-				Text:  "View Pull Request",
-				URL:   item.URL,
-				Style: "primary",
-			})
-			if item.BranchURL != "" {
-				buttons = append(buttons, notify.CardButton{
-					Text: "View Branch",
-					URL:  item.BranchURL,
-				})
-			}
-		}
-		sections = append(sections, notify.Section{
-			Text:     title,
-			Subtitle: subtitle,
-			Body:     descriptionOrPlaceholder(item.Body),
-			IconURL:  data.IconURL,
-			Buttons:  buttons,
-		})
-	}
-
-	return notify.Content{
-		Header:   renderTemplate(get("header"), data),
-		Body:     renderTemplate(get("body"), data),
-		Sections: sections,
-		Context:  renderTemplate(get("context"), data),
-	}
-}
-
-// descriptionOrPlaceholder returns body when non-empty, otherwise an
-// italicized "no description" placeholder. Italics render as a softer
-// muted style in Slack mrkdwn, signalling "this slot is intentionally
-// empty" rather than "the field is missing entirely."
-func descriptionOrPlaceholder(body string) string {
-	if strings.TrimSpace(body) == "" {
-		return "_no description_"
-	}
-	return body
+	return c
 }
 
 // renderTemplate parses and executes a Go text/template. Returns empty
