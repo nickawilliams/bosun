@@ -179,7 +179,7 @@ jira:
 # Notification channels
 slack:
   channel_review: bb-prs
-  channel_release: release_coordination
+  channel_prerelease: release_coordination
 
 # Repository patterns (globs resolved to directories containing .git/)
 repositories:

@@ -531,7 +531,7 @@ func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 	b.WriteString("# notification:\n")
 	b.WriteString("#   provider: slack\n")
 	b.WriteString("#   channel_review: code-review\n")
-	b.WriteString("#   channel_release: releases\n")
+	b.WriteString("#   channel_prerelease: releases\n")
 
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

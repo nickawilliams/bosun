@@ -653,7 +653,7 @@ func newPrereleaseCmd() *cobra.Command {
 				}
 			}
 
-			releaseChannel := viper.GetString("notification.channel_release")
+			releaseChannel := viper.GetString("notification.channel_prerelease")
 			releaseNotifier, releaseNotifierErr := newNotifier()
 			if releaseNotifierErr == nil {
 				defer releaseNotifier.Close()
@@ -738,7 +738,7 @@ func newPrereleaseCmd() *cobra.Command {
 							Channel:  releaseChannel,
 							IssueKey: issue,
 							Items:    items,
-							Content: buildNotifyContent("release", notifyTemplateData{
+							Content: buildNotifyContent("prerelease", notifyTemplateData{
 								IssueKey: issue,
 								Items:    items,
 							}),
