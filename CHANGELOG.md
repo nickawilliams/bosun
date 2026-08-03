@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.0.1](https://github.com/nickawilliams/bosun/compare/31487cec7ed061e5ad9bb97f4cbd7c257804b464...v1.0.1) - 2026-08-03
+
+### Improvements
+
+- **CLI:** Migrate ad hoc bold+Primary emphasis to ui.Keyword - ([117b318](https://github.com/nickawilliams/bosun/commit/117b318864ec324fd8021902a52e3cca2e536fa9))
+
+### Fixes
+
+- **CLI:** Guard buildSelectionForm against duplicate BubbleTea renders - ([31487ce](https://github.com/nickawilliams/bosun/commit/31487cec7ed061e5ad9bb97f4cbd7c257804b464))
+
 ## [v1.0.0](https://github.com/nickawilliams/bosun/compare/3364946db41dc64cab70e8e67f81b5cf596c35be...v1.0.0) - 2026-07-29
 
 ### New Features
