@@ -201,6 +201,28 @@ shape and copy the pattern.
 5. Verify via `go test ./internal/cli/ -run Test<Cmd> -v` and
    `make test/tree` to see the rendered scenario tree.
 
+### Error-path coverage
+
+An `errors/` (and `plan_confirmation/`) group is only complete when it
+exercises the failure modes the command actually has. Two are easy to
+miss because the happy path never touches them:
+
+- **Apply-stage failure.** For a command that mutates, force the
+  relevant fake's error knob (`CreateErr`, `SetStatusErr`, the code-host
+  / cicd equivalents) and assert the error surfaces AND the mutation
+  didn't half-land (zero created issues, no branch, etc.). The apply
+  error propagates straight out of `runActions` as the command's return
+  — see `create_test.go:errors/create_failure_surfaces`. Read-only
+  commands (`status`, `doctor`) have no apply stage; their analogue is a
+  fetch/probe failure (`GetErr`, a provider probe error), not this.
+- **Plan-gate cancel.** Typing `n` at the confirmation gate returns
+  `ErrCancelled` with no mutations — distinct from `--dry-run` (same
+  no-mutation outcome, different trigger). See
+  `create_test.go:plan_confirmation/cancelled_aborts`.
+
+The seam is the fake's error knobs (see Fake conventions above); reach
+for them rather than constructing elaborate failing fixtures.
+
 ## Files
 
 | File                          | Purpose                                          |
