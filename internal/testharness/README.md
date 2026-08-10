@@ -104,12 +104,35 @@ Forms expect `bubbletea`'s key parser. When pre-filling stdin via
 | Field type        | Key sequence                                         |
 |-------------------|------------------------------------------------------|
 | Text input        | `<value>\r` (carriage return — `\n` does not submit) |
+| Textarea (Text)   | `<value>\r` submits/advances; newline is `alt+enter` (`\x1b\r`) or `ctrl+j` — which is why a literal `\n` doesn't submit |
+| Select            | `\x1b[B` = down, `\x1b[A` = up, `\r` accepts focused option |
 | Confirm (Yes/No)  | `y` → affirmative, `n` → negative, `\r` → focused button (default = negative) |
 | Multi-select      | `<space>` toggles, `\x1b[B` = down, `\x1b[A` = up, `\r` submits |
 
 Plan confirmation gates use `huh.Confirm` with `Apply`/`Cancel` buttons
 where Cancel is focused by default — drive with `h.Type("y")` to apply,
 `h.Type("n")` to cancel.
+
+### Multi-field forms: one Type call per field
+
+huh advances fields asynchronously (the field emits `huh.NextField` as
+a `tea.Cmd`; focus moves only when the resulting message round-trips
+through the bubbletea runtime). Keys buffered past a field's final
+Enter race that transition and can leak into the still-focused field.
+
+`Harness.Type` therefore delivers each call as one chunk, pausing at
+chunk boundaries until the transition has settled (see `chunkReader`).
+Group the keys one focused field consumes per call:
+
+```go
+h.Type("Add audit log\r")          // title input
+h.Type("Persist admin actions\r")  // description textarea
+h.Type("\r")                       // type select (accept default)
+```
+
+A single call spanning several fields (`h.Type("a\rb\r")`) is the
+racy shape — don't do it. Keys within one call are fine for a single
+field's compound sequences (`" \x1b[B \r"` on a multi-select).
 
 ### macOS symlinks + git worktree paths
 
@@ -177,6 +200,28 @@ shape and copy the pattern.
    filling out the tree.
 5. Verify via `go test ./internal/cli/ -run Test<Cmd> -v` and
    `make test/tree` to see the rendered scenario tree.
+
+### Error-path coverage
+
+An `errors/` (and `plan_confirmation/`) group is only complete when it
+exercises the failure modes the command actually has. Two are easy to
+miss because the happy path never touches them:
+
+- **Apply-stage failure.** For a command that mutates, force the
+  relevant fake's error knob (`CreateErr`, `SetStatusErr`, the code-host
+  / cicd equivalents) and assert the error surfaces AND the mutation
+  didn't half-land (zero created issues, no branch, etc.). The apply
+  error propagates straight out of `runActions` as the command's return
+  — see `create_test.go:errors/create_failure_surfaces`. Read-only
+  commands (`status`, `doctor`) have no apply stage; their analogue is a
+  fetch/probe failure (`GetErr`, a provider probe error), not this.
+- **Plan-gate cancel.** Typing `n` at the confirmation gate returns
+  `ErrCancelled` with no mutations — distinct from `--dry-run` (same
+  no-mutation outcome, different trigger). See
+  `create_test.go:plan_confirmation/cancelled_aborts`.
+
+The seam is the fake's error knobs (see Fake conventions above); reach
+for them rather than constructing elaborate failing fixtures.
 
 ## Files
 
