@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -218,6 +219,35 @@ func TestCreate(t *testing.T) {
 		}
 	})
 
+	t.Run("plan_confirmation/cancelled_aborts", func(t *testing.T) {
+		// Without --approve the plan gate prompts; "n" selects Cancel.
+		// The command returns ErrCancelled and never reaches apply, so
+		// no issue is created.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(createConfig)
+		h.Type("n")
+
+		err := h.Run(
+			"create", "--title", "Add webhooks",
+			"--description", "Outbound events", "--type", "story",
+		)
+		if err == nil {
+			t.Fatalf("expected ErrCancelled; got nil")
+		}
+		if !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("error = %v, want contains \"cancelled\"", err)
+		}
+
+		if n := len(h.Tracker.Issues()); n != 0 {
+			t.Errorf("cancelled run created %d issue(s); want 0", n)
+		}
+		for _, call := range h.Tracker.Calls() {
+			if call == "CreateIssue" {
+				t.Errorf("cancelled run called CreateIssue; calls=%v", h.Tracker.Calls())
+			}
+		}
+	})
+
 	t.Run("errors/missing_project_config", func(t *testing.T) {
 		// No issue_tracker.project in config. The check runs after the
 		// title guard and the interactive form, so all field flags are
@@ -238,6 +268,31 @@ func TestCreate(t *testing.T) {
 
 		if n := len(h.Tracker.Issues()); n != 0 {
 			t.Errorf("created %d issue(s) without project config; want 0", n)
+		}
+	})
+
+	t.Run("errors/create_failure_surfaces", func(t *testing.T) {
+		// The tracker rejects the create at apply time (e.g. a required
+		// field the API 400s on). The error propagates out of the plan
+		// apply and no issue lands. CreateErr is the fake's knob for
+		// this; --approve drives straight through the gate to apply.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(createConfig)
+		h.Tracker.CreateErr = errors.New("tracker rejected: customfield_10001 is required")
+
+		err := h.Run(
+			"create", "--title", "Add webhooks",
+			"--description", "Outbound events", "--type", "story", "--approve",
+		)
+		if err == nil {
+			t.Fatalf("expected create failure to surface; got nil")
+		}
+		if !strings.Contains(err.Error(), "customfield_10001") {
+			t.Errorf("error %q does not carry the tracker's message", err)
+		}
+
+		if n := len(h.Tracker.Issues()); n != 0 {
+			t.Errorf("failed create left %d issue(s); want 0", n)
 		}
 	})
 }
