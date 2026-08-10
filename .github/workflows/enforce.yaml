@@ -28,29 +28,33 @@ jobs:
             issue="${BASH_REMATCH[1]}"
           fi
 
-          # --- Title prefix (issue in scope; PR number as fallback) ---
+          # --- Title prefix (issue in scope; scope-less fallback) ---
           # The scope carries the linked issue so the merge commit reads
           # pr(#<issue>): <subject> (#<pr>) — GitHub appends the PR ref,
           # so both ends of the chain are greppable from git log. Issues
           # and PRs share one ID namespace, so a misread ref still
-          # resolves to the right artifact. Non-issue branches fall back
-          # to the PR number to keep the merge commit conventional for
-          # git-cliff (require_conventional).
-          # Strip any existing pr(...) prefix so edits stay idempotent
-          # and pre-convention titles migrate on their next edit event.
+          # resolves to the right artifact. Non-issue branches drop the
+          # scope entirely (pr: <subject>) — the PR number GitHub
+          # appends is the only meaningful ref, and a bare pr: type
+          # still parses as conventional for git-cliff.
+          # Strip any existing pr prefix (scoped or not) so edits stay
+          # idempotent and pre-convention titles migrate on their next
+          # edit event.
           subject="${PR_TITLE}"
           refs=""
-          re='^pr\((#[0-9]+(,[[:space:]]?#[0-9]+)*)\):[[:space:]]*(.*)$'
+          re='^pr(\((#[0-9]+(,[[:space:]]?#[0-9]+)*)\))?:[[:space:]]*(.*)$'
           if [[ "${PR_TITLE}" =~ ${re} ]]; then
-            refs="${BASH_REMATCH[1]//[[:space:]]/}"
-            subject="${BASH_REMATCH[3]}"
+            refs="${BASH_REMATCH[2]//[[:space:]]/}"
+            subject="${BASH_REMATCH[4]}"
           fi
           if [[ -n "${issue}" && ",${refs}," == *",#${issue},"* ]]; then
             # Existing prefix already references the branch issue — keep
             # it verbatim; it may carry hand-added extra issue refs.
             new_title="${PR_TITLE}"
+          elif [[ -n "${issue}" ]]; then
+            new_title="pr(#${issue}): ${subject}"
           else
-            new_title="pr(#${issue:-${PR_NUMBER}}): ${subject}"
+            new_title="pr: ${subject}"
           fi
           if [[ "${PR_TITLE}" == "${new_title}" ]]; then
             echo "Title already has prefix: ${PR_TITLE}"
