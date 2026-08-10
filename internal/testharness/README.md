@@ -104,12 +104,35 @@ Forms expect `bubbletea`'s key parser. When pre-filling stdin via
 | Field type        | Key sequence                                         |
 |-------------------|------------------------------------------------------|
 | Text input        | `<value>\r` (carriage return — `\n` does not submit) |
+| Textarea (Text)   | `<value>\r` submits/advances; newline is `alt+enter` (`\x1b\r`) or `ctrl+j` — which is why a literal `\n` doesn't submit |
+| Select            | `\x1b[B` = down, `\x1b[A` = up, `\r` accepts focused option |
 | Confirm (Yes/No)  | `y` → affirmative, `n` → negative, `\r` → focused button (default = negative) |
 | Multi-select      | `<space>` toggles, `\x1b[B` = down, `\x1b[A` = up, `\r` submits |
 
 Plan confirmation gates use `huh.Confirm` with `Apply`/`Cancel` buttons
 where Cancel is focused by default — drive with `h.Type("y")` to apply,
 `h.Type("n")` to cancel.
+
+### Multi-field forms: one Type call per field
+
+huh advances fields asynchronously (the field emits `huh.NextField` as
+a `tea.Cmd`; focus moves only when the resulting message round-trips
+through the bubbletea runtime). Keys buffered past a field's final
+Enter race that transition and can leak into the still-focused field.
+
+`Harness.Type` therefore delivers each call as one chunk, pausing at
+chunk boundaries until the transition has settled (see `chunkReader`).
+Group the keys one focused field consumes per call:
+
+```go
+h.Type("Add audit log\r")          // title input
+h.Type("Persist admin actions\r")  // description textarea
+h.Type("\r")                       // type select (accept default)
+```
+
+A single call spanning several fields (`h.Type("a\rb\r")`) is the
+racy shape — don't do it. Keys within one call are fine for a single
+field's compound sequences (`" \x1b[B \r"` on a multi-select).
 
 ### macOS symlinks + git worktree paths
 

@@ -35,7 +35,7 @@ type Harness struct {
 	// Tests seed it with issues and assert on Calls() / Issues().
 	Tracker *fakes.Tracker
 
-	stdin  *bytes.Buffer
+	stdin  *chunkReader
 	stdout *syncBuffer
 	stderr *syncBuffer
 }
@@ -89,7 +89,7 @@ func New(t *testing.T) *Harness {
 		t:         t,
 		Workspace: NewWorkspace(t),
 		Tracker:   fakes.NewTracker(),
-		stdin:     &bytes.Buffer{},
+		stdin:     &chunkReader{},
 		stdout:    &syncBuffer{},
 		stderr:    &syncBuffer{},
 	}
@@ -129,11 +129,18 @@ func New(t *testing.T) *Harness {
 	return h
 }
 
-// Type appends s to the input buffer the cobra command reads from.
-// Use this to pre-fill answers for interactive prompts (e.g., "y\n"
-// for confirmations, "branch-slug\n" for input fields).
+// Type appends s to the input the cobra command reads from. Use this
+// to pre-fill answers for interactive prompts (e.g., "y" for
+// confirmations, "branch-slug\r" for input fields).
+//
+// Each Type call is delivered as one chunk, with a short pause before
+// every chunk after the first (see chunkReader). Keys within a chunk
+// go to whichever field is focused when the chunk arrives — so when a
+// form spans multiple fields, make one Type call per field. A single
+// call containing keys for several fields races huh's async field
+// transition and can leak keys into the previous field.
 func (h *Harness) Type(s string) {
-	h.stdin.WriteString(s)
+	h.stdin.append(s)
 }
 
 // Run executes the bosun command tree with the given args. The
