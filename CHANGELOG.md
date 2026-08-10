@@ -1,5 +1,16 @@
 # Changelog
 
+## [v2.0.0](https://github.com/nickawilliams/bosun/compare/ffc38c737c78bacaf24b3d0eb94539575239eae9...v2.0.0) - 2026-08-10
+
+### New Features
+
+- **CLI:** Surface a skip when notification is configured but channel is unset - ([b9b356e](https://github.com/nickawilliams/bosun/commit/b9b356e6545a8326a361ee61229b940adc28d7d8))
+
+### Improvements
+
+- **CLI:** Flat per-command notification channel + template keys - ([8f00bc7](https://github.com/nickawilliams/bosun/commit/8f00bc71f15ae88519ff484d82deabc8885740c2))
+- **Notify:** Split notification content from provider presentation - ([ffc38c7](https://github.com/nickawilliams/bosun/commit/ffc38c737c78bacaf24b3d0eb94539575239eae9))
+
 ## [v1.0.1](https://github.com/nickawilliams/bosun/compare/31487cec7ed061e5ad9bb97f4cbd7c257804b464...v1.0.1) - 2026-08-03
 
 ### Improvements
