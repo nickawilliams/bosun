@@ -22,23 +22,48 @@ jobs:
         run: |
           set -euo pipefail
 
-          # --- Title prefix (uses PR number) ---
-          prefix="pr(#${PR_NUMBER}): "
-          if [[ "${PR_TITLE}" == "${prefix}"* ]]; then
+          # --- Issue number (from branch <issue>-<slug>) ---
+          issue=""
+          if [[ "${BRANCH}" =~ ^([0-9]+)- ]]; then
+            issue="${BASH_REMATCH[1]}"
+          fi
+
+          # --- Title prefix (issue in scope; PR number as fallback) ---
+          # The scope carries the linked issue so the merge commit reads
+          # pr(#<issue>): <subject> (#<pr>) — GitHub appends the PR ref,
+          # so both ends of the chain are greppable from git log. Issues
+          # and PRs share one ID namespace, so a misread ref still
+          # resolves to the right artifact. Non-issue branches fall back
+          # to the PR number to keep the merge commit conventional for
+          # git-cliff (require_conventional).
+          # Strip any existing pr(...) prefix so edits stay idempotent
+          # and pre-convention titles migrate on their next edit event.
+          subject="${PR_TITLE}"
+          refs=""
+          re='^pr\((#[0-9]+(,[[:space:]]?#[0-9]+)*)\):[[:space:]]*(.*)$'
+          if [[ "${PR_TITLE}" =~ ${re} ]]; then
+            refs="${BASH_REMATCH[1]//[[:space:]]/}"
+            subject="${BASH_REMATCH[3]}"
+          fi
+          if [[ -n "${issue}" && ",${refs}," == *",#${issue},"* ]]; then
+            # Existing prefix already references the branch issue — keep
+            # it verbatim; it may carry hand-added extra issue refs.
+            new_title="${PR_TITLE}"
+          else
+            new_title="pr(#${issue:-${PR_NUMBER}}): ${subject}"
+          fi
+          if [[ "${PR_TITLE}" == "${new_title}" ]]; then
             echo "Title already has prefix: ${PR_TITLE}"
           else
-            new_title="${prefix}${PR_TITLE}"
             echo "Setting title: ${new_title}"
             gh pr edit "${PR_NUMBER}" --repo "${{ github.repository }}" --title "${new_title}"
           fi
 
           # --- Closing reference (uses issue number from branch) ---
-          # Extract issue number from branch name (<issue>-<slug>)
-          if [[ ! "${BRANCH}" =~ ^([0-9]+)- ]]; then
+          if [[ -z "${issue}" ]]; then
             echo "Branch '${BRANCH}' does not follow <issue>-<slug> convention; skipping body injection"
             exit 0
           fi
-          issue="${BASH_REMATCH[1]}"
 
           if [[ "${EVENT_ACTION}" != "opened" ]]; then
             exit 0
