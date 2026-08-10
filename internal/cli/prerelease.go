@@ -746,6 +746,12 @@ func newPrereleaseCmd() *cobra.Command {
 						return err
 					},
 				})
+			} else if releaseNotifierErr == nil {
+				// Notification is configured (the notifier built), but this
+				// command has no channel to post to — a partial config, not an
+				// opt-out. Surface it (naming the key) rather than dropping the
+				// announcement silently; an unconfigured provider stays quiet.
+				ui.Skip("notification: set notification.channel_prerelease to announce releases")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {
