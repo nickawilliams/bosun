@@ -5,11 +5,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/notify"
 	slackapi "github.com/slack-go/slack"
 )
+
+// The Slack adapter owns all presentation: it consumes a provider-agnostic
+// notify.Content and upgrades it to Block Kit cards. Card labels, glyphs,
+// and icon normalization live here — the content layer never knows about
+// cards.
+const (
+	btnViewIssue       = "View Issue"
+	btnViewPullRequest = "View Pull Request"
+	btnViewBranch      = "View Branch"
+	btnViewDeployment  = "View Deployment"
+
+	glyphJira  = ":jira:"
+	glyphCloud = ":cloud:"
+
+	// noDescription is the placeholder for an empty card body. Italics
+	// render as a softer muted style in Slack mrkdwn, signalling "this
+	// slot is intentionally empty" rather than "the field is missing."
+	noDescription = "_no description_"
+
+	// cardIconJiraSize is the Jira universal_avatar named size closest to
+	// the shared card-icon footprint — Jira's avatar endpoint takes named
+	// sizes (xsmall/small/medium/large/xlarge), not pixel counts.
+	cardIconJiraSize = "large"
+)
+
+// section is the adapter's internal card model. renderContent produces
+// these from a notify.Content; cardBlock emits each as a raw "card" block.
+type section struct {
+	Text     string       // Card title (mrkdwn).
+	Subtitle string       // Card subtitle (mrkdwn).
+	Body     string       // Card body (truncated to 200 chars by cardBlock).
+	IconURL  string       // Small icon image URL.
+	Buttons  []cardButton // Action buttons.
+}
+
+// cardButton is a link button rendered in a card's actions area.
+type cardButton struct {
+	Text  string // Button label.
+	URL   string // Link URL.
+	Style string // "primary" (green), "danger" (red), or "" (default).
+}
 
 // rawBlock implements slack.Block by marshaling arbitrary JSON. This lets
 // us use block types (like "card") that slack-go doesn't have native types for.
@@ -23,7 +65,7 @@ func (b rawBlock) ID() string                           { return "" }
 func (b rawBlock) MarshalJSON() ([]byte, error)         { return b.data, nil }
 
 // cardBlock builds a raw "card" block with the given fields.
-func cardBlock(s notify.Section, idPrefix string) rawBlock {
+func cardBlock(s section, idPrefix string) rawBlock {
 	card := map[string]any{
 		"type": "card",
 		"title": map[string]any{
@@ -66,109 +108,154 @@ func cardBlock(s notify.Section, idPrefix string) rawBlock {
 	return rawBlock{blockType: "card", data: data}
 }
 
-// tableBlock builds a raw "table" block from rows of cells.
-// Rows are arrays of cells (not objects with a "cells" key).
-func tableBlock(rows []notify.TableRow) rawBlock {
-	jsonRows := make([][]map[string]any, len(rows))
-	for i, row := range rows {
-		cells := make([]map[string]any, len(row.Cells))
-		for j, cell := range row.Cells {
-			cells[j] = buildTableCell(cell)
+// renderContent turns a provider-agnostic notify.Content into the card
+// sections this adapter posts: a Jira ticket card, an ephemeral preview
+// deployment card, and one card per repository item (PR/release). This is
+// the presentation half of the notification split — the content layer
+// hands us structured data, and the button labels, glyphs, and layout are
+// decided here.
+func renderContent(c notify.Content) []section {
+	var sections []section
+
+	var issueKey, issueTitle string
+	if c.Issue != nil {
+		issueKey, issueTitle = c.Issue.Key, c.Issue.Title
+	}
+
+	// Card title shared by the Jira ticket and its PR cards: "[KEY] Title",
+	// or just "KEY" when the title is unknown.
+	subjectTitle := issueKey
+	if issueTitle != "" {
+		subjectTitle = fmt.Sprintf("[%s] %s", issueKey, issueTitle)
+	}
+
+	// Jira ticket card.
+	if c.Issue != nil {
+		issueType := "Issue"
+		if c.Issue.Type != "" {
+			issueType = c.Issue.Type
 		}
-		jsonRows[i] = cells
+		var buttons []cardButton
+		if c.Issue.URL != "" {
+			buttons = append(buttons, cardButton{
+				Text:  btnViewIssue,
+				URL:   c.Issue.URL,
+				Style: "primary",
+			})
+		}
+		// Prefer the real issue-type icon (e.g. the Story/Bug avatar) as the
+		// card image, mirroring the GitHub avatar on PR cards. When there's
+		// no usable icon, fall back to the :jira: glyph prefixed on the title
+		// so the card still reads as a Jira ticket. Key the fallback off the
+		// normalized icon, not the raw URL.
+		icon := slackIconURL(c.Issue.IconURL)
+		text := subjectTitle
+		if icon == "" {
+			text = glyphJira + " " + subjectTitle
+		}
+		sections = append(sections, section{
+			Text:     text,
+			Subtitle: issueType,
+			Body:     descriptionOrPlaceholder(c.Issue.Description),
+			IconURL:  icon,
+			Buttons:  buttons,
+		})
 	}
 
-	table := map[string]any{
-		"type": "table",
-		"rows": jsonRows,
+	// Ephemeral deployment card.
+	if c.Preview != nil {
+		name := c.Preview.Name
+		if name == "" {
+			name = "Preview"
+		}
+		var buttons []cardButton
+		if c.Preview.URL != "" {
+			buttons = append(buttons, cardButton{
+				Text:  btnViewDeployment,
+				URL:   c.Preview.URL,
+				Style: "primary",
+			})
+		}
+		sections = append(sections, section{
+			Text:     glyphCloud + " " + name,
+			Subtitle: "Ephemeral preview",
+			Buttons:  buttons,
+		})
 	}
 
-	data, _ := json.Marshal(table)
-	return rawBlock{blockType: "table", data: data}
+	// Per-repo PR card sections.
+	for _, item := range c.Items {
+		subtitle := fmt.Sprintf("`%s` %s", item.Label, item.Detail)
+		var buttons []cardButton
+		if item.URL != "" {
+			buttons = append(buttons, cardButton{
+				Text:  btnViewPullRequest,
+				URL:   item.URL,
+				Style: "primary",
+			})
+			if item.BranchURL != "" {
+				buttons = append(buttons, cardButton{
+					Text: btnViewBranch,
+					URL:  item.BranchURL,
+				})
+			}
+		}
+		sections = append(sections, section{
+			Text:     subjectTitle,
+			Subtitle: subtitle,
+			Body:     descriptionOrPlaceholder(item.Body),
+			IconURL:  c.IconURL,
+			Buttons:  buttons,
+		})
+	}
+
+	return sections
 }
 
-// buildTableCell converts a TableCell to a rich_text or raw_text JSON cell.
-func buildTableCell(c notify.TableCell) map[string]any {
-	// Emoji-only cell.
-	if c.Emoji != "" && c.Text == "" {
-		return map[string]any{
-			"type": "rich_text",
-			"elements": []map[string]any{
-				{
-					"type": "rich_text_section",
-					"elements": []map[string]any{
-						{"type": "emoji", "name": c.Emoji},
-					},
-				},
-			},
-		}
+// descriptionOrPlaceholder returns body when non-empty, otherwise the
+// italicized "no description" placeholder.
+func descriptionOrPlaceholder(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return noDescription
 	}
+	return body
+}
 
-	// Empty cell.
-	if c.Text == "" && c.Emoji == "" {
-		return map[string]any{
-			"type": "rich_text",
-			"elements": []map[string]any{
-				{"type": "rich_text_section", "elements": []map[string]any{
-					{"type": "text", "text": " "},
-				}},
-			},
-		}
+// slackIconURL normalizes a Jira issue-type icon URL into something Slack's
+// image proxy can actually render, returning "" only when there is nothing
+// usable (in which case the card falls back to the :jira: glyph).
+//
+// Slack fetches image_url server-side through its proxy and does NOT render
+// SVG (browsers do — which is why an SVG icon opens fine in a browser but
+// shows as a broken image on a card). Jira hands us icons in two shapes:
+//
+//   - universal_avatar URLs (most issue types) default to SVG but accept a
+//     `format=png` parameter; we add it plus a `size` so Slack gets a
+//     card-sized raster.
+//   - legacy /images/icons/issuetypes/<name>.svg system icons (e.g. the
+//     built-in Epic, which has no avatar record). Jira serves a PNG sibling
+//     at the same path; we swap the extension. These are fixed ~16px —
+//     there is no larger variant Jira will serve.
+func slackIconURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
 	}
-
-	// Text cell with optional formatting.
-	var elements []map[string]any
-
-	if c.Emoji != "" {
-		elements = append(elements, map[string]any{"type": "emoji", "name": c.Emoji})
-		elements = append(elements, map[string]any{"type": "text", "text": " "})
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
 	}
-
-	if c.URL != "" {
-		el := map[string]any{"type": "link", "url": c.URL, "text": c.Text}
-		if c.Bold || c.Italic {
-			style := map[string]any{}
-			if c.Bold {
-				style["bold"] = true
-			}
-			if c.Italic {
-				style["italic"] = true
-			}
-			el["style"] = style
-		}
-		elements = append(elements, el)
-	} else {
-		el := map[string]any{"type": "text", "text": c.Text}
-		if c.Bold || c.Italic {
-			style := map[string]any{}
-			if c.Bold {
-				style["bold"] = true
-			}
-			if c.Italic {
-				style["italic"] = true
-			}
-			el["style"] = style
-		}
-		elements = append(elements, el)
+	switch {
+	case strings.Contains(u.Path, "/universal_avatar/"):
+		// SVG by default; force a card-sized PNG.
+		q := u.Query()
+		q.Set("size", cardIconJiraSize)
+		q.Set("format", "png")
+		u.RawQuery = q.Encode()
+	case strings.HasSuffix(strings.ToLower(u.Path), ".svg"):
+		// Legacy system icon — swap to the PNG sibling Slack can render.
+		u.Path = u.Path[:len(u.Path)-len(".svg")] + ".png"
 	}
-
-	// Subtitle on a new line in the same cell.
-	if c.Subtitle != "" {
-		elements = append(elements,
-			map[string]any{"type": "text", "text": "\n"},
-			map[string]any{"type": "text", "text": c.Subtitle},
-		)
-	}
-
-	return map[string]any{
-		"type": "rich_text",
-		"elements": []map[string]any{
-			{
-				"type":     "rich_text_section",
-				"elements": elements,
-			},
-		},
-	}
+	return u.String()
 }
 
 // truncate shortens s to max bytes, adding "…" if truncated.
@@ -691,7 +778,7 @@ func (a *Adapter) resolveChannelID(ctx context.Context, name string) (string, er
 // from `markdown_text` directly, so no separate `text` fallback is needed
 // — and the parameter is documented as mutually exclusive with `text`.
 func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
-	if !c.HasBlocks() {
+	if !c.Structured() {
 		// markdown_text renders standard CommonMark, where a single `\n`
 		// is a soft break that joins lines into one paragraph. The
 		// generic content layer above us treats each `\n` as a visible
@@ -720,38 +807,14 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 		))
 	}
 
-	for i, btn := range c.Actions {
-		b := slackapi.NewButtonBlockElement(
-			fmt.Sprintf("action_%d", i), "",
-			slackapi.NewTextBlockObject(slackapi.PlainTextType, btn.Text, true, false),
-		)
-		if btn.URL != "" {
-			b.WithURL(btn.URL)
-		}
-		if btn.Style != "" {
-			b.WithStyle(slackapi.Style(btn.Style))
-		}
-		blocks = append(blocks, slackapi.NewActionBlock("", b))
-	}
+	// Structured data (issue, preview, items) becomes card blocks.
+	sections := renderContent(c)
 
-	if len(c.Table) > 0 {
-		blocks = append(blocks, tableBlock(c.Table))
-	}
-
-	if len(c.Fields) > 0 {
-		fields := make([]*slackapi.TextBlockObject, len(c.Fields)*2)
-		for i, f := range c.Fields {
-			fields[i*2] = slackapi.NewTextBlockObject(slackapi.MarkdownType, f.Key, false, false)
-			fields[i*2+1] = slackapi.NewTextBlockObject(slackapi.MarkdownType, f.Value, false, false)
-		}
-		blocks = append(blocks, slackapi.NewSectionBlock(nil, fields, nil))
-	}
-
-	if len(c.Sections) > 0 && (c.Header != "" || c.Body != "" || len(c.Fields) > 0) {
+	if len(sections) > 0 && (c.Header != "" || c.Body != "") {
 		blocks = append(blocks, slackapi.NewDividerBlock())
 	}
 
-	for i, s := range c.Sections {
+	for i, s := range sections {
 		blocks = append(blocks, cardBlock(s, fmt.Sprintf("view_%d", i)))
 	}
 
@@ -766,10 +829,7 @@ func buildMsgOptions(c notify.Content) []slackapi.MsgOption {
 	if c.Body != "" {
 		fallback = c.Header + " — " + c.Body
 	}
-	for _, f := range c.Fields {
-		fallback += "\n" + f.Key + ": " + f.Value
-	}
-	for _, s := range c.Sections {
+	for _, s := range sections {
 		fallback += "\n" + s.Text
 	}
 

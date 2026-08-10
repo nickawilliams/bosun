@@ -919,3 +919,139 @@ func TestHasAnnouncementRecognizesOwnByAuthor(t *testing.T) {
 		t.Error("own author-matched announcement counted as a foreign match")
 	}
 }
+
+// TestSlackIconURL confirms a Jira issue-type icon URL is normalized for
+// Slack's image proxy: universal_avatar URLs (SVG by default) get
+// format=png plus the shared card size; legacy SVG system icons are
+// swapped for the PNG sibling Jira serves; empty/unusable inputs return
+// "" so the card falls back to the :jira: glyph.
+func TestSlackIconURL(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"empty", "", ""},
+		{
+			"universal_avatar forces png and size",
+			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
+			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize,
+		},
+		{
+			"legacy svg system icon swapped to png",
+			"https://x.atlassian.net/images/icons/issuetypes/epic.svg",
+			"https://x.atlassian.net/images/icons/issuetypes/epic.png",
+		},
+		{
+			"plain raster passes through",
+			"https://x.atlassian.net/images/icons/issuetypes/story.png",
+			"https://x.atlassian.net/images/icons/issuetypes/story.png",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := slackIconURL(tc.in); got != tc.want {
+				t.Errorf("slackIconURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderContentJiraCard confirms the Jira ticket card: title formatted
+// as "[KEY] Title", a primary "View Issue" button, the normalized icon,
+// no :jira: glyph when a real icon is present, and the placeholder body.
+func TestRenderContentJiraCard(t *testing.T) {
+	rawIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium"
+	sections := renderContent(notify.Content{
+		Issue: &notify.IssueRef{
+			Key: "PROJ-1", Title: "Add widget", Type: "Story",
+			URL: "https://jira.example.com/browse/PROJ-1", IconURL: rawIcon,
+		},
+	})
+	if len(sections) != 1 {
+		t.Fatalf("got %d sections, want 1", len(sections))
+	}
+	card := sections[0]
+	if card.Text != "[PROJ-1] Add widget" {
+		t.Errorf("Text = %q, want %q", card.Text, "[PROJ-1] Add widget")
+	}
+	if strings.Contains(card.Text, glyphJira) {
+		t.Errorf("Text = %q, want no glyph when an icon is present", card.Text)
+	}
+	wantIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize
+	if card.IconURL != wantIcon {
+		t.Errorf("IconURL = %q, want %q", card.IconURL, wantIcon)
+	}
+	if len(card.Buttons) != 1 || card.Buttons[0].Text != btnViewIssue || card.Buttons[0].Style != "primary" {
+		t.Errorf("Buttons = %+v, want one primary %q", card.Buttons, btnViewIssue)
+	}
+	if card.Body != noDescription {
+		t.Errorf("Body = %q, want placeholder %q", card.Body, noDescription)
+	}
+}
+
+// TestRenderContentJiraGlyphFallback confirms the :jira: glyph prefixes the
+// title when there's no usable icon.
+func TestRenderContentJiraGlyphFallback(t *testing.T) {
+	sections := renderContent(notify.Content{
+		Issue: &notify.IssueRef{Key: "PROJ-1", Title: "Add widget"},
+	})
+	if len(sections) != 1 {
+		t.Fatalf("got %d sections, want 1", len(sections))
+	}
+	want := glyphJira + " [PROJ-1] Add widget"
+	if sections[0].Text != want {
+		t.Errorf("Text = %q, want %q", sections[0].Text, want)
+	}
+	if sections[0].IconURL != "" {
+		t.Errorf("IconURL = %q, want empty", sections[0].IconURL)
+	}
+}
+
+// TestRenderContentItemAndPreviewCards confirms the ephemeral preview card
+// ("View Deployment") and per-repo PR item cards (primary "View Pull
+// Request" + "View Branch"), carrying the raw GitHub avatar as the icon.
+func TestRenderContentItemAndPreviewCards(t *testing.T) {
+	avatar := "https://github.com/octocat.png?size=48"
+	sections := renderContent(notify.Content{
+		Issue:   &notify.IssueRef{Key: "PROJ-1", Title: "Add widget"},
+		IconURL: avatar,
+		Preview: &notify.PreviewRef{Name: "brave-falcon", URL: "https://preview.example.com"},
+		Items: []notify.Item{
+			{
+				Label: "my-service", URL: "https://github.com/org/my-service/pull/42",
+				Detail: "#42", Body: "PR body",
+				BranchURL: "https://github.com/org/my-service/tree/feat",
+			},
+		},
+	})
+	// Jira card, preview card, then one item card.
+	if len(sections) != 3 {
+		t.Fatalf("got %d sections, want 3", len(sections))
+	}
+
+	preview := sections[1]
+	if preview.Text != glyphCloud+" brave-falcon" {
+		t.Errorf("preview Text = %q, want %q", preview.Text, glyphCloud+" brave-falcon")
+	}
+	if len(preview.Buttons) != 1 || preview.Buttons[0].Text != btnViewDeployment {
+		t.Errorf("preview Buttons = %+v, want one %q", preview.Buttons, btnViewDeployment)
+	}
+
+	item := sections[2]
+	if item.Text != "[PROJ-1] Add widget" {
+		t.Errorf("item Text = %q", item.Text)
+	}
+	if item.Subtitle != "`my-service` #42" {
+		t.Errorf("item Subtitle = %q, want %q", item.Subtitle, "`my-service` #42")
+	}
+	if item.IconURL != avatar {
+		t.Errorf("item IconURL = %q, want the raw GitHub avatar %q", item.IconURL, avatar)
+	}
+	if len(item.Buttons) != 2 ||
+		item.Buttons[0].Text != btnViewPullRequest || item.Buttons[0].Style != "primary" ||
+		item.Buttons[1].Text != btnViewBranch {
+		t.Errorf("item Buttons = %+v, want primary %q + %q", item.Buttons, btnViewPullRequest, btnViewBranch)
+	}
+	if item.Body != "PR body" {
+		t.Errorf("item Body = %q, want %q", item.Body, "PR body")
+	}
+}

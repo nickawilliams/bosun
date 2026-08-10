@@ -27,8 +27,8 @@ func TestReleaseDefaultTextTemplate(t *testing.T) {
 		},
 	})
 
-	if c.HasBlocks() {
-		t.Fatalf("HasBlocks() = true, want false (text default should be flat)")
+	if c.Structured() {
+		t.Fatalf("Structured() = true, want false (text default should be flat)")
 	}
 	got := c.Text
 	wantPrefix := "going out `host-ui`: https://example.com/host-ui/releases/tag/v1.0.0\n"
@@ -71,79 +71,47 @@ func TestReleaseStringConfigOverridesDefault(t *testing.T) {
 	}
 }
 
-// TestSlackIconURL confirms a Jira issue-type icon URL is normalized for
-// Slack's image proxy: universal_avatar URLs (SVG by default) get
-// format=png plus the shared card size; legacy SVG system icons are
-// swapped for the PNG sibling Jira serves; empty/unusable inputs return
-// "" so the card falls back to the :jira: glyph.
-func TestSlackIconURL(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"empty", "", ""},
-		{
-			"universal_avatar forces png and size",
-			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
-			"https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize,
-		},
-		{
-			"legacy svg system icon swapped to png",
-			"https://x.atlassian.net/images/icons/issuetypes/epic.svg",
-			"https://x.atlassian.net/images/icons/issuetypes/epic.png",
-		},
-		{
-			"plain raster passes through",
-			"https://x.atlassian.net/images/icons/issuetypes/story.png",
-			"https://x.atlassian.net/images/icons/issuetypes/story.png",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := slackIconURL(tc.in); got != tc.want {
-				t.Errorf("slackIconURL(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestReviewJiraCardIconNormalized confirms the Jira card's icon is
-// emitted as a Slack-renderable PNG at the shared card size on the block
-// path, with no :jira: glyph when a real icon is present.
-func TestReviewJiraCardIconNormalized(t *testing.T) {
+// TestReviewIssueDataPopulated confirms the review type builds structured
+// Content carrying the raw issue data — including the raw (un-normalized)
+// issue-type icon URL, which the provider adapter normalizes for its own
+// image proxy. Card assembly and icon normalization are the adapter's
+// concern and are tested in the slack package.
+func TestReviewIssueDataPopulated(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 
+	rawIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium"
 	c := buildNotifyContent("review", notifyTemplateData{
 		IssueKey:     "PROJ-1",
 		IssueTitle:   "Add widget",
-		IssueIconURL: "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium",
+		IssueType:    "Story",
+		IssueIconURL: rawIcon,
 	})
-	if len(c.Sections) == 0 {
-		t.Fatal("no sections rendered")
+	if !c.Structured() {
+		t.Fatal("Structured() = false, want true (review builds structured content)")
 	}
-	card := c.Sections[0]
-	wantIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?format=png&size=" + cardIconJiraSize
-	if card.IconURL != wantIcon {
-		t.Errorf("IconURL = %q, want %q", card.IconURL, wantIcon)
+	if c.Issue == nil {
+		t.Fatal("Issue = nil, want populated issue data")
 	}
-	if strings.Contains(card.Text, ":jira:") {
-		t.Errorf("Text = %q, want no :jira: glyph when an icon is present", card.Text)
+	if c.Issue.Key != "PROJ-1" || c.Issue.Title != "Add widget" || c.Issue.Type != "Story" {
+		t.Errorf("Issue = %+v, want Key/Title/Type populated", c.Issue)
+	}
+	if c.Issue.IconURL != rawIcon {
+		t.Errorf("Issue.IconURL = %q, want the raw URL %q (adapter normalizes)", c.Issue.IconURL, rawIcon)
 	}
 }
 
-// TestReleaseMapConfigEntersBlockPath confirms a map config on
-// notification.templates.release reopens the structured-block escape
-// hatch even though the type now defaults to text.
-func TestReleaseMapConfigEntersBlockPath(t *testing.T) {
+// TestReleaseMapConfigEntersStructuredPath confirms a map config on
+// notification.templates.release reopens the structured escape hatch even
+// though the type now defaults to flat text.
+func TestReleaseMapConfigEntersStructuredPath(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	viper.Set("notification.templates.release.header", "Custom Header")
 
 	c := buildNotifyContent("release", notifyTemplateData{IssueKey: "PROJ-1"})
-	if !c.HasBlocks() {
-		t.Fatalf("HasBlocks() = false, want true (map config should enter block path)")
+	if !c.Structured() {
+		t.Fatalf("Structured() = false, want true (map config should enter structured path)")
 	}
 	if c.Header != "Custom Header" {
 		t.Errorf("Header = %q, want %q", c.Header, "Custom Header")
