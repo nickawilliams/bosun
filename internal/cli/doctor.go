@@ -385,7 +385,7 @@ func checkNotification(ctx context.Context) (string, error) {
 	lines := []string{fmt.Sprintf("%s → %s", provider, user)}
 
 	var failedCount int
-	for _, key := range []string{"notification.channel_review", "notification.channel_release"} {
+	for _, key := range []string{"notification.channel_review", "notification.channel_prerelease"} {
 		ch := viper.GetString(key)
 		if ch == "" {
 			continue

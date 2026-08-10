@@ -152,6 +152,12 @@ func newPreviewCmd() *cobra.Command {
 						return err
 					},
 				})
+			} else if previewNotifierErr == nil {
+				// Notification is configured (the notifier built), but this
+				// command has no channel to post to — a partial config, not an
+				// opt-out. Surface it (naming the key) rather than dropping the
+				// announcement silently; an unconfigured provider stays quiet.
+				ui.Skip("notification: set notification.channel_review to announce the preview")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {

@@ -8,11 +8,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-// TestReleaseDefaultTextTemplate locks the rendered shape of the default
-// release notification — matches the #release_coordination convention:
+// TestPrereleaseDefaultTextTemplate locks the rendered shape of the default
+// prerelease notification — matches the #release_coordination convention:
 // `going out `<repo>`: <url>` + the host-generated notes inline, one
 // block per item separated by a blank line.
-func TestReleaseDefaultTextTemplate(t *testing.T) {
+func TestPrereleaseDefaultTextTemplate(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 
@@ -20,7 +20,7 @@ func TestReleaseDefaultTextTemplate(t *testing.T) {
 	// provider adapter is responsible for rendering it (the Slack
 	// adapter wraps the text in a markdown block).
 	body := "## What's Changed\n* PR title by @alice in https://example.com/pull/1"
-	c := buildNotifyContent("release", notifyTemplateData{
+	c := buildNotifyContent("prerelease", notifyTemplateData{
 		IssueKey: "PROJ-1",
 		Items: []notify.Item{
 			{Label: "host-ui", URL: "https://example.com/host-ui/releases/tag/v1.0.0", Detail: "v1.0.0", Body: body},
@@ -40,11 +40,11 @@ func TestReleaseDefaultTextTemplate(t *testing.T) {
 	}
 }
 
-func TestReleaseDefaultTextTemplateMultipleItems(t *testing.T) {
+func TestPrereleaseDefaultTextTemplateMultipleItems(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 
-	c := buildNotifyContent("release", notifyTemplateData{
+	c := buildNotifyContent("prerelease", notifyTemplateData{
 		Items: []notify.Item{
 			{Label: "host-ui", URL: "u1", Body: "b1"},
 			{Label: "legacy-api", URL: "u2", Body: "b2"},
@@ -57,15 +57,15 @@ func TestReleaseDefaultTextTemplateMultipleItems(t *testing.T) {
 	}
 }
 
-// TestReleaseStringConfigOverridesDefault confirms a user-supplied string
-// template at notification.templates.release wins over the built-in
-// default — the existing string-config path is preserved.
-func TestReleaseStringConfigOverridesDefault(t *testing.T) {
+// TestPrereleaseStringConfigOverridesDefault confirms a user-supplied
+// string template at notification.templates.prerelease wins over the
+// built-in default — the existing string-config path is preserved.
+func TestPrereleaseStringConfigOverridesDefault(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
-	viper.Set("notification.templates.release", "custom: {{.IssueKey}}")
+	viper.Set("notification.templates.prerelease", "custom: {{.IssueKey}}")
 
-	c := buildNotifyContent("release", notifyTemplateData{IssueKey: "PROJ-1"})
+	c := buildNotifyContent("prerelease", notifyTemplateData{IssueKey: "PROJ-1"})
 	if c.Text != "custom: PROJ-1" {
 		t.Errorf("got %q, want %q", c.Text, "custom: PROJ-1")
 	}
@@ -101,15 +101,15 @@ func TestReviewIssueDataPopulated(t *testing.T) {
 	}
 }
 
-// TestReleaseMapConfigEntersStructuredPath confirms a map config on
-// notification.templates.release reopens the structured escape hatch even
-// though the type now defaults to flat text.
-func TestReleaseMapConfigEntersStructuredPath(t *testing.T) {
+// TestPrereleaseMapConfigEntersStructuredPath confirms a map config on
+// notification.templates.prerelease reopens the structured escape hatch
+// even though the type now defaults to flat text.
+func TestPrereleaseMapConfigEntersStructuredPath(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
-	viper.Set("notification.templates.release.header", "Custom Header")
+	viper.Set("notification.templates.prerelease.header", "Custom Header")
 
-	c := buildNotifyContent("release", notifyTemplateData{IssueKey: "PROJ-1"})
+	c := buildNotifyContent("prerelease", notifyTemplateData{IssueKey: "PROJ-1"})
 	if !c.Structured() {
 		t.Fatalf("Structured() = false, want true (map config should enter structured path)")
 	}

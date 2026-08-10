@@ -989,6 +989,14 @@ func newReviewCmd() *cobra.Command {
 						return err
 					},
 				})
+			} else if !draft && notifierErr == nil {
+				// Notification is configured (the notifier built), but this
+				// command has no channel to post to — a partial config, not an
+				// opt-out. Surface it (naming the key) rather than dropping the
+				// announcement silently. Drafts intentionally suppress
+				// notifications, so they stay quiet; so does an unconfigured
+				// provider.
+				ui.Skip("notification: set notification.channel_review to announce the review")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {

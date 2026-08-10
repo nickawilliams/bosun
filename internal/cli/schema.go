@@ -119,7 +119,7 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true},
 			{Key: "workspace", Label: "workspace name", Example: "mycompany"},
 			{Key: "channel_review", Label: "review channel", Example: "bb-prs"},
-			{Key: "channel_release", Label: "release channel", Example: "release_coordination"},
+			{Key: "channel_prerelease", Label: "prerelease channel", Example: "release_coordination"},
 		},
 	},
 	"cicd": {
