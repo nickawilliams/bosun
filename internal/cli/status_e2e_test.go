@@ -474,6 +474,12 @@ func TestStatus(t *testing.T) {
 		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 1 {
 			t.Errorf("repos not probed after issue fetch failed; GetPRForBranch = %d, want 1", n)
 		}
+		// The recap is the proof the run finished rather than bailing
+		// quietly: returning nil having done nothing would satisfy
+		// every assertion above it.
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
+		}
 		assertStatusReadOnly(t, p)
 	})
 
@@ -498,6 +504,9 @@ func TestStatus(t *testing.T) {
 		if got := p.checksRefs(); !equalStrings(got, []string{"acme/api@" + branch}) {
 			t.Errorf("checks refs = %v, want [acme/api@%s] (branch, no PR head)", got, branch)
 		}
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
+		}
 		assertStatusReadOnly(t, p)
 	})
 
@@ -519,6 +528,13 @@ func TestStatus(t *testing.T) {
 		}
 		if got := p.issueKeys(); !equalStrings(got, []string{"EX-11"}) {
 			t.Errorf("issue keys fetched = %v, want [EX-11] (issue section still renders)", got)
+		}
+		// Skipping the PR section is not the same as skipping the repo:
+		// it still lands in the recap. Without this, a status that
+		// dropped the repo entirely would pass — "the host wasn't
+		// called" is true either way.
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
 		}
 		assertStatusReadOnly(t, p)
 	})
@@ -546,6 +562,9 @@ func TestStatus(t *testing.T) {
 		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 1 {
 			t.Errorf("repos not probed without a tracker; GetPRForBranch = %d, want 1", n)
 		}
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q (the repo cards still render)", got, want)
+		}
 		assertStatusReadOnly(t, p)
 	})
 
@@ -570,6 +589,9 @@ func TestStatus(t *testing.T) {
 		}
 		if got := p.previewKeysAsked(); !equalStrings(got, []string{"EX-13"}) {
 			t.Errorf("preview looked up under %v, want [EX-13] (key comes from the workspace name)", got)
+		}
+		if got, want := statusSummary(t, h), "1 workspace · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q (the workspace still rolls up)", got, want)
 		}
 		assertStatusReadOnly(t, p)
 	})

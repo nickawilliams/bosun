@@ -156,8 +156,9 @@ broken; the only visible symptom is a `(none)` where a value used to
 be. `bosun status` shipped eleven scenarios with this hole.
 
 Assert the key explicitly, using the fakes' key recorders —
-`Tracker.GetPropertyKeys()`, `Tracker.Property(key)` — rather than
-inferring it from downstream state. Then verify the assertion has
+`Tracker.GetIssueKeys()`, `Tracker.GetPropertyKeys()`,
+`Tracker.Property(key)`, `Preview.GetKeys()`, `Host.ChecksRefs()` —
+rather than inferring it from downstream state. Then verify the assertion has
 teeth: substitute a wrong constant for the key in the *production*
 path and confirm the scenario fails. On the empty-registry path that
 mutation changes nothing else observable, so a scenario without the
