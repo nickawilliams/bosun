@@ -475,6 +475,11 @@ func (h *Host) CreatePR(_ context.Context, req code.CreatePRRequest) (code.PullR
 	if existing, ok := h.prs[key]; ok && existing.Number > 0 {
 		return existing, nil // idempotent, like the real host
 	}
+	// Fuller than the GitHub adapter, which returns only number/URL/
+	// state from its create call — BaseRef and the echoed title/body are
+	// here so a follow-up GetPRForBranch in the same test sees a
+	// realistic PR. Assert on CreatePRRequests for what was *asked for*;
+	// asserting these fields on the returned PR tests the fake.
 	pr := code.PullRequest{
 		Number:  len(h.prs) + 1,
 		Title:   req.Title,
@@ -519,7 +524,9 @@ func (h *Host) RequestReviewers(_ context.Context, owner, repository string, num
 	h.teamRequests[key] = append(h.teamRequests[key], teamReviewers...)
 	// Mirror the host: a requested reviewer shows up as pending on the
 	// PR, so a second run sees them already satisfied rather than
-	// re-requesting (and resetting) them.
+	// re-requesting (and resetting) them. Appends unconditionally where
+	// GitHub would de-duplicate — strictly noisier than the real thing,
+	// so a test that passes here would pass against the host too.
 	h.recordOnPR(owner, repository, number, func(pr *code.PullRequest) {
 		pr.RequestedReviewers = append(pr.RequestedReviewers, reviewers...)
 		pr.RequestedTeams = append(pr.RequestedTeams, teamReviewers...)

@@ -271,15 +271,29 @@ func TestReview(t *testing.T) {
 
 	t.Run("idempotency/existing_pr_returns_no_op", func(t *testing.T) {
 		// A PR that already matches the requested state is a no-op: no
-		// create, no edit, no reviewer or assignee write. The seeded PR
-		// mirrors what a previous run would have left behind.
+		// create, no edit, no reviewer or assignee write.
+		//
+		// Every requested axis is seeded as already-satisfied, and every
+		// one is asked for on the command line — otherwise an empty
+		// request set would make the "nothing was written" assertions
+		// hold no matter what planSync computed. Carol is seeded under
+		// ReviewedBy rather than RequestedReviewers (GitHub drops a
+		// submitter from the pending list) and in different casing, so
+		// the case-insensitive fold over both lists is exercised too.
 		h, repos := startReviewWorkspace(t, reviewConfig, "api")
 		h.Host.SeedPR(repos[0].Owner, "api", reviewBranch, code.PullRequest{
 			Number: 7, State: "open", Title: "[EX-1] Add feature",
-			BaseRef: "main", Assignees: []string{"testuser"},
+			BaseRef:            "main",
+			RequestedReviewers: []string{"alice"},
+			ReviewedBy:         []string{"Carol"},
+			RequestedTeams:     []string{"backend"},
+			Assignees:          []string{"bob", "testuser"},
 		})
 
-		if err := runReview(h, "--repository", "api", "--approve"); err != nil {
+		if err := runReview(h, "--repository", "api",
+			"--reviewer", "alice", "--reviewer", "carol",
+			"--team-reviewer", "backend",
+			"--assignee", "bob", "--approve"); err != nil {
 			t.Fatalf("review: %v", err)
 		}
 
@@ -291,6 +305,62 @@ func TestReview(t *testing.T) {
 		}
 		wantNotCalled(t, h, "RequestReviewers")
 		wantNotCalled(t, h, "AddAssignees")
+	})
+
+	t.Run("idempotency/rerun_does_not_re_request", func(t *testing.T) {
+		// The same thing against real prior state instead of seeded
+		// state: run review twice over an untouched workspace and the
+		// second run must write nothing. Re-requesting a reviewer resets
+		// their submitted review on GitHub, so a duplicate here is a
+		// user-visible regression, not just noise.
+		args := []string{"--repository", "api", "--reviewer", "alice",
+			"--team-reviewer", "backend", "--assignee", "bob", "--approve"}
+		h, repos := startReviewWorkspace(t, reviewConfig, "api")
+
+		if err := runReview(h, args...); err != nil {
+			t.Fatalf("first review: %v", err)
+		}
+		if err := runReview(h, args...); err != nil {
+			t.Fatalf("second review: %v", err)
+		}
+
+		owner := repos[0].Owner
+		if got := h.Host.ReviewersRequested(owner, "api"); !slices.Equal(got, []string{"alice"}) {
+			t.Errorf("reviewers = %v, want alice requested exactly once", got)
+		}
+		if got := h.Host.TeamsRequested(owner, "api"); !slices.Equal(got, []string{"backend"}) {
+			t.Errorf("team reviewers = %v, want backend requested exactly once", got)
+		}
+		if got := h.Host.AssigneesAdded(owner, "api"); !slices.Equal(got, []string{"bob", "testuser"}) {
+			t.Errorf("assignees = %v, want each added exactly once", got)
+		}
+		if n := len(h.Host.CreatePRRequests()); n != 1 {
+			t.Errorf("CreatePR requests = %d, want 1 across both runs", n)
+		}
+	})
+
+	t.Run("idempotency/draft_pr_is_updated_in_place", func(t *testing.T) {
+		// A draft PR is active, not creatable: a stale one is edited
+		// rather than joined by a second PR on the same branch.
+		h, repos := startReviewWorkspace(t, reviewConfig, "api")
+		h.Host.SeedPR(repos[0].Owner, "api", reviewBranch, code.PullRequest{
+			Number: 9, State: "draft", Title: "Stale", BaseRef: "main",
+		})
+
+		if err := runReview(h, "--repository", "api", "--approve"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if n := len(h.Host.CreatePRRequests()); n != 0 {
+			t.Errorf("CreatePR requests = %d, want 0 — the draft is the PR", n)
+		}
+		edits := h.Host.EditPRRequests()
+		if len(edits) != 1 {
+			t.Fatalf("EditPR requests = %+v, want one for the draft", edits)
+		}
+		if edits[0].Number != 9 || edits[0].Title != "[EX-1] Add feature" {
+			t.Errorf("edit = %+v, want draft #9 retitled from the template", edits[0])
+		}
 	})
 
 	t.Run("idempotency/open_pr_is_not_reselected", func(t *testing.T) {
@@ -351,10 +421,12 @@ func TestReview(t *testing.T) {
 		}
 	})
 
-	t.Run("reviewers/from_config_without_prompting", func(t *testing.T) {
-		// Config-provided reviewers are enough on their own: a
-		// non-interactive run requests them without ever enumerating the
-		// repo's collaborators.
+	t.Run("reviewers/from_config", func(t *testing.T) {
+		// Config-provided reviewers are enough on their own — no flag
+		// needed. The ListCollaborators check below is a guard rather
+		// than the point: a non-interactive run skips every value prompt
+		// anyway, so it would hold even if config were ignored. The
+		// exact-match on the requested set is what carries this.
 		h, repos := startReviewWorkspace(t,
 			reviewConfig+"\npull_request:\n  reviewers: [\"carol\"]\n", "api")
 

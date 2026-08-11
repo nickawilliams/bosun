@@ -76,6 +76,11 @@ func (n *Notifier) SeedAnnouncement(channel, query string) *Notifier {
 }
 
 // Messages returns a snapshot of messages sent via Notify, in order.
+//
+// One entry per Notify CALL. The Slack adapter short-circuits a call
+// whose content hash matches the existing thread and posts nothing, so
+// a count here is an upper bound on real posts — asserting "exactly one
+// message" is therefore stricter than the host, never looser.
 func (n *Notifier) Messages() []notify.Message {
 	n.mu.Lock()
 	defer n.mu.Unlock()
