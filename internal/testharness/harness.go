@@ -35,6 +35,16 @@ type Harness struct {
 	// Tests seed it with issues and assert on Calls() / Issues().
 	Tracker *fakes.Tracker
 
+	// Host is the in-memory code host injected via SetServices. Tests
+	// seed PRs/releases and assert on Releases() / Calls(). Repos
+	// added after Host exists are linked automatically by LinkRepo so
+	// release tags land on the workspace's bare remotes.
+	Host *fakes.Host
+
+	// Notifier is the in-memory notifier injected via SetServices.
+	// Tests assert on Messages() for what was posted.
+	Notifier *fakes.Notifier
+
 	stdin  *chunkReader
 	stdout *syncBuffer
 	stderr *syncBuffer
@@ -79,19 +89,29 @@ func (s *syncBuffer) Reset() {
 // produce nondeterministic failures. Sequential is fine; the per-test
 // setup is fast (single-digit hundreds of milliseconds).
 //
-// Fakes for capability interfaces beyond issue tracker (CodeHost,
-// CICD, Notifier, PreviewProvider) default to functions that fail
-// the test if invoked. Tests for commands needing those services
-// install fakes via SetServices directly after calling New.
+// Tracker, Host, and Notifier fakes install automatically. The
+// remaining capability factories (CICD, PreviewProvider) default to
+// functions that fail the test if invoked. Tests for commands needing
+// those services install fakes via SetServices directly after calling
+// New.
 func New(t *testing.T) *Harness {
 	t.Helper()
 	h := &Harness{
 		t:         t,
 		Workspace: NewWorkspace(t),
 		Tracker:   fakes.NewTracker(),
+		Host:      fakes.NewHost(),
+		Notifier:  fakes.NewNotifier(),
 		stdin:     &chunkReader{},
 		stdout:    &syncBuffer{},
 		stderr:    &syncBuffer{},
+	}
+
+	// Link every repo to the code-host fake as it's added, so
+	// host-side tag creation (CreateRelease) lands on the repo's bare
+	// remote and GetLatestTag reads real tags back.
+	h.Workspace.onAddRepo = func(r *Repo) {
+		h.Host.LinkRepo(r.Owner, r.Name, r.RemotePath)
 	}
 
 	// Isolate viper, ui streams, and the project-root override so
@@ -120,9 +140,9 @@ func New(t *testing.T) *Harness {
 
 	cli.SetServices(&cli.Services{
 		IssueTracker:    func() (issue.Tracker, error) { return h.Tracker, nil },
-		CodeHost:        notInstalled[code.Host](t, "CodeHost"),
+		CodeHost:        func() (code.Host, error) { return h.Host, nil },
 		CICD:            notInstalled[cicd.CICD](t, "CICD"),
-		Notifier:        notInstalled[notify.Notifier](t, "Notifier"),
+		Notifier:        func() (notify.Notifier, error) { return h.Notifier, nil },
 		PreviewProvider: notInstalledPreview(t),
 	})
 
