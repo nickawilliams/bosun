@@ -9,21 +9,18 @@ package cli_test
 //
 // Assertion shape: status is the one command with no side effects, so
 // what it *asked for* is the behavior. Every scenario asserts on the
-// call surface each fake recorded during the status run — which
-// services were consulted, for which repos, at which refs — plus the
-// read-only invariant (assertReadOnly).
+// calls each fake recorded during the status run — which services were
+// consulted, for which repos, at which refs, under which issue keys —
+// plus the read-only invariant (assertStatusReadOnly).
 //
-// Why not assert on rendered output: the harness runs commands with a
-// non-TTY stdout, so Bootstrap installs the raw reporter and every
-// card render is suppressed (ui.Card.Print short-circuits on IsRaw).
-// h.Stdout() is empty for status by construction — see the deviation
-// note in the PR. The rendered path is covered by the card-builder
-// tests in status_test.go instead.
+// Nothing here asserts on h.Stdout(): under the harness every command
+// runs against the raw reporter and card rendering draws nothing. See
+// "Card output is invisible to the harness" in
+// internal/testharness/README.md. Section presence and absence are
+// covered by the card-builder tests in status_test.go instead.
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -52,100 +49,125 @@ issue_tracker:
     ready_for_release: "Ready for Release"
 `
 
-// trackerReads / hostReads / previewReads are the methods `bosun
-// status` is allowed to call. Allowlists rather than a deny-list of
-// today's mutators: a newly added mutating method fails these tests by
-// default instead of slipping through until someone remembers to name
-// it.
+// statusTrackerCalls / statusHostCalls / statusPreviewCalls are the
+// methods `bosun status` is permitted to reach for. Allowlists rather
+// than a deny-list of today's mutators: anything new — a mutation, or
+// a read-shaped method whose cost profile differs like a per-repo
+// PRsInRange fan-out — fails these tests by default instead of
+// slipping through until someone remembers to name it.
 var (
-	trackerReads = map[string]bool{"GetIssue": true, "ListIssues": true}
-	hostReads    = map[string]bool{
-		"GetPRForBranch": true, "GetChecks": true, "GetLatestTag": true,
-		"GetReleaseByTag": true, "PRsInRange": true, "ListBranches": true,
-		"ListCollaborators": true, "ListTeams": true, "GetLatestDeployment": true,
-		"GetAuthenticatedUser": true,
-	}
-	previewReads = map[string]bool{"Get": true, "Inspect": true}
+	statusTrackerCalls = map[string]bool{"GetIssue": true, "ListIssues": true}
+	statusHostCalls    = map[string]bool{"GetPRForBranch": true, "GetChecks": true}
+	statusPreviewCalls = map[string]bool{"Get": true}
 )
 
-// probe snapshots the fakes' call logs so a scenario can attribute
-// calls to the status run alone. Workspaces are built by running
-// `bosun start`, which mutates the tracker on its way through — mark
-// after setup, read after status.
-type probe struct {
-	h                            *testharness.Harness
-	previews                     *previewFactoryLog
-	tracker, host, preview, refs int
+// statusProbe snapshots the fakes' call logs so a scenario can
+// attribute calls to the status run alone. Workspaces are built by
+// running `bosun start`, which consults the same fakes on its way
+// through — take the mark after setup, read the accessors after
+// status.
+type statusProbe struct {
+	h        *testharness.Harness
+	previews *statusPreviewFactoryLog
+
+	tracker, host, preview, refs, keys, previewKeys, factories int
 }
 
-// mark captures the current call counts as the baseline for since().
-func mark(h *testharness.Harness, previews *previewFactoryLog) probe {
-	return probe{
-		h:        h,
-		previews: previews,
-		tracker:  len(h.Tracker.Calls()),
-		host:     len(h.Host.Calls()),
-		preview:  len(h.Preview.Calls()),
-		refs:     len(h.Host.ChecksRefs()),
+// markStatus captures the current call counts as the baseline every
+// accessor below slices from.
+func markStatus(h *testharness.Harness, previews *statusPreviewFactoryLog) statusProbe {
+	return statusProbe{
+		h:           h,
+		previews:    previews,
+		tracker:     len(h.Tracker.Calls()),
+		host:        len(h.Host.Calls()),
+		preview:     len(h.Preview.Calls()),
+		refs:        len(h.Host.ChecksRefs()),
+		keys:        len(h.Tracker.GetIssueKeys()),
+		previewKeys: len(h.Preview.GetKeys()),
+		factories:   len(previews.names()),
 	}
 }
 
-func (p probe) trackerCalls() []string { return p.h.Tracker.Calls()[p.tracker:] }
-func (p probe) hostCalls() []string    { return p.h.Host.Calls()[p.host:] }
-func (p probe) previewCalls() []string { return p.h.Preview.Calls()[p.preview:] }
-func (p probe) checksRefs() []string   { return p.h.Host.ChecksRefs()[p.refs:] }
+func (p statusProbe) trackerCalls() []string { return p.h.Tracker.Calls()[p.tracker:] }
+func (p statusProbe) hostCalls() []string    { return p.h.Host.Calls()[p.host:] }
+func (p statusProbe) previewCalls() []string { return p.h.Preview.Calls()[p.preview:] }
+func (p statusProbe) checksRefs() []string   { return p.h.Host.ChecksRefs()[p.refs:] }
 
-// workspacesAsked returns the workspace names status passed to the
-// preview-provider factory, sorted for order-independent comparison
-// (project scope fans out concurrently).
-func (p probe) workspacesAsked() []string {
-	names := p.previews.names()
-	sort.Strings(names)
-	return names
+// issueKeys returns the keys status asked the tracker for, sorted —
+// project scope fans out concurrently, so order isn't meaningful.
+func (p statusProbe) issueKeys() []string {
+	return sorted(p.h.Tracker.GetIssueKeys()[p.keys:])
 }
 
-// assertReadOnly fails the test if the status run reached for anything
-// outside the read allowlists — the invariant that separates status
-// from every other command in the tree.
-func assertReadOnly(t *testing.T, p probe) {
+// previewKeysAsked returns the issue keys status looked preview
+// environments up under, sorted.
+func (p statusProbe) previewKeysAsked() []string {
+	return sorted(p.h.Preview.GetKeys()[p.previewKeys:])
+}
+
+// workspacesAsked returns the workspace names status passed to the
+// preview-provider factory, sorted.
+func (p statusProbe) workspacesAsked() []string {
+	return sorted(p.previews.names()[p.factories:])
+}
+
+func sorted(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+// assertStatusReadOnly fails the test if the status run reached for
+// anything outside the allowlists — the invariant that separates
+// status from every other command in the tree.
+func assertStatusReadOnly(t *testing.T, p statusProbe) {
 	t.Helper()
 	check := func(kind string, calls []string, allowed map[string]bool) {
 		for _, c := range calls {
 			if !allowed[c] {
-				t.Errorf("status made mutating %s call %q; calls=%v", kind, c, calls)
+				t.Errorf("status made disallowed %s call %q; calls=%v", kind, c, calls)
 			}
 		}
 	}
-	check("tracker", p.trackerCalls(), trackerReads)
-	check("host", p.hostCalls(), hostReads)
-	check("preview", p.previewCalls(), previewReads)
+	check("tracker", p.trackerCalls(), statusTrackerCalls)
+	check("host", p.hostCalls(), statusHostCalls)
+	check("preview", p.previewCalls(), statusPreviewCalls)
+	// Absolute rather than delta-from-mark on purpose: no command in
+	// any of these scenarios' setup tears an env down either, so a
+	// non-empty list is a failure whenever it appeared.
 	if d := p.h.Preview.Destroyed(); len(d) > 0 {
 		t.Errorf("status destroyed preview env(s) %v", d)
 	}
 }
 
-// previewFactoryLog records the workspace name every
+// statusPreviewFactoryLog records the workspace name every
 // newPreviewProvider call was made with. Guarded because project scope
 // builds providers from concurrent per-workspace goroutines.
-type previewFactoryLog struct {
+type statusPreviewFactoryLog struct {
 	mu sync.Mutex
 	ws []string
 }
 
-func (l *previewFactoryLog) names() []string {
+func (l *statusPreviewFactoryLog) names() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.ws...)
 }
 
-// installPreview wires the harness's preview fake in and wraps the
-// factory so the workspace name status resolves it for is observable.
-// The name is the binding between a workspace and its preview env —
-// getting it wrong is exactly the composition regression this file
-// exists to catch, and the fake alone can't see it.
-func installPreview(h *testharness.Harness) *previewFactoryLog {
+// installStatusPreview wires the harness's preview fake in and wraps
+// the factory so the workspace name status resolves a provider for is
+// observable. That name is half the workspace→env binding (the issue
+// key is the other half, via Preview.GetKeys) — getting either wrong
+// renders every preview as "(none)" with no other symptom, which is
+// exactly the composition regression this file exists to catch.
+func installStatusPreview(h *testharness.Harness) *statusPreviewFactoryLog {
 	fake := h.InstallPreview()
-	log := &previewFactoryLog{}
+	log := &statusPreviewFactoryLog{}
+	// In-place field assignment mirrors Harness.InstallPreview itself
+	// and is safe for the same reason: New() installed a fresh
+	// *cli.Services for this test and restores the previous pointer in
+	// t.Cleanup, so every mutation dies with the test.
 	cli.GetServices().PreviewProvider = func(ws string) (preview.Provider, error) {
 		log.mu.Lock()
 		log.ws = append(log.ws, ws)
@@ -157,20 +179,20 @@ func installPreview(h *testharness.Harness) *previewFactoryLog {
 
 // newStatusHarness builds a harness with the status config, the
 // preview fake installed, and the named repos created.
-func newStatusHarness(t *testing.T, repos ...string) (*testharness.Harness, *previewFactoryLog) {
+func newStatusHarness(t *testing.T, repos ...string) (*testharness.Harness, *statusPreviewFactoryLog) {
 	t.Helper()
 	h := testharness.New(t)
 	h.Workspace.WriteConfig(statusConfig)
 	for _, name := range repos {
 		h.Workspace.AddRepo(name)
 	}
-	return h, installPreview(h)
+	return h, installStatusPreview(h)
 }
 
-// startWorkspace seeds an issue and runs `bosun start` to lay down a
-// real workspace (branches + worktrees) for it. Returns the workspace
-// name, which is also the branch name.
-func startWorkspace(t *testing.T, h *testharness.Harness, key, title, slug string, repos ...string) string {
+// startStatusWorkspace seeds an issue and runs `bosun start` to lay
+// down a real workspace (branches + worktrees) for it. Returns the
+// workspace name, which is also the branch name.
+func startStatusWorkspace(t *testing.T, h *testharness.Harness, key, title, slug string, repos ...string) string {
 	t.Helper()
 	h.Tracker.SeedIssue(issue.Issue{
 		Key: key, Title: title, Type: "Story", Status: "In Progress",
@@ -186,18 +208,8 @@ func startWorkspace(t *testing.T, h *testharness.Harness, key, title, slug strin
 	return "story/" + key + "_" + slug
 }
 
-// dirty writes an uncommitted file into a workspace worktree so the
-// manager's IsDirty probe has something to report.
-func dirty(t *testing.T, h *testharness.Harness, branch, repo string) {
-	t.Helper()
-	path := filepath.Join(h.WorktreePath(branch, repo), "scratch.txt")
-	if err := os.WriteFile(path, []byte("wip\n"), 0o644); err != nil {
-		t.Fatalf("write scratch file: %v", err)
-	}
-}
-
-// countCall returns how many times name appears in calls.
-func countCall(calls []string, name string) int {
+// statusCallCount returns how many times name appears in calls.
+func statusCallCount(calls []string, name string) int {
 	n := 0
 	for _, c := range calls {
 		if c == name {
@@ -205,6 +217,19 @@ func countCall(calls []string, name string) int {
 		}
 	}
 	return n
+}
+
+// equalStrings compares two string slices for exact equality.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestStatus exercises `bosun status` end-to-end through the test
@@ -217,60 +242,64 @@ func TestStatus(t *testing.T) {
 		// The baseline fan-in: one tracker fetch for the issue card, one
 		// preview lookup for the Preview card, and a PR + checks probe
 		// for the workspace's single repo.
+		//
+		// No --issue: the key is derived from the workspace name, which
+		// is the path real invocations from inside a workspace take. The
+		// derived key is what the tracker and preview lookups must both
+		// receive.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-1", "Add feature", "feature")
-		p := mark(h, previews)
+		branch := startStatusWorkspace(t, h, "EX-1", "Add feature", "feature")
+		p := markStatus(h, previews)
 
-		if err := h.Run("status", "--workspace", branch, "--issue", "EX-1"); err != nil {
+		if err := h.Run("status", "--workspace", branch); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
 		if got := p.trackerCalls(); len(got) != 1 || got[0] != "GetIssue" {
 			t.Errorf("tracker calls = %v, want [GetIssue]", got)
 		}
-		if got := p.previewCalls(); len(got) != 1 || got[0] != "Get" {
-			t.Errorf("preview calls = %v, want [Get]", got)
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-1"}) {
+			t.Errorf("issue keys fetched = %v, want [EX-1] (derived from the workspace name)", got)
 		}
-		if got := p.workspacesAsked(); len(got) != 1 || got[0] != branch {
+		if got := p.previewKeysAsked(); !equalStrings(got, []string{"EX-1"}) {
+			t.Errorf("preview looked up under %v, want [EX-1]", got)
+		}
+		if got := p.workspacesAsked(); !equalStrings(got, []string{branch}) {
 			t.Errorf("preview provider built for %v, want [%s]", got, branch)
 		}
-		if n := countCall(p.hostCalls(), "GetPRForBranch"); n != 1 {
+		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 1 {
 			t.Errorf("GetPRForBranch calls = %d, want 1", n)
 		}
-		if n := countCall(p.hostCalls(), "GetChecks"); n != 1 {
+		if n := statusCallCount(p.hostCalls(), "GetChecks"); n != 1 {
 			t.Errorf("GetChecks calls = %d, want 1", n)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("workspace_scope/multi_repo_mixed_states", func(t *testing.T) {
-		// Two repos in one workspace, in different states: api is dirty
-		// with an open PR, web is clean with none. Both must be probed —
-		// a fan-in that stops at the first repo is the regression this
-		// pins — and each repo's checks ref reflects its own PR state.
+		// Two repos in one workspace, in different states: api has an
+		// open PR, web has none. Both must be probed — a fan-in that
+		// stops at the first repo is the regression this pins — and each
+		// repo's checks ref reflects its own PR state.
 		h, previews := newStatusHarness(t, "api", "web")
-		branch := startWorkspace(t, h, "EX-2", "Wire both", "both", "api", "web")
-		dirty(t, h, branch, "api")
+		branch := startStatusWorkspace(t, h, "EX-2", "Wire both", "both", "api", "web")
 		h.Host.SeedPR(testharness.Owner, "api", branch, code.PullRequest{
 			Number: 4, State: "open", HeadSHA: "apihead", URL: "https://github.test/acme/api/pull/4",
 		})
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-2"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if n := countCall(p.hostCalls(), "GetPRForBranch"); n != 2 {
+		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 2 {
 			t.Errorf("GetPRForBranch calls = %d, want 2 (one per repo)", n)
 		}
-		want := []string{"acme/api@apihead", "acme/web@" + branch}
-		got := p.checksRefs()
-		sort.Strings(got)
-		sort.Strings(want)
-		if strings.Join(got, ",") != strings.Join(want, ",") {
+		want := sorted([]string{"acme/api@apihead", "acme/web@" + branch})
+		if got := sorted(p.checksRefs()); !equalStrings(got, want) {
 			t.Errorf("checks refs = %v, want %v", got, want)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("workspace_scope/with_open_pr", func(t *testing.T) {
@@ -279,127 +308,134 @@ func TestStatus(t *testing.T) {
 		// fetchRepoState that a "PR shape changed" regression would
 		// silently drop.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-3", "Ship it", "ship")
+		branch := startStatusWorkspace(t, h, "EX-3", "Ship it", "ship")
 		h.Host.SeedPR(testharness.Owner, "api", branch, code.PullRequest{
 			Number: 9, State: "open", MergeableState: "clean", Review: "approved",
 			HeadSHA: "cafebabe", URL: "https://github.test/acme/api/pull/9",
 		})
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-3"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if got := p.checksRefs(); len(got) != 1 || got[0] != "acme/api@cafebabe" {
+		if got := p.checksRefs(); !equalStrings(got, []string{"acme/api@cafebabe"}) {
 			t.Errorf("checks refs = %v, want [acme/api@cafebabe]", got)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("workspace_scope/with_active_preview", func(t *testing.T) {
-		// A live env bound to the issue is read, never touched: Get is
-		// the only preview call and the binding survives the run.
+		// A live env bound to the issue is found and left alone: the
+		// lookup runs under the issue's key (not the workspace name, not
+		// the branch), Get is the only preview call, and the binding
+		// survives the run.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-4", "Preview me", "preview")
+		branch := startStatusWorkspace(t, h, "EX-4", "Preview me", "preview")
 		h.Preview.SeedEnv("EX-4", preview.Environment{
 			Name: "brave-falcon", URL: "https://brave-falcon.preview.test",
 			Probed: true, Alive: true,
 		})
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-4"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if got := p.previewCalls(); len(got) != 1 || got[0] != "Get" {
+		if got := p.previewCalls(); !equalStrings(got, []string{"Get"}) {
 			t.Errorf("preview calls = %v, want [Get]", got)
+		}
+		if got := p.previewKeysAsked(); !equalStrings(got, []string{"EX-4"}) {
+			t.Errorf("preview looked up under %v, want [EX-4] — a wrong key reads as no env bound", got)
 		}
 		env, ok := h.Preview.Env("EX-4")
 		if !ok || env.Name != "brave-falcon" {
 			t.Errorf("preview binding after status = (%+v, %v), want brave-falcon still bound", env, ok)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("project_scope/no_workspace_flag_lists_all", func(t *testing.T) {
 		// No --workspace: status resolves to project scope and fans out
 		// over every workspace under the workspace root — one tracker
-		// fetch and one preview provider per workspace, keyed by that
-		// workspace's own name.
+		// fetch and one preview provider per workspace, each keyed by
+		// the issue extracted from that workspace's own name.
 		h, previews := newStatusHarness(t, "api")
-		first := startWorkspace(t, h, "EX-5", "First", "first")
-		second := startWorkspace(t, h, "EX-6", "Second", "second")
-		p := mark(h, previews)
+		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
+		second := startStatusWorkspace(t, h, "EX-6", "Second", "second")
+		p := markStatus(h, previews)
 
 		if err := h.Run("status"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if n := countCall(p.trackerCalls(), "GetIssue"); n != 2 {
-			t.Errorf("GetIssue calls = %d, want 2 (one per workspace)", n)
+		wantKeys := []string{"EX-5", "EX-6"}
+		if got := p.issueKeys(); !equalStrings(got, wantKeys) {
+			t.Errorf("issue keys fetched = %v, want %v (one per workspace, extracted from its name)", got, wantKeys)
 		}
-		want := []string{first, second}
-		sort.Strings(want)
-		if got := p.workspacesAsked(); strings.Join(got, ",") != strings.Join(want, ",") {
+		if got := p.previewKeysAsked(); !equalStrings(got, wantKeys) {
+			t.Errorf("preview looked up under %v, want %v", got, wantKeys)
+		}
+		want := sorted([]string{first, second})
+		if got := p.workspacesAsked(); !equalStrings(got, want) {
 			t.Errorf("preview providers built for %v, want %v", got, want)
 		}
-		if n := countCall(p.previewCalls(), "Get"); n != 2 {
-			t.Errorf("preview Get calls = %d, want 2", n)
-		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
-	t.Run("project_scope/aggregates_per_workspace_state", func(t *testing.T) {
-		// Workspaces in different states roll up independently: the
+	t.Run("project_scope/per_workspace_fan_out", func(t *testing.T) {
+		// Workspaces in different states are resolved independently: the
 		// merged-PR workspace's checks follow its PR head, the untouched
 		// one's follow its branch. Both repos are probed regardless of
 		// how the first one resolved.
+		//
+		// (The issue called this aggregates_per_workspace_state; the
+		// aggregation itself — rollup state, counts, lifecycle sort — is
+		// render-only, so the name follows what's assertable here. The
+		// rollup rendering is covered in status_test.go.)
 		h, previews := newStatusHarness(t, "api")
-		merged := startWorkspace(t, h, "EX-7", "Merged work", "merged")
-		open := startWorkspace(t, h, "EX-8", "Fresh work", "fresh")
+		merged := startStatusWorkspace(t, h, "EX-7", "Merged work", "merged")
+		open := startStatusWorkspace(t, h, "EX-8", "Fresh work", "fresh")
 		h.Host.SeedPR(testharness.Owner, "api", merged, code.PullRequest{
 			Number: 11, State: "merged", HeadSHA: "mergedhead",
 			URL: "https://github.test/acme/api/pull/11",
 		})
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if n := countCall(p.hostCalls(), "GetPRForBranch"); n != 2 {
+		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 2 {
 			t.Errorf("GetPRForBranch calls = %d, want 2 (one per workspace repo)", n)
 		}
-		want := []string{"acme/api@mergedhead", "acme/api@" + open}
-		got := p.checksRefs()
-		sort.Strings(got)
-		sort.Strings(want)
-		if strings.Join(got, ",") != strings.Join(want, ",") {
+		want := sorted([]string{"acme/api@mergedhead", "acme/api@" + open})
+		if got := sorted(p.checksRefs()); !equalStrings(got, want) {
 			t.Errorf("checks refs = %v, want %v", got, want)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
-	t.Run("issue_not_found/renders_without_issue_detail", func(t *testing.T) {
+	t.Run("issue_not_found/continues_without_issue_detail", func(t *testing.T) {
 		// The tracker rejects the key (deleted issue, typo'd workspace
 		// name). Status renders the degraded issue card and carries on —
 		// it must not abort, and the rest of the fan-in must still run.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-9", "Vanishing", "vanish")
+		branch := startStatusWorkspace(t, h, "EX-9", "Vanishing", "vanish")
 		h.Tracker.GetErr = errors.New("issue EX-9 not found")
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-9"); err != nil {
 			t.Fatalf("status should tolerate a failed issue fetch; got %v", err)
 		}
 
-		if n := countCall(p.trackerCalls(), "GetIssue"); n != 1 {
-			t.Errorf("GetIssue calls = %d, want 1", n)
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-9"}) {
+			t.Errorf("issue keys fetched = %v, want [EX-9]", got)
 		}
-		if n := countCall(p.hostCalls(), "GetPRForBranch"); n != 1 {
+		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 1 {
 			t.Errorf("repos not probed after issue fetch failed; GetPRForBranch = %d, want 1", n)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("clean_workspace/no_pr_no_preview", func(t *testing.T) {
@@ -410,20 +446,20 @@ func TestStatus(t *testing.T) {
 		// (The issue's "no branch" variant isn't reachable: a workspace
 		// is a set of worktrees, each necessarily on a branch.)
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-10", "Nothing yet", "nothing")
-		p := mark(h, previews)
+		branch := startStatusWorkspace(t, h, "EX-10", "Nothing yet", "nothing")
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-10"); err != nil {
 			t.Fatalf("status: %v", err)
 		}
 
-		if got := p.previewCalls(); len(got) != 1 || got[0] != "Get" {
+		if got := p.previewCalls(); !equalStrings(got, []string{"Get"}) {
 			t.Errorf("preview calls = %v, want [Get] (returning ErrNoEnvironment)", got)
 		}
-		if got := p.checksRefs(); len(got) != 1 || got[0] != "acme/api@"+branch {
+		if got := p.checksRefs(); !equalStrings(got, []string{"acme/api@" + branch}) {
 			t.Errorf("checks refs = %v, want [acme/api@%s] (branch, no PR head)", got, branch)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("partial_data/host_unconfigured_skips_pr_section", func(t *testing.T) {
@@ -431,11 +467,11 @@ func TestStatus(t *testing.T) {
 		// no source, so status must skip them silently rather than
 		// failing the run — and must not call the host at all.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-11", "Hostless", "hostless")
+		branch := startStatusWorkspace(t, h, "EX-11", "Hostless", "hostless")
 		cli.GetServices().CodeHost = func() (code.Host, error) {
 			return nil, errors.New("code_host not configured")
 		}
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-11"); err != nil {
 			t.Fatalf("status should tolerate a missing code host; got %v", err)
@@ -444,10 +480,10 @@ func TestStatus(t *testing.T) {
 		if got := p.hostCalls(); len(got) != 0 {
 			t.Errorf("host consulted despite being unconfigured: %v", got)
 		}
-		if n := countCall(p.trackerCalls(), "GetIssue"); n != 1 {
-			t.Errorf("GetIssue calls = %d, want 1 (issue section still renders)", n)
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-11"}) {
+			t.Errorf("issue keys fetched = %v, want [EX-11] (issue section still renders)", got)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("partial_data/tracker_unconfigured_skips_issue_section", func(t *testing.T) {
@@ -456,11 +492,11 @@ func TestStatus(t *testing.T) {
 		// fetch, so the preview lookup is skipped along with it. The
 		// per-repo cards still render.
 		h, previews := newStatusHarness(t, "api")
-		branch := startWorkspace(t, h, "EX-12", "Trackerless", "trackerless")
+		branch := startStatusWorkspace(t, h, "EX-12", "Trackerless", "trackerless")
 		cli.GetServices().IssueTracker = func() (issue.Tracker, error) {
 			return nil, errors.New("issue_tracker not configured")
 		}
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-12"); err != nil {
 			t.Fatalf("status should tolerate a missing tracker; got %v", err)
@@ -472,24 +508,25 @@ func TestStatus(t *testing.T) {
 		if got := p.previewCalls(); len(got) != 0 {
 			t.Errorf("preview consulted without a tracker at workspace scope: %v", got)
 		}
-		if n := countCall(p.hostCalls(), "GetPRForBranch"); n != 1 {
+		if n := statusCallCount(p.hostCalls(), "GetPRForBranch"); n != 1 {
 			t.Errorf("repos not probed without a tracker; GetPRForBranch = %d, want 1", n)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 
 	t.Run("partial_data/project_scope_previews_without_tracker", func(t *testing.T) {
 		// Project scope diverges from workspace scope here on purpose:
 		// the issue key comes from the workspace *name*, so the preview
-		// lookup doesn't need the tracker and still runs. Pinning the
-		// asymmetry keeps a future "just gate both on the tracker"
-		// simplification from silently dropping the Preview row.
+		// lookup doesn't need the tracker and still runs — under that
+		// derived key. Pinning the asymmetry keeps a future "just gate
+		// both on the tracker" simplification from silently dropping the
+		// Preview row.
 		h, previews := newStatusHarness(t, "api")
-		startWorkspace(t, h, "EX-13", "Trackerless project", "tp")
+		startStatusWorkspace(t, h, "EX-13", "Trackerless project", "tp")
 		cli.GetServices().IssueTracker = func() (issue.Tracker, error) {
 			return nil, errors.New("issue_tracker not configured")
 		}
-		p := mark(h, previews)
+		p := markStatus(h, previews)
 
 		if err := h.Run("status"); err != nil {
 			t.Fatalf("status should tolerate a missing tracker; got %v", err)
@@ -498,9 +535,9 @@ func TestStatus(t *testing.T) {
 		if got := p.trackerCalls(); len(got) != 0 {
 			t.Errorf("tracker consulted despite being unconfigured: %v", got)
 		}
-		if n := countCall(p.previewCalls(), "Get"); n != 1 {
-			t.Errorf("preview Get calls = %d, want 1 (issue key comes from the workspace name)", n)
+		if got := p.previewKeysAsked(); !equalStrings(got, []string{"EX-13"}) {
+			t.Errorf("preview looked up under %v, want [EX-13] (key comes from the workspace name)", got)
 		}
-		assertReadOnly(t, p)
+		assertStatusReadOnly(t, p)
 	})
 }
