@@ -419,10 +419,10 @@ func reviewTargetRow(rc *repoContext, on bool) (glyph, content string) {
 // to its Apply: the existing PR (zero value when none) and the
 // per-axis deltas to apply.
 //
-// For a create, add* hold the full requested sets and remove* are empty.
-// For an in-place update, add*/remove* reconcile the PR's reviewers,
-// teams, and assignees to exactly the requested state, and
-// contentChanged (with title/body/base) drives an EditPR overwrite.
+// For a create, add* hold the full requested sets. For an in-place
+// update they hold only what's missing from the PR, and contentChanged
+// (with title/body/base) drives an EditPR overwrite. There is no
+// removal axis — see planSync for why reconciliation is additive.
 type prState struct {
 	pr code.PullRequest
 
@@ -481,24 +481,12 @@ func syncSummary(s *prState) string {
 		parts = append(parts, "content")
 	}
 	if a := len(s.addRevs) + len(s.addTeams); a > 0 {
-		parts = append(parts, countPair(a, 0)+" rev")
+		parts = append(parts, fmt.Sprintf("+%d rev", a))
 	}
 	if a := len(s.addAsns); a > 0 {
-		parts = append(parts, countPair(a, 0)+" asn")
+		parts = append(parts, fmt.Sprintf("+%d asn", a))
 	}
 	return strings.Join(parts, " ")
-}
-
-// countPair formats an add/remove pair, omitting a zero side.
-func countPair(add, rem int) string {
-	switch {
-	case add > 0 && rem > 0:
-		return fmt.Sprintf("+%d/-%d", add, rem)
-	case rem > 0:
-		return fmt.Sprintf("-%d", rem)
-	default:
-		return fmt.Sprintf("+%d", add)
-	}
 }
 
 // diffCaseInsensitive returns elements of want that don't appear in
@@ -910,10 +898,10 @@ func newReviewCmd() *cobra.Command {
 									return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 								}
 
-								// Checked for update — reconcile reviewers,
-								// teams, and assignees to exactly the requested
-								// state (add missing, remove unwanted) and
-								// overwrite title/body/base when they differ.
+								// Checked for update — add whichever
+								// reviewers, teams, and assignees are missing
+								// and overwrite title/body/base when they
+								// differ.
 								*state = *planSync(existing, meta.reviewers, meta.teams, meta.assignees, meta.title, meta.body, meta.base)
 								if !state.hasChanges() {
 									return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
