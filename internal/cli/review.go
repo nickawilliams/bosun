@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
+	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,7 +23,8 @@ import (
 // repoContext is one workspace repo resolved for review: its remote
 // identity, the branch under review, the PR currently associated with
 // that branch (zero value when none), and whether the user selected it
-// for PR creation. pr/prErr/include are filled by selectReviewTargets;
+// for PR creation. pr/prErr/include/defaultBranch are filled by
+// selectReviewTargets; meta by the metadata resolution that follows;
 // the rest by the identity-resolution loop.
 type repoContext struct {
 	repo     Repository
@@ -29,9 +32,43 @@ type repoContext struct {
 	owner    string
 	repoName string
 
-	pr      code.PullRequest // existing PR for branch (zero value = none)
-	prErr   error            // lookup failure, surfaced as a ✗ plan row
-	include bool             // selected for PR creation (creatable repos)
+	pr            code.PullRequest // existing PR for branch (zero value = none)
+	prErr         error            // lookup failure, surfaced as a ✗ plan row
+	include       bool             // selected for PR creation (creatable repos)
+	defaultBranch string           // repo's own default branch (base fallback)
+
+	meta prMetadata // the PR content this repo is created/synced with
+}
+
+// prMetadata is the PR content applied to ONE repository. Every repo
+// starts from the shared resolution (flags, config, the shared prompt
+// pass) with base defaulting to that repo's own default branch, and can
+// then be overridden individually in the customization pass. Keeping it
+// per repo is the point: a workspace-wide base that doesn't exist in
+// repo N fails N's CreatePR, and reviewer lists drawn from one repo's
+// collaborators don't necessarily resolve on the others.
+type prMetadata struct {
+	base      string
+	title     string
+	body      string
+	reviewers []string
+	teams     []string
+	assignees []string
+}
+
+// defaultBaseBranch is the last-resort PR base: neither --base nor
+// config named one, and neither the host nor the local clone could say
+// what the repo actually targets.
+const defaultBaseBranch = "main"
+
+// baseBranch returns the branch rc's PR targets when no global override
+// applies: the repo's own default branch, falling back to
+// defaultBaseBranch when it couldn't be resolved.
+func (rc *repoContext) baseBranch() string {
+	if rc.defaultBranch != "" {
+		return rc.defaultBranch
+	}
+	return defaultBaseBranch
 }
 
 // activePR reports whether rc's branch already has an open or draft PR
@@ -69,18 +106,19 @@ func (rc *repoContext) statusNote() string {
 	return fmt.Sprintf("#%d (%s)", rc.pr.Number, rc.pr.State)
 }
 
-// selectReviewTargets fetches each repo's PR status under a spinner
-// sequence, then — when interactive — offers a multi-select of the
-// creatable repos so the user can choose which get a PR created. Repos
-// with an active PR aren't offered (they're updated in place); merged
-// repos appear unchecked. Mutates resolved in place: sets pr/prErr on
-// every repo and include on the creatable ones.
+// selectReviewTargets fetches each repo's PR status and default branch
+// under a spinner sequence, then — when interactive — offers a
+// multi-select of the creatable repos so the user can choose which get
+// a PR created. Repos with an active PR aren't offered (they're updated
+// in place); merged repos appear unchecked. Mutates resolved in place:
+// sets pr/prErr/defaultBranch on every repo and include on the
+// creatable ones.
 //
 // Either way the section ends with a static "Pull Requests" card
 // recording the outcome per repo (create / update / skipped) — the
 // spinner program morphs into the form header when the form shows and
 // into that card otherwise, and the submitted form is replaced by it.
-func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host, resolved []repoContext) error {
+func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host, g vcs.VCS, resolved []repoContext) error {
 	if host == nil || len(resolved) == 0 {
 		return nil
 	}
@@ -115,6 +153,7 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 			// not the step error path, so the sequence finishes.
 			Run: func() error {
 				rc.pr, rc.prErr = host.GetPRForBranch(ctx, rc.owner, rc.repoName, rc.branch)
+				rc.defaultBranch = resolveDefaultBranch(ctx, host, g, rc)
 				glyph, content := reviewTargetRow(rc, rc.preselect())
 				for j := i + 1; j < n; j++ {
 					cards[j].Item(glyph, content)
@@ -272,6 +311,28 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 	ui.ClearSpacer()
 	buildReviewTargetsCard(resolved).Print()
 	return nil
+}
+
+// resolveDefaultBranch answers "what does this repo's PR target by
+// default?" — the host's default_branch first (authoritative, and the
+// only source that's right for a repo whose local origin/HEAD was never
+// fetched), then the local clone's origin/HEAD, then "" so the caller
+// falls back to defaultBaseBranch. Deliberately error-free: a base we
+// couldn't detect isn't a review failure, it's a value the global
+// --base / config override and the per-repo customization pass exist to
+// correct.
+func resolveDefaultBranch(ctx context.Context, host code.Host, g vcs.VCS, rc *repoContext) string {
+	if host != nil {
+		if b, err := host.GetDefaultBranch(ctx, rc.owner, rc.repoName); err == nil && b != "" {
+			return b
+		}
+	}
+	if g != nil {
+		if b, err := g.GetDefaultBranch(ctx, rc.repo.Path); err == nil && b != "" {
+			return b
+		}
+	}
+	return ""
 }
 
 // buildReviewTargetsCard composes the static "Pull Requests" card: one
@@ -548,67 +609,97 @@ func newReviewCmd() *cobra.Command {
 			// the user pick which repos to open a PR for, pre-checking
 			// the ones that should have one. Repos with an active PR are
 			// updated in place; merged repos are unchecked by default.
-			if err := selectReviewTargets(ctx, cmd, host, resolved); err != nil {
+			if err := selectReviewTargets(ctx, cmd, host, gitClient, resolved); err != nil {
 				return err // ErrCancelled (form abort) propagates as a clean abort
 			}
 
 			// --- Resolve PR metadata from flags, config, and interactive prompts ---
+			//
+			// Two layers. This pass resolves what applies to EVERY repo;
+			// customizeRepoMetadata below is the opt-in pass where a repo
+			// diverges. Base is the exception that motivates the split: it
+			// defaults per repo (each repo's own default branch) and only
+			// goes workspace-wide when --base or config says so, because a
+			// base that doesn't exist in repo N fails N's CreatePR.
 
-			baseBranch, _ := cmd.Flags().GetString("base")
-			if baseBranch == "" {
-				baseBranch = viper.GetString("pull_request.base")
+			// globalBase is "" when nothing overrides the per-repo default.
+			globalBase, _ := cmd.Flags().GetString("base")
+			if globalBase == "" {
+				globalBase = viper.GetString("pull_request.base")
 			}
-			if baseBranch == "" {
-				baseBranch = "main"
-			}
-			// Open-ended text input (current value as placeholder, Enter
-			// accepts it). A single base applies to every repo's PR — see
-			// the deferred "per-repo PR metadata" overhaul for the
-			// mixed-base / per-repo-branch-list case this intentionally
-			// doesn't cover yet.
-			if forceInteractive(cmd) && !cmd.Flags().Changed("base") {
-				val, err := typeaheadInput("Base Branch", baseBranch)
+			if promptForValues(cmd) && !cmd.Flags().Changed("base") {
+				// Open-ended text input whose placeholder is whatever
+				// submitting nothing yields — the override when one is set,
+				// the shared default branch when the repos agree, otherwise
+				// a description of the per-repo rule. A typed answer becomes
+				// the workspace-wide override.
+				entry, err := typeaheadInputOptional("Base Branch", basePlaceholder(globalBase, resolved))
 				if err != nil {
 					return err
 				}
-				baseBranch = val
+				if entry != "" {
+					globalBase = entry
+				}
 			}
 
-			// Build PR title and body from templates.
-			var templateBranch string
+			// baseFor resolves one repo's base: global override first, else
+			// the repo's own default branch.
+			baseFor := func(rc *repoContext) string {
+				if globalBase != "" {
+					return globalBase
+				}
+				return rc.baseBranch()
+			}
+
+			// Title and body render from a per-repo template (Branch and
+			// BaseBranch differ), so they stay templated unless the user
+			// pins a literal via --title/--body or by editing the prompt.
+			// The prompts preview the first resolved repo's rendering —
+			// they have to show one concrete result.
+			var repRepo *repoContext
 			if len(resolved) > 0 {
-				templateBranch = resolved[0].branch
+				repRepo = &resolved[0]
 			}
-			prData := prTemplateData{
-				IssueKey:   issue,
-				IssueTitle: detail.Title,
-				IssueType:  detail.Type,
-				IssueURL:   detail.URL,
-				Branch:     templateBranch,
-				BaseBranch: baseBranch,
+			templateData := func(rc *repoContext) prTemplateData {
+				d := prTemplateData{
+					IssueKey:   issue,
+					IssueTitle: detail.Title,
+					IssueType:  detail.Type,
+					IssueURL:   detail.URL,
+				}
+				if rc != nil {
+					d.Branch = rc.branch
+					d.BaseBranch = baseFor(rc)
+				}
+				return d
 			}
+
 			prTitle, _ := cmd.Flags().GetString("title")
-			if prTitle == "" {
-				prTitle = buildPRTitle(prData)
-			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("title") {
-				val, err := typeaheadInput("Title", prTitle)
+			titlePinned := prTitle != ""
+			if promptForValues(cmd) && !cmd.Flags().Changed("title") {
+				entry, err := typeaheadInputOptional("Title", buildPRTitle(templateData(repRepo)))
 				if err != nil {
 					return err
 				}
-				prTitle = val
+				if entry != "" {
+					prTitle, titlePinned = entry, true
+				}
 			}
 
 			prBody, _ := cmd.Flags().GetString("body")
-			if prBody == "" {
-				prBody = buildPRBody(prData)
-			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("body") {
-				val, err := typeaheadText("Body", prBody)
+			bodyPinned := prBody != ""
+			if promptForValues(cmd) && !cmd.Flags().Changed("body") {
+				rendered := buildPRBody(templateData(repRepo))
+				val, err := typeaheadText("Body", rendered)
 				if err != nil {
 					return err
 				}
-				prBody = val
+				// Only an EDITED body pins a literal workspace-wide;
+				// submitting the preview unchanged leaves each repo
+				// rendering its own.
+				if val != rendered {
+					prBody, bodyPinned = val, true
+				}
 			}
 
 			// Resolve the authenticated user once; reused to exclude the
@@ -629,7 +720,7 @@ func newReviewCmd() *cobra.Command {
 			if flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer"); len(flagReviewers) > 0 {
 				reviewers = append(reviewers, flagReviewers...)
 			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
+			if promptForValues(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
 				selected, err := typeaheadMultiSelect("Reviewers", reviewers, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
 				}, excludeUser(selfUser))
@@ -643,7 +734,7 @@ func newReviewCmd() *cobra.Command {
 			if flagTeams, _ := cmd.Flags().GetStringSlice("team-reviewer"); len(flagTeams) > 0 {
 				teamReviewers = append(teamReviewers, flagTeams...)
 			}
-			if forceInteractive(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
+			if promptForValues(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
 				selected, err := typeaheadMultiSelect("Team Reviewers", teamReviewers, func() ([]string, error) {
 					return host.ListTeams(ctx, apiOwner)
 				})
@@ -677,7 +768,7 @@ func newReviewCmd() *cobra.Command {
 				}
 			}
 
-			if forceInteractive(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
+			if promptForValues(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
 				selected, err := typeaheadMultiSelect("Assignees", assignees, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
 				}, promoteUser(selfUser))
@@ -699,6 +790,34 @@ func newReviewCmd() *cobra.Command {
 					}
 				}
 				reviewers = kept
+			}
+
+			// --- Seed per-repo metadata, then offer the override pass ---
+			//
+			// Every repo starts from the shared resolution above; only
+			// base (and the templated title/body that embed it) is
+			// already per repo at this point.
+			for i := range resolved {
+				rc := &resolved[i]
+				data := templateData(rc)
+				rc.meta = prMetadata{
+					base:      data.BaseBranch,
+					title:     prTitle,
+					body:      prBody,
+					reviewers: slices.Clone(reviewers),
+					teams:     slices.Clone(teamReviewers),
+					assignees: slices.Clone(assignees),
+				}
+				if !titlePinned {
+					rc.meta.title = buildPRTitle(data)
+				}
+				if !bodyPinned {
+					rc.meta.body = buildPRBody(data)
+				}
+			}
+
+			if err := customizeRepoMetadata(ctx, cmd, host, resolved, selfUser); err != nil {
+				return err // ErrCancelled (form abort) propagates as a clean abort
 			}
 
 			// --- Plan + Apply ---
@@ -723,10 +842,12 @@ func newReviewCmd() *cobra.Command {
 
 					// PR status pre-fetched by selectReviewTargets, along
 					// with whether the user selected this repo for
-					// creation.
+					// creation. meta is THIS repo's PR content — shared
+					// values unless the customization pass changed them.
 					existing := rc.pr
 					prErr := rc.prErr
 					include := rc.include
+					meta := rc.meta
 
 					// prOp switches between PlanCreate (selected repo with
 					// no active PR) and PlanModify (open PR needing
@@ -766,9 +887,9 @@ func newReviewCmd() *cobra.Command {
 							if active {
 								rec := existing
 								if include {
-									rec.Title = prTitle
-									rec.Body = prBody
-									rec.BaseRef = baseBranch
+									rec.Title = meta.title
+									rec.Body = meta.body
+									rec.BaseRef = meta.base
 								}
 								prResults = append(prResults, prResult{
 									repo: repoDisplayName, pr: rec,
@@ -787,7 +908,7 @@ func newReviewCmd() *cobra.Command {
 								// teams, and assignees to exactly the requested
 								// state (add missing, remove unwanted) and
 								// overwrite title/body/base when they differ.
-								*state = *planSync(existing, reviewers, teamReviewers, assignees, prTitle, prBody, baseBranch)
+								*state = *planSync(existing, meta.reviewers, meta.teams, meta.assignees, meta.title, meta.body, meta.base)
 								if !state.hasChanges() {
 									return ActionCompleted, fmt.Sprintf("#%d", existing.Number), nil
 								}
@@ -812,10 +933,10 @@ func newReviewCmd() *cobra.Command {
 							// Selected for creation — Apply opens a new PR
 							// and applies all requested reviewers/teams/
 							// assignees fresh.
-							state.addRevs = reviewers
-							state.addTeams = teamReviewers
-							state.addAsns = assignees
-							detail := fmt.Sprintf("%s → %s", branch, baseBranch)
+							state.addRevs = meta.reviewers
+							state.addTeams = meta.teams
+							state.addAsns = meta.assignees
+							detail := fmt.Sprintf("%s → %s", branch, meta.base)
 							if draft {
 								detail += " (draft)"
 							}
@@ -829,9 +950,9 @@ func newReviewCmd() *cobra.Command {
 									Owner:      owner,
 									Repository: repoName,
 									Head:       branch,
-									Base:       baseBranch,
-									Title:      prTitle,
-									Body:       prBody,
+									Base:       meta.base,
+									Title:      meta.title,
+									Body:       meta.body,
 									Draft:      draft,
 								})
 								if err != nil {
@@ -1024,7 +1145,7 @@ func newReviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
-	cmd.Flags().String("base", "", "target branch (default: pull_request.base config or main)")
+	cmd.Flags().String("base", "", "target branch for every repo (default: pull_request.base config, else each repo's default branch)")
 	cmd.Flags().String("title", "", "override PR title")
 	cmd.Flags().String("body", "", "override PR body")
 	cmd.Flags().StringSlice("reviewer", nil, "request review from user (repeatable)")

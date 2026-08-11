@@ -11,19 +11,32 @@ import (
 // maxSelectHeight is the maximum number of visible options in a select list.
 const maxSelectHeight = 10
 
-// typeaheadInput shows a single-line text input with the current value as a
-// placeholder. Pressing Enter with no input accepts the current value.
-func typeaheadInput(title, current string) (string, error) {
-	input, field := newDefaultInput(current)
+// typeaheadInputOptional shows a single-line text input with a
+// placeholder that describes what submitting nothing does; the return
+// is the RAW entry, empty when the user accepted the placeholder.
+//
+// Returning the entry rather than the resolved value is what lets a
+// caller keep a per-item default: a shared prompt over N repositories
+// can offer "each repo's own default branch" and, on an empty submit,
+// leave every repo resolving for itself — where a resolved-value
+// prompt would freeze one literal onto all of them.
+func typeaheadInputOptional(title, placeholder string) (string, error) {
+	input, field := newDefaultInput(placeholder)
 	slot := ui.NewSlot()
 	slot.Show(ui.NewCard(ui.CardInput, title).Tight())
 	if err := runForm(input); err != nil {
-		return current, err
+		return "", err
 	}
 	slot.Clear()
-	value := field.Resolved()
-	ui.Selected(title, value)
-	return value, nil
+	entry := strings.TrimSpace(field.Entry())
+	if entry == "" {
+		// Record the placeholder — it's the answer the user accepted,
+		// even when it describes a rule ("per repo") rather than a value.
+		ui.Selected(title, placeholder)
+		return "", nil
+	}
+	ui.Selected(title, entry)
+	return entry, nil
 }
 
 // typeaheadText shows a multi-line text editor with the current value

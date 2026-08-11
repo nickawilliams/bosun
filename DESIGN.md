@@ -156,6 +156,8 @@ branch:
 
 # PR defaults
 pull_request:
+  # Optional. Unset means each repository's PR targets that repository's
+  # own default branch; setting it overrides that for every repository.
   base: main
   title_pattern: "[{{.IssueNumber}}] {{.IssueTitle}}"
 
