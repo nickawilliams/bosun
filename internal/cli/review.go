@@ -843,6 +843,15 @@ func newReviewCmd() *cobra.Command {
 					include := rc.include
 					meta := rc.meta
 
+					// An open/draft PR is a candidate for in-place update;
+					// anything else (none, closed, merged) is a creation
+					// candidate. Both are gated by the user's selection.
+					// Taken from the shared predicate rather than recomputed
+					// below: selectReviewTargets already classified this repo
+					// with it, and a second inline copy is free to drift from
+					// the one that decided which repos were even offered.
+					active := rc.activePR()
+
 					// prOp switches between PlanCreate (selected repo with
 					// no active PR) and PlanModify (open PR needing
 					// reviewers/teams/assignees filled in).
@@ -865,13 +874,6 @@ func newReviewCmd() *cobra.Command {
 							if prErr != nil {
 								return 0, "", prErr
 							}
-
-							// An open/draft PR is a candidate for in-place
-							// update; anything else (none, closed, merged) is
-							// a creation candidate. Both are gated by the
-							// user's selection.
-							active := existing.Number > 0 &&
-								(existing.State == "open" || existing.State == "draft")
 
 							// Every open/draft PR in the workspace is recorded
 							// for the notification, whether or not we mutate
