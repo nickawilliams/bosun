@@ -281,6 +281,40 @@ func (h *Harness) GlobalConfigPath() string {
 	return filepath.Join(h.globalConfigDir, "config.yaml")
 }
 
+// InstallPreviewAdapter points the PreviewProvider factory at bosun's
+// *production* adapter (internal/preview/cicd) instead of a fake, so
+// the provider under test is the real composition of the CI/CD
+// pipeline and the issue tracker — both of which are already fakes
+// here. Call InstallCICD first; the adapter reaches for the pipeline
+// through the same factory the command does.
+//
+// Use this for `bosun preview`, where the provider is not a
+// collaborator but the thing being exercised: the workflow dispatches
+// land in h.CICD.Triggers() with their real workflow path, ref, and
+// inputs, and the env-to-issue binding round-trips through
+// h.Tracker's issue properties under the real issue key. A fake
+// provider there would only be able to confirm that the command
+// called Create — and a test that seeds an environment and then reads
+// its own seed back never pins the key binding at all.
+//
+// Prefer InstallPreview (the fake) for commands that merely consult a
+// provider — cleanup, status, review. Those want a cheap, seedable
+// environment, not the adapter's workflow machinery.
+//
+// The adapter probes cicd.workflows.preview.url_template over HTTP to
+// decide whether an env is alive, so a test that cares about liveness
+// must point that template at an httptest server; without a template
+// the adapter reports every bound env as exists-but-unverifiable.
+func (h *Harness) InstallPreviewAdapter() {
+	h.t.Helper()
+
+	prev := cli.GetServices()
+	next := *prev
+	next.PreviewProvider = cli.DefaultServices().PreviewProvider
+	cli.SetServices(&next)
+	h.t.Cleanup(func() { cli.SetServices(prev) })
+}
+
 // Type appends s to the input the cobra command reads from. Use this
 // to pre-fill answers for interactive prompts (e.g., "y" for
 // confirmations, "branch-slug\r" for input fields).
@@ -429,4 +463,3 @@ func notInstalledPreview(t *testing.T) func(string) (preview.Provider, error) {
 		return nil, fmt.Errorf("no PreviewProvider fake installed")
 	}
 }
-
