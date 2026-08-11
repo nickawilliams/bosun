@@ -39,8 +39,26 @@ func ResetStreams() {
 	defaultErr = os.Stderr
 }
 
-// Input returns the current input stream.
-func Input() io.Reader { return defaultInput }
+// InputHandoff is implemented by injected input readers (the test
+// harness) that need to know when a new consumer takes over the
+// stream. bubbletea can't cancel reads on a non-File reader, so a
+// finished form's leaked read loop would otherwise steal — and
+// discard — input meant for the next form in the same command run.
+// Input() announces each handoff so the reader can refuse delivery
+// to readers from an earlier session.
+type InputHandoff interface {
+	NextConsumer()
+}
+
+// Input returns the current input stream, announcing a consumer
+// handoff to readers that track sessions (see InputHandoff). Called
+// once per form construction, which is exactly the consumer boundary.
+func Input() io.Reader {
+	if h, ok := defaultInput.(InputHandoff); ok {
+		h.NextConsumer()
+	}
+	return defaultInput
+}
 
 // Output returns the current output stream.
 func Output() io.Writer { return defaultOutput }

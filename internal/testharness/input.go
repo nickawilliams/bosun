@@ -39,6 +39,19 @@ const chunkPause = 200 * time.Millisecond
 //
 // When all chunks are drained, Read returns io.EOF, matching
 // bytes.Buffer semantics (a form still waiting for input aborts).
+//
+// Session tracking: bubbletea cannot cancel reads on a non-File
+// reader, so a finished form leaks a read-loop goroutine blocked in
+// Read — and a post-cancel read that completes gets its data
+// DISCARDED by the cancelreader fallback. With chunks pre-queued,
+// that stale reader would consume the chunk meant for the next form
+// in the same Run (form → plan gate) and the run would hang waiting
+// for input. ui.Input() announces each new consumer via NextConsumer;
+// a Read that began under an older session returns io.EOF without
+// consuming, so the pending chunk is delivered to the live form
+// instead. The stale reader must still be inside its chunk-boundary
+// pause when the next form starts — chunkPause covers the in-memory
+// transitions between sequential prompts.
 type chunkReader struct {
 	mu     sync.Mutex
 	chunks [][]byte
@@ -47,6 +60,18 @@ type chunkReader struct {
 	// so the next Read continues it rather than beginning a new chunk.
 	served  bool
 	started bool
+	// session increments on every NextConsumer call; reads that began
+	// under an older session are refused without consuming.
+	session uint64
+}
+
+// NextConsumer marks the start of a new consumer session (called by
+// ui.Input() each time a form takes over the stream). Reads in flight
+// from earlier sessions will return io.EOF instead of data.
+func (r *chunkReader) NextConsumer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.session++
 }
 
 // append adds one chunk to be served after all prior chunks.
@@ -58,6 +83,7 @@ func (r *chunkReader) append(s string) {
 
 func (r *chunkReader) Read(p []byte) (int, error) {
 	r.mu.Lock()
+	session := r.session
 	if len(r.chunks) == 0 {
 		r.mu.Unlock()
 		return 0, io.EOF
@@ -72,6 +98,12 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.session != session {
+		// A newer consumer owns the stream: this read belongs to an
+		// exited form's leaked read loop. Refuse without consuming so
+		// the pending chunk reaches the live form.
+		return 0, io.EOF
+	}
 	if len(r.chunks) == 0 {
 		return 0, io.EOF
 	}
