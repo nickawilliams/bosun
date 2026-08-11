@@ -107,7 +107,15 @@ func (t *Tracker) Property(key string) (json.RawMessage, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	raw, ok := t.properties[key]
-	return raw, ok
+	if !ok {
+		return nil, false
+	}
+	// Copy, like every other inspector here: json.RawMessage is a
+	// slice, and handing out the stored one would let an assertion
+	// scribble on harness state.
+	out := make(json.RawMessage, len(raw))
+	copy(out, raw)
+	return out, true
 }
 
 // GetPropertyKeys returns the keys passed to GetProperty, in call

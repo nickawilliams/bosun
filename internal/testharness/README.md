@@ -160,10 +160,41 @@ path and confirm the scenario fails. On the empty-registry path that
 mutation changes nothing else observable, so a scenario without the
 recorder assertion stays green.
 
-One caveat found doing exactly that: when a lookup silently misses,
-`preview` falls through to its interactive env-name prompt and
-*hangs* on the harness's empty stdin rather than failing. Run
-mutation checks with an explicit short `-timeout`.
+### A regression that reaches an unexpected prompt HANGS
+
+Worth knowing before you interpret a stuck test run. `chunkReader`
+returns `io.EOF` once its queued input is drained, but bubbletea's
+event loop doesn't terminate on input EOF — so a command that reaches
+a prompt the scenario didn't feed blocks forever instead of failing.
+
+That is a regression signal, not a harness bug per se, but it is an
+expensive one: the hang burns the whole package's `go test` timeout
+and takes every other `internal/cli` result down with it. Several
+realistic regressions land here rather than on a clean failure — an
+ignored `--approve`, an ignored `--dry-run`, a registry lookup that
+silently misses (`preview` then falls through to its interactive
+env-name prompt).
+
+Two consequences:
+
+- Run mutation checks with an explicit short `-timeout`; the default
+  is 10 minutes per package.
+- Where a scenario can make a skipped prompt fail *fast*, do it.
+  Queueing the key that would produce the WRONG outcome turns the
+  hang into an assertion failure — `preview`'s
+  `plan_confirmation/yes_flag_skips_prompt` queues an `n` and asserts
+  the deploy happened anyway, so a gate that stopped being suppressed
+  reads the `n` and cancels instead of blocking.
+
+  This only protects the run the key is queued for. A regression in
+  something shared like `isAutoApprove` still hangs in whatever the
+  fixture ran first (usually the `bosun start` that builds the
+  workspace), so it buys a fast failure for the command under test,
+  not immunity.
+
+This predates any one command's suite (the same mutation hangs
+`TestCleanup` and `TestPrerelease`). A watchdog in `Harness.Run`, or
+aborting the form on EOF, would fix it centrally.
 
 ## Asserting on what a command reported
 

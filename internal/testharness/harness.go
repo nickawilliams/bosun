@@ -52,7 +52,8 @@ type Harness struct {
 	// CICD is the in-memory CI/CD fake. It is NOT installed by
 	// default — the CICD factory fails the test until InstallCICD is
 	// called, so a command that reaches for CI/CD unexpectedly still
-	// surfaces the gap. Set its knobs before installing.
+	// surfaces the gap. Its knobs are read at call time, so a test can
+	// set them either side of the install.
 	CICD *fakes.CICD
 
 	// Reporter records every ui.Reporter call the command made, so
@@ -285,8 +286,10 @@ func (h *Harness) GlobalConfigPath() string {
 // *production* adapter (internal/preview/cicd) instead of a fake, so
 // the provider under test is the real composition of the CI/CD
 // pipeline and the issue tracker — both of which are already fakes
-// here. Call InstallCICD first; the adapter reaches for the pipeline
-// through the same factory the command does.
+// here. Install the CICD fake too: the adapter reaches for the
+// pipeline through the same factory the command does, and without one
+// that factory fails the test. Order doesn't matter — the lookup
+// happens when the provider is built, not when this is called.
 //
 // Use this for `bosun preview`, where the provider is not a
 // collaborator but the thing being exercised: the workflow dispatches
