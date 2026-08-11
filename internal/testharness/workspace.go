@@ -6,12 +6,19 @@
 package testharness
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// Owner is the GitHub owner every workspace repo is created under.
+// AddRepo wires each repo's origin as git@github.com:acme/<name>.git so
+// production code that parses the remote for a GitHub identity
+// (gh.ParseRemote) resolves owner/name without network access.
+const Owner = "acme"
 
 // Workspace is a temp project directory with .bosun/config.yaml and
 // any repositories the test seeds. Created via NewWorkspace; cleaned
@@ -25,6 +32,10 @@ type Workspace struct {
 
 	// Repos collects repos added via AddRepo, in insertion order.
 	Repos []*Repo
+
+	// onAddRepo, when set, is invoked for each repo AddRepo creates.
+	// The harness uses it to link repos to the code-host fake.
+	onAddRepo func(*Repo)
 }
 
 // NewWorkspace creates a fresh project directory with an empty .bosun/
@@ -50,17 +61,24 @@ func (w *Workspace) WriteConfig(yaml string) {
 
 // AddRepo creates a git repository under repos/<name>/ with an
 // initial commit on the default branch (main) and a bare remote at
-// remotes/<name>.git wired as origin with HEAD pointing at main.
+// remotes/acme/<name>.git wired as origin with HEAD pointing at main.
 // The remote matters because bosun's branch creation flow runs
 // `git fetch origin main` and `git push -u origin <branch>`; without
 // it, GetDefaultBranch fails on `git rev-parse origin/HEAD`.
+//
+// The origin URL is the GitHub-shaped git@github.com:acme/<name>.git —
+// NOT the bare repo's path — so gh.ParseRemote resolves a repository
+// identity. Real git transport still works because core.sshCommand
+// points at a local shim that runs the pack command against remotes/
+// instead of ssh-ing anywhere (see ensureGitShim).
 //
 // Returns a Repo handle for assertions on git state.
 func (w *Workspace) AddRepo(name string) *Repo {
 	w.t.Helper()
 
-	// Bare repo serving as origin.
-	remote := filepath.Join(w.Dir, "remotes", name+".git")
+	// Bare repo serving as origin, laid out under the owner so the
+	// ssh shim can resolve "acme/<name>.git" paths relative to remotes/.
+	remote := filepath.Join(w.Dir, "remotes", Owner, name+".git")
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		w.t.Fatalf("create remote dir: %v", err)
 	}
@@ -83,13 +101,37 @@ func (w *Workspace) AddRepo(name string) *Repo {
 	w.run(path, "git", "commit", "-m", "initial commit")
 
 	// Wire origin + push + set HEAD so origin/HEAD → main is resolvable.
-	w.run(path, "git", "remote", "add", "origin", remote)
+	// The URL is GitHub-shaped; the shim makes the transport local.
+	url := fmt.Sprintf("git@github.com:%s/%s.git", Owner, name)
+	w.run(path, "git", "remote", "add", "origin", url)
+	w.run(path, "git", "config", "core.sshCommand", "'"+w.ensureGitShim()+"'")
 	w.run(path, "git", "push", "-u", "origin", "main")
 	w.run(path, "git", "remote", "set-head", "origin", "main")
 
-	r := &Repo{t: w.t, Name: name, Path: path}
+	r := &Repo{t: w.t, Name: name, Owner: Owner, Path: path, RemotePath: remote}
 	w.Repos = append(w.Repos, r)
+	if w.onAddRepo != nil {
+		w.onAddRepo(r)
+	}
 	return r
+}
+
+// ensureGitShim writes (once) and returns the GIT_SSH-style shim that
+// makes git@github.com URLs resolve locally: git invokes it as
+// `shim <host> "git-upload-pack 'acme/api.git'"`, and the shim drops
+// the host and runs the pack command with remotes/ as the working
+// directory, so 'acme/api.git' lands on the workspace's bare remote.
+func (w *Workspace) ensureGitShim() string {
+	w.t.Helper()
+	path := filepath.Join(w.Dir, "gitshim")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	script := "#!/bin/sh\nshift\ncd \"$(dirname \"$0\")/remotes\" && eval \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		w.t.Fatalf("write git shim: %v", err)
+	}
+	return path
 }
 
 // run executes a command in dir, failing the test on non-zero exit.
@@ -108,8 +150,14 @@ type Repo struct {
 
 	// Name is the directory basename (e.g., "api").
 	Name string
+	// Owner is the GitHub owner in the repo's origin URL (see Owner).
+	Owner string
 	// Path is the absolute path to the repository root.
 	Path string
+	// RemotePath is the absolute path to the bare repository serving
+	// as origin. Host-side effects (release tags cut by fakes.Host)
+	// land here, mirroring GitHub creating tags server-side.
+	RemotePath string
 }
 
 // HasBranch reports whether name exists as a local branch.
@@ -118,6 +166,58 @@ func (r *Repo) HasBranch(name string) bool {
 	cmd := exec.Command("git", "rev-parse", "--verify", "refs/heads/"+name)
 	cmd.Dir = r.Path
 	return cmd.Run() == nil
+}
+
+// HasTag reports whether name exists as a tag on the repo's origin
+// remote — where host-side release tags land. The local clone only
+// sees such tags after a fetch, so assertions go straight to the
+// remote rather than depending on fetch timing.
+func (r *Repo) HasTag(name string) bool {
+	r.t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--verify", "refs/tags/"+name)
+	cmd.Dir = r.RemotePath
+	return cmd.Run() == nil
+}
+
+// Tag creates a lightweight tag at ref on the repo's origin remote —
+// the seeding counterpart to HasTag. Use it to establish a "previous
+// release" baseline the command's tag fetches and ancestry checks can
+// see.
+func (r *Repo) Tag(name, ref string) {
+	r.t.Helper()
+	cmd := exec.Command("git", "tag", name, ref)
+	cmd.Dir = r.RemotePath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		r.t.Fatalf("git tag %s %s in %s: %v\n%s", name, ref, r.RemotePath, err, out)
+	}
+}
+
+// RemoteRef resolves ref (e.g. "refs/heads/main", "refs/tags/v1.2.3")
+// to a commit SHA on the repo's origin remote.
+func (r *Repo) RemoteRef(ref string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--verify", ref+"^{commit}")
+	cmd.Dir = r.RemotePath
+	out, err := cmd.Output()
+	if err != nil {
+		r.t.Fatalf("rev-parse %s in %s: %v", ref, r.RemotePath, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Git runs a git command in dir, failing the test on error, and
+// returns trimmed output. Exported for scenario setup that needs raw
+// git operations beyond the Repo helpers (commits in worktrees,
+// merges, pushes).
+func Git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // WorktreeExists reports whether path is registered as a worktree of
