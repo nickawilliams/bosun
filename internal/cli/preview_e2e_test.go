@@ -376,6 +376,10 @@ func TestPreview(t *testing.T) {
 		f.bindEnv("EX-1", "brave-falcon")
 		f.env.alive("brave-falcon")
 
+		// Snapshot: the setup's `start` run made tracker calls of its
+		// own, and only what this run did is in question.
+		before := len(f.h.Tracker.Calls())
+
 		if err := f.run("--approve"); err != nil {
 			t.Fatalf("preview: %v", err)
 		}
@@ -386,11 +390,9 @@ func TestPreview(t *testing.T) {
 		if got := f.boundName(t, "EX-1"); got != "brave-falcon" {
 			t.Errorf("env bound to EX-1 = %q, want the existing %q", got, "brave-falcon")
 		}
-		// SeedProperty writes without recording a call, so any
-		// SetProperty here came from this run — a rewrite of a binding
-		// that was already correct.
-		if slices.Contains(f.h.Tracker.Calls(), "SetProperty") {
-			t.Errorf("rewrote the binding; calls=%v", f.h.Tracker.Calls())
+		// A binding that was already correct must not be rewritten.
+		if newCalls := f.h.Tracker.Calls()[before:]; slices.Contains(newCalls, "SetProperty") {
+			t.Errorf("rewrote the binding; calls=%v", newCalls)
 		}
 		// The env is current, but the issue still moves: reaching a
 		// live preview is the lifecycle event, not the dispatch.
@@ -406,6 +408,10 @@ func TestPreview(t *testing.T) {
 		f := setupPreview(t, "api")
 		f.bindEnv("EX-1", "brave-falcon")
 		f.env.alive("brave-falcon")
+
+		// Snapshot: the setup's `start` run made tracker calls of its
+		// own, and only what this run did is in question.
+		before := len(f.h.Tracker.Calls())
 
 		if err := f.run("--force", "--approve"); err != nil {
 			t.Fatalf("preview: %v", err)
@@ -423,8 +429,56 @@ func TestPreview(t *testing.T) {
 		if n := len(f.teardowns()); n != 0 {
 			t.Errorf("redeploy dispatched %d teardown(s); want 0", n)
 		}
+		// The name is unchanged, so asserting on it alone would pass
+		// against the seed even if the redeploy never wrote anything.
+		// The rewrite itself is the observable difference from the
+		// idempotency scenario, which asserts SetProperty is NOT called.
+		if newCalls := f.h.Tracker.Calls()[before:]; !slices.Contains(newCalls, "SetProperty") {
+			t.Errorf("redeploy never rewrote the binding; calls=%v", newCalls)
+		}
 		if got := f.boundName(t, "EX-1"); got != "brave-falcon" {
 			t.Errorf("env bound to EX-1 = %q, want %q", got, "brave-falcon")
+		}
+	})
+
+	t.Run("rename/tears_down_previous_env", func(t *testing.T) {
+		// A --name that differs from the bound env is a move: the old
+		// env is destroyed and the new one stood up in the same run.
+		// This is the only preview path that tears anything down, and
+		// the teardown must carry the OLD name — a teardown of the new
+		// name would destroy what this run just deployed, and a dropped
+		// teardown row leaks the old environment forever.
+		f := setupPreview(t, "api")
+		f.bindEnv("EX-1", "old-env")
+		f.env.alive("old-env")
+
+		if err := f.run("--name", "new-env", "--approve"); err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+
+		teardowns := f.teardowns()
+		if len(teardowns) != 1 {
+			t.Fatalf("teardown dispatches = %d, want 1 (%+v)", len(teardowns), f.h.CICD.Triggers())
+		}
+		if got := teardowns[0].Inputs["env-name"]; got != "old-env" {
+			t.Errorf("teardown env-name = %q, want the superseded %q", got, "old-env")
+		}
+		if got := teardowns[0].Repository; got != "devops" {
+			t.Errorf("teardown target repo = %q, want %q", got, "devops")
+		}
+
+		deploys := f.deploys()
+		if len(deploys) != 1 {
+			t.Fatalf("deploy dispatches = %d, want 1", len(deploys))
+		}
+		if got := deploys[0].Inputs["env-name"]; got != "new-env" {
+			t.Errorf("deploy env-name = %q, want %q", got, "new-env")
+		}
+
+		// The binding must end up on the new env; leaving it on the
+		// destroyed one would point every later run at a dead name.
+		if got := f.boundName(t, "EX-1"); got != "new-env" {
+			t.Errorf("env bound to EX-1 = %q, want %q", got, "new-env")
 		}
 	})
 
@@ -482,17 +536,33 @@ func TestPreview(t *testing.T) {
 	})
 
 	t.Run("plan_confirmation/yes_flag_skips_prompt", func(t *testing.T) {
-		// --name answers the env-name prompt and --approve answers the
-		// plan gate, so the run completes against an empty stdin.
-		// Success with no keys queued is the proof.
+		// A queued "n" is the probe here. --approve must suppress the
+		// plan gate outright; if it regressed to merely pre-filling
+		// the prompt, the gate would read that "n" and cancel.
+		// Verified by dropping --approve from this exact call: the run
+		// fails with "plan cancelled", so the key really does reach
+		// the gate and the assertion below really does depend on it.
+		//
+		// Without the queued key this scenario would be a strict
+		// subset of claim/triggers_workflow, and the regression it
+		// exists to catch would block on the prompt forever rather
+		// than fail.
+		//
+		// --service keeps the service-selection form out of the way
+		// (--approve suppresses it too, but then the same regression
+		// would feed the "n" to the form instead of the gate).
 		f := setupPreview(t, "api")
+		f.h.Type("n")
 
-		if err := f.run("--name", "brave-falcon", "--approve"); err != nil {
+		if err := f.run("--name", "brave-falcon", "--service", "api-svc", "--approve"); err != nil {
 			t.Fatalf("preview: %v", err)
 		}
 
 		if n := len(f.deploys()); n != 1 {
-			t.Fatalf("deploy dispatches = %d, want 1", n)
+			t.Fatalf("deploy dispatches = %d, want 1 (a consumed \"n\" would have cancelled)", n)
+		}
+		if got := f.boundName(t, "EX-1"); got != "brave-falcon" {
+			t.Errorf("env bound to EX-1 = %q, want %q", got, "brave-falcon")
 		}
 	})
 
@@ -651,6 +721,12 @@ func TestPreview(t *testing.T) {
 		}
 		if got := f.boundName(t, "EX-1"); got != "" {
 			t.Errorf("bound env %q with no pipeline to create it", got)
+		}
+		// "Skip, not fail" means the rest of the plan still applies —
+		// the status transition is what proves the run continued past
+		// the missing pipeline rather than quietly doing nothing.
+		if got, _ := f.h.Tracker.Issue("EX-1"); got.Status != "In Preview Env" {
+			t.Errorf("issue status = %q, want %q (the plan still ran)", got.Status, "In Preview Env")
 		}
 	})
 
