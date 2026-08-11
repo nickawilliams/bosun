@@ -189,6 +189,10 @@ func TestCaptureReporter(t *testing.T) {
 	})
 
 	t.Run("free-form messages expand their format", func(t *testing.T) {
+		// Asserted positionally rather than by kind: the three
+		// Selected* variants all record CaptureSelected, so a
+		// kind-keyed lookup would only ever check the last one and
+		// the other two could record anything at all.
 		c := NewCaptureReporter()
 
 		c.Header("doctor", "system check")
@@ -203,28 +207,60 @@ func TestCaptureReporter(t *testing.T) {
 		c.SelectedMulti("services", []string{"api", "web"})
 		c.Details("workspace", NewFields("branch", "main", "issue", "EX-1"))
 
-		byKind := map[string]string{}
-		for _, ev := range c.Events() {
-			byKind[ev.Kind] = ev.Label
+		want := []CaptureEvent{
+			{Kind: CaptureHeader, Label: "doctor"},
+			{Kind: CaptureSuccess, Label: "created EX-1"},
+			{Kind: CaptureWarning, Label: "2 stale"},
+			{Kind: CaptureInfo, Label: "info"},
+			{Kind: CaptureMuted, Label: "muted"},
+			{Kind: CaptureDryRun, Label: "would create EX-2"},
+			{Kind: CaptureSaved, Label: "token", Value: "***"},
+			{Kind: CaptureSelected, Label: "repository", Value: "api"},
+			{Kind: CaptureSelected, Label: "branch", Value: "story/EX-1"},
+			{Kind: CaptureSelected, Label: "services"},
+			{Kind: CaptureDetails, Label: "workspace"},
 		}
-		for kind, want := range map[string]string{
-			CaptureHeader:   "doctor",
-			CaptureSuccess:  "created EX-1",
-			CaptureWarning:  "2 stale",
-			CaptureInfo:     "info",
-			CaptureMuted:    "muted",
-			CaptureDryRun:   "would create EX-2",
-			CaptureSaved:    "token",
-			CaptureSelected: "services",
-			CaptureDetails:  "workspace",
-		} {
-			if got := byKind[kind]; got != want {
-				t.Errorf("%s label = %q, want %q", kind, got, want)
+		got := c.Events()
+		if len(got) != len(want) {
+			t.Fatalf("got %d events, want %d\n%s", len(got), len(want), c.Dump())
+		}
+		for i, w := range want {
+			if got[i].Kind != w.Kind || got[i].Label != w.Label || got[i].Value != w.Value {
+				t.Errorf("event %d = (%s %q · %q), want (%s %q · %q)",
+					i, got[i].Kind, got[i].Label, got[i].Value, w.Kind, w.Label, w.Value)
 			}
 		}
-		details, _ := c.Find("workspace")
-		if len(details.Items) != 2 || details.Items[0] != "branch: main" {
-			t.Errorf("Details items = %v, want [branch: main issue: EX-1]", details.Items)
+
+		// Items-carrying calls: Header's context strings, the
+		// multi-select's values, and Details' key: value pairs.
+		if items := got[0].Items; len(items) != 1 || items[0] != "system check" {
+			t.Errorf("Header items = %v, want [system check]", items)
+		}
+		if items := got[9].Items; len(items) != 2 || items[0] != "api" {
+			t.Errorf("SelectedMulti items = %v, want [api web]", items)
+		}
+		if items := got[10].Items; len(items) != 2 || items[0] != "branch: main" {
+			t.Errorf("Details items = %v, want [branch: main issue: EX-1]", items)
+		}
+	})
+
+	t.Run("records the alignment width of value forms", func(t *testing.T) {
+		// The shared value column is invisible outside a rendered
+		// terminal; recording it is what lets command tests assert
+		// that sibling rows line up.
+		c := NewCaptureReporter()
+
+		c.CompleteValue("aligned", "v", 12)
+		c.SkipValue("skipped", "why", 12)
+		c.FailValue("failed", "why", 12)
+		c.CompleteValue("natural", "v")
+
+		got := c.Events()
+		for i, want := range []int{12, 12, 12, 0} {
+			if got[i].Align != want {
+				t.Errorf("event %d (%s) align = %d, want %d",
+					i, got[i].Label, got[i].Align, want)
+			}
 		}
 	})
 }
@@ -246,6 +282,11 @@ func TestSetRawReporterFactory(t *testing.T) {
 	capture := NewCaptureReporter()
 
 	restore := SetRawReporterFactory(func() Reporter { return capture })
+	// Registered as well as called below: a t.Fatalf between here and
+	// the explicit restore would otherwise leak the capture into
+	// rawFactory for every later test in the package.
+	t.Cleanup(restore)
+
 	if got := NewRawReporter(); got != Reporter(capture) {
 		t.Errorf("NewRawReporter() = %T, want the installed capture", got)
 	}

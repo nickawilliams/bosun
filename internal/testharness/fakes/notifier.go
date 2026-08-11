@@ -20,6 +20,9 @@ type Notifier struct {
 	replies []notify.Message
 	// threads are keyed by "channel|issueKey" for FindThread.
 	threads map[string]notify.ThreadRef
+	// findThreadChannels records the channel argument of every
+	// FindThread call, in order.
+	findThreadChannels []string
 	// announcements are keyed by "channel|query" for HasAnnouncement.
 	announcements map[string]bool
 
@@ -90,6 +93,22 @@ func (n *Notifier) Replies() []notify.Message {
 	return out
 }
 
+// FindThreadChannels returns the channel each FindThread call asked
+// about, in order.
+//
+// FindThread returns a zero ThreadRef and no error for any unknown
+// channel, so a command that probes the wrong channel — or the same
+// one twice — is indistinguishable from one that probes correctly
+// unless the test asserts on the arguments. Counting calls is not
+// enough.
+func (n *Notifier) FindThreadChannels() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]string, len(n.findThreadChannels))
+	copy(out, n.findThreadChannels)
+	return out
+}
+
 // Calls returns a snapshot of method calls in invocation order.
 func (n *Notifier) Calls() []string {
 	n.mu.Lock()
@@ -135,6 +154,7 @@ func (n *Notifier) FindThread(_ context.Context, channel, issueKey string) (noti
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.recordCall("FindThread")
+	n.findThreadChannels = append(n.findThreadChannels, channel)
 	if n.FindThreadErr != nil {
 		return notify.ThreadRef{}, n.FindThreadErr
 	}

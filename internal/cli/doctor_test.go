@@ -33,6 +33,7 @@ package cli_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,6 +182,26 @@ func assertFailed(t *testing.T, h *testharness.Harness, name, want string) {
 	assertRow(t, h, name, ui.CaptureFail, want)
 }
 
+// assertNotConfigured asserts a check reported the absent-integration
+// warning, and *only* that.
+//
+// The exact match is the point. "configured but failing — (not
+// configured)" contains the not-configured reason as a substring, so a
+// containment assertion would accept the very conflation these
+// scenarios exist to catch: doctor losing the errNotConfigured branch
+// and rendering every absent integration as a broken one.
+func assertNotConfigured(t *testing.T, h *testharness.Harness, name string) {
+	t.Helper()
+	ev := doctorRow(t, h, name)
+	if ev.Kind != ui.CaptureSkip {
+		t.Errorf("%s: state = %q, want %q (value %q)", name, ev.Kind, ui.CaptureSkip, ev.Value)
+	}
+	if ev.Value != notConfigured {
+		t.Errorf("%s: value = %q, want exactly %q — an absent integration must not "+
+			"read as a broken one", name, ev.Value, notConfigured)
+	}
+}
+
 // assertHealthyExcept asserts every integration check passed except
 // the ones named — the "failure is reported for this provider and
 // only this provider" assertion the per-capability scenarios need.
@@ -270,6 +291,29 @@ func TestDoctor(t *testing.T) {
 		}
 	})
 
+	t.Run("all_configured/rows_share_one_value_column", func(t *testing.T) {
+		// doctor pre-computes the alignment width across every check
+		// in every group so the "name · value" dividers line up down
+		// the whole report, not just within a group. That width is
+		// invisible outside a rendered terminal, so assert on the
+		// value the Reporter was handed.
+		h := newDoctorHarness(t)
+
+		runDoctor(t, h)
+
+		// Widest check name is "branch template" / "status mappings".
+		const wantAlign = len("status mappings")
+		for name := range map[string]bool{
+			rowGlobalConfig: true, rowGit: true, rowRepositories: true,
+			rowStatusMappings: true, rowTracker: true, rowCICD: true,
+		} {
+			if got := doctorRow(t, h, name).Align; got != wantAlign {
+				t.Errorf("%s: align width = %d, want %d — every row shares one column",
+					name, got, wantAlign)
+			}
+		}
+	})
+
 	t.Run("all_configured/summary_counts_every_check", func(t *testing.T) {
 		h := newDoctorHarness(t)
 
@@ -305,7 +349,7 @@ func TestDoctor(t *testing.T) {
 
 		runDoctor(t, h)
 
-		assertWarned(t, h, rowTracker, notConfigured)
+		assertNotConfigured(t, h, rowTracker)
 		assertHealthyExcept(t, h, rowTracker)
 	})
 
@@ -392,9 +436,9 @@ issue_tracker:
 
 		runDoctor(t, h)
 
-		assertWarned(t, h, rowCodeHost, notConfigured)
+		assertNotConfigured(t, h, rowCodeHost)
 		assertHealthyExcept(t, h, rowCodeHost, rowCICD)
-		assertWarned(t, h, rowCICD, notConfigured)
+		assertNotConfigured(t, h, rowCICD)
 	})
 
 	t.Run("code_host_unconfigured/cicd_shares_the_code_host_token", func(t *testing.T) {
@@ -407,7 +451,7 @@ issue_tracker:
 
 		runDoctor(t, h)
 
-		assertWarned(t, h, rowCodeHost, notConfigured)
+		assertNotConfigured(t, h, rowCodeHost)
 		assertWarned(t, h, rowCICD, "cannot verify token: no github token configured")
 	})
 
@@ -428,7 +472,7 @@ issue_tracker:
 
 		runDoctor(t, h)
 
-		assertWarned(t, h, rowNotification, notConfigured)
+		assertNotConfigured(t, h, rowNotification)
 		assertHealthyExcept(t, h, rowNotification)
 		if calls := h.Notifier.Calls(); len(calls) != 0 {
 			t.Errorf("notifier calls = %v, want none — an unset provider shouldn't be probed", calls)
@@ -475,21 +519,20 @@ issue_tracker:
 	})
 
 	t.Run("notifier_configured/probes_every_configured_channel", func(t *testing.T) {
-		// Both channels are configured, so both are probed — a
-		// silently unprobed channel would hide a broken one.
+		// Both configured channels are probed, and they're the ones
+		// from the config. Asserting on the arguments rather than the
+		// call count matters: the fake answers any channel with a zero
+		// ThreadRef and no error, so probing the wrong channel — or
+		// the same one twice — reports success just as loudly as
+		// probing correctly.
 		h := newDoctorHarness(t)
 
 		runDoctor(t, h)
 
-		var probes int
-		for _, call := range h.Notifier.Calls() {
-			if call == "FindThread" {
-				probes++
-			}
-		}
-		if probes != 2 {
-			t.Errorf("channel probes = %d, want 2 (review + prerelease)\ncalls: %v",
-				probes, h.Notifier.Calls())
+		got := h.Notifier.FindThreadChannels()
+		want := []string{"reviews", "releases"}
+		if !slices.Equal(got, want) {
+			t.Errorf("probed channels = %v, want %v (review then prerelease)", got, want)
 		}
 	})
 
@@ -499,7 +542,7 @@ issue_tracker:
 
 		runDoctor(t, h)
 
-		assertWarned(t, h, rowCICD, notConfigured)
+		assertNotConfigured(t, h, rowCICD)
 		assertHealthyExcept(t, h, rowCICD)
 	})
 
@@ -564,7 +607,13 @@ issue_tracker:
 
 		assertPassed(t, h, rowGlobalConfig, h.GlobalConfigPath())
 		assertPassed(t, h, rowProjectConfig, ".bosun/config.yaml")
-		assertPassed(t, h, rowGit, "")
+		// git's value is the local git version, so assert its shape
+		// rather than a literal: present, and stripped of the
+		// "git version " prefix the command shells out for.
+		git := doctorRow(t, h, rowGit)
+		if git.Value == "" || strings.HasPrefix(git.Value, "git version") {
+			t.Errorf("git value = %q, want a bare version string", git.Value)
+		}
 	})
 
 	t.Run("no_project/exits_with_clear_error", func(t *testing.T) {

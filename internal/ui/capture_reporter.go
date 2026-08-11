@@ -44,8 +44,22 @@ type CaptureEvent struct {
 	Items []string
 	// Segments carries a Summary card's breakdown verbatim.
 	Segments []SummarySegment
+	// Align is the alignWidth passed to a *Value form — the column
+	// siblings pad their label to. 0 means natural width. Recorded so
+	// tests can assert that a group of rows shares one value column,
+	// which is otherwise invisible outside a rendered terminal.
+	Align int
 	// OK is false for a failed Task and for the fail kind.
 	OK bool
+}
+
+// alignOf returns the alignWidth from a *Value form's variadic tail,
+// or 0 when the caller omitted it.
+func alignOf(align []int) int {
+	if len(align) == 0 {
+		return 0
+	}
+	return align[0]
 }
 
 // CaptureReporter is a Reporter that records calls instead of
@@ -160,24 +174,27 @@ func (c *CaptureReporter) CompleteDetail(label string, items []string) {
 	c.record(CaptureEvent{Kind: CaptureComplete, Label: label, Items: items, OK: true})
 }
 
-func (c *CaptureReporter) CompleteValue(label, value string, _ ...int) {
-	c.record(CaptureEvent{Kind: CaptureComplete, Label: label, Value: value, OK: true})
+func (c *CaptureReporter) CompleteValue(label, value string, align ...int) {
+	c.record(CaptureEvent{
+		Kind: CaptureComplete, Label: label, Value: value,
+		Align: alignOf(align), OK: true,
+	})
 }
 
 func (c *CaptureReporter) Skip(label string) {
 	c.record(CaptureEvent{Kind: CaptureSkip, Label: label})
 }
 
-func (c *CaptureReporter) SkipValue(label, value string, _ ...int) {
-	c.record(CaptureEvent{Kind: CaptureSkip, Label: label, Value: value})
+func (c *CaptureReporter) SkipValue(label, value string, align ...int) {
+	c.record(CaptureEvent{Kind: CaptureSkip, Label: label, Value: value, Align: alignOf(align)})
 }
 
 func (c *CaptureReporter) Fail(label string) {
 	c.record(CaptureEvent{Kind: CaptureFail, Label: label})
 }
 
-func (c *CaptureReporter) FailValue(label, value string, _ ...int) {
-	c.record(CaptureEvent{Kind: CaptureFail, Label: label, Value: value})
+func (c *CaptureReporter) FailValue(label, value string, align ...int) {
+	c.record(CaptureEvent{Kind: CaptureFail, Label: label, Value: value, Align: alignOf(align)})
 }
 
 func (c *CaptureReporter) Success(format string, args ...any) {

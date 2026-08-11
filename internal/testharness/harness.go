@@ -236,8 +236,11 @@ func (h *Harness) InstallPreview() *fakes.Preview {
 // that should say so explicitly. Installs by copy-and-swap with its
 // own restore for the reason spelled out on InstallPreview.
 //
-// The installed factory consults h.CICD.NewErr at call time, so a
-// test can install here and force construction to fail later.
+// Unlike InstallPreview, this does NOT allocate a fresh fake — h.CICD
+// is created by New and installed as-is, so a test can set its knobs
+// (NewErr, TriggerErr) before installing and they survive. The
+// installed factory also consults NewErr at call time, so forcing
+// construction to fail after installing works too.
 func (h *Harness) InstallCICD() *fakes.CICD {
 	h.t.Helper()
 

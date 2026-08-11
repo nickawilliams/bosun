@@ -35,7 +35,7 @@ issue_tracker:
 
 ## Architecture
 
-Three seams let the harness drive commands in-process:
+Four seams let the harness drive commands in-process:
 
 1. **`cli.SetServices`** — swaps capability factories (Tracker, CodeHost,
    CICD, Notifier, PreviewProvider) for fakes. The harness installs them
@@ -104,7 +104,13 @@ unexpectedly reaches for CICD / PreviewProvider, the test fails with a
 clear message instead of a nil-pointer panic. Tests for commands
 needing those services opt in — `h.InstallCICD()` for CI/CD,
 `h.InstallPreview()` for the preview provider. Each swaps its factory
-for the fake, sets the corresponding `Harness` field, and returns it.
+for the fake and returns it.
+
+The two differ in one respect worth knowing: `InstallPreview` allocates
+a fresh `fakes.Preview` and assigns `h.Preview` (so seed *after*
+installing), while `InstallCICD` installs the `h.CICD` that `New()`
+already allocated (so knobs like `NewErr` can be set either side of the
+call).
 
 `PreviewProvider`'s opt-in is needed in any command whose path touches
 a preview env — note that reaching for the *provider* is enough to
@@ -112,18 +118,12 @@ trip the stub, even when no env is bound, so e.g. every `cleanup` test
 needs it (`cleanup` calls `newPreviewProvider` unconditionally and its
 plan leads with the teardown row).
 
-`h.CICD` is allocated by `New()` even though the factory isn't
-installed, so a test can set its knobs (`NewErr`, `TriggerErr`) before
-calling `InstallCICD`.
-
 ## Asserting on what a command reported
 
-Commands run non-interactively here — output is a buffer, not a TTY —
-so `cli.Bootstrap` installs a **raw** Reporter and the rendered
-timeline never reaches `h.Stdout()`. `h.Stdout()` still captures
-everything written directly (`config get`'s value, raw-mode errors),
-but for a command whose entire output is Reporter calls (`doctor`,
-`status`), assert on `h.Reporter` instead:
+Commands run under a raw Reporter here, so the rendered timeline never
+reaches `h.Stdout()` — see "Card output is invisible to the harness"
+below for why. For a command whose entire output is Reporter calls
+(`doctor`, `status`), assert on `h.Reporter` instead:
 
 ```go
 if err := h.Run("doctor"); err != nil { ... }
@@ -247,25 +247,30 @@ that ever changes, the heuristic needs revisiting.
 ### Card output is invisible to the harness
 
 `Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
-harness's output is a buffer — so every command runs under the **raw
+harness's output is a buffer — so every command runs under a **raw
 reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
 and draw nothing. `h.Stdout()` is therefore empty for any command whose
-output is entirely cards (`status`, the lifecycle preambles). Commands
-that write through `fmt.Fprint(ui.Output(), ...)` — `config get`, and
-anything annotated `output: raw` — do surface there.
+output is entirely cards (`status`, `doctor`, the lifecycle preambles).
+Commands that write through `fmt.Fprint(ui.Output(), ...)` — `config
+get`, and anything annotated `output: raw` — do surface there.
 
-Two consequences when planning a command's scenarios:
+Three consequences when planning a command's scenarios:
 
-- Assert on **what the command asked for**, not what it drew: the
-  fakes' `Calls()` logs, their recorded arguments, and post-run fake
-  state. For a read-only command that *is* the observable behavior.
+- Assert on **what the command reported** through `h.Reporter`: the
+  raw reporter the harness installs is a `ui.CaptureReporter`, so
+  every Reporter call is recorded even though nothing is drawn. See
+  "Asserting on what a command reported" above.
+- Assert on **what the command asked for**: the fakes' `Calls()` logs,
+  their recorded arguments, and post-run fake state — the other half
+  of a read-only command's observable behavior.
 - Cover section presence/absence by testing the card builders directly
   from `package cli` (see `../cli/status_test.go`). Splitting it this
   way also keeps the assertions off ANSI-styled strings.
 
-Forcing card rendering would need a real PTY; nothing in-tree does
-that today, and the spinner frames would make output assertions
-timing-dependent.
+Forcing *actual* card rendering would still need a real PTY; nothing
+in-tree does that, and the spinner frames would make output assertions
+timing-dependent. The capture reporter sidesteps the problem by
+recording the semantic calls instead of the pixels.
 
 Two consequences that bite when you go looking for uncovered lines:
 
@@ -298,7 +303,9 @@ Capability fakes live in `fakes/` and follow a consistent shape:
 - **Error knobs** (e.g., `CreateErr`, `GetErr`) let tests force the
   fake to return an error from a specific method, exercising the
   command's error path without complex setup.
-- **`NewErr`** is the construction knob: set it and the *factory*
+- **`NewErr`** is the construction knob on the fakes whose factories
+  the harness owns (`Tracker`, `Host`, `Notifier`, `CICD`): set it and
+  the *factory*
   fails instead of handing out the fake, simulating a capability
   whose config or credentials are wrong. The harness's factory
   closures read it at call time, so it can be set any time before
