@@ -35,7 +35,7 @@ issue_tracker:
 
 ## Architecture
 
-Three seams let the harness drive commands in-process:
+Four seams let the harness drive commands in-process:
 
 1. **`cli.SetServices`** — swaps capability factories (Tracker, CodeHost,
    CICD, Notifier, PreviewProvider) for fakes. The harness installs them
@@ -52,6 +52,13 @@ Three seams let the harness drive commands in-process:
    remote for a repository identity (`gh.ParseRemote`) — while a
    `core.sshCommand` shim routes the transport to the local bare repo
    (see the gotcha below).
+4. **Both config layers are scratch** — `XDG_CONFIG_HOME` points at a
+   temp dir so the developer's real global config never leaks in.
+   `Workspace.WriteConfig` writes the project layer;
+   `Harness.WriteGlobalConfig` the global one (needed when the
+   command reads the global config's presence or a setting has to
+   come from that layer). `Harness.GlobalConfigPath` is the path it
+   writes to.
 
 ## Test naming as scenario tree
 
@@ -95,16 +102,44 @@ function level. Sharing the harness across siblings leaks fake state.
 capability factories default to `t.Fatalf` stubs — if a command
 unexpectedly reaches for CICD / PreviewProvider, the test fails with a
 clear message instead of a nil-pointer panic. Tests for commands
-needing those services install them by calling `cli.SetServices`
-directly after `New()`.
+needing those services opt in — `h.InstallCICD()` for CI/CD,
+`h.InstallPreview()` for the preview provider. Each swaps its factory
+for the fake and returns it.
 
-`PreviewProvider` has a ready-made opt-in: `h.InstallPreview()` swaps
-in `fakes.Preview` and sets `h.Preview`. Reach for it in any command
-whose path touches a preview env — note that reaching for the
-*provider* is enough to trip the stub, even when no env is bound, so
-e.g. every `cleanup` test needs it (`cleanup` calls
-`newPreviewProvider` unconditionally and its plan leads with the
-teardown row).
+The two differ in one respect worth knowing: `InstallPreview` allocates
+a fresh `fakes.Preview` and assigns `h.Preview` (so seed *after*
+installing), while `InstallCICD` installs the `h.CICD` that `New()`
+already allocated (so knobs like `NewErr` can be set either side of the
+call).
+
+`PreviewProvider`'s opt-in is needed in any command whose path touches
+a preview env — note that reaching for the *provider* is enough to
+trip the stub, even when no env is bound, so e.g. every `cleanup` test
+needs it (`cleanup` calls `newPreviewProvider` unconditionally and its
+plan leads with the teardown row).
+
+## Asserting on what a command reported
+
+Commands run under a raw Reporter here, so the rendered timeline never
+reaches `h.Stdout()` — see "Card output is invisible to the harness"
+below for why. For a command whose entire output is Reporter calls
+(`doctor`, `status`), assert on `h.Reporter` instead:
+
+```go
+if err := h.Run("doctor"); err != nil { ... }
+
+ev, ok := h.Reporter.Find("code host")   // one check's row
+// ev.Kind is ui.CaptureComplete / CaptureSkip / CaptureFail —
+// the ✓ / ! / ✗ states — ev.Value the inline detail,
+// ev.Group the enclosing Group's title.
+```
+
+`h.Reporter` is a `ui.CaptureReporter`: it records every Reporter
+call in order (`Events()`), filters by kind (`OfKind`), finds by
+label (`Find`), and renders itself for failure messages (`Dump()`).
+It's reset at the start of each `Run`. Values may carry ANSI styling
+where the command colored part of a string — strip with
+`ansi.Strip` before comparing.
 
 ## Gotchas
 
@@ -212,42 +247,48 @@ that ever changes, the heuristic needs revisiting.
 ### Card output is invisible to the harness
 
 `Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
-harness's output is a buffer — so every command runs under the **raw
+harness's output is a buffer — so every command runs under a **raw
 reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
 and draw nothing. `h.Stdout()` is therefore empty for any command whose
-output is entirely cards (`status`, the lifecycle preambles). Commands
-that write through `fmt.Fprint(ui.Output(), ...)` — `config get`, and
-anything annotated `output: raw` — do surface there.
+output is entirely cards (`status`, `doctor`, the lifecycle preambles).
+Commands that write through `fmt.Fprint(ui.Output(), ...)` — `config
+get`, and anything annotated `output: raw` — do surface there.
 
-Two consequences when planning a command's scenarios:
+Nothing is *drawn*, but the semantic calls are still recorded: the raw
+reporter the harness installs is a `ui.CaptureReporter`. Three
+consequences when planning a command's scenarios:
 
-- Assert on **what the command asked for**, not what it drew: the
-  fakes' `Calls()` logs, their recorded arguments, and post-run fake
-  state. For a read-only command that *is* the observable behavior.
+- Assert on **what the command reported** through `h.Reporter` — see
+  "Asserting on what a command reported" above. This reaches the
+  package-level helpers too: `ui.Skip`, `ui.Fail`, `ui.Info` and
+  `ui.Selected` all delegate to the active reporter, so a branch whose
+  only effect is emitting one of them *is* assertable.
+- Assert on **what the command asked for**: the fakes' `Calls()` logs,
+  their recorded arguments, and post-run fake state — the other half
+  of a read-only command's observable behavior.
 - Cover section presence/absence by testing the card builders directly
   from `package cli` (see `../cli/status_test.go`). Splitting it this
   way also keeps the assertions off ANSI-styled strings.
 
-Forcing card rendering would need a real PTY; nothing in-tree does
-that today, and the spinner frames would make output assertions
-timing-dependent.
+What stays genuinely undrivable here, and shouldn't be chased when you
+go looking for uncovered lines:
 
-Two consequences that bite when you go looking for uncovered lines:
-
-- **"The user was warned" is never assertable here.** Every reporter
-  call — `ui.Skip`, `ui.Fail`, `ui.Info`, `ui.Selected` — is an empty
-  method on the raw reporter (`../ui/raw_reporter.go`). A branch whose
-  only effect is emitting one of those is invisible to an E2E test, so
-  cover the *behavior* beside it (the run continued, the value was
-  kept) and let the message itself go uncovered.
-- **Interactive form-takeover branches are PTY-only too.** Commands
-  that morph a spinner program into a form (`review`, `prerelease`,
+- **Interactive form-takeover branches are PTY-only.** Commands that
+  morph a spinner program into a form (`review`, `prerelease`,
   `release`) fork on whether a frame was painted to take the cursor
   over from. Raw rendering never paints one, so the harness always
   takes the "build the form standalone" arm and the takeover arm —
   cursor arithmetic against that frame — is structurally undrivable.
   Don't restructure to chase it; there is nothing to assert without a
   terminal.
+- **The raw reporter's own empty methods** (`../ui/raw_reporter.go`)
+  never run under the harness at all, since the capture stands in for
+  it. They stay uncovered by design, not for want of a test.
+
+Forcing *actual* card rendering would still need a real PTY; nothing
+in-tree does that, and the spinner frames would make output assertions
+timing-dependent. The capture reporter sidesteps the problem by
+recording the semantic calls instead of the pixels.
 
 ## Fake conventions
 
@@ -263,6 +304,13 @@ Capability fakes live in `fakes/` and follow a consistent shape:
 - **Error knobs** (e.g., `CreateErr`, `GetErr`) let tests force the
   fake to return an error from a specific method, exercising the
   command's error path without complex setup.
+- **`NewErr`** is the construction knob on the fakes whose factories
+  the harness owns (`Tracker`, `Host`, `Notifier`, `CICD`): set it and
+  the *factory* fails instead of handing out the fake, simulating a
+  capability whose config or credentials are wrong. The harness's
+  factory closures read it at call time, so it can be set any time
+  before `Run`. This is the seam `doctor` uses to report a provider as
+  configured-but-failing.
 - **`sync.Mutex`** guards mutable state even though tests run
   sequentially — protects against subtle ordering issues if a fake
   is ever shared across goroutines.
@@ -317,5 +365,7 @@ for them rather than constructing elaborate failing fixtures.
 | `fakes/host.go`               | In-memory `code.Host` (real tags via LinkRepo)   |
 | `fakes/notifier.go`           | In-memory `notify.Notifier`                      |
 | `fakes/preview.go`            | In-memory `preview.Provider` (opt-in install)    |
+| `fakes/cicd.go`               | In-memory `cicd.CICD` (opt-in install)           |
 | `fakes/...`                   | Additional capability fakes (added as needed)    |
 | `../cli/start_test.go`        | Canonical end-to-end test example                |
+| `../cli/doctor_test.go`       | Canonical `h.Reporter` assertion example         |

@@ -37,6 +37,13 @@ type Tracker struct {
 	GetErr       error
 	SetStatusErr error
 
+	// NewErr makes the harness's IssueTracker factory return this
+	// error instead of the fake, simulating a provider that failed to
+	// construct — bad credentials, incomplete config. It's a knob on
+	// the fake rather than on the harness because the factory closure
+	// reads it at call time, so a test can set it after New().
+	NewErr error
+
 	// calls records the method names invoked, in order, for tests that
 	// want to assert on the call sequence.
 	calls []string

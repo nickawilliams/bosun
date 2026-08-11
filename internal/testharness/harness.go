@@ -49,6 +49,22 @@ type Harness struct {
 	// InstallPreview. Not installed by default — see that method.
 	Preview *fakes.Preview
 
+	// CICD is the in-memory CI/CD fake. It is NOT installed by
+	// default — the CICD factory fails the test until InstallCICD is
+	// called, so a command that reaches for CI/CD unexpectedly still
+	// surfaces the gap. Set its knobs before installing.
+	CICD *fakes.CICD
+
+	// Reporter records every ui.Reporter call the command made, so
+	// tests can assert on reported steps without parsing styled
+	// terminal output (commands run in raw mode under the harness —
+	// output isn't a TTY — so the rendered timeline never reaches
+	// Stdout()). Reset at the start of each Run.
+	Reporter *ui.CaptureReporter
+
+	// globalConfigDir is $XDG_CONFIG_HOME/bosun for this test.
+	globalConfigDir string
+
 	stdin  *chunkReader
 	stdout *syncBuffer
 	stderr *syncBuffer
@@ -97,7 +113,7 @@ func (s *syncBuffer) Reset() {
 // remaining capability factories (CICD, PreviewProvider) default to
 // functions that fail the test if invoked. Tests for commands needing
 // those services install fakes after calling New — PreviewProvider via
-// the InstallPreview helper, CICD via SetServices directly.
+// the InstallPreview helper, CICD via InstallCICD.
 func New(t *testing.T) *Harness {
 	t.Helper()
 	h := &Harness{
@@ -106,6 +122,8 @@ func New(t *testing.T) *Harness {
 		Tracker:   fakes.NewTracker(),
 		Host:      fakes.NewHost(),
 		Notifier:  fakes.NewNotifier(),
+		CICD:      fakes.NewCICD(),
+		Reporter:  ui.NewCaptureReporter(),
 		stdin:     &chunkReader{},
 		stdout:    &syncBuffer{},
 		stderr:    &syncBuffer{},
@@ -128,6 +146,13 @@ func New(t *testing.T) *Harness {
 
 	t.Cleanup(ui.ResetStreams)
 
+	// Commands run non-interactively here (output is a buffer, not a
+	// TTY), so cli.Bootstrap installs a raw Reporter that renders
+	// nothing — and re-installs one on every Run. Swapping the
+	// raw-mode constructor rather than the installed Reporter is what
+	// makes the capture survive that.
+	t.Cleanup(ui.SetRawReporterFactory(func() ui.Reporter { return h.Reporter }))
+
 	// Reset cli.Bootstrap's once-per-process guard so each test's
 	// cmd.Execute re-runs config load + UI-mode setup against its
 	// own fresh workspace and viper.
@@ -141,12 +166,32 @@ func New(t *testing.T) *Harness {
 	// read the developer's real global config during tests.
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
+	h.globalConfigDir = filepath.Join(xdg, "bosun")
 
+	// Each factory consults its fake's NewErr at call time, so a test
+	// can make construction fail after New() — the seam for "this
+	// capability is misconfigured" without swapping the whole
+	// Services set.
 	cli.SetServices(&cli.Services{
-		IssueTracker:    func() (issue.Tracker, error) { return h.Tracker, nil },
-		CodeHost:        func() (code.Host, error) { return h.Host, nil },
-		CICD:            notInstalled[cicd.CICD](t, "CICD"),
-		Notifier:        func() (notify.Notifier, error) { return h.Notifier, nil },
+		IssueTracker: func() (issue.Tracker, error) {
+			if h.Tracker.NewErr != nil {
+				return nil, h.Tracker.NewErr
+			}
+			return h.Tracker, nil
+		},
+		CodeHost: func() (code.Host, error) {
+			if h.Host.NewErr != nil {
+				return nil, h.Host.NewErr
+			}
+			return h.Host, nil
+		},
+		CICD: notInstalled[cicd.CICD](t, "CICD"),
+		Notifier: func() (notify.Notifier, error) {
+			if h.Notifier.NewErr != nil {
+				return nil, h.Notifier.NewErr
+			}
+			return h.Notifier, nil
+		},
 		PreviewProvider: notInstalledPreview(t),
 	})
 
@@ -183,6 +228,57 @@ func (h *Harness) InstallPreview() *fakes.Preview {
 	h.t.Cleanup(func() { cli.SetServices(prev) })
 
 	return h.Preview
+}
+
+// InstallCICD swaps the fail-loudly CICD factory for the in-memory
+// fake and returns it. Opt-in for the same reason InstallPreview is:
+// commands that shouldn't touch CI/CD keep the guard, and commands
+// that should say so explicitly. Installs by copy-and-swap with its
+// own restore for the reason spelled out on InstallPreview.
+//
+// Unlike InstallPreview, this does NOT allocate a fresh fake — h.CICD
+// is created by New and installed as-is, so a test can set its knobs
+// (NewErr, TriggerErr) before installing and they survive. The
+// installed factory also consults NewErr at call time, so forcing
+// construction to fail after installing works too.
+func (h *Harness) InstallCICD() *fakes.CICD {
+	h.t.Helper()
+
+	prev := cli.GetServices()
+	next := *prev
+	next.CICD = func() (cicd.CICD, error) {
+		if h.CICD.NewErr != nil {
+			return nil, h.CICD.NewErr
+		}
+		return h.CICD, nil
+	}
+	cli.SetServices(&next)
+	h.t.Cleanup(func() { cli.SetServices(prev) })
+
+	return h.CICD
+}
+
+// WriteGlobalConfig writes yaml to the scratch $XDG_CONFIG_HOME's
+// bosun/config.yaml — the global half of bosun's two-layer config.
+// Tests need it when the command under test inspects the global
+// config's presence (bosun doctor) or when a setting must come from
+// the global layer rather than the project's.
+func (h *Harness) WriteGlobalConfig(yaml string) {
+	h.t.Helper()
+	if err := os.MkdirAll(h.globalConfigDir, 0o755); err != nil {
+		h.t.Fatalf("create global config dir: %v", err)
+	}
+	path := filepath.Join(h.globalConfigDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		h.t.Fatalf("write global config: %v", err)
+	}
+}
+
+// GlobalConfigPath returns the path WriteGlobalConfig writes to,
+// whether or not the file exists — the value bosun doctor reports for
+// the global config check.
+func (h *Harness) GlobalConfigPath() string {
+	return filepath.Join(h.globalConfigDir, "config.yaml")
 }
 
 // Type appends s to the input the cobra command reads from. Use this
@@ -227,6 +323,7 @@ func (h *Harness) Run(args ...string) error {
 	// must not accumulate into this one's assertions.
 	h.stdout.Reset()
 	h.stderr.Reset()
+	h.Reporter.Reset()
 
 	cmd := cli.NewRootCmd("test")
 	cmd.SetIn(h.stdin)

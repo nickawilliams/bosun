@@ -169,9 +169,17 @@ func Default() Reporter { return defaultReporter }
 // IsRaw reports whether the default Reporter is a raw (non-rendering)
 // variant. Used by Card.Print and other direct-output functions to
 // suppress timeline rendering in raw mode.
+//
+// The cases enumerate every non-rendering Reporter: rawReporter for
+// production raw mode, CaptureReporter for tests. Add a case when
+// adding another — the set is necessarily package-local, since a
+// Reporter defined elsewhere can't participate in this decision.
 func IsRaw() bool {
-	_, ok := defaultReporter.(*rawReporter)
-	return ok
+	switch defaultReporter.(type) {
+	case *rawReporter, *CaptureReporter:
+		return true
+	}
+	return false
 }
 
 // SetDefault replaces the default reporter. Intended for tests and

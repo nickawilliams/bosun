@@ -81,6 +81,16 @@ type Host struct {
 	ListCollaboratorsErr error
 	ListTeamsErr         error
 
+	// AuthErr forces GetAuthenticatedUser to fail — the seam for
+	// "host constructed, but the token is rejected".
+	AuthErr error
+
+	// NewErr makes the harness's CodeHost factory return this error
+	// instead of the fake, simulating a host that failed to construct
+	// (no token configured, bad credentials). See the same knob on
+	// fakes.Tracker for why it lives on the fake.
+	NewErr error
+
 	// calls records the method names invoked, in order.
 	calls []string
 }
@@ -501,6 +511,9 @@ func (h *Host) GetAuthenticatedUser(_ context.Context) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("GetAuthenticatedUser")
+	if h.AuthErr != nil {
+		return "", h.AuthErr
+	}
 	return "testuser", nil
 }
 
