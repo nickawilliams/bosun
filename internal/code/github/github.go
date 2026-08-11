@@ -834,6 +834,32 @@ func (a *Adapter) ListBranches(ctx context.Context, owner, repository string) ([
 	return names, nil
 }
 
+// GetDefaultBranch reads default_branch off the repository object —
+// one request, no pagination, unlike deriving it from ListBranches
+// (which can't tell you which of the branches is the default anyway).
+func (a *Adapter) GetDefaultBranch(ctx context.Context, owner, repository string) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s", owner, repository)
+	resp, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("fetching repository: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var repoInfo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&repoInfo); err != nil {
+		return "", fmt.Errorf("parsing repository response: %w", err)
+	}
+	// An empty default_branch means an empty repository (no commits, so
+	// no branches). Report it rather than handing back "" for a caller
+	// to use as a PR base.
+	if repoInfo.DefaultBranch == "" {
+		return "", fmt.Errorf("%s/%s has no default branch", owner, repository)
+	}
+	return repoInfo.DefaultBranch, nil
+}
+
 func (a *Adapter) ListCollaborators(ctx context.Context, owner, repository string) ([]string, error) {
 	var logins []string
 	path := fmt.Sprintf("/repos/%s/%s/collaborators?per_page=100", owner, repository)

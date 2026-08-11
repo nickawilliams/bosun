@@ -185,6 +185,12 @@ type Host interface {
 	// ListBranches returns branch names for a repository.
 	ListBranches(ctx context.Context, owner, repository string) ([]string, error)
 
+	// GetDefaultBranch returns the repository's default branch — the
+	// branch a PR targets unless told otherwise. Lets callers resolve a
+	// PR base per repository instead of applying one workspace-wide
+	// guess to repos that don't share it.
+	GetDefaultBranch(ctx context.Context, owner, repository string) (string, error)
+
 	// ListCollaborators returns usernames who can review or be assigned to PRs.
 	ListCollaborators(ctx context.Context, owner, repository string) ([]string, error)
 

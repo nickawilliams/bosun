@@ -592,6 +592,42 @@ func TestListBranchesPaginated(t *testing.T) {
 	}
 }
 
+func TestGetDefaultBranch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo" {
+			t.Errorf("path = %q, want /repos/org/repo", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":           "repo",
+			"default_branch": "develop",
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	branch, err := a.GetDefaultBranch(context.Background(), "org", "repo")
+	if err != nil {
+		t.Fatalf("GetDefaultBranch() error: %v", err)
+	}
+	if branch != "develop" {
+		t.Errorf("GetDefaultBranch() = %q, want %q", branch, "develop")
+	}
+}
+
+func TestGetDefaultBranchEmpty(t *testing.T) {
+	// An empty repository reports no default branch. Handing "" back as
+	// a PR base would produce a confusing 422 later, so it's an error.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "repo"})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	if _, err := a.GetDefaultBranch(context.Background(), "org", "repo"); err == nil {
+		t.Fatal("GetDefaultBranch() error = nil, want an error for a repo with no default branch")
+	}
+}
+
 func TestListCollaborators(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/org/repo/collaborators" {
