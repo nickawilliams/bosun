@@ -372,6 +372,39 @@ in-tree does that, and the spinner frames would make output assertions
 timing-dependent. The capture reporter sidesteps the problem by
 recording the semantic calls instead of the pixels.
 
+### `bosun init` runs against the CWD, not `--project`
+
+Every other command resolves its project through the `--project` flag
+`Run` injects. `init` doesn't: it writes `.bosun/` relative to
+`os.Getwd()`, and errors out if `config.FindProjectRoot()` finds a
+project anywhere else. A scenario for it therefore has to
+`t.Chdir(h.Workspace.Dir)` — which is safe here for the same reason
+`t.Setenv` is, since harness tests never run in parallel.
+
+`--project` is also useless before a project exists: `Bootstrap`
+rejects a directory with no `.bosun/`. So `Workspace.Uninitialize()`
+removes the `.bosun/` that `NewWorkspace` creates for everyone else's
+benefit (init would read it as a reinit), and `Run` skips the
+`--project` injection while the workspace stays that way — see
+`Workspace.Initialized`. `Workspace.ReadConfig` / `ConfigPath` are the
+round-trip counterparts for asserting on what got written.
+
+Two things about init's prompt flow are worth knowing before writing
+its scenarios, because both cost a keystroke that isn't about the
+thing under test. The optional-service wizard runs whenever the
+session is interactive — which the harness always is — so every
+non-`--quick` run ends with four provider gates that each need a `\r`.
+And `resolveGroupAsForm`'s fields arrive pre-filled with the schema's
+example rather than showing it as a placeholder, so typing appends;
+send `\x15` (ctrl+u) first to clear the field.
+
+Since the whole command is prompts, a scenario that expects *not* to
+be asked something has no clean way to fail — it hangs. Queue a
+trailing `h.Type("\x03")` as a tripwire in those cases: nothing reads
+it on the intended path, and a regression that reaches an unplanned
+prompt aborts with `ErrCancelled` instead of eating the package
+timeout. See `../cli/init_test.go`.
+
 ## Fake conventions
 
 Capability fakes live in `fakes/` and follow a consistent shape:
