@@ -1033,10 +1033,11 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 	if msField == nil {
 		// Raw rendering: RunCardStepsInto never runs its final-frame
 		// closure (there's no frame to take over), so the form hasn't
-		// been built. Build it now and run it standalone — prompts
-		// still run in raw mode (harness-driven stdin, or a TTY-stdin/
-		// piped-stdout session) — skipping the cursor takeover below,
-		// which assumes a painted frame to repaint over.
+		// been built. Build it now and run it standalone, skipping the
+		// cursor takeover below, which assumes a painted frame to
+		// repaint over. The form runs when stdin can drive it (the
+		// harness's injected reader); a TTY-stdin/piped-stdout session
+		// is refused cleanly by runForm's render guard instead.
 		buildSelectionForm()
 		if err := runForm(msField); err != nil {
 			return err
