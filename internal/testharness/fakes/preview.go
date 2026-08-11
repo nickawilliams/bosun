@@ -44,6 +44,11 @@ type Preview struct {
 
 	// calls records the method names invoked, in order.
 	calls []string
+	// getKeys records the issueKey argument of every Get call, in
+	// order. An env is bound to an issue key, so a caller that looks up
+	// the wrong key silently reads as "no env bound" — the miss is
+	// invisible in the returned value and only visible here.
+	getKeys []string
 }
 
 // NewPreview constructs an empty Preview.
@@ -79,6 +84,17 @@ func (p *Preview) Destroyed() []string {
 	return out
 }
 
+// GetKeys returns a snapshot of the issue keys passed to Get, in call
+// order — including keys with no env bound, since asking for the
+// wrong key is exactly what this records.
+func (p *Preview) GetKeys() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, len(p.getKeys))
+	copy(out, p.getKeys)
+	return out
+}
+
 // Calls returns a snapshot of method calls in invocation order.
 func (p *Preview) Calls() []string {
 	p.mu.Lock()
@@ -98,6 +114,7 @@ func (p *Preview) Get(_ context.Context, issueKey string) (preview.Environment, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.recordCall("Get")
+	p.getKeys = append(p.getKeys, issueKey)
 	env, ok := p.envs[issueKey]
 	if p.GetErr != nil {
 		// Partially-populated result + error, per the Provider
