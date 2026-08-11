@@ -45,9 +45,13 @@ Three seams let the harness drive commands in-process:
    reader; output goes to the injected buffer. Triggered automatically
    by root.go's `PersistentPreRunE`.
 3. **Real git on temp dirs** — `Workspace.AddRepo` creates a working
-   repo plus a bare remote at `remotes/<name>.git` so production code
-   that does `git fetch origin <branch>` and `git push -u origin ...`
-   works without modification.
+   repo plus a bare remote at `remotes/acme/<name>.git` so production
+   code that does `git fetch origin <branch>` and `git push -u origin
+   ...` works without modification. The origin URL is the GitHub-shaped
+   `git@github.com:acme/<name>.git` — required by code that parses the
+   remote for a repository identity (`gh.ParseRemote`) — while a
+   `core.sshCommand` shim routes the transport to the local bare repo
+   (see the gotcha below).
 
 ## Test naming as scenario tree
 
@@ -87,9 +91,9 @@ function level. Sharing the harness across siblings leaks fake state.
 
 ### Uninstalled fakes fail loudly
 
-`New()` installs `Tracker` only. The other capability factories
-default to `t.Fatalf` stubs — if a command unexpectedly reaches for
-CodeHost / CICD / Notifier / PreviewProvider, the test fails with a
+`New()` installs `Tracker`, `Host`, and `Notifier`. The remaining
+capability factories default to `t.Fatalf` stubs — if a command
+unexpectedly reaches for CICD / PreviewProvider, the test fails with a
 clear message instead of a nil-pointer panic. Tests for commands
 needing those services install them by calling `cli.SetServices`
 directly after `New()`.
@@ -133,6 +137,34 @@ h.Type("\r")                       // type select (accept default)
 A single call spanning several fields (`h.Type("a\rb\r")`) is the
 racy shape — don't do it. Keys within one call are fine for a single
 field's compound sequences (`" \x1b[B \r"` on a multi-select).
+
+### GitHub-shaped remotes resolve through an ssh shim
+
+`gh.ParseRemote` runs `git remote get-url origin` and only accepts
+GitHub SSH/HTTPS URLs — a filesystem-path origin fails identity
+resolution and the repo surfaces as a ✗ row. AddRepo therefore sets
+origin to `git@github.com:acme/<name>.git` and points `core.sshCommand`
+at a per-workspace shim that executes the pack command against
+`remotes/` locally, so push/fetch never touch the network. (A
+`url.<path>.insteadOf` rewrite does NOT work here: `git remote get-url`
+expands it and hands the path to ParseRemote.) Host-side effects
+(release tags cut by `fakes.Host.CreateRelease`) land on the bare
+remote at `Repo.RemotePath`; assert with `Repo.HasTag` / seed with
+`Repo.Tag`, which operate on the remote for exactly that reason.
+
+### Sequential forms in one Run
+
+bubbletea cannot cancel reads on a non-File reader, so each finished
+form leaks a read-loop goroutine blocked in Read — and the
+cancelreader fallback DISCARDS whatever a post-cancel read returns.
+With chunks pre-queued, a command that runs two prompts in sequence
+(target-selection form, then the plan gate) would have the first
+form's leaked reader silently swallow the second prompt's keys and
+hang the run. `ui.Input()` announces each new form via the
+`InputHandoff` interface and `chunkReader` refuses delivery to reads
+that began under an earlier session. This is automatic; it only means
+a chunk isn't consumed until the form it's meant for is actually the
+live consumer.
 
 ### macOS symlinks + git worktree paths
 
@@ -229,6 +261,9 @@ for them rather than constructing elaborate failing fixtures.
 |-------------------------------|--------------------------------------------------|
 | `harness.go`                  | `Harness` + `New(t)` entry point                 |
 | `workspace.go`                | `Workspace` + `Repo` fixtures                    |
+| `input.go`                    | `chunkReader` stdin (chunk pacing + sessions)    |
 | `fakes/tracker.go`            | In-memory `issue.Tracker` (canonical fake)       |
+| `fakes/host.go`               | In-memory `code.Host` (real tags via LinkRepo)   |
+| `fakes/notifier.go`           | In-memory `notify.Notifier`                      |
 | `fakes/...`                   | Additional capability fakes (added as needed)    |
 | `../cli/start_test.go`        | Canonical end-to-end test example                |
