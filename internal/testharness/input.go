@@ -46,12 +46,16 @@ const chunkPause = 200 * time.Millisecond
 // DISCARDED by the cancelreader fallback. With chunks pre-queued,
 // that stale reader would consume the chunk meant for the next form
 // in the same Run (form → plan gate) and the run would hang waiting
-// for input. ui.Input() announces each new consumer via NextConsumer;
-// a Read that began under an older session returns io.EOF without
-// consuming, so the pending chunk is delivered to the live form
-// instead. The stale reader must still be inside its chunk-boundary
-// pause when the next form starts — chunkPause covers the in-memory
-// transitions between sequential prompts.
+// for input. The session is bumped at both consumer boundaries —
+// ui.Input() when a form takes the stream, ui.ReleaseInput() when it
+// exits — and a Read that began under an older session returns
+// io.EOF without consuming, so the pending chunk is delivered to the
+// live form instead. The exit-side bump is what makes this hold
+// regardless of how much work runs between two prompts: the leaked
+// read is in flight before the form returns, so its session snapshot
+// is stale the moment runForm exits. The remaining assumption is only
+// that form teardown completes within chunkPause — a property of the
+// form machinery, not of the command's between-prompt work.
 type chunkReader struct {
 	mu     sync.Mutex
 	chunks [][]byte
@@ -65,9 +69,10 @@ type chunkReader struct {
 	session uint64
 }
 
-// NextConsumer marks the start of a new consumer session (called by
-// ui.Input() each time a form takes over the stream). Reads in flight
-// from earlier sessions will return io.EOF instead of data.
+// NextConsumer marks a consumer-session boundary (called by
+// ui.Input() when a form takes over the stream and by
+// ui.ReleaseInput() when it exits). Reads in flight from earlier
+// sessions will return io.EOF instead of data.
 func (r *chunkReader) NextConsumer() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

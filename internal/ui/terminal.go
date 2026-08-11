@@ -40,12 +40,13 @@ func ResetStreams() {
 }
 
 // InputHandoff is implemented by injected input readers (the test
-// harness) that need to know when a new consumer takes over the
-// stream. bubbletea can't cancel reads on a non-File reader, so a
-// finished form's leaked read loop would otherwise steal — and
-// discard — input meant for the next form in the same command run.
-// Input() announces each handoff so the reader can refuse delivery
-// to readers from an earlier session.
+// harness) that need to know when the stream's consumer changes.
+// bubbletea can't cancel reads on a non-File reader, so a finished
+// form's leaked read loop would otherwise steal — and discard —
+// input meant for the next form in the same command run. Input()
+// announces acquisition (a new form taking the stream) and
+// ReleaseInput() announces exit (the form is done), so the reader
+// can refuse delivery to reads begun under an earlier session.
 type InputHandoff interface {
 	NextConsumer()
 }
@@ -58,6 +59,18 @@ func Input() io.Reader {
 		h.NextConsumer()
 	}
 	return defaultInput
+}
+
+// ReleaseInput announces that the current form's consumer is done
+// with the input stream (see InputHandoff). Bumping the session at
+// form EXIT — not only at the next form's start — invalidates the
+// exited form's leaked read loop structurally: its in-flight read
+// began under the old session regardless of how much time passes
+// before the next prompt, so it can never consume that prompt's keys.
+func ReleaseInput() {
+	if h, ok := defaultInput.(InputHandoff); ok {
+		h.NextConsumer()
+	}
 }
 
 // Output returns the current output stream.

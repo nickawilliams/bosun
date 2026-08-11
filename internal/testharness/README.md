@@ -160,11 +160,14 @@ cancelreader fallback DISCARDS whatever a post-cancel read returns.
 With chunks pre-queued, a command that runs two prompts in sequence
 (target-selection form, then the plan gate) would have the first
 form's leaked reader silently swallow the second prompt's keys and
-hang the run. `ui.Input()` announces each new form via the
-`InputHandoff` interface and `chunkReader` refuses delivery to reads
-that began under an earlier session. This is automatic; it only means
-a chunk isn't consumed until the form it's meant for is actually the
-live consumer.
+hang the run. `ui.Input()` announces each form's start and
+`ui.ReleaseInput()` its exit via the `InputHandoff` interface, and
+`chunkReader` refuses delivery to reads that began under an earlier
+session. The exit-side announcement makes the guarantee independent
+of how much work a command does between prompts — the leaked read is
+in flight before the form returns, so it's stale by construction.
+This is automatic; it only means a chunk isn't consumed until the
+form it's meant for is actually the live consumer.
 
 ### macOS symlinks + git worktree paths
 
