@@ -98,6 +98,14 @@ clear message instead of a nil-pointer panic. Tests for commands
 needing those services install them by calling `cli.SetServices`
 directly after `New()`.
 
+`PreviewProvider` has a ready-made opt-in: `h.InstallPreview()` swaps
+in `fakes.Preview` and sets `h.Preview`. Reach for it in any command
+whose path touches a preview env — note that reaching for the
+*provider* is enough to trip the stub, even when no env is bound, so
+e.g. every `cleanup` test needs it (`cleanup` calls
+`newPreviewProvider` unconditionally and its plan leads with the
+teardown row).
+
 ## Gotchas
 
 ### huh keypress conventions
@@ -268,5 +276,6 @@ for them rather than constructing elaborate failing fixtures.
 | `fakes/tracker.go`            | In-memory `issue.Tracker` (canonical fake)       |
 | `fakes/host.go`               | In-memory `code.Host` (real tags via LinkRepo)   |
 | `fakes/notifier.go`           | In-memory `notify.Notifier`                      |
+| `fakes/preview.go`            | In-memory `preview.Provider` (opt-in install)    |
 | `fakes/...`                   | Additional capability fakes (added as needed)    |
 | `../cli/start_test.go`        | Canonical end-to-end test example                |

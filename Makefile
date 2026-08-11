@@ -44,6 +44,27 @@ MAIN_PKG := ./cmd/bosun
 export CARGO_HOME ?= $(CURDIR)/.cache/cargo
 
 # ============================================================================
+# Coverage
+# ============================================================================
+
+# Packages whose statements count toward coverage. Test-support code is
+# excluded: it exists only to exercise production code, so counting it
+# distorts the project total and — because a PR that adds a fake adds
+# uncovered "production" lines — a PR's patch coverage too. Go already
+# treats _test.go files this way; internal/testharness only misses that
+# treatment because several test packages import it, which a _test.go
+# file can't provide.
+#
+# -coverpkg takes patterns and has no negation, so the list is built by
+# subtraction. Excluding here rather than in codecov.yaml keeps the
+# local totals (make test, make test/tree) agreeing with CI's, and
+# leaves the excluded code out of the profile entirely instead of
+# filtering it downstream in one consumer.
+COVER_EXCLUDE := /internal/testharness
+COVERPKG = $(shell $(GO) list ./cmd/... ./internal/... \
+	| grep -v -e '$(COVER_EXCLUDE)' | paste -sd, -)
+
+# ============================================================================
 # Publishing
 # ============================================================================
 
@@ -159,7 +180,7 @@ build: $(SRC)
 test:
 	@echo "Running tests with coverage..."
 	@mkdir -p $(OUT_DIR)/coverage
-	@$(GO) test ./... -coverpkg=./cmd/...,./internal/... -coverprofile=$(OUT_DIR)/coverage/coverage.out
+	@$(GO) test ./... -coverpkg=$(COVERPKG) -coverprofile=$(OUT_DIR)/coverage/coverage.out
 	@$(GO) tool cover -func=$(OUT_DIR)/coverage/coverage.out | tail -n 1
 	@$(GO) tool gcov2lcov -infile $(OUT_DIR)/coverage/coverage.out -outfile $(OUT_DIR)/coverage/lcov.info >/dev/null
 	@$(GO) tool cover -html=$(OUT_DIR)/coverage/coverage.out -o $(OUT_DIR)/coverage/index.html
@@ -169,12 +190,12 @@ test:
 ## Run all tests with cross-package coverage attribution, rendered as a tree via cmd/gotree
 test/tree:
 	@mkdir -p $(OUT_DIR)/coverage
-	@set -o pipefail; $(GO) test ./... -coverpkg=./cmd/...,./internal/... -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -coverprofile=$(OUT_DIR)/coverage/gotree.out
+	@set -o pipefail; $(GO) test ./... -coverpkg=$(COVERPKG) -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -coverprofile=$(OUT_DIR)/coverage/gotree.out
 
 ## Same as test/tree but renders each package the moment it finishes (only overall coverage shown at end)
 test/tree/stream:
 	@mkdir -p $(OUT_DIR)/coverage
-	@set -o pipefail; $(GO) test ./... -coverpkg=./cmd/...,./internal/... -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -stream -coverprofile=$(OUT_DIR)/coverage/gotree.out
+	@set -o pipefail; $(GO) test ./... -coverpkg=$(COVERPKG) -coverprofile=$(OUT_DIR)/coverage/gotree.out -json | $(GO) run ./cmd/gotree -stream -coverprofile=$(OUT_DIR)/coverage/gotree.out
 
 ## Run benchmarks across all packages
 bench:

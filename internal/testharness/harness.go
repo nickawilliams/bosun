@@ -45,6 +45,10 @@ type Harness struct {
 	// Tests assert on Messages() for what was posted.
 	Notifier *fakes.Notifier
 
+	// Preview is the in-memory preview provider, nil until a test calls
+	// InstallPreview. Not installed by default — see that method.
+	Preview *fakes.Preview
+
 	stdin  *chunkReader
 	stdout *syncBuffer
 	stderr *syncBuffer
@@ -92,8 +96,8 @@ func (s *syncBuffer) Reset() {
 // Tracker, Host, and Notifier fakes install automatically. The
 // remaining capability factories (CICD, PreviewProvider) default to
 // functions that fail the test if invoked. Tests for commands needing
-// those services install fakes via SetServices directly after calling
-// New.
+// those services install fakes after calling New — PreviewProvider via
+// the InstallPreview helper, CICD via SetServices directly.
 func New(t *testing.T) *Harness {
 	t.Helper()
 	h := &Harness{
@@ -147,6 +151,38 @@ func New(t *testing.T) *Harness {
 	})
 
 	return h
+}
+
+// InstallPreview swaps the fail-loudly PreviewProvider factory for an
+// in-memory fake, sets h.Preview, and returns it. Call it right after
+// New for commands that reach for a preview provider (cleanup tears an
+// env down as the first row of its plan; preview and review consult
+// one).
+//
+// Kept opt-in rather than installed by New so a command that touches
+// previews unexpectedly still fails loudly for every other test — the
+// same posture the CICD factory keeps.
+//
+// Installs by copy-and-swap with its own restore rather than writing
+// the field on the live *Services in place. In-place mutation happens
+// to be safe today only because New always installs a fresh struct
+// immediately beforehand; the moment anything puts a shared *Services
+// in place between the two calls, an in-place write would outlive this
+// test with nothing to undo it — leaving a finished harness's fake
+// bound to later tests.
+func (h *Harness) InstallPreview() *fakes.Preview {
+	h.t.Helper()
+	h.Preview = fakes.NewPreview()
+
+	prev := cli.GetServices()
+	next := *prev
+	next.PreviewProvider = func(string) (preview.Provider, error) {
+		return h.Preview, nil
+	}
+	cli.SetServices(&next)
+	h.t.Cleanup(func() { cli.SetServices(prev) })
+
+	return h.Preview
 }
 
 // Type appends s to the input the cobra command reads from. Use this
