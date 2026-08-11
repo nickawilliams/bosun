@@ -209,6 +209,29 @@ This is the test-injection escape hatch, not a security guarantee.
 The only in-tree producer of non-File readers is this harness; if
 that ever changes, the heuristic needs revisiting.
 
+### Card output is invisible to the harness
+
+`Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
+harness's output is a buffer — so every command runs under the **raw
+reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
+and draw nothing. `h.Stdout()` is therefore empty for any command whose
+output is entirely cards (`status`, the lifecycle preambles). Commands
+that write through `fmt.Fprint(ui.Output(), ...)` — `config get`, and
+anything annotated `output: raw` — do surface there.
+
+Two consequences when planning a command's scenarios:
+
+- Assert on **what the command asked for**, not what it drew: the
+  fakes' `Calls()` logs, their recorded arguments, and post-run fake
+  state. For a read-only command that *is* the observable behavior.
+- Cover section presence/absence by testing the card builders directly
+  from `package cli` (see `../cli/status_test.go`). Splitting it this
+  way also keeps the assertions off ANSI-styled strings.
+
+Forcing card rendering would need a real PTY; nothing in-tree does
+that today, and the spinner frames would make output assertions
+timing-dependent.
+
 ## Fake conventions
 
 Capability fakes live in `fakes/` and follow a consistent shape:
