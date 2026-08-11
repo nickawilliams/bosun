@@ -24,11 +24,17 @@ import (
 // repositories + workspace root (so the worktrees resolve), and the
 // status mappings the readiness probe reads the issue's lifecycle
 // position from.
+//
+// workspace.root is deliberately NOT the "workspaces" default:
+// Harness.WorktreePath falls back to that name when viper holds
+// nothing, so a config-loading regression would still point every path
+// assertion at the right directory and pass. A non-default root makes
+// the assertions depend on the config actually being read.
 const cleanupConfig = `
 repositories:
   - "repos/*"
 workspace:
-  root: "workspaces"
+  root: "trees"
 issue_tracker:
   project: "EX"
   statuses:
@@ -182,12 +188,21 @@ func TestCleanup(t *testing.T) {
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
+		// Snapshot: the setup's `start` run already called SetStatus.
+		before := len(h.Tracker.Calls())
 
 		if err := runCleanup(h, "--approve"); err != nil {
 			t.Fatalf("cleanup: %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
+		// Cleanup reads the issue's status for the readiness probe but
+		// never moves it — the lifecycle is the user's concern. Pinned
+		// here rather than left as prose, because it's the reason this
+		// file has no tracker apply-failure scenario.
+		if newCalls := h.Tracker.Calls()[before:]; slices.Contains(newCalls, "SetStatus") {
+			t.Errorf("cleanup called SetStatus; calls=%v", newCalls)
+		}
 	})
 
 	t.Run("merged_branch/removes_every_repo_in_workspace", func(t *testing.T) {
@@ -389,6 +404,31 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceGone(t, h, api)
 	})
 
+	t.Run("force/removes_dirty_worktree_when_flagged", func(t *testing.T) {
+		// The other half of what --force means. Above, it only bypasses
+		// the readiness gate: the branch's work was committed and
+		// pushed, so the worktree was clean and `git worktree remove`
+		// would have succeeded either way. Here the worktree is dirty,
+		// which is the one case where git itself refuses without
+		// --force — so this is what pins cleanup threading the flag
+		// through to RemoveWorktree, and the uncommitted file really
+		// being destroyed is the point rather than a side effect.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		wt := h.WorktreePath(cleanupBranch, api.Name)
+		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+		h.Type("y")
+
+		if err := runCleanup(h, "--force", "--approve"); err != nil {
+			t.Fatalf("cleanup --force: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+	})
+
 	t.Run("plan_confirmation/yes_flag_skips_prompt", func(t *testing.T) {
 		// A SAFE workspace with --approve and an empty stdin: neither
 		// the readiness gate nor the plan gate prompts. Success with no
@@ -508,6 +548,57 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceIntact(t, h, web)
 	})
 
+	t.Run("errors/host_probe_failure_warns_not_blocks", func(t *testing.T) {
+		// The code host is unreachable, so the PR-state probe can't
+		// run. That must not read as SAFE — a failed probe means a
+		// safety signal silently didn't fire — but it also isn't a
+		// BLOCK: nothing is known to be lost. It lands as a WARN, which
+		// interactively means the Continue/Cancel dialog. "n" declines,
+		// so nothing is destroyed.
+		//
+		// This is the read-only analogue of the apply-failure case the
+		// harness README's error-path note describes: cleanup's gather
+		// phase is all probes, and this is its injectable seam.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Host.GetPRErr = errStubErr("github API 503: service unavailable")
+		h.Type("n")
+
+		err := runCleanup(h, "--approve")
+		if err == nil {
+			t.Fatalf("expected the unreachable host to gate the run; got nil")
+		}
+		if !strings.Contains(err.Error(), "cancelled") {
+			t.Errorf("error = %v, want the declined warning gate", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("errors/preview_probe_failure_still_tears_down", func(t *testing.T) {
+		// The provider can't confirm whether an env is bound
+		// (indeterminate probe, not a definitive "none"). The teardown
+		// row fails open: it still applies, so a registry entry can't
+		// strand because a probe blipped. The env name from the
+		// partially-populated probe result is what Destroy receives.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon"})
+		h.Preview.GetErr = errStubErr("probing preview: timeout")
+
+		if err := runCleanup(h, "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		want := "EX-1|brave-falcon"
+		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want {
+			t.Errorf("destroyed = %v, want [%s]", got, want)
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
 	t.Run("errors/preview_teardown_failure_surfaces", func(t *testing.T) {
 		// The provider rejects the teardown at apply time. The error
 		// propagates out of the plan apply as the command's return.
@@ -536,6 +627,14 @@ func TestCleanup(t *testing.T) {
 			t.Errorf("error %q does not carry the provider's message", err)
 		}
 
+		// Calls(), not Destroyed(): the fake records the call before
+		// consulting DestroyErr but appends to destroyed only on
+		// success, so `len(Destroyed()) == 0` is true by construction
+		// whenever the knob is set and would pass even if the teardown
+		// row never ran at all.
+		if !slices.Contains(h.Preview.Calls(), "Destroy") {
+			t.Errorf("teardown row never applied; calls=%v", h.Preview.Calls())
+		}
 		if got := h.Preview.Destroyed(); len(got) != 0 {
 			t.Errorf("destroyed = %v, want none (the provider refused)", got)
 		}
