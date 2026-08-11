@@ -105,6 +105,11 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
+	// Announce form exit on every return path: a read loop this form
+	// leaks (bubbletea can't cancel reads on non-File inputs) must not
+	// be able to consume input meant for a later prompt in the same
+	// run. See ui.ReleaseInput / ui.InputHandoff.
+	defer ui.ReleaseInput()
 	prologueLines := emitFormPrologue(fields)
 	err := buildForm(fields).Run()
 	if errors.Is(err, huh.ErrUserAborted) {
