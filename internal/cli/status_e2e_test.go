@@ -7,17 +7,22 @@ package cli_test
 // the fan-in across tracker / code host / preview provider / workspace
 // manager, and the degraded paths where a service is unconfigured.
 //
-// Assertion shape: status is the one command with no side effects, so
-// what it *asked for* is the behavior. Every scenario asserts on the
-// calls each fake recorded during the status run — which services were
-// consulted, for which repos, at which refs, under which issue keys —
-// plus the read-only invariant (assertStatusReadOnly).
+// Assertion shape, two halves:
 //
-// Nothing here asserts on h.Stdout(): under the harness every command
-// runs against the raw reporter and card rendering draws nothing. See
-// "Card output is invisible to the harness" in
-// internal/testharness/README.md. Section presence and absence are
-// covered by the card-builder tests in status_test.go instead.
+//   - What status *asked for* — the calls each fake recorded during
+//     the run (which services, for which repos, at which refs, under
+//     which issue keys), plus the read-only invariant
+//     (assertStatusReadOnly). For a command with no side effects this
+//     is most of the behavior.
+//   - What status *reported* — the summary rollup, via h.Reporter.
+//     The harness installs a ui.CaptureReporter, so the semantic
+//     Reporter calls are recorded even though nothing is drawn.
+//
+// Nothing here asserts on h.Stdout(). Cards short-circuit under a raw
+// reporter and the capture is one, so stdout stays empty — see "Card
+// output is invisible to the harness" in
+// internal/testharness/README.md. Per-row section presence and absence
+// live in the card-builder tests in status_test.go.
 
 import (
 	"errors"
@@ -31,6 +36,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/testharness"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 // statusConfig is the minimum project config for `bosun status`:
@@ -161,20 +167,44 @@ func (l *statusPreviewFactoryLog) names() []string {
 // key is the other half, via Preview.GetKeys) — getting either wrong
 // renders every preview as "(none)" with no other symptom, which is
 // exactly the composition regression this file exists to catch.
-func installStatusPreview(h *testharness.Harness) *statusPreviewFactoryLog {
+func installStatusPreview(t *testing.T, h *testharness.Harness) *statusPreviewFactoryLog {
+	t.Helper()
 	fake := h.InstallPreview()
 	log := &statusPreviewFactoryLog{}
-	// In-place field assignment mirrors Harness.InstallPreview itself
-	// and is safe for the same reason: New() installed a fresh
-	// *cli.Services for this test and restores the previous pointer in
-	// t.Cleanup, so every mutation dies with the test.
-	cli.GetServices().PreviewProvider = func(ws string) (preview.Provider, error) {
+
+	// Copy-and-swap with its own restore, matching Harness.
+	// InstallPreview. Writing the field on the live *Services in place
+	// would be safe only as long as nothing shares that struct between
+	// installs — see the note on InstallPreview for why that's not a
+	// property worth depending on.
+	prev := cli.GetServices()
+	next := *prev
+	next.PreviewProvider = func(ws string) (preview.Provider, error) {
 		log.mu.Lock()
 		log.ws = append(log.ws, ws)
 		log.mu.Unlock()
 		return fake, nil
 	}
+	cli.SetServices(&next)
+	t.Cleanup(func() { cli.SetServices(prev) })
+
 	return log
+}
+
+// statusSummary returns the summary rollup status reported, as
+// "<total> · <n label>, ..." over the non-zero segments — the shape a
+// reader sees on the recap card. Fails the test when no summary was
+// reported at all.
+func statusSummary(t *testing.T, h *testharness.Harness) string {
+	t.Helper()
+	events := h.Reporter.OfKind(ui.CaptureSummary)
+	if len(events) != 1 {
+		t.Fatalf("summary events = %d, want 1:\n%s", len(events), h.Reporter.Dump())
+	}
+	// Label is the total, Value the comma-joined non-zero breakdown —
+	// the two halves of the recap card, and the same pairing
+	// CaptureReporter.Dump prints.
+	return events[0].Label + " · " + events[0].Value
 }
 
 // newStatusHarness builds a harness with the status config, the
@@ -186,7 +216,7 @@ func newStatusHarness(t *testing.T, repos ...string) (*testharness.Harness, *sta
 	for _, name := range repos {
 		h.Workspace.AddRepo(name)
 	}
-	return h, installStatusPreview(h)
+	return h, installStatusPreview(t, h)
 }
 
 // startStatusWorkspace seeds an issue and runs `bosun start` to lay
@@ -272,6 +302,12 @@ func TestStatus(t *testing.T) {
 		}
 		if n := statusCallCount(p.hostCalls(), "GetChecks"); n != 1 {
 			t.Errorf("GetChecks calls = %d, want 1", n)
+		}
+		// One repo, no PR yet — the rollup reads pending, not done.
+		// (Contrast aggregates_per_workspace_state, where the merged-PR
+		// workspace pushes its side of the recap to done.)
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
 		}
 		assertStatusReadOnly(t, p)
 	})
@@ -383,16 +419,16 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
-	t.Run("project_scope/per_workspace_fan_out", func(t *testing.T) {
-		// Workspaces in different states are resolved independently: the
-		// merged-PR workspace's checks follow its PR head, the untouched
-		// one's follow its branch. Both repos are probed regardless of
-		// how the first one resolved.
+	t.Run("project_scope/aggregates_per_workspace_state", func(t *testing.T) {
+		// Workspaces in different states are resolved independently —
+		// the merged-PR workspace's checks follow its PR head, the
+		// untouched one's follow its branch — and then roll up into one
+		// recap: two workspaces, one done (merged PR) and one pending.
 		//
-		// (The issue called this aggregates_per_workspace_state; the
-		// aggregation itself — rollup state, counts, lifecycle sort — is
-		// render-only, so the name follows what's assertable here. The
-		// rollup rendering is covered in status_test.go.)
+		// The rollup is the reason this scenario is worth having: it
+		// crosses every per-workspace state into a single aggregate, so
+		// a fan-in that resolved one workspace with the other's data
+		// still shows up here.
 		h, previews := newStatusHarness(t, "api")
 		merged := startStatusWorkspace(t, h, "EX-7", "Merged work", "merged")
 		open := startStatusWorkspace(t, h, "EX-8", "Fresh work", "fresh")
@@ -412,6 +448,9 @@ func TestStatus(t *testing.T) {
 		want := sorted([]string{"acme/api@mergedhead", "acme/api@" + open})
 		if got := sorted(p.checksRefs()); !equalStrings(got, want) {
 			t.Errorf("checks refs = %v, want %v", got, want)
+		}
+		if got, want := statusSummary(t, h), "2 workspaces · 1 done, 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
 		}
 		assertStatusReadOnly(t, p)
 	})
@@ -468,9 +507,7 @@ func TestStatus(t *testing.T) {
 		// failing the run — and must not call the host at all.
 		h, previews := newStatusHarness(t, "api")
 		branch := startStatusWorkspace(t, h, "EX-11", "Hostless", "hostless")
-		cli.GetServices().CodeHost = func() (code.Host, error) {
-			return nil, errors.New("code_host not configured")
-		}
+		h.Host.NewErr = errors.New("code_host not configured")
 		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-11"); err != nil {
@@ -493,9 +530,7 @@ func TestStatus(t *testing.T) {
 		// per-repo cards still render.
 		h, previews := newStatusHarness(t, "api")
 		branch := startStatusWorkspace(t, h, "EX-12", "Trackerless", "trackerless")
-		cli.GetServices().IssueTracker = func() (issue.Tracker, error) {
-			return nil, errors.New("issue_tracker not configured")
-		}
+		h.Tracker.NewErr = errors.New("issue_tracker not configured")
 		p := markStatus(h, previews)
 
 		if err := h.Run("status", "--workspace", branch, "--issue", "EX-12"); err != nil {
@@ -523,9 +558,7 @@ func TestStatus(t *testing.T) {
 		// Preview row.
 		h, previews := newStatusHarness(t, "api")
 		startStatusWorkspace(t, h, "EX-13", "Trackerless project", "tp")
-		cli.GetServices().IssueTracker = func() (issue.Tracker, error) {
-			return nil, errors.New("issue_tracker not configured")
-		}
+		h.Tracker.NewErr = errors.New("issue_tracker not configured")
 		p := markStatus(h, previews)
 
 		if err := h.Run("status"); err != nil {
