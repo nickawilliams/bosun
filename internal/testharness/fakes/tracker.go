@@ -49,6 +49,11 @@ type Tracker struct {
 	// calls records the method names invoked, in order, for tests that
 	// want to assert on the call sequence.
 	calls []string
+	// getIssueKeys records the key argument of every GetIssue call, in
+	// order. Commands that derive the key rather than take it verbatim
+	// (status at project scope extracts it from the workspace name)
+	// have no other observable seam for that derivation.
+	getIssueKeys []string
 }
 
 // NewTracker constructs an empty Tracker.
@@ -152,6 +157,17 @@ func (t *Tracker) Issues() []issue.Issue {
 	return out
 }
 
+// GetIssueKeys returns a snapshot of the keys passed to GetIssue, in
+// call order — including keys that resolved to nothing, since asking
+// for the wrong key is exactly what this records.
+func (t *Tracker) GetIssueKeys() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.getIssueKeys))
+	copy(out, t.getIssueKeys)
+	return out
+}
+
 // Calls returns a snapshot of method calls in invocation order.
 func (t *Tracker) Calls() []string {
 	t.mu.Lock()
@@ -197,6 +213,7 @@ func (t *Tracker) GetIssue(_ context.Context, key string) (issue.Issue, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.recordCall("GetIssue")
+	t.getIssueKeys = append(t.getIssueKeys, key)
 	if t.GetErr != nil {
 		return issue.Issue{}, t.GetErr
 	}

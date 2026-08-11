@@ -35,6 +35,24 @@ func containsNone(t *testing.T, out string, unwanted ...string) {
 	}
 }
 
+// rowReads asserts that the body row labelled label carries value on
+// the same line. Whole-card substring checks can't tell "both rows say
+// (none)" from "one row says it twice", which is the distinction these
+// empty-state cases turn on.
+func rowReads(t *testing.T, out, label, value string) {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, label) {
+			continue
+		}
+		if !strings.Contains(line, value) {
+			t.Errorf("row %q reads %q, want it to contain %q", label, strings.TrimSpace(line), value)
+		}
+		return
+	}
+	t.Errorf("no row labelled %q:\n%s", label, out)
+}
+
 func TestBuildWorkspaceStoryCard(t *testing.T) {
 	t.Run("fetch failed falls back to key only", func(t *testing.T) {
 		card := buildWorkspaceStoryCard(issuepkg.Issue{
@@ -70,7 +88,10 @@ func TestBuildWorkspaceRepoCard(t *testing.T) {
 		card := buildWorkspaceRepoCard(repo, repoState{})
 
 		out := ansi.Strip(card.Render())
-		containsAll(t, out, "api", "Branch", "story/EX-1_feature", "Checks", "PR", "(none)")
+		containsAll(t, out, "api")
+		rowReads(t, out, "Branch", "story/EX-1_feature")
+		rowReads(t, out, "Checks", "(none)")
+		rowReads(t, out, "PR", "(none)")
 		containsNone(t, out, "#")
 	})
 
@@ -85,7 +106,10 @@ func TestBuildWorkspaceRepoCard(t *testing.T) {
 		// The sync state rides on the row glyph, not the value — the
 		// value carries the branch name and the PR row the dominant
 		// label folded out of state + mergeable + review.
-		containsAll(t, ansi.Strip(card.Render()), "Branch", "story/EX-1_feature", "#12", "(approved)")
+		out := ansi.Strip(card.Render())
+		rowReads(t, out, "Branch", "story/EX-1_feature")
+		rowReads(t, out, "PR", "#12")
+		rowReads(t, out, "PR", "(approved)")
 	})
 
 	t.Run("dirty worktree marks the branch value", func(t *testing.T) {
@@ -93,7 +117,7 @@ func TestBuildWorkspaceRepoCard(t *testing.T) {
 		dirtyRepo.Dirty = true
 		card := buildWorkspaceRepoCard(dirtyRepo, repoState{sync: vcs.BranchSync{HasRemote: true}})
 
-		containsAll(t, ansi.Strip(card.Render()), "story/EX-1_feature*")
+		rowReads(t, ansi.Strip(card.Render()), "Branch", "story/EX-1_feature*")
 	})
 }
 
@@ -115,19 +139,18 @@ func TestBuildProjectWorkspaceCard(t *testing.T) {
 		ws.previewErr = preview.ErrNoEnvironment
 		out := ansi.Strip(buildProjectWorkspaceCard(ws).Render())
 
-		containsAll(t, out,
-			"EX-1", "Add feature", "Status", "In Progress",
-			"Repos", "2 repositories", "1 ready", "1 pending",
-		)
+		containsAll(t, out, "EX-1", "Add feature")
+		rowReads(t, out, "Status", "In Progress")
+		rowReads(t, out, "Repos", "2 repositories")
+		rowReads(t, out, "Repos", "1 ready")
+		rowReads(t, out, "Repos", "1 pending")
 		containsNone(t, out, "Preview")
 	})
 
 	t.Run("bound preview env adds the preview row", func(t *testing.T) {
 		ws := base
 		ws.previewEnv = preview.Environment{Name: "brave-falcon", Probed: true, Alive: true}
-		out := ansi.Strip(buildProjectWorkspaceCard(ws).Render())
-
-		containsAll(t, out, "Preview", "brave-falcon")
+		rowReads(t, ansi.Strip(buildProjectWorkspaceCard(ws).Render()), "Preview", "brave-falcon")
 	})
 
 	t.Run("unknown issue falls back to the workspace name", func(t *testing.T) {
@@ -141,7 +164,8 @@ func TestBuildProjectWorkspaceCard(t *testing.T) {
 			previewErr: preview.ErrNoEnvironment,
 		}).Render())
 
-		containsAll(t, out, "story/EX-1_feature", "1 repository")
+		containsAll(t, out, "story/EX-1_feature")
+		rowReads(t, out, "Repos", "1 repository")
 		containsNone(t, out, "Status")
 	})
 }
