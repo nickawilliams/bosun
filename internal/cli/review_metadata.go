@@ -30,7 +30,7 @@ func basePlaceholder(globalBase string, resolved []repoContext) string {
 		return globalBase
 	}
 	shared := ""
-	for i := range resolved {
+	for _, i := range writableRepos(resolved) {
 		b := resolved[i].baseBranch()
 		if shared == "" {
 			shared = b
@@ -44,6 +44,25 @@ func basePlaceholder(globalBase string, resolved []repoContext) string {
 		return defaultBaseBranch
 	}
 	return shared
+}
+
+// writableRepos returns the indices of the repos this run will actually
+// create or update a PR in, repo-alphabetically. Everything that asks
+// "what do the repos look like?" — the base placeholder, the metadata
+// preview, the customization pass — means these repos: a repo we're
+// skipping (or whose lookup failed) shouldn't get a vote on prompts
+// whose answers it will never consume.
+func writableRepos(resolved []repoContext) []int {
+	var idxs []int
+	for i := range resolved {
+		if resolved[i].include && resolved[i].prErr == nil {
+			idxs = append(idxs, i)
+		}
+	}
+	sort.SliceStable(idxs, func(a, b int) bool {
+		return resolved[idxs[a]].repo.Name < resolved[idxs[b]].repo.Name
+	})
+	return idxs
 }
 
 // customizeRepoMetadata runs the opt-in per-repository override pass:
@@ -69,18 +88,10 @@ func customizeRepoMetadata(ctx context.Context, cmd *cobra.Command, host code.Ho
 	// matters, and with fewer than two of them the shared prompts WERE
 	// the per-repo prompts — offering to customize would be asking the
 	// same question twice.
-	var idxs []int
-	for i := range resolved {
-		if resolved[i].include && resolved[i].prErr == nil {
-			idxs = append(idxs, i)
-		}
-	}
+	idxs := writableRepos(resolved)
 	if len(idxs) < 2 {
 		return nil
 	}
-	sort.SliceStable(idxs, func(a, b int) bool {
-		return resolved[idxs[a]].repo.Name < resolved[idxs[b]].repo.Name
-	})
 
 	picked, err := pickCustomizeTargets(resolved, idxs)
 	if err != nil {
@@ -160,20 +171,32 @@ func editRepoMetadata(ctx context.Context, host code.Host, rc *repoContext, self
 	slot := ui.NewSlot()
 
 	var collaborators, teams []string
-	if err := slot.Run("fetching "+rc.repo.Name, func() error {
-		// Neither list is required: a repo whose collaborators we can't
-		// read still gets base/title/body fields, and keeps the shared
-		// reviewer sets. Failing the whole run over an optional picker
-		// would be worse than the narrower form.
-		if c, err := host.ListCollaborators(ctx, rc.owner, rc.repoName); err == nil {
+	var fetchNotes []string
+	// Neither list is required: a repo whose collaborators we can't read
+	// still gets base/title/body fields and keeps the shared reviewer
+	// sets. Failing the whole run over an optional picker would be worse
+	// than the narrower form — but the failure is NOT silent, or the
+	// user can't tell "no collaborators" from "token can't read them".
+	// The closure therefore never returns an error; slot.Run's own error
+	// path stays unreachable by construction.
+	_ = slot.Run("fetching "+rc.repo.Name, func() error {
+		if c, err := host.ListCollaborators(ctx, rc.owner, rc.repoName); err != nil {
+			fetchNotes = append(fetchNotes,
+				fmt.Sprintf("%s: collaborators: %v", rc.repo.Name, err))
+		} else {
 			collaborators = c
 		}
-		if t, err := host.ListTeams(ctx, rc.owner); err == nil {
+		if t, err := host.ListTeams(ctx, rc.owner); err != nil {
+			fetchNotes = append(fetchNotes,
+				fmt.Sprintf("%s: teams: %v", rc.repo.Name, err))
+		} else {
 			teams = t
 		}
 		return nil
-	}); err != nil {
-		return err
+	})
+	slot.Clear()
+	for _, note := range fetchNotes {
+		ui.Skip(note)
 	}
 
 	base, title := rc.meta.base, rc.meta.title
@@ -212,11 +235,14 @@ func editRepoMetadata(ctx context.Context, host code.Host, rc *repoContext, self
 	}
 	slot.Clear()
 
-	rc.meta.base = strings.TrimSpace(base)
-	if rc.meta.base == "" {
-		rc.meta.base = rc.baseBranch()
-	}
-	rc.meta.title = title
+	// A cleared field means "I didn't want to change this", not "send an
+	// empty value" — an empty base or title is a guaranteed 422 at Apply
+	// time, after the plan was already approved. Each falls back to what
+	// the field was pre-filled with, so a cleared base keeps any global
+	// override rather than silently dropping to the repo default. Body
+	// is genuinely allowed to be empty (most templates render nothing).
+	rc.meta.base = firstNonBlank(base, rc.meta.base, rc.baseBranch())
+	rc.meta.title = firstNonBlank(title, rc.meta.title)
 	rc.meta.body = body
 	if revField != nil {
 		rc.meta.reviewers = reviewers
@@ -228,6 +254,17 @@ func editRepoMetadata(ctx context.Context, host code.Host, rc *repoContext, self
 		rc.meta.assignees = assignees
 	}
 	return nil
+}
+
+// firstNonBlank returns the first argument that isn't empty or
+// whitespace, trimmed; "" when every candidate is blank.
+func firstNonBlank(candidates ...string) string {
+	for _, c := range candidates {
+		if t := strings.TrimSpace(c); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // multiSelectOver builds a titled multi-select over options with the

@@ -231,9 +231,11 @@ func (h *Host) EditPRRequests() []code.EditPRRequest {
 }
 
 // ReviewersRequested returns the users and teams requested across every
-// PR in a repo, in request order. Keyed by repo rather than PR number
-// because callers assert on what a REPOSITORY was given — the number a
-// freshly created PR happens to get is an artifact of seeding order.
+// PR in a repo: grouped by PR (PRs in lexical key order, NOT call
+// order), requests within a PR in call order. Keyed by repo rather than
+// PR number because callers assert on what a REPOSITORY was given — the
+// number a freshly created PR happens to get is an artifact of seeding
+// order.
 func (h *Host) ReviewersRequested(owner, name string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -241,7 +243,7 @@ func (h *Host) ReviewersRequested(owner, name string) []string {
 }
 
 // AssigneesAdded returns the users assigned across every PR in a repo,
-// in request order.
+// with the same grouping and ordering as ReviewersRequested.
 func (h *Host) AssigneesAdded(owner, name string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()

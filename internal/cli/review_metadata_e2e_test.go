@@ -9,7 +9,6 @@ package cli_test
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
@@ -148,9 +147,32 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 
 	t.Run("base/host_failure_falls_back_to_local_clone", func(t *testing.T) {
 		// A host that can't answer isn't a review failure: the local
-		// clone's origin/HEAD is the next-best source, and the run
-		// proceeds against it.
-		h, _ := startReviewWorkspace(t, reviewConfig, "api")
+		// clone's origin/HEAD is the next-best source. Point origin/HEAD
+		// at a branch OTHER than main so the assertion distinguishes
+		// "the clone answered" from "everything failed and we hit the
+		// defaultBaseBranch constant" — which is also "main".
+		h, repos := startReviewWorkspace(t, reviewConfig, "api")
+		api := repos[0]
+		testharness.Git(t, api.RemotePath, "branch", "trunk", "main")
+		testharness.Git(t, api.Path, "fetch", "origin")
+		testharness.Git(t, api.Path, "remote", "set-head", "origin", "trunk")
+		h.Host.GetDefaultBranchErr = errReviewHost
+
+		if err := runReview(h, "--approve"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if got := baseFor(t, h.Host.CreatePRRequests(), "api"); got != "trunk" {
+			t.Errorf("api base = %q, want the local clone's default branch %q", got, "trunk")
+		}
+	})
+
+	t.Run("base/no_source_answers_falls_back_to_main", func(t *testing.T) {
+		// Host errors AND the clone has no origin/HEAD: the constant is
+		// the last resort rather than an empty base (which GitHub would
+		// reject at create time).
+		h, repos := startReviewWorkspace(t, reviewConfig, "api")
+		testharness.Git(t, repos[0].Path, "remote", "set-head", "origin", "--delete")
 		h.Host.GetDefaultBranchErr = errReviewHost
 
 		if err := runReview(h, "--approve"); err != nil {
@@ -158,7 +180,28 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		}
 
 		if got := baseFor(t, h.Host.CreatePRRequests(), "api"); got != "main" {
-			t.Errorf("api base = %q, want the local default branch %q", got, "main")
+			t.Errorf("api base = %q, want the %q fallback", got, "main")
+		}
+	})
+
+	t.Run("body/template_renders_per_repo", func(t *testing.T) {
+		// The body template embeds .BaseBranch, which now differs
+		// between repos — so the body must be rendered per repo rather
+		// than once from whichever repo sorted first.
+		h, repos := startReviewWorkspace(t,
+			reviewConfig+"\npull_request:\n  body_template: \"Targets {{.BaseBranch}}\"\n",
+			"api", "web")
+		h.Host.SeedDefaultBranch(repos[1].Owner, "web", "develop")
+
+		if err := runReview(h, "--approve"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		want := map[string]string{"api": "Targets main", "web": "Targets develop"}
+		for _, r := range h.Host.CreatePRRequests() {
+			if r.Body != want[r.Repository] {
+				t.Errorf("%s body = %q, want %q", r.Repository, r.Body, want[r.Repository])
+			}
 		}
 	})
 
@@ -214,12 +257,12 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		// SELECTED option, so a picker with a pre-checked entry would
 		// have space toggling that one off instead.)
 		if err := runReview(h, "--interactive", "--team-reviewer", "backend"); err != nil {
-			t.Fatalf("review: %v\n%s", err, h.Stdout())
+			t.Fatalf("review: %v", err)
 		}
 
 		reqs := h.Host.CreatePRRequests()
 		if len(reqs) != 2 {
-			t.Fatalf("CreatePR requests = %d, want 2\n%s", len(reqs), h.Stdout())
+			t.Fatalf("CreatePR requests = %d, want 2; calls = %v", len(reqs), h.Host.Calls())
 		}
 		var apiTitle, webTitle string
 		for _, r := range reqs {
@@ -258,12 +301,22 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		h.Type("\r") // Assignees
 		h.Type("y")  // plan gate
 
+		// Two independent signals that the pass didn't run, because a
+		// declined pass leaves nothing else observable: the keystrokes
+		// above are exactly enough for the prompts that SHOULD appear
+		// (an extra form would starve the plan gate and hang the run),
+		// and --team-reviewer pins the shared team set so ListTeams is
+		// reachable only from the per-repo mini-form.
+		//
+		// Deliberately not asserting on h.Stdout(): harness runs use the
+		// raw reporter, so it carries no card text and a "does not
+		// contain" check would pass vacuously.
 		if err := runReview(h, "--interactive", "--reviewer", "alice",
 			"--team-reviewer", "backend"); err != nil {
-			t.Fatalf("review: %v\n%s", err, h.Stdout())
+			t.Fatalf("review: %v", err)
 		}
-		if out := h.Stdout(); strings.Contains(strings.ToLower(out), "customi") {
-			t.Errorf("customize pass shown for a single repo:\n%s", out)
+		if slices.Contains(h.Host.Calls(), "ListTeams") {
+			t.Errorf("customize pass ran for a single repo; calls = %v", h.Host.Calls())
 		}
 	})
 }

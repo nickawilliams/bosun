@@ -654,10 +654,13 @@ func newReviewCmd() *cobra.Command {
 			// Title and body render from a per-repo template (Branch and
 			// BaseBranch differ), so they stay templated unless the user
 			// pins a literal via --title/--body or by editing the prompt.
-			// The prompts preview the first resolved repo's rendering —
-			// they have to show one concrete result.
+			// The prompts have to preview one concrete rendering: use the
+			// first repo this run will actually write to, so the previewed
+			// base isn't one no created PR will use.
 			var repRepo *repoContext
-			if len(resolved) > 0 {
+			if writable := writableRepos(resolved); len(writable) > 0 {
+				repRepo = &resolved[writable[0]]
+			} else if len(resolved) > 0 {
 				repRepo = &resolved[0]
 			}
 			templateData := func(rc *repoContext) prTemplateData {
@@ -696,8 +699,11 @@ func newReviewCmd() *cobra.Command {
 				}
 				// Only an EDITED body pins a literal workspace-wide;
 				// submitting the preview unchanged leaves each repo
-				// rendering its own.
-				if val != rendered {
+				// rendering its own. Compare ignoring trailing newlines —
+				// the textarea round-trip is allowed to normalize those,
+				// and reading that as an edit would freeze the preview
+				// repo's body onto every repo.
+				if strings.TrimRight(val, "\n") != strings.TrimRight(rendered, "\n") {
 					prBody, bodyPinned = val, true
 				}
 			}

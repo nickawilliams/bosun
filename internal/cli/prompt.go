@@ -90,18 +90,25 @@ func forceInteractive(cmd *cobra.Command) bool {
 // promptForValues gates VALUE prompts — the ones that fill in a field
 // the command could resolve on its own from flags, config, or
 // detection. Commands have two distinct interactivity classes and this
-// is the line between them:
+// names the line between them:
 //
 //   - Scope and approval gates (which repos to act on, the plan
 //     confirmation) show whenever the session is interactive, because
-//     they're asking permission, not asking for data. --approve / -y
-//     opts out.
+//     they ask permission rather than asking for data. --approve opts
+//     out of those.
 //   - Value prompts are OFF by default — the resolved value is meant to
-//     be right without asking — and --interactive turns them on. -y
-//     ("take the defaults") suppresses them too, so the two flags can't
-//     contradict each other.
+//     be right without asking — and --interactive turns them on.
+//
+// The two classes are independent on purpose: --approve answers "apply
+// this plan", not "take every default", so `--interactive --approve`
+// still prompts for values and still skips the plan gate. Same
+// separate-consents principle as isAutoApprove vs. --force.
+//
+// Currently an alias for forceInteractive; it exists so each call site
+// declares WHICH class it belongs to, and so the policy has one place
+// to change.
 func promptForValues(cmd *cobra.Command) bool {
-	return forceInteractive(cmd) && !isAutoApprove(cmd)
+	return forceInteractive(cmd)
 }
 
 // runForm runs a huh form with the app theme applied. Keybinding

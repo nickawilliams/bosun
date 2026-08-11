@@ -25,10 +25,12 @@ func TestRepoContextBaseBranch(t *testing.T) {
 }
 
 func TestBasePlaceholder(t *testing.T) {
+	// Every fixture repo is selected: the placeholder only ever considers
+	// repos this run will write to (see TestBasePlaceholderIgnoresUnwrittenRepos).
 	repos := func(branches ...string) []repoContext {
 		out := make([]repoContext, len(branches))
 		for i, b := range branches {
-			out[i] = repoContext{defaultBranch: b}
+			out[i] = repoContext{defaultBranch: b, include: true}
 		}
 		return out
 	}
@@ -74,6 +76,58 @@ func TestBasePlaceholder(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := basePlaceholder(tt.globalBase, tt.resolved); got != tt.want {
 				t.Errorf("basePlaceholder() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWritableRepos(t *testing.T) {
+	resolved := []repoContext{
+		{repo: Repository{Name: "web"}, include: true},
+		{repo: Repository{Name: "api"}, include: true},
+		{repo: Repository{Name: "docs"}},                               // not selected
+		{repo: Repository{Name: "ops"}, include: true, prErr: errNope}, // lookup failed
+	}
+	got := writableRepos(resolved)
+	var names []string
+	for _, i := range got {
+		names = append(names, resolved[i].repo.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"api", "web"}) {
+		t.Errorf("writableRepos() = %v, want the selected, error-free repos alphabetically", names)
+	}
+}
+
+func TestBasePlaceholderIgnoresUnwrittenRepos(t *testing.T) {
+	// docs isn't selected, so its divergent default must not force the
+	// prompt into the "(per repo default)" wording — every repo actually
+	// being written to agrees on develop.
+	resolved := []repoContext{
+		{repo: Repository{Name: "api"}, include: true, defaultBranch: "develop"},
+		{repo: Repository{Name: "web"}, include: true, defaultBranch: "develop"},
+		{repo: Repository{Name: "docs"}, defaultBranch: "trunk"},
+	}
+	if got := basePlaceholder("", resolved); got != "develop" {
+		t.Errorf("basePlaceholder() = %q, want %q", got, "develop")
+	}
+}
+
+func TestFirstNonBlank(t *testing.T) {
+	tests := []struct {
+		name       string
+		candidates []string
+		want       string
+	}{
+		{"first wins", []string{"a", "b"}, "a"},
+		{"blank falls through", []string{"   ", "b"}, "b"},
+		{"empty falls through", []string{"", "", "c"}, "c"},
+		{"trims the winner", []string{"  a  "}, "a"},
+		{"all blank", []string{"", "  "}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := firstNonBlank(tt.candidates...); got != tt.want {
+				t.Errorf("firstNonBlank(%q) = %q, want %q", tt.candidates, got, tt.want)
 			}
 		})
 	}

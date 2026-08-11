@@ -156,9 +156,10 @@ branch:
 
 # PR defaults
 pull_request:
-  # Optional. Unset means each repository's PR targets that repository's
-  # own default branch; setting it overrides that for every repository.
-  base: main
+  # Optional, and usually best left unset: each repository's PR then
+  # targets that repository's own default branch. Setting it pins one
+  # base for EVERY repository, which fails in any repo that lacks it.
+  # base: main
   title_pattern: "[{{.IssueNumber}}] {{.IssueTitle}}"
 
 # Issue tracker status mapping (your workflow -> provider states)
