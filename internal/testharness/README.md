@@ -118,6 +118,53 @@ trip the stub, even when no env is bound, so e.g. every `cleanup` test
 needs it (`cleanup` calls `newPreviewProvider` unconditionally and its
 plan leads with the teardown row).
 
+### When the collaborator IS the subject: `InstallPreviewAdapter`
+
+`h.InstallPreviewAdapter()` points the PreviewProvider factory at
+bosun's *production* adapter (`internal/preview/cicd`) rather than a
+fake, so the provider composes the CI/CD pipeline and the tracker —
+both already fakes. Workflow dispatches then land in
+`h.CICD.Triggers()` with their real workflow path, ref, and inputs,
+and the env-to-issue binding round-trips through `h.Tracker`'s issue
+properties under the real key. Call `h.InstallCICD()` first.
+
+Choose by what the command is *for*. `cleanup`, `status`, and
+`review` merely consult a provider — they want the cheap, seedable
+`fakes.Preview`. `preview` exists to resolve an issue key to an
+environment and dispatch for it; a fake provider there can only
+confirm that `Create` was called, and leaves the resolution itself
+untested (see the key-binding note below).
+
+The adapter probes `cicd.workflows.preview.url_template` over HTTP to
+decide whether an env is alive, so a scenario that cares about
+liveness points that template at an `httptest` server and expresses
+"the env is up" as a 200 (404 = definitively gone, 500 = the
+indeterminate probe `--force` exists for). See
+`../cli/preview_e2e_test.go`. Without a template the adapter reports
+every bound env as exists-but-unverifiable.
+
+### Pin key bindings, then mutation-check them
+
+A fake looked up under the WRONG key returns "nothing stored" — which
+renders identically to a legitimate empty result. Scenarios that seed
+state and then read their own seed back never exercise the binding at
+all, so an entire suite can stay green while key resolution is
+broken; the only visible symptom is a `(none)` where a value used to
+be. `bosun status` shipped eleven scenarios with this hole.
+
+Assert the key explicitly, using the fakes' key recorders —
+`Tracker.GetPropertyKeys()`, `Tracker.Property(key)` — rather than
+inferring it from downstream state. Then verify the assertion has
+teeth: substitute a wrong constant for the key in the *production*
+path and confirm the scenario fails. On the empty-registry path that
+mutation changes nothing else observable, so a scenario without the
+recorder assertion stays green.
+
+One caveat found doing exactly that: when a lookup silently misses,
+`preview` falls through to its interactive env-name prompt and
+*hangs* on the harness's empty stdin rather than failing. Run
+mutation checks with an explicit short `-timeout`.
+
 ## Asserting on what a command reported
 
 Commands run under a raw Reporter here, so the rendered timeline never
