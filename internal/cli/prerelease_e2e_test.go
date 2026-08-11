@@ -388,8 +388,13 @@ func TestPrerelease(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected ErrCancelled; got nil")
 		}
-		if !strings.Contains(err.Error(), "cancelled") {
-			t.Fatalf("error = %v, want contains \"cancelled\"", err)
+		// Pin the genuine decline: runPlanCard maps ANY confirm-form
+		// error to bare ErrCancelled ("cancelled"), but only an
+		// answered Cancel returns errPlanCancelled ("plan cancelled").
+		// A confirm form that died on a read error — e.g. the "n"
+		// never reaching it — would fail this.
+		if !strings.Contains(err.Error(), "plan cancelled") {
+			t.Fatalf("error = %v, want the answered-decline \"plan cancelled\"", err)
 		}
 
 		if n := len(h.Host.Releases()); n != 0 {
