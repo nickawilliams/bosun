@@ -406,8 +406,13 @@ shape and copy the pattern.
 2. Confirm each needed fake exists in `fakes/`. If not, add one
    following the `fakes/tracker.go` shape; expose it on `Harness` and
    install it in `New()`.
-3. Create `internal/cli/<cmd>_test.go` with a top-level
-   `Test<Cmd>` and a `t.Run("<category>/<scenario>", ...)` per case.
+3. Create `internal/cli/<cmd>_test.go` in `package cli_test` with a
+   top-level `Test<Cmd>` and a `t.Run("<category>/<scenario>", ...)`
+   per case. When that file name is already taken by in-package
+   (`package cli`) unit tests, use `<cmd>_e2e_test.go` — Go allows
+   both packages in one directory, but not in one file. Prefix shared
+   helpers with the command name (`startPrereleaseWorkspace`,
+   `cleanupConfig`): every E2E file shares one package scope.
 4. Build incrementally: get one scenario passing end-to-end before
    filling out the tree.
 5. Verify via `go test ./internal/cli/ -run Test<Cmd> -v` and
