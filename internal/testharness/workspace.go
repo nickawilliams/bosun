@@ -92,6 +92,13 @@ func (w *Workspace) AddRepo(name string) *Repo {
 	w.run(path, "git", "init", "-b", "main")
 	w.run(path, "git", "config", "user.email", "test@bosun.local")
 	w.run(path, "git", "config", "user.name", "bosun test")
+	// A fresh repo inherits commit.gpgsign from the developer's global
+	// config, so on a machine that signs by default every commit these
+	// tests make — here and in the worktrees, which share this config —
+	// invokes gpg. That turns a locked keyring or a hiccupping agent
+	// into a test failure ("[GNUPG:] FAILURE sign") unrelated to
+	// anything under test. Signed fixtures buy nothing; opt out.
+	w.run(path, "git", "config", "commit.gpgsign", "false")
 
 	readme := filepath.Join(path, "README.md")
 	if err := os.WriteFile(readme, []byte("# "+name+"\n"), 0o644); err != nil {

@@ -57,6 +57,14 @@ func defaultServices() *Services {
 // current set before installing fakes so they can restore in t.Cleanup.
 func GetServices() *Services { return services }
 
+// DefaultServices returns a fresh production factory set. Tests reach
+// for it when one capability should run against its real adapter
+// while the rest stay faked — `bosun preview` exercises the actual
+// preview provider over a fake pipeline and tracker that way. Unlike
+// ResetServices this installs nothing; the caller picks the fields it
+// wants.
+func DefaultServices() *Services { return defaultServices() }
+
 // SetServices replaces the active factory set wholesale. Tests pass
 // a Services with at least the fields their command uses populated;
 // nil fields will panic if called by command code, which is the
