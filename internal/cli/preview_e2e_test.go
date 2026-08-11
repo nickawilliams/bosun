@@ -25,6 +25,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/testharness"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 const previewBranch = "story/EX-1_feature"
@@ -727,6 +728,19 @@ func TestPreview(t *testing.T) {
 		// the missing pipeline rather than quietly doing nothing.
 		if got, _ := f.h.Tracker.Issue("EX-1"); got.Status != "In Preview Env" {
 			t.Errorf("issue status = %q, want %q (the plan still ran)", got.Status, "In Preview Env")
+		}
+		// Silently doing less than asked is the failure mode here, so
+		// the skip has to actually reach the user. Assertable only
+		// because the harness captures Reporter calls — h.Stdout() is
+		// still empty for this command.
+		var reported bool
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "CI/CD") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("no CI/CD skip reported; the deploy was dropped silently\n%s", f.h.Reporter.Dump())
 		}
 	})
 
