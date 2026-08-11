@@ -96,8 +96,8 @@ func (s *syncBuffer) Reset() {
 // Tracker, Host, and Notifier fakes install automatically. The
 // remaining capability factories (CICD, PreviewProvider) default to
 // functions that fail the test if invoked. Tests for commands needing
-// those services install fakes via SetServices directly after calling
-// New.
+// those services install fakes after calling New — PreviewProvider via
+// the InstallPreview helper, CICD via SetServices directly.
 func New(t *testing.T) *Harness {
 	t.Helper()
 	h := &Harness{
@@ -162,12 +162,26 @@ func New(t *testing.T) *Harness {
 // Kept opt-in rather than installed by New so a command that touches
 // previews unexpectedly still fails loudly for every other test — the
 // same posture the CICD factory keeps.
+//
+// Installs by copy-and-swap with its own restore rather than writing
+// the field on the live *Services in place. In-place mutation happens
+// to be safe today only because New always installs a fresh struct
+// immediately beforehand; the moment anything puts a shared *Services
+// in place between the two calls, an in-place write would outlive this
+// test with nothing to undo it — leaving a finished harness's fake
+// bound to later tests.
 func (h *Harness) InstallPreview() *fakes.Preview {
 	h.t.Helper()
 	h.Preview = fakes.NewPreview()
-	cli.GetServices().PreviewProvider = func(string) (preview.Provider, error) {
+
+	prev := cli.GetServices()
+	next := *prev
+	next.PreviewProvider = func(string) (preview.Provider, error) {
 		return h.Preview, nil
 	}
+	cli.SetServices(&next)
+	h.t.Cleanup(func() { cli.SetServices(prev) })
+
 	return h.Preview
 }
 

@@ -29,8 +29,15 @@ type Preview struct {
 	// GetErr, CreateErr, DestroyErr override default behavior to force
 	// error paths. nil means use the default success behavior.
 	//
-	// GetErr is returned instead of the ErrNoEnvironment / found-env
-	// result, standing in for an indeterminate probe.
+	// GetErr stands in for an indeterminate probe, and Get returns it
+	// the way the real contract specifies: alongside the seeded
+	// Environment, not instead of it. preview.Provider.Get documents
+	// that an indeterminate probe still yields Name / URL / IssueKey so
+	// callers that only need the binding can use it — and callers do.
+	// cleanup's teardown row reads env.Name off exactly this path and
+	// passes it to Destroy, so a fake that zeroed the Environment here
+	// would let a test lock in "Destroy receives an empty name" and
+	// pass, while the real provider hands over the real one.
 	GetErr     error
 	CreateErr  error
 	DestroyErr error
@@ -91,10 +98,14 @@ func (p *Preview) Get(_ context.Context, issueKey string) (preview.Environment, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.recordCall("Get")
-	if p.GetErr != nil {
-		return preview.Environment{}, p.GetErr
-	}
 	env, ok := p.envs[issueKey]
+	if p.GetErr != nil {
+		// Partially-populated result + error, per the Provider
+		// contract. Probed/Alive stay false; whatever the test seeded
+		// for Name/URL comes back. Nothing seeded → zero Environment,
+		// which is also a legal indeterminate result.
+		return env, p.GetErr
+	}
 	if !ok {
 		return preview.Environment{}, preview.ErrNoEnvironment
 	}
