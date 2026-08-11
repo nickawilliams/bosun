@@ -254,12 +254,15 @@ output is entirely cards (`status`, `doctor`, the lifecycle preambles).
 Commands that write through `fmt.Fprint(ui.Output(), ...)` — `config
 get`, and anything annotated `output: raw` — do surface there.
 
-Three consequences when planning a command's scenarios:
+Nothing is *drawn*, but the semantic calls are still recorded: the raw
+reporter the harness installs is a `ui.CaptureReporter`. Three
+consequences when planning a command's scenarios:
 
-- Assert on **what the command reported** through `h.Reporter`: the
-  raw reporter the harness installs is a `ui.CaptureReporter`, so
-  every Reporter call is recorded even though nothing is drawn. See
-  "Asserting on what a command reported" above.
+- Assert on **what the command reported** through `h.Reporter` — see
+  "Asserting on what a command reported" above. This reaches the
+  package-level helpers too: `ui.Skip`, `ui.Fail`, `ui.Info` and
+  `ui.Selected` all delegate to the active reporter, so a branch whose
+  only effect is emitting one of them *is* assertable.
 - Assert on **what the command asked for**: the fakes' `Calls()` logs,
   their recorded arguments, and post-run fake state — the other half
   of a read-only command's observable behavior.
@@ -267,27 +270,25 @@ Three consequences when planning a command's scenarios:
   from `package cli` (see `../cli/status_test.go`). Splitting it this
   way also keeps the assertions off ANSI-styled strings.
 
-Forcing *actual* card rendering would still need a real PTY; nothing
-in-tree does that, and the spinner frames would make output assertions
-timing-dependent. The capture reporter sidesteps the problem by
-recording the semantic calls instead of the pixels.
+What stays genuinely undrivable here, and shouldn't be chased when you
+go looking for uncovered lines:
 
-Two consequences that bite when you go looking for uncovered lines:
-
-- **"The user was warned" is never assertable here.** Every reporter
-  call — `ui.Skip`, `ui.Fail`, `ui.Info`, `ui.Selected` — is an empty
-  method on the raw reporter (`../ui/raw_reporter.go`). A branch whose
-  only effect is emitting one of those is invisible to an E2E test, so
-  cover the *behavior* beside it (the run continued, the value was
-  kept) and let the message itself go uncovered.
-- **Interactive form-takeover branches are PTY-only too.** Commands
-  that morph a spinner program into a form (`review`, `prerelease`,
+- **Interactive form-takeover branches are PTY-only.** Commands that
+  morph a spinner program into a form (`review`, `prerelease`,
   `release`) fork on whether a frame was painted to take the cursor
   over from. Raw rendering never paints one, so the harness always
   takes the "build the form standalone" arm and the takeover arm —
   cursor arithmetic against that frame — is structurally undrivable.
   Don't restructure to chase it; there is nothing to assert without a
   terminal.
+- **The raw reporter's own empty methods** (`../ui/raw_reporter.go`)
+  never run under the harness at all, since the capture stands in for
+  it. They stay uncovered by design, not for want of a test.
+
+Forcing *actual* card rendering would still need a real PTY; nothing
+in-tree does that, and the spinner frames would make output assertions
+timing-dependent. The capture reporter sidesteps the problem by
+recording the semantic calls instead of the pixels.
 
 ## Fake conventions
 
@@ -305,11 +306,10 @@ Capability fakes live in `fakes/` and follow a consistent shape:
   command's error path without complex setup.
 - **`NewErr`** is the construction knob on the fakes whose factories
   the harness owns (`Tracker`, `Host`, `Notifier`, `CICD`): set it and
-  the *factory*
-  fails instead of handing out the fake, simulating a capability
-  whose config or credentials are wrong. The harness's factory
-  closures read it at call time, so it can be set any time before
-  `Run`. This is the seam `doctor` uses to report a provider as
+  the *factory* fails instead of handing out the fake, simulating a
+  capability whose config or credentials are wrong. The harness's
+  factory closures read it at call time, so it can be set any time
+  before `Run`. This is the seam `doctor` uses to report a provider as
   configured-but-failing.
 - **`sync.Mutex`** guards mutable state even though tests run
   sequentially — protects against subtle ordering issues if a fake
