@@ -226,16 +226,28 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		return nil
 	}
 
-	// Seamless takeover: the form's first frame is already on screen —
-	// move the cursor to its origin and let huh repaint the same bytes
-	// in place. ClearSpacer: the header was painted by the spinner
-	// program's final frame (not via Print), so suppress the spacer the
-	// way Tight-on-Print would.
-	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-	ui.ClearSpacer()
-	if err := runForm(msField); err != nil {
-		ui.RequestSpacer()
-		return err
+	if msField == nil {
+		// Raw rendering: RunCardStepsInto never runs its final-frame
+		// closure (there's no frame to take over), so the form hasn't
+		// been built. Build it now and run it standalone, skipping the
+		// cursor takeover below, which assumes a painted frame to
+		// repaint over. Same shape as prerelease's target picker.
+		buildSelectionForm()
+		if err := runForm(msField); err != nil {
+			return err
+		}
+	} else {
+		// Seamless takeover: the form's first frame is already on screen —
+		// move the cursor to its origin and let huh repaint the same bytes
+		// in place. ClearSpacer: the header was painted by the spinner
+		// program's final frame (not via Print), so suppress the spacer the
+		// way Tight-on-Print would.
+		fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+		ui.ClearSpacer()
+		if err := runForm(msField); err != nil {
+			ui.RequestSpacer()
+			return err
+		}
 	}
 
 	pickedSet := make(map[int]bool, len(picked))
