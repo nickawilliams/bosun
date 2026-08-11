@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,15 @@ type Host struct {
 	created []code.Release
 	// createRequests records every CreateRelease request verbatim.
 	createRequests []code.CreateReleaseRequest
+	// createPRRequests / editPRRequests record every CreatePR / EditPR
+	// request verbatim, so tests can assert the per-repository PR
+	// metadata (base, title, body) each repo was given.
+	createPRRequests []code.CreatePRRequest
+	editPRRequests   []code.EditPRRequest
+	// reviewerRequests / assigneeRequests record who was requested or
+	// assigned, keyed "owner/name#number".
+	reviewerRequests map[string][]string
+	assigneeRequests map[string][]string
 	// prsInRange are keyed by "owner/name" — returned by PRsInRange
 	// minus the excluded numbers.
 	prsInRange map[string][]code.PullRequest
@@ -52,30 +62,56 @@ type Host struct {
 	// PR's head SHA when a PR exists, the branch otherwise), so it is
 	// the only place that choice is observable.
 	checksRefs []string
+	// defaultBranches are keyed "owner/name"; unseeded repos answer
+	// defaultBranchFallback.
+	defaultBranches map[string]string
+	// collaborators and teams are keyed "owner/name" and "owner"
+	// respectively; unseeded lookups return nil.
+	collaborators map[string][]string
+	teams         map[string][]string
 
-	// CreateReleaseErr, GetLatestTagErr, GetPRErr, MergePRErr override
+	// CreateReleaseErr, GetLatestTagErr, GetPRErr, MergePRErr,
+	// GetDefaultBranchErr, ListCollaboratorsErr, ListTeamsErr override
 	// default behavior to force error paths. nil means success.
-	CreateReleaseErr error
-	GetLatestTagErr  error
-	GetPRErr         error
-	MergePRErr       error
+	CreateReleaseErr     error
+	GetLatestTagErr      error
+	GetPRErr             error
+	MergePRErr           error
+	GetDefaultBranchErr  error
+	ListCollaboratorsErr error
+	ListTeamsErr         error
 
 	// calls records the method names invoked, in order.
 	calls []string
 }
 
+// defaultBranchFallback is GetDefaultBranch's answer for a repo no test
+// seeded — the overwhelmingly common real-world default, so tests that
+// don't care about base resolution need no setup.
+const defaultBranchFallback = "main"
+
 // NewHost constructs an empty Host.
 func NewHost() *Host {
 	return &Host{
-		repoDirs:      map[string]string{},
-		prs:           map[string]code.PullRequest{},
-		releasesByTag: map[string]code.Release{},
-		prsInRange:    map[string][]code.PullRequest{},
-		latestTag:     map[string]string{},
+		repoDirs:        map[string]string{},
+		prs:             map[string]code.PullRequest{},
+		releasesByTag:   map[string]code.Release{},
+		prsInRange:      map[string][]code.PullRequest{},
+		latestTag:       map[string]string{},
+		defaultBranches: map[string]string{},
+		collaborators:   map[string][]string{},
+		teams:           map[string][]string{},
+
+		reviewerRequests: map[string][]string{},
+		assigneeRequests: map[string][]string{},
 	}
 }
 
 func repoKey(owner, name string) string { return owner + "/" + name }
+
+func prKey(owner, name string, number int) string {
+	return repoKey(owner, name) + "#" + strconv.Itoa(number)
+}
 
 // LinkRepo wires owner/name to a git repository directory so
 // CreateRelease creates real tags there and GetLatestTag derives the
@@ -121,6 +157,31 @@ func (h *Host) SeedLatestTag(owner, name, tag string) *Host {
 	return h
 }
 
+// SeedDefaultBranch sets the branch GetDefaultBranch returns for a
+// repo. Unseeded repos answer defaultBranchFallback.
+func (h *Host) SeedDefaultBranch(owner, name, branch string) *Host {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.defaultBranches[repoKey(owner, name)] = branch
+	return h
+}
+
+// SeedCollaborators sets the logins ListCollaborators returns for a repo.
+func (h *Host) SeedCollaborators(owner, name string, logins ...string) *Host {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.collaborators[repoKey(owner, name)] = logins
+	return h
+}
+
+// SeedTeams sets the slugs ListTeams returns for an org.
+func (h *Host) SeedTeams(owner string, slugs ...string) *Host {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.teams[owner] = slugs
+	return h
+}
+
 // Releases returns a snapshot of releases created via CreateRelease,
 // in creation order. Seeded releases are not included.
 func (h *Host) Releases() []code.Release {
@@ -149,6 +210,63 @@ func (h *Host) ChecksRefs() []string {
 	defer h.mu.Unlock()
 	out := make([]string, len(h.checksRefs))
 	copy(out, h.checksRefs)
+	return out
+}
+
+// CreatePRRequests returns a snapshot of every CreatePR request, in
+// call order.
+func (h *Host) CreatePRRequests() []code.CreatePRRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]code.CreatePRRequest, len(h.createPRRequests))
+	copy(out, h.createPRRequests)
+	return out
+}
+
+// EditPRRequests returns a snapshot of every EditPR request, in call order.
+func (h *Host) EditPRRequests() []code.EditPRRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]code.EditPRRequest, len(h.editPRRequests))
+	copy(out, h.editPRRequests)
+	return out
+}
+
+// ReviewersRequested returns the users and teams requested across every
+// PR in a repo: grouped by PR (PRs in lexical key order, NOT call
+// order), requests within a PR in call order. Keyed by repo rather than
+// PR number because callers assert on what a REPOSITORY was given — the
+// number a freshly created PR happens to get is an artifact of seeding
+// order.
+func (h *Host) ReviewersRequested(owner, name string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.requestsForRepo(h.reviewerRequests, owner, name)
+}
+
+// AssigneesAdded returns the users assigned across every PR in a repo,
+// with the same grouping and ordering as ReviewersRequested.
+func (h *Host) AssigneesAdded(owner, name string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.requestsForRepo(h.assigneeRequests, owner, name)
+}
+
+// requestsForRepo flattens a PR-keyed request map down to one repo.
+// Callers hold h.mu.
+func (h *Host) requestsForRepo(m map[string][]string, owner, name string) []string {
+	prefix := repoKey(owner, name) + "#"
+	var out []string
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, m[k]...)
+	}
 	return out
 }
 
@@ -312,6 +430,7 @@ func (h *Host) CreatePR(_ context.Context, req code.CreatePRRequest) (code.PullR
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("CreatePR")
+	h.createPRRequests = append(h.createPRRequests, req)
 	key := repoKey(req.Owner, req.Repository) + "@" + req.Head
 	if existing, ok := h.prs[key]; ok && existing.Number > 0 {
 		return existing, nil // idempotent, like the real host
@@ -328,17 +447,30 @@ func (h *Host) CreatePR(_ context.Context, req code.CreatePRRequest) (code.PullR
 	return pr, nil
 }
 
-func (h *Host) EditPR(_ context.Context, _ code.EditPRRequest) error {
+func (h *Host) EditPR(_ context.Context, req code.EditPRRequest) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("EditPR")
+	h.editPRRequests = append(h.editPRRequests, req)
+	// Mirror the host: the edit lands on the PR, so a later lookup (or
+	// a second run in the same test) sees the updated content.
+	for k, pr := range h.prs {
+		if strings.HasPrefix(k, repoKey(req.Owner, req.Repository)+"@") && pr.Number == req.Number {
+			pr.Title, pr.Body, pr.BaseRef = req.Title, req.Body, req.Base
+			h.prs[k] = pr
+			break
+		}
+	}
 	return nil
 }
 
-func (h *Host) RequestReviewers(_ context.Context, _, _ string, _ int, _, _ []string) error {
+func (h *Host) RequestReviewers(_ context.Context, owner, repository string, number int, reviewers, teamReviewers []string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("RequestReviewers")
+	key := prKey(owner, repository, number)
+	h.reviewerRequests[key] = append(h.reviewerRequests[key], reviewers...)
+	h.reviewerRequests[key] = append(h.reviewerRequests[key], teamReviewers...)
 	return nil
 }
 
@@ -349,10 +481,12 @@ func (h *Host) RemoveReviewers(_ context.Context, _, _ string, _ int, _, _ []str
 	return nil
 }
 
-func (h *Host) AddAssignees(_ context.Context, _, _ string, _ int, _ []string) error {
+func (h *Host) AddAssignees(_ context.Context, owner, repository string, number int, assignees []string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("AddAssignees")
+	key := prKey(owner, repository, number)
+	h.assigneeRequests[key] = append(h.assigneeRequests[key], assignees...)
 	return nil
 }
 
@@ -377,18 +511,37 @@ func (h *Host) ListBranches(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
 
-func (h *Host) ListCollaborators(_ context.Context, _, _ string) ([]string, error) {
+func (h *Host) GetDefaultBranch(_ context.Context, owner, repository string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recordCall("GetDefaultBranch")
+	if h.GetDefaultBranchErr != nil {
+		return "", h.GetDefaultBranchErr
+	}
+	if b, ok := h.defaultBranches[repoKey(owner, repository)]; ok {
+		return b, nil
+	}
+	return defaultBranchFallback, nil
+}
+
+func (h *Host) ListCollaborators(_ context.Context, owner, repository string) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("ListCollaborators")
-	return nil, nil
+	if h.ListCollaboratorsErr != nil {
+		return nil, h.ListCollaboratorsErr
+	}
+	return h.collaborators[repoKey(owner, repository)], nil
 }
 
-func (h *Host) ListTeams(_ context.Context, _ string) ([]string, error) {
+func (h *Host) ListTeams(_ context.Context, owner string) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("ListTeams")
-	return nil, nil
+	if h.ListTeamsErr != nil {
+		return nil, h.ListTeamsErr
+	}
+	return h.teams[owner], nil
 }
 
 func (h *Host) GetChecks(_ context.Context, owner, repository, ref string) (code.CheckRollup, error) {

@@ -592,6 +592,81 @@ func TestListBranchesPaginated(t *testing.T) {
 	}
 }
 
+func TestGetDefaultBranch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo" {
+			t.Errorf("path = %q, want /repos/org/repo", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":           "repo",
+			"default_branch": "develop",
+		})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	branch, err := a.GetDefaultBranch(context.Background(), "org", "repo")
+	if err != nil {
+		t.Fatalf("GetDefaultBranch() error: %v", err)
+	}
+	if branch != "develop" {
+		t.Errorf("GetDefaultBranch() = %q, want %q", branch, "develop")
+	}
+}
+
+func TestGetDefaultBranchAPIError(t *testing.T) {
+	// A repo the token can't see 404s. The base resolver treats any
+	// error as "fall through to the local clone", so the only contract
+	// here is that a failed request IS an error rather than a "" base.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	_, err := a.GetDefaultBranch(context.Background(), "org", "nonexistent")
+	if err == nil {
+		t.Fatal("GetDefaultBranch() error = nil, want an error for a 404")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should mention 404, got: %v", err)
+	}
+}
+
+func TestGetDefaultBranchMalformedResponse(t *testing.T) {
+	// A 200 with a body that isn't the repository object — a proxy
+	// error page, say. Decoding fails; that must surface rather than
+	// leaving DefaultBranch zeroed and reporting "no default branch".
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	_, err := a.GetDefaultBranch(context.Background(), "org", "repo")
+	if err == nil {
+		t.Fatal("GetDefaultBranch() error = nil, want a decode error")
+	}
+	if !strings.Contains(err.Error(), "parsing repository response") {
+		t.Errorf("error = %v, want it to name the parse failure", err)
+	}
+}
+
+func TestGetDefaultBranchEmpty(t *testing.T) {
+	// An empty repository reports no default branch. Handing "" back as
+	// a PR base would produce a confusing 422 later, so it's an error.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": "repo"})
+	}))
+	defer server.Close()
+
+	a := NewWithClient(server.Client(), server.URL, "token")
+	if _, err := a.GetDefaultBranch(context.Background(), "org", "repo"); err == nil {
+		t.Fatal("GetDefaultBranch() error = nil, want an error for a repo with no default branch")
+	}
+}
+
 func TestListCollaborators(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/org/repo/collaborators" {

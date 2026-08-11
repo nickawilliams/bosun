@@ -101,7 +101,11 @@ var configSchema = map[string]ConfigGroup{
 		Label: "pull request",
 
 		Keys: []ConfigKey{
-			{Key: "base", Label: "base branch", Default: "main"},
+			// No Default: unset means "each repository's own default
+			// branch", which is the right answer far more often than a
+			// workspace-wide literal. Setting it makes it a global
+			// override applied to every repo.
+			{Key: "base", Label: "base branch", Example: "main"},
 			{Key: "title_template", Label: "PR title template", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
 			{Key: "body_template", Label: "PR body template"},
 			{Key: "reviewers", Label: "reviewers (GitHub usernames)"},

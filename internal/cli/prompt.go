@@ -87,6 +87,30 @@ func forceInteractive(cmd *cobra.Command) bool {
 	return fi && isInteractive()
 }
 
+// promptForValues gates VALUE prompts — the ones that fill in a field
+// the command could resolve on its own from flags, config, or
+// detection. Commands have two distinct interactivity classes and this
+// names the line between them:
+//
+//   - Scope and approval gates (which repos to act on, the plan
+//     confirmation) show whenever the session is interactive, because
+//     they ask permission rather than asking for data. --approve opts
+//     out of those.
+//   - Value prompts are OFF by default — the resolved value is meant to
+//     be right without asking — and --interactive turns them on.
+//
+// The two classes are independent on purpose: --approve answers "apply
+// this plan", not "take every default", so `--interactive --approve`
+// still prompts for values and still skips the plan gate. Same
+// separate-consents principle as isAutoApprove vs. --force.
+//
+// Currently an alias for forceInteractive; it exists so each call site
+// declares WHICH class it belongs to, and so the policy has one place
+// to change.
+func promptForValues(cmd *cobra.Command) bool {
+	return forceInteractive(cmd)
+}
+
 // runForm runs a huh form with the app theme applied. Keybinding
 // help is explicitly enabled so the shortcut hints render in the
 // footer beneath the active prompt. The timeline layout wraps
@@ -322,6 +346,12 @@ func (f *defaultField) Resolved() string {
 	}
 	return f.value
 }
+
+// Entry returns the raw text the user typed — empty when they accepted
+// the placeholder. Prefer it over Resolved when the fallback isn't a
+// literal the caller wants frozen in (a per-item default, say): the
+// caller can then keep resolving each item itself.
+func (f *defaultField) Entry() string { return f.value }
 
 // newDefaultInput returns a huh.Input with fallback shown as placeholder
 // (blank accepts it) and a field to resolve the result after the form

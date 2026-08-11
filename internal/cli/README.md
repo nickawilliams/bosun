@@ -80,13 +80,16 @@ Application: bosun
 |   +-- Phase: resolve repository identities
 |   |   +-- Task: get current branch                 -- per repository
 |   |   +-- Task: parse remote owner/name            -- per repository
-|   +-- Phase: collect PR metadata
-|   |   +-- Task: resolve base branch
+|   +-- Phase: collect PR metadata                   -- shared across repos
+|   |   +-- Task: resolve base branch                -- per repo default; --base/config overrides all
 |   |   +-- Task: resolve PR title
 |   |   +-- Task: resolve PR body
 |   |   +-- Task: resolve reviewers
 |   |   +-- Task: resolve team reviewers
 |   |   +-- Task: resolve assignees
+|   +-- Phase: customize PR metadata                 -- opt-in, --interactive
+|   |   +-- Task: select repositories to customize   -- interactive multi-select, none checked
+|   |   +-- Task: edit metadata                      -- per selected repository
 |   +-- Phase: ensure branches are pushed
 |   |   +-- Task: check unpushed commits             -- per repository
 |   |   +-- Task: confirm push                       -- interactive
