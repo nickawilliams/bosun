@@ -482,14 +482,29 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return states, nil
 	}
 
-	// Seamless takeover: the form's first frame is already on screen —
-	// move the cursor to its origin and let huh repaint the same bytes
-	// in place.
-	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-	ui.ClearSpacer()
-	if err := runForm(msField); err != nil {
-		ui.RequestSpacer()
-		return nil, err
+	if msField == nil {
+		// Raw rendering: RunCardStepsInto never runs its final-frame
+		// closure (there's no frame to take over), so the form hasn't
+		// been built. Build it now and run it standalone, skipping the
+		// cursor takeover below, which assumes a painted frame to
+		// repaint over. Mirrors prerelease's selectReleaseTargets. The
+		// form runs when stdin can drive it (the harness's injected
+		// reader); a TTY-stdin/piped-stdout session is refused cleanly
+		// by runForm's render guard instead.
+		buildSelectionForm()
+		if err := runForm(msField); err != nil {
+			return nil, err
+		}
+	} else {
+		// Seamless takeover: the form's first frame is already on screen —
+		// move the cursor to its origin and let huh repaint the same bytes
+		// in place.
+		fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+		ui.ClearSpacer()
+		if err := runForm(msField); err != nil {
+			ui.RequestSpacer()
+			return nil, err
+		}
 	}
 
 	for i := range states {
