@@ -84,10 +84,6 @@ func NewCaptureReporter() *CaptureReporter {
 	return &CaptureReporter{mu: &sync.Mutex{}, events: &[]CaptureEvent{}}
 }
 
-// rawMode marks CaptureReporter as a non-rendering Reporter — see
-// IsRaw.
-func (c *CaptureReporter) rawMode() {}
-
 func (c *CaptureReporter) record(e CaptureEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

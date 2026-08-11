@@ -143,7 +143,8 @@ A hierarchical, recursive display of labeled nodes (`Tree`,
   rendering them so tests can assert on what a command reported.
   Commands emit through `Reporter` methods; the active implementation
   decides how to present. `IsRaw()` covers every non-rendering
-  implementation (raw and capture) via an unexported marker method.
+  implementation (raw and capture) — it enumerates them, so a new one
+  needs a case added.
   The test harness installs the capture reporter with
   `SetRawReporterFactory` rather than `SetDefault`, because the CLI
   bootstrap installs a fresh raw reporter on every command run.

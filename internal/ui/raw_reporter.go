@@ -7,9 +7,6 @@ package ui
 // animate or render cards.
 type rawReporter struct{}
 
-// rawMode marks rawReporter as a non-rendering Reporter — see IsRaw.
-func (r *rawReporter) rawMode() {}
-
 // rawFactory constructs the Reporter installed for raw mode. Held in
 // a var because the CLI bootstrap installs a fresh raw Reporter on
 // every command run: a test that wants to observe reporter calls
