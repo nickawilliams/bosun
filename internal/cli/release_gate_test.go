@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestClassifyServiceDeploy locks the per-service production decision:
@@ -284,4 +287,64 @@ func TestAdvanceReleaseStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildDeployTargetsCard locks the "deploy" record card's rollup:
+// which rows survive the record-only-what-shipped filter, and which
+// card state the mix of outcomes selects. Tested here rather than
+// through the E2E suite because cards render nothing under the test
+// harness's raw reporter — see internal/testharness/README.md.
+func TestBuildDeployTargetsCard(t *testing.T) {
+	target := func(label string) DeployTarget {
+		return DeployTarget{RepoName: "api", Service: label, Label: label}
+	}
+	deploying := releaseServiceTarget{
+		target: target("web"), state: deployGo, include: true,
+		deployTag: "v1.2.4", reason: "→ v1.2.4 (first deploy)",
+	}
+	deselected := releaseServiceTarget{
+		target: target("worker"), state: deployGo,
+		deployedTag: "v1.2.3", reason: "v1.2.3 → v1.2.4",
+	}
+	live := releaseServiceTarget{
+		target: target("cron"), state: deploySkip,
+		deployedTag: "v1.2.4", reason: "v1.2.4 (already live)",
+	}
+	broken := releaseServiceTarget{
+		target: target("edge"), err: fakeErr("deployed state: API 500"),
+	}
+
+	// state reads the card's own glyph off the title line — the row
+	// glyphs below it reuse the same characters, so the first line is
+	// what distinguishes the card's state from its contents.
+	state := func(out string) string {
+		return strings.SplitN(out, "\n", 2)[0]
+	}
+
+	t.Run("selected rows only", func(t *testing.T) {
+		out := ansi.Strip(buildDeployTargetsCard(
+			[]releaseServiceTarget{deploying, deselected}).Render())
+		containsAll(t, out, "✓", "web", "first deploy")
+		// The deselected sibling is accounted for by the plan's
+		// "= not selected" row, not by a second row here.
+		containsNone(t, out, "worker")
+	})
+
+	t.Run("nothing selected", func(t *testing.T) {
+		out := ansi.Strip(buildDeployTargetsCard(
+			[]releaseServiceTarget{deselected, live}).Render())
+		containsAll(t, out, "(none selected)")
+		if !strings.Contains(state(out), "▲") {
+			t.Errorf("card state = %q, want the skipped glyph", state(out))
+		}
+	})
+
+	t.Run("failed target", func(t *testing.T) {
+		out := ansi.Strip(buildDeployTargetsCard(
+			[]releaseServiceTarget{deploying, broken}).Render())
+		containsAll(t, out, "edge", "API 500", "web")
+		if !strings.Contains(state(out), "✗") {
+			t.Errorf("card state = %q, want the failed glyph", state(out))
+		}
+	})
 }
