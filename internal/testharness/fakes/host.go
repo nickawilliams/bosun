@@ -47,6 +47,11 @@ type Host struct {
 	prsInRange map[string][]code.PullRequest
 	// latestTag is the fallback for unlinked repos, keyed "owner/name".
 	latestTag map[string]string
+	// checksRefs records the "owner/name@ref" of every GetChecks call,
+	// in order. The caller picks the ref (status resolves it to the
+	// PR's head SHA when a PR exists, the branch otherwise), so it is
+	// the only place that choice is observable.
+	checksRefs []string
 
 	// CreateReleaseErr, GetLatestTagErr, GetPRErr, MergePRErr override
 	// default behavior to force error paths. nil means success.
@@ -132,6 +137,18 @@ func (h *Host) CreateRequests() []code.CreateReleaseRequest {
 	defer h.mu.Unlock()
 	out := make([]code.CreateReleaseRequest, len(h.createRequests))
 	copy(out, h.createRequests)
+	return out
+}
+
+// ChecksRefs returns a snapshot of the "owner/name@ref" arguments
+// passed to GetChecks, in call order. Use it to assert which ref a
+// command asked for — the fake's rollup is fixed, so the ref is the
+// interesting half of the call.
+func (h *Host) ChecksRefs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, len(h.checksRefs))
+	copy(out, h.checksRefs)
 	return out
 }
 
@@ -374,10 +391,11 @@ func (h *Host) ListTeams(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
 
-func (h *Host) GetChecks(_ context.Context, _, _, _ string) (code.CheckRollup, error) {
+func (h *Host) GetChecks(_ context.Context, owner, repository, ref string) (code.CheckRollup, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("GetChecks")
+	h.checksRefs = append(h.checksRefs, repoKey(owner, repository)+"@"+ref)
 	return code.CheckRollup{State: "none"}, nil
 }
 
