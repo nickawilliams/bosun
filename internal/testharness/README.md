@@ -126,7 +126,10 @@ fake, so the provider composes the CI/CD pipeline and the tracker —
 both already fakes. Workflow dispatches then land in
 `h.CICD.Triggers()` with their real workflow path, ref, and inputs,
 and the env-to-issue binding round-trips through `h.Tracker`'s issue
-properties under the real key. Call `h.InstallCICD()` first.
+properties under the real key. Install the CICD fake too — the
+adapter resolves the pipeline through the same factory the command
+does, and without one that factory fails the test. Order doesn't
+matter.
 
 Choose by what the command is *for*. `cleanup`, `status`, and
 `review` merely consult a provider — they want the cheap, seedable
