@@ -30,6 +30,8 @@ type Tracker struct {
 	boards []issue.Board
 	// boardColumns is keyed by board ID.
 	boardColumns map[string][]issue.BoardColumn
+	// propertyKeys records the keys passed to GetProperty, in order.
+	propertyKeys []string
 
 	// CreateErr, GetErr, SetStatusErr override default behavior to
 	// force error paths. nil means use the default success behavior.
@@ -77,6 +79,49 @@ func (t *Tracker) SeedBoard(b issue.Board, columns ...issue.BoardColumn) *Tracke
 		t.boardColumns[b.ID] = columns
 	}
 	return t
+}
+
+// SeedProperty stores value as the issue's property blob, the way a
+// prior command run would have left it. Use it to put a command in
+// the "this issue already has state attached" position — e.g. an
+// existing preview binding — without replaying the run that wrote it.
+func (t *Tracker) SeedProperty(key string, value any) *Tracker {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	data, err := json.Marshal(value)
+	if err != nil {
+		// Seeds are test-authored literals; a marshal failure is a bug
+		// in the test, and returning it would only push a panic to the
+		// call site with less context.
+		panic("fakes: SeedProperty marshal: " + err.Error())
+	}
+	t.properties[key] = data
+	return t
+}
+
+// Property returns the raw property blob stored under key, or (nil,
+// false). Assert on it to pin which issue key a command wrote its
+// state against — a command that writes the right JSON under the
+// wrong key looks identical from the issue map alone.
+func (t *Tracker) Property(key string) (json.RawMessage, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	raw, ok := t.properties[key]
+	return raw, ok
+}
+
+// GetPropertyKeys returns the keys passed to GetProperty, in call
+// order. Assert on it whenever a command's behavior depends on a
+// property LOOKUP rather than a write: a lookup under the wrong key
+// returns "nothing stored", which is indistinguishable from a genuine
+// empty registry at every later assertion. Pinning the key is the
+// only way that class of bug fails a test.
+func (t *Tracker) GetPropertyKeys() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.propertyKeys))
+	copy(out, t.propertyKeys)
+	return out
 }
 
 // Issue returns a snapshot of the issue under key, or (zero, false).
@@ -221,6 +266,7 @@ func (t *Tracker) GetProperty(_ context.Context, key string) (json.RawMessage, e
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.recordCall("GetProperty")
+	t.propertyKeys = append(t.propertyKeys, key)
 	return t.properties[key], nil
 }
 
