@@ -28,6 +28,20 @@ type Notifier struct {
 	NotifyErr          error
 	HasAnnouncementErr error
 
+	// AuthTestErr forces the auth probe to fail — the seam doctor uses
+	// to exercise "configured, reachable, but the token is rejected".
+	AuthTestErr error
+
+	// FindThreadErr forces the per-channel probe to fail, so a test
+	// can drive the "channel unreachable" branch of a notification
+	// health check.
+	FindThreadErr error
+
+	// NewErr makes the harness's Notifier factory return this error
+	// instead of the fake, simulating a notifier that failed to
+	// construct. See the same knob on fakes.Tracker.
+	NewErr error
+
 	// calls records the method names invoked, in order.
 	calls []string
 }
@@ -95,6 +109,9 @@ func (n *Notifier) AuthTest(_ context.Context) (string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.recordCall("AuthTest")
+	if n.AuthTestErr != nil {
+		return "", n.AuthTestErr
+	}
 	return "bosun-test", nil
 }
 
@@ -118,6 +135,9 @@ func (n *Notifier) FindThread(_ context.Context, channel, issueKey string) (noti
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.recordCall("FindThread")
+	if n.FindThreadErr != nil {
+		return notify.ThreadRef{}, n.FindThreadErr
+	}
 	return n.threads[channel+"|"+issueKey], nil
 }
 

@@ -52,6 +52,13 @@ Three seams let the harness drive commands in-process:
    remote for a repository identity (`gh.ParseRemote`) — while a
    `core.sshCommand` shim routes the transport to the local bare repo
    (see the gotcha below).
+4. **Both config layers are scratch** — `XDG_CONFIG_HOME` points at a
+   temp dir so the developer's real global config never leaks in.
+   `Workspace.WriteConfig` writes the project layer;
+   `Harness.WriteGlobalConfig` the global one (needed when the
+   command reads the global config's presence or a setting has to
+   come from that layer). `Harness.GlobalConfigPath` is the path it
+   writes to.
 
 ## Test naming as scenario tree
 
@@ -95,16 +102,44 @@ function level. Sharing the harness across siblings leaks fake state.
 capability factories default to `t.Fatalf` stubs — if a command
 unexpectedly reaches for CICD / PreviewProvider, the test fails with a
 clear message instead of a nil-pointer panic. Tests for commands
-needing those services install them by calling `cli.SetServices`
-directly after `New()`.
+needing those services opt in — `h.InstallCICD()` for CI/CD,
+`h.InstallPreview()` for the preview provider. Each swaps its factory
+for the fake, sets the corresponding `Harness` field, and returns it.
 
-`PreviewProvider` has a ready-made opt-in: `h.InstallPreview()` swaps
-in `fakes.Preview` and sets `h.Preview`. Reach for it in any command
-whose path touches a preview env — note that reaching for the
-*provider* is enough to trip the stub, even when no env is bound, so
-e.g. every `cleanup` test needs it (`cleanup` calls
-`newPreviewProvider` unconditionally and its plan leads with the
-teardown row).
+`PreviewProvider`'s opt-in is needed in any command whose path touches
+a preview env — note that reaching for the *provider* is enough to
+trip the stub, even when no env is bound, so e.g. every `cleanup` test
+needs it (`cleanup` calls `newPreviewProvider` unconditionally and its
+plan leads with the teardown row).
+
+`h.CICD` is allocated by `New()` even though the factory isn't
+installed, so a test can set its knobs (`NewErr`, `TriggerErr`) before
+calling `InstallCICD`.
+
+## Asserting on what a command reported
+
+Commands run non-interactively here — output is a buffer, not a TTY —
+so `cli.Bootstrap` installs a **raw** Reporter and the rendered
+timeline never reaches `h.Stdout()`. `h.Stdout()` still captures
+everything written directly (`config get`'s value, raw-mode errors),
+but for a command whose entire output is Reporter calls (`doctor`,
+`status`), assert on `h.Reporter` instead:
+
+```go
+if err := h.Run("doctor"); err != nil { ... }
+
+ev, ok := h.Reporter.Find("code host")   // one check's row
+// ev.Kind is ui.CaptureComplete / CaptureSkip / CaptureFail —
+// the ✓ / ! / ✗ states — ev.Value the inline detail,
+// ev.Group the enclosing Group's title.
+```
+
+`h.Reporter` is a `ui.CaptureReporter`: it records every Reporter
+call in order (`Events()`), filters by kind (`OfKind`), finds by
+label (`Find`), and renders itself for failure messages (`Dump()`).
+It's reset at the start of each `Run`. Values may carry ANSI styling
+where the command colored part of a string — strip with
+`ansi.Strip` before comparing.
 
 ## Gotchas
 
@@ -263,6 +298,12 @@ Capability fakes live in `fakes/` and follow a consistent shape:
 - **Error knobs** (e.g., `CreateErr`, `GetErr`) let tests force the
   fake to return an error from a specific method, exercising the
   command's error path without complex setup.
+- **`NewErr`** is the construction knob: set it and the *factory*
+  fails instead of handing out the fake, simulating a capability
+  whose config or credentials are wrong. The harness's factory
+  closures read it at call time, so it can be set any time before
+  `Run`. This is the seam `doctor` uses to report a provider as
+  configured-but-failing.
 - **`sync.Mutex`** guards mutable state even though tests run
   sequentially — protects against subtle ordering issues if a fake
   is ever shared across goroutines.
@@ -317,5 +358,7 @@ for them rather than constructing elaborate failing fixtures.
 | `fakes/host.go`               | In-memory `code.Host` (real tags via LinkRepo)   |
 | `fakes/notifier.go`           | In-memory `notify.Notifier`                      |
 | `fakes/preview.go`            | In-memory `preview.Provider` (opt-in install)    |
+| `fakes/cicd.go`               | In-memory `cicd.CICD` (opt-in install)           |
 | `fakes/...`                   | Additional capability fakes (added as needed)    |
 | `../cli/start_test.go`        | Canonical end-to-end test example                |
+| `../cli/doctor_test.go`       | Canonical `h.Reporter` assertion example         |
