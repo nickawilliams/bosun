@@ -166,11 +166,17 @@ var defaultReporter Reporter = newCardReporter()
 // Default returns the package-level default Reporter.
 func Default() Reporter { return defaultReporter }
 
+// rawMode is implemented by Reporters that suppress timeline
+// rendering — the raw reporter and the test CaptureReporter. It's a
+// marker so IsRaw covers every non-rendering variant instead of a
+// single concrete type.
+type rawMode interface{ rawMode() }
+
 // IsRaw reports whether the default Reporter is a raw (non-rendering)
 // variant. Used by Card.Print and other direct-output functions to
 // suppress timeline rendering in raw mode.
 func IsRaw() bool {
-	_, ok := defaultReporter.(*rawReporter)
+	_, ok := defaultReporter.(rawMode)
 	return ok
 }
 

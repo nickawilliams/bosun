@@ -7,8 +7,27 @@ package ui
 // animate or render cards.
 type rawReporter struct{}
 
+// rawMode marks rawReporter as a non-rendering Reporter — see IsRaw.
+func (r *rawReporter) rawMode() {}
+
+// rawFactory constructs the Reporter installed for raw mode. Held in
+// a var because the CLI bootstrap installs a fresh raw Reporter on
+// every command run: a test that wants to observe reporter calls
+// (CaptureReporter) has to replace the constructor, not the installed
+// value, or its reporter is overwritten as soon as the command runs.
+var rawFactory = func() Reporter { return &rawReporter{} }
+
 // NewRawReporter creates a Reporter that suppresses timeline output.
-func NewRawReporter() Reporter { return &rawReporter{} }
+func NewRawReporter() Reporter { return rawFactory() }
+
+// SetRawReporterFactory replaces the raw-mode Reporter constructor
+// and returns a function restoring the previous one. Test-only seam —
+// production code has exactly one raw Reporter.
+func SetRawReporterFactory(f func() Reporter) func() {
+	prev := rawFactory
+	rawFactory = f
+	return func() { rawFactory = prev }
+}
 
 func (r *rawReporter) Header(_ string, _ ...string)        {}
 func (r *rawReporter) Complete(_ string)                   {}
