@@ -232,6 +232,23 @@ Forcing card rendering would need a real PTY; nothing in-tree does
 that today, and the spinner frames would make output assertions
 timing-dependent.
 
+Two consequences that bite when you go looking for uncovered lines:
+
+- **"The user was warned" is never assertable here.** Every reporter
+  call — `ui.Skip`, `ui.Fail`, `ui.Info`, `ui.Selected` — is an empty
+  method on the raw reporter (`../ui/raw_reporter.go`). A branch whose
+  only effect is emitting one of those is invisible to an E2E test, so
+  cover the *behavior* beside it (the run continued, the value was
+  kept) and let the message itself go uncovered.
+- **Interactive form-takeover branches are PTY-only too.** Commands
+  that morph a spinner program into a form (`review`, `prerelease`,
+  `release`) fork on whether a frame was painted to take the cursor
+  over from. Raw rendering never paints one, so the harness always
+  takes the "build the form standalone" arm and the takeover arm —
+  cursor arithmetic against that frame — is structurally undrivable.
+  Don't restructure to chase it; there is nothing to assert without a
+  terminal.
+
 ## Fake conventions
 
 Capability fakes live in `fakes/` and follow a consistent shape:

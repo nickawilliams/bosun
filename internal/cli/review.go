@@ -656,12 +656,12 @@ func newReviewCmd() *cobra.Command {
 			// pins a literal via --title/--body or by editing the prompt.
 			// The prompts have to preview one concrete rendering: use the
 			// first repo this run will actually write to, so the previewed
-			// base isn't one no created PR will use.
+			// base isn't one no created PR will use. Nil when nothing is
+			// writable — templateData renders the issue-only fields in
+			// that case, which is all a run with no PR to open can show.
 			var repRepo *repoContext
 			if writable := writableRepos(resolved); len(writable) > 0 {
 				repRepo = &resolved[writable[0]]
-			} else if len(resolved) > 0 {
-				repRepo = &resolved[0]
 			}
 			templateData := func(rc *repoContext) prTemplateData {
 				d := prTemplateData{

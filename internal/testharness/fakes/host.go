@@ -71,13 +71,15 @@ type Host struct {
 	teams         map[string][]string
 
 	// CreateReleaseErr, GetLatestTagErr, GetPRErr, MergePRErr,
-	// GetDefaultBranchErr override default behavior to force error
-	// paths. nil means success.
-	CreateReleaseErr    error
-	GetLatestTagErr     error
-	GetPRErr            error
-	MergePRErr          error
-	GetDefaultBranchErr error
+	// GetDefaultBranchErr, ListCollaboratorsErr, ListTeamsErr override
+	// default behavior to force error paths. nil means success.
+	CreateReleaseErr     error
+	GetLatestTagErr      error
+	GetPRErr             error
+	MergePRErr           error
+	GetDefaultBranchErr  error
+	ListCollaboratorsErr error
+	ListTeamsErr         error
 
 	// calls records the method names invoked, in order.
 	calls []string
@@ -526,6 +528,9 @@ func (h *Host) ListCollaborators(_ context.Context, owner, repository string) ([
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("ListCollaborators")
+	if h.ListCollaboratorsErr != nil {
+		return nil, h.ListCollaboratorsErr
+	}
 	return h.collaborators[repoKey(owner, repository)], nil
 }
 
@@ -533,6 +538,9 @@ func (h *Host) ListTeams(_ context.Context, owner string) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("ListTeams")
+	if h.ListTeamsErr != nil {
+		return nil, h.ListTeamsErr
+	}
 	return h.teams[owner], nil
 }
 

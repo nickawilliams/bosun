@@ -9,6 +9,7 @@ package cli_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
@@ -224,6 +225,167 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		}
 		if edits[0].Base != "develop" {
 			t.Errorf("retargeted base = %q, want %q", edits[0].Base, "develop")
+		}
+	})
+
+	t.Run("prompts/typed_answers_pin_every_repo", func(t *testing.T) {
+		// The other half of the pin-vs-template split: an answer the user
+		// TYPES at a shared prompt becomes the workspace-wide override and
+		// lands on every repo, overriding even a divergent per-repo
+		// default. Without this the whole typed path is unexercised —
+		// typeaheadInputOptional could discard its input entirely and the
+		// suite would stay green.
+		//
+		// No --reviewer/--team-reviewer/--assignee here, so all three
+		// shared pickers run too.
+		h, repos := startReviewWorkspace(t, reviewConfig, "api", "web")
+		owner := repos[0].Owner
+		h.Host.SeedDefaultBranch(owner, "web", "develop")
+		h.Host.SeedCollaborators(owner, "api", "alice")
+		h.Host.SeedTeams(owner, "backend")
+
+		h.Type("\r")             // PR-target multi-select: accept both
+		h.Type("release/2.0\r")  // Base Branch: TYPED → global override
+		h.Type("Custom title\r") // Title: TYPED → pinned workspace-wide
+		h.Type("Custom body\r")  // Body: EDITED → pinned workspace-wide
+		h.Type("\r")             // Reviewers
+		h.Type("\r")             // Team Reviewers
+		h.Type("\r")             // Assignees
+		h.Type("\r")             // Customize: decline
+		h.Type("y")              // plan gate
+
+		if err := runReview(h, "--interactive"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		reqs := h.Host.CreatePRRequests()
+		if len(reqs) != 2 {
+			t.Fatalf("CreatePR requests = %d, want 2; calls = %v", len(reqs), h.Host.Calls())
+		}
+		for _, r := range reqs {
+			// web's own default is develop; the typed base must win.
+			if r.Base != "release/2.0" {
+				t.Errorf("%s base = %q, want the typed override %q", r.Repository, r.Base, "release/2.0")
+			}
+			if r.Title != "Custom title" {
+				t.Errorf("%s title = %q, want the typed title", r.Repository, r.Title)
+			}
+			if r.Body != "Custom body" {
+				t.Errorf("%s body = %q, want the edited body", r.Repository, r.Body)
+			}
+		}
+	})
+
+	t.Run("customize/declined_keeps_shared_metadata", func(t *testing.T) {
+		// Declining is the default — the picker ships with nothing
+		// checked, so one Enter is the most likely real interaction. Each
+		// repo keeps its own resolved base, and no mini-form runs (with
+		// every reviewer axis pinned by flag, the ONLY caller left of
+		// ListCollaborators is the mini-form).
+		h, repos := startReviewWorkspace(t, reviewConfig, "api", "web")
+		owner := repos[0].Owner
+		h.Host.SeedDefaultBranch(owner, "web", "develop")
+
+		h.Type("\r") // PR-target multi-select
+		h.Type("\r") // Base Branch
+		h.Type("\r") // Title
+		h.Type("\r") // Body
+		h.Type("\r") // Customize: decline
+		h.Type("y")  // plan gate
+
+		if err := runReview(h, "--interactive", "--reviewer", "alice",
+			"--team-reviewer", "backend", "--assignee", "bob"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if got := baseFor(t, h.Host.CreatePRRequests(), "api"); got != "main" {
+			t.Errorf("api base = %q, want %q", got, "main")
+		}
+		if got := baseFor(t, h.Host.CreatePRRequests(), "web"); got != "develop" {
+			t.Errorf("web base = %q, want %q", got, "develop")
+		}
+		if slices.Contains(h.Host.Calls(), "ListCollaborators") {
+			t.Errorf("a mini-form ran after the pass was declined; calls = %v", h.Host.Calls())
+		}
+	})
+
+	t.Run("customize/cancelled_aborts", func(t *testing.T) {
+		// Ctrl+c at the customize picker aborts the whole run — the pass
+		// sits before the plan, so nothing has been written yet and
+		// nothing should be. One scenario is enough: every other form in
+		// this flow propagates the same ErrCancelled the same way.
+		h, _ := startReviewWorkspace(t, reviewConfig, "api", "web")
+
+		h.Type("\r")   // PR-target multi-select
+		h.Type("\r")   // Base Branch
+		h.Type("\r")   // Title
+		h.Type("\r")   // Body
+		h.Type("\x03") // Customize: ctrl+c
+
+		err := runReview(h, "--interactive", "--reviewer", "alice",
+			"--team-reviewer", "backend", "--assignee", "bob")
+		if err == nil {
+			t.Fatalf("expected ErrCancelled; got nil")
+		}
+		if !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("error = %v, want contains \"cancelled\"", err)
+		}
+		if n := len(h.Host.CreatePRRequests()); n != 0 {
+			t.Errorf("cancelled run created %d PR(s); want 0", n)
+		}
+	})
+
+	t.Run("customize/option_fetch_failure_keeps_shared_values", func(t *testing.T) {
+		// A repo whose collaborators and teams can't be read still gets
+		// its base/title/body fields and keeps the shared reviewer sets —
+		// an optional picker failing must not abort the run.
+		//
+		// Only the BEHAVIOUR is asserted, not the Skip rows the failure
+		// emits: reporter calls are no-ops under the raw reporter every
+		// harness run uses, so "the user was warned" isn't observable
+		// here (see internal/testharness/README.md).
+		//
+		// Every reviewer axis is pinned by flag so the SHARED pickers are
+		// skipped — they surface a fetch error as a hard failure, and the
+		// mini-form's best-effort handling is what's under test.
+		h, repos := startReviewWorkspace(t, reviewConfig, "api", "web")
+		owner := repos[0].Owner
+		h.Host.SeedDefaultBranch(owner, "web", "develop")
+		h.Host.ListCollaboratorsErr = errReviewHost
+		h.Host.ListTeamsErr = errReviewHost
+
+		h.Type("\r")        // PR-target multi-select
+		h.Type("\r")        // Base Branch
+		h.Type("\r")        // Title
+		h.Type("\r")        // Body
+		h.Type("\x1b[B \r") // Customize: down to web, toggle, submit
+		h.Type("\r")        // web · Base Branch
+		h.Type("\r")        // web · Title
+		h.Type("\r")        // web · Body
+		h.Type("\r")        // web · Reviewers (pre-filled from the shared set)
+		h.Type("\r")        // web · Team Reviewers
+		h.Type("\r")        // web · Assignees
+		h.Type("y")         // plan gate
+
+		if err := runReview(h, "--interactive", "--reviewer", "alice",
+			"--team-reviewer", "backend", "--assignee", "bob"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if !slices.Contains(h.Host.Calls(), "ListCollaborators") {
+			t.Fatalf("mini-form never attempted the fetch; calls = %v", h.Host.Calls())
+		}
+		if n := len(h.Host.CreatePRRequests()); n != 2 {
+			t.Fatalf("CreatePR requests = %d, want 2", n)
+		}
+		revs := h.Host.ReviewersRequested(owner, "web")
+		for _, want := range []string{"alice", "backend"} {
+			if !slices.Contains(revs, want) {
+				t.Errorf("web reviewers = %v, want the shared %q preserved", revs, want)
+			}
+		}
+		if asns := h.Host.AssigneesAdded(owner, "web"); !slices.Contains(asns, "bob") {
+			t.Errorf("web assignees = %v, want the shared \"bob\" preserved", asns)
 		}
 	})
 
