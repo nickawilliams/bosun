@@ -364,6 +364,61 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
+	t.Run("idempotency/deployed_state_is_per_service", func(t *testing.T) {
+		// A monorepo's services each read their own
+		// "<service>-production" environment. Seeding only web's leaves
+		// worker untouched, so the same workspace release skips for one
+		// and deploys for the other — which is only true if the lookup
+		// is keyed on the target's environment. A constant "production"
+		// (or the sibling's env) would miss the seed, classify web as a
+		// first deploy, and dispatch.
+		f := setupRelease(t, releaseMonorepoTarget)
+		f.h.Host.SeedDeployment(f.api.Owner, f.api.Name, "web-production", code.Deployment{
+			Ref: "v1.2.4", SHA: f.workSHA, State: "success",
+		})
+
+		if err := f.run("--migrations-done", "--service", "web", "--approve"); err != nil {
+			t.Fatalf("release web: %v", err)
+		}
+		if n := len(f.triggers()); n != 0 {
+			t.Fatalf("web dispatches = %d, want 0 (already live at v1.2.4)", n)
+		}
+
+		if err := f.run("--migrations-done", "--service", "worker", "--approve"); err != nil {
+			t.Fatalf("release worker: %v", err)
+		}
+		trs := f.triggers()
+		if len(trs) != 1 {
+			t.Fatalf("worker dispatches = %d, want 1 (%+v)", len(trs), trs)
+		}
+		if trs[0].Workflow != "deploy-worker.yaml" {
+			t.Errorf("workflow = %q, want %q", trs[0].Workflow, "deploy-worker.yaml")
+		}
+	})
+
+	t.Run("idempotency/failed_deployment_is_not_live", func(t *testing.T) {
+		// The environment's latest deployment of v1.2.4 FAILED. That is
+		// not what's live, so the release still ships — the host only
+		// reports successful deployments, and a failed one must not
+		// read as "already deployed".
+		f := setupRelease(t, releaseSingleTarget)
+		f.h.Host.SeedDeployment(f.api.Owner, f.api.Name, "production", code.Deployment{
+			Ref: "v1.2.4", SHA: f.workSHA, State: "failure",
+		})
+
+		if err := f.run("--migrations-done", "--service", "api", "--approve"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+
+		trs := f.triggers()
+		if len(trs) != 1 {
+			t.Fatalf("dispatches = %d, want 1 (a failed deploy isn't live)", len(trs))
+		}
+		if trs[0].Ref != "v1.2.4" {
+			t.Errorf("ref = %q, want %q", trs[0].Ref, "v1.2.4")
+		}
+	})
+
 	t.Run("gate/unreleased_work_blocks_deploy", func(t *testing.T) {
 		// The workspace's work is merged but no release contains it:
 		// the deploy is blocked (run prerelease first), nothing is
@@ -394,6 +449,11 @@ func TestRelease(t *testing.T) {
 		if got := f.status(t); got != "In Progress" {
 			t.Errorf("issue status = %q, want %q (blocked work isn't done)", got, "In Progress")
 		}
+		// A gate BLOCK and a resolution ERROR both dispatch nothing and
+		// both hold the status, so neither assertion above tells them
+		// apart. The nil return does: an errored target assesses into a
+		// ✗ plan row, which runActions surfaces as the command's error.
+		// Reaching here means the target was classified and blocked.
 	})
 
 	t.Run("migration_gate/blocks_without_flag", func(t *testing.T) {
@@ -490,8 +550,15 @@ func TestRelease(t *testing.T) {
 		// Dry-run still walks the selection form (enter keeps the
 		// --service pre-check) but renders the plan without applying:
 		// ErrCancelled, no dispatch, no status change.
+		//
+		// The trailing "n" is a fail-fast guard, not part of the flow:
+		// a --dry-run that stopped suppressing apply would fall through
+		// to the plan gate and block forever on an empty stdin, burning
+		// the package timeout. With the key queued it reads a Cancel
+		// and the scenario fails on the assertions below instead.
 		f := setupRelease(t, releaseSingleTarget)
 		f.h.Type("\r")
+		f.h.Type("n")
 
 		err := f.run("--migrations-done", "--service", "api", "--dry-run")
 		if err == nil {
@@ -499,6 +566,15 @@ func TestRelease(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "cancelled") {
 			t.Fatalf("dry-run error = %v, want contains \"cancelled\"", err)
+		}
+		// --dry-run returns the bare ErrCancelled ("cancelled"); an
+		// answered Cancel returns errPlanCancelled ("plan cancelled").
+		// Without this line the guard key above hides the regression it
+		// exists to expose: a run that ignored --dry-run would reach
+		// the gate, read the "n", and cancel — passing every other
+		// assertion here.
+		if strings.Contains(err.Error(), "plan cancelled") {
+			t.Fatalf("error = %v, want dry-run's own cancellation, not an answered gate", err)
 		}
 
 		if n := len(f.triggers()); n != 0 {
@@ -597,16 +673,21 @@ func TestRelease(t *testing.T) {
 	t.Run("errors/unknown_service_flag", func(t *testing.T) {
 		// --service naming a service no target configures is a hard
 		// error: filtering it out silently would read as "nothing to
-		// deploy" for what is actually a typo.
+		// deploy" for what is actually a typo. Repeated here alongside
+		// a service that DOES match, so the error can't come from
+		// "nothing matched" — it has to name the one that didn't.
 		f := setupRelease(t, releaseMonorepoTarget)
 
-		err := f.run("--migrations-done", "--service", "wbe", "--approve")
+		err := f.run("--migrations-done", "--service", "web", "--service", "wbe", "--approve")
 		if err == nil {
 			t.Fatalf("expected an error for an unknown --service; got nil")
 		}
 		if !strings.Contains(err.Error(), "wbe") ||
 			!strings.Contains(err.Error(), "doesn't match any configured deploy target") {
 			t.Errorf("error = %v, want it to name the unmatched service", err)
+		}
+		if strings.Contains(err.Error(), "web,") || strings.Contains(err.Error(), " web") {
+			t.Errorf("error = %v, names the service that DID match", err)
 		}
 		if n := len(f.triggers()); n != 0 {
 			t.Errorf("dispatches = %d, want 0", n)
