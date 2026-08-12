@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/cli"
@@ -65,6 +66,11 @@ type Harness struct {
 
 	// globalConfigDir is $XDG_CONFIG_HOME/bosun for this test.
 	globalConfigDir string
+
+	// fatalf is t.Fatalf, indirected so this package's own tests can
+	// assert on a starvation report without ending the test that
+	// provoked it.
+	fatalf func(format string, args ...any)
 
 	stdin  *chunkReader
 	stdout *syncBuffer
@@ -125,10 +131,11 @@ func New(t *testing.T) *Harness {
 		Notifier:  fakes.NewNotifier(),
 		CICD:      fakes.NewCICD(),
 		Reporter:  ui.NewCaptureReporter(),
-		stdin:     &chunkReader{},
+		stdin:     newChunkReader(),
 		stdout:    &syncBuffer{},
 		stderr:    &syncBuffer{},
 	}
+	h.fatalf = t.Fatalf
 
 	// Link every repo to the code-host fake as it's added, so
 	// host-side tag creation (CreateRelease) lands on the repo's bare
@@ -345,6 +352,11 @@ func (h *Harness) Type(s string) {
 // streams misses everything the user actually sees; tests can rely
 // on h.Stdout() / h.Stderr() returning the full rendered output
 // regardless of which channel each write went through.
+//
+// A command that reaches a prompt the scenario never fed fails the
+// test here rather than hanging: the drained reader unblocks the form
+// with errStarvedInput after starvationGrace, and Run reports the
+// starvation whether or not the command forwarded the error.
 func (h *Harness) Run(args ...string) error {
 	h.t.Helper()
 
@@ -363,6 +375,7 @@ func (h *Harness) Run(args ...string) error {
 	h.stdout.Reset()
 	h.stderr.Reset()
 	h.Reporter.Reset()
+	h.stdin.beginRun()
 
 	cmd := cli.NewRootCmd("test")
 	cmd.SetIn(h.stdin)
@@ -385,7 +398,133 @@ func (h *Harness) Run(args ...string) error {
 	restoreErr := captureFD(h.t, &os.Stderr, h.stderr)
 	defer restoreErr()
 
-	return cmd.Execute()
+	err := cmd.Execute()
+
+	// Restore before diagnosing: the starvation report quotes the
+	// captured output, and the pipe's copy goroutine is only guaranteed
+	// to have drained once its writer is closed. Both restores are
+	// idempotent, so the defers above stay as the panic path.
+	restoreErr()
+	restoreOut()
+
+	// The command has returned, so any read still parked belongs to a
+	// finished form's leaked loop — retire it rather than let it sit
+	// out the grace and latch a starvation this run never suffered.
+	h.stdin.release()
+
+	if starved, queued, grace := h.stdin.starvation(); starved {
+		h.fatalf("%s", h.starvationReport(final, queued, grace))
+	}
+	return err
+}
+
+// starvationReport explains a starved run: which invocation blocked,
+// how much input the scenario had thought would cover it, and what was
+// on screen when it stopped.
+//
+// The trailing output is the part that names the prompt. Prompts are
+// preceded by a rewindable input card (ui.CardInput) written straight
+// to the output buffer, and a buffer keeps what a terminal would have
+// erased — so the last card in the capture is the question the command
+// is sitting on. Rendering the prompt itself would not help: with a
+// non-TTY output bubbletea uses the nil renderer and the form draws
+// nothing at all.
+func (h *Harness) starvationReport(args []string, queued int, grace time.Duration) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "bosun %s reached a prompt this scenario never fed.\n\n",
+		strings.Join(args, " "))
+	fmt.Fprintf(&b, "The scenario queued %d input(s) via Type(); the command "+
+		"consumed all of them and asked for more, so the harness aborted the "+
+		"form after %s instead of blocking until the package test timeout.\n\n",
+		queued, grace)
+	b.WriteString("Either feed the prompt with another h.Type(...) call, or — if " +
+		"the command should not be prompting here at all — that is the " +
+		"regression under test.\n\n")
+
+	if tail := outputTail(h.Stdout(), starvationTailLines); tail != "" {
+		fmt.Fprintf(&b, "Last output before it blocked (the prompt is usually the "+
+			"final card):\n%s", tail)
+	} else {
+		b.WriteString("The command produced no output before it blocked.")
+	}
+	return b.String()
+}
+
+// starvationTailLines is how much trailing output the starvation
+// report quotes — enough for the last input card plus the row or two
+// of context above it that says which step the command was on.
+const starvationTailLines = 12
+
+// outputTail returns the last n non-blank lines of s with ANSI escapes
+// stripped and each line indented, for quoting inside a test failure.
+func outputTail(s string, n int) string {
+	var lines []string
+	for line := range strings.SplitSeq(stripANSI(s), "\n") {
+		if line = strings.TrimRight(line, " \t\r"); strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// stripANSI removes ANSI escape sequences so the quoted output reads
+// as plain text in a test failure. Handles the CSI and OSC forms the
+// rendering layer emits (colors, cursor moves, erases) plus the plain
+// two- and three-byte escapes (charset designators and the like).
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != 0x1b {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i++ // ESC
+		if i >= len(s) {
+			break
+		}
+		switch s[i] {
+		case '[': // CSI: params, then a final byte in @-~
+			i++
+			for i < len(s) && (s[i] < '@' || s[i] > '~') {
+				i++
+			}
+			if i < len(s) {
+				i++
+			}
+		case ']': // OSC: runs to BEL or ST (ESC \)
+			i++
+			for i < len(s) && s[i] != 0x07 {
+				if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
+					i++
+					break
+				}
+				i++
+			}
+			if i < len(s) {
+				i++
+			}
+		default:
+			// Everything else: zero or more intermediates (0x20-0x2F)
+			// then one final byte — ESC(B, ESC)0, ESC M, ESC =.
+			for i < len(s) && s[i] >= 0x20 && s[i] <= 0x2f {
+				i++
+			}
+			if i < len(s) {
+				i++
+			}
+		}
+	}
+	return b.String()
 }
 
 // captureFD swaps *fd for a pipe whose reads are copied into sink for
@@ -393,6 +532,10 @@ func (h *Harness) Run(args ...string) error {
 // process-wide os.Stdout / os.Stderr during Run so direct fmt.Print
 // writes from the rendering layer land in the harness's buffers
 // alongside whatever cobra routes through its own streams.
+//
+// The restore is idempotent, so Run can both call it explicitly (to
+// settle the capture before reading it back) and defer it (to survive
+// a panic in the command).
 func captureFD(t *testing.T, fd **os.File, sink io.Writer) func() {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -408,11 +551,14 @@ func captureFD(t *testing.T, fd **os.File, sink io.Writer) func() {
 		close(done)
 	}()
 
+	var once sync.Once
 	return func() {
-		_ = w.Close()
-		<-done
-		*fd = orig
-		_ = r.Close()
+		once.Do(func() {
+			_ = w.Close()
+			<-done
+			*fd = orig
+			_ = r.Close()
+		})
 	}
 }
 
