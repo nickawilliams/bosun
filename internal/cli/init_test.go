@@ -77,9 +77,11 @@ func TestInit(t *testing.T) {
 		// The write confirmation is a plain ui.SuccessLine, not a card
 		// or a Reporter call — it goes straight to os.Stdout, which the
 		// harness captures. It's the only thing telling the user where
-		// the project settings landed, so it's worth pinning; see the
-		// harness README's note on which output does reach h.Stdout().
-		wrote := "Wrote Project Settings to "
+		// the project settings landed, so the PATH is the part worth
+		// pinning: a confirmation naming a file init didn't write sends
+		// the user off to edit the wrong one. See the harness README's
+		// note on which output does reach h.Stdout().
+		wrote := "Wrote Project Settings to " + displayPath(h.Workspace.ConfigPath())
 		if out := ansi.Strip(h.Stdout()); !strings.Contains(out, wrote) {
 			t.Errorf("no %q line on stdout; got:\n%s", wrote, out)
 		}
@@ -89,6 +91,12 @@ func TestInit(t *testing.T) {
 		h := newInitHarness(t)
 		addChildRepo(t, h, "api")
 		addChildRepo(t, h, "web")
+		// A hidden sibling that is also a repository. Tool caches
+		// (.cache, .config, a vendored .git-managed dir) are the common
+		// real case, and they are not the user's projects — detection
+		// skips dot-directories, and the assertion below is what says
+		// so.
+		addChildRepo(t, h, ".cache")
 
 		h.Type("\r") // repository patterns — accept the detected default
 		h.Type("\r") // workspace root — accept the default
@@ -528,6 +536,68 @@ func TestInit(t *testing.T) {
 		assertWorkflowsPreserved(t, cfg)
 	})
 
+	t.Run("already_initialized/reconfigure_defaults_to_the_existing_values", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(configuredProject)
+		t.Chdir(h.Workspace.Dir)
+
+		h.Type("y") // Already Initialized — reconfigure
+		// Enter through both prompts without typing. This is the
+		// "reconfigure, but keep what I have" path, and it is the only
+		// scenario that exercises the reinit default chain at
+		// init.go:112-121 — every other reinit scenario types over the
+		// prompt or takes --quick's separate reuse branch. Without that
+		// chain the placeholders are the fresh-project fallbacks, so
+		// pressing Enter would silently REPLACE the user's settings
+		// with "., ./*" and ".workspaces".
+		h.Type("\r") // repository patterns — accept the placeholder
+		h.Type("\r") // workspace root — accept the placeholder
+		skipIntegrationGates(h)
+
+		if err := h.Run("init"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		cfg := readInitConfig(t, h)
+		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
+			t.Errorf("repositories = %v, want [repos/*]", got)
+		}
+		if got := configString(t, cfg, "workspace", "root"); got != ".wt" {
+			t.Errorf("workspace.root = %q, want %q", got, ".wt")
+		}
+		// The values were echoed back as the resolved placeholders, not
+		// typed — which is what tells this apart from a run that
+		// prompted with the wrong default and happened to be accepted.
+		assertSaved(t, h, "Repository Patterns", "repos/*")
+		assertSaved(t, h, "Workspace Root", ".wt")
+		assertWorkflowsPreserved(t, cfg)
+	})
+
+	t.Run("already_initialized/reconfigure_prompt_defaults_to_declining", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(configuredProject)
+		t.Chdir(h.Workspace.Dir)
+
+		// Enter on the dialog takes the focused button. It must be the
+		// declining one: this prompt gates a rewrite of a config the
+		// user already has, so the unconsidered keystroke has to be the
+		// one that changes nothing. approve_flag_skips_reconfigure_prompt
+		// leans on this too — its ability to fail rather than hang
+		// assumes an unanswered dialog declines.
+		h.Type("\r")
+		tripwire(h)
+
+		if err := h.Run("init"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		if _, ok := h.Reporter.Find("keeping existing configuration"); !ok {
+			t.Errorf("no keeping-existing-configuration step; reported:\n%s", h.Reporter.Dump())
+		}
+		if got := h.Workspace.ReadConfig(); got != configuredProject {
+			t.Errorf("config rewritten after accepting the default:\n%s", got)
+		}
+	})
+
 	t.Run("already_initialized/declines_reconfigure_keeps_config", func(t *testing.T) {
 		h := testharness.New(t)
 		h.Workspace.WriteConfig(configuredProject)
@@ -933,9 +1003,17 @@ func TestInit(t *testing.T) {
 // previously collided and have all been moved off their defaults:
 // `workspace.root` (init.go's hardcoded ".workspaces" fallback),
 // `code_host.merge_method` ("squash"), `notification.auth` ("token")
-// and `cicd.workflows.release.inputs.version` ("version"). Every value
-// below is now one neither path can invent. Keep it that way when
-// editing: grep the key in schema.go for a Default before choosing.
+// and `cicd.workflows.release.inputs.version` ("version"). Every
+// non-provider value below is now one neither path can invent. Keep it
+// that way when editing: grep the key in schema.go for a Default
+// before choosing.
+//
+// The four `provider` values are the exception and cannot be fixed
+// here: each is the only entry in its group's schema Options, so it is
+// exactly what init would write if it regenerated the group. Don't
+// assert provider preservation on this fixture — such an assertion
+// would pass whether or not anything was preserved. Give it teeth by
+// adding a second provider to configSchema, not by editing this.
 //
 // Completeness matters for the quick-mode scenario specifically:
 // quick resolves each service group's unset keys by prompting, so a
@@ -1056,6 +1134,21 @@ func skipIntegrationGates(h *testharness.Harness) {
 // last, always.
 func tripwire(h *testharness.Harness) { h.Type("\x03") }
 
+// displayPath is how the command renders a path in a confirmation
+// line — cli.shortPath's rule, which abbreviates a $HOME prefix to "~".
+// Mirrored rather than reached for because shortPath is unexported;
+// the assertion it serves is about WHICH file the command named, not
+// about how the path was formatted, so restating the rule here costs
+// nothing it was covering. A t.TempDir path normally sits outside
+// $HOME and comes back unchanged; this only matters when TMPDIR
+// doesn't.
+func displayPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
 // addChildRepo creates a git repository directly under the workspace
 // root, where init's auto-detection scans (it looks one level down,
 // not into repos/ the way Workspace.AddRepo lays things out).
@@ -1149,9 +1242,14 @@ func sortedKeys(m map[string]any) []string {
 }
 
 // assertSaved checks that the command echoed a field back with the
-// value the scenario typed. The Saved record is the only observable
-// difference between a value that came from a prompt and one that
-// came from a flag or a default.
+// value the run resolved. The Saved record is the only observable
+// difference between a value that came from a PROMPT and one that
+// came from a flag or from the skip path — it says the prompt ran,
+// not that the user typed. init emits it with defaultField.Resolved(),
+// which is the placeholder when the entry was blank, so a scenario
+// that presses Enter through a prompt still gets a Saved record and
+// the value in it is the default that was offered. That makes it the
+// assertion for "the prompt offered the right default" as well.
 func assertSaved(t *testing.T, h *testharness.Harness, label, value string) {
 	t.Helper()
 	ev, ok := h.Reporter.Find(label)

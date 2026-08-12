@@ -225,7 +225,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 		ui.Skip("no repositories configured — add patterns to " + configPath)
 	}
 
-	// Service configuration wizard — runs unless --approve.
+	// Service configuration wizard — runs whenever the session is
+	// interactive. --approve does NOT suppress it: that flag answers
+	// the reinit question ("yes, reconfigure"), and skipping the
+	// wizard as well would leave an --approve'd reinit with nothing to
+	// reconfigure. --quick is what trims it, down to the missing
+	// required keys.
 	if isInteractive() {
 		// Reload config so resolveGroup can read/write the new file.
 		if err := config.Load(); err != nil {
