@@ -1,0 +1,7 @@
+# Code owners for this repository.
+#
+# Matching is last-match-wins, not most-specific-wins: the final pattern that
+# matches a file decides its owners. Keep this catch-all first and add any
+# narrower rules below it, or they will be silently overridden.
+
+* @nickawilliams
