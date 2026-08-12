@@ -30,6 +30,35 @@ type healthCheck struct {
 // rather than a failure (✗).
 var errNotConfigured = fmt.Errorf("(not configured)")
 
+// doctorRunTimeout caps the whole run and doctorCheckTimeout caps each
+// individual check. Both are needed, and they bound different things.
+//
+// The run timeout is the caller's contract: `bosun doctor` invoked
+// from CI to gate a pipeline must return within a bounded time no
+// matter how many integrations are wedged.
+//
+// The per-check timeout exists because the run budget alone is a
+// shared pool, and a single unreachable host drains it. Every check
+// receives one context, so the first integration pointed at a
+// blackholed address consumes the entire run budget in its dial and
+// every check after it fails instantly with "context deadline
+// exceeded" — reporting a broken code host, notifier, and CI/CD that
+// are in fact fine. That failure mode is worst precisely when doctor
+// is most needed, since diagnosing one broken integration is the
+// reason to run it. Slicing the budget per check keeps one wedged
+// integration from being reported as four.
+//
+// The run timeout remains the hard cap: with four integration checks
+// these do not multiply out to fit inside it, so enough simultaneously
+// unreachable hosts can still exhaust the run budget before the last
+// check runs. Bounding the total is the property that matters more,
+// and the common case — one broken integration — now costs one check's
+// budget rather than everything.
+var (
+	doctorRunTimeout   = 30 * time.Second
+	doctorCheckTimeout = 10 * time.Second
+)
+
 func newDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
@@ -40,7 +69,7 @@ func newDoctorCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r := ui.Default()
 
-			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), doctorRunTimeout)
 			defer cancel()
 
 			// Groups organize checks by kind: local environment,
@@ -77,9 +106,7 @@ func newDoctorCmd() *cobra.Command {
 					for _, hc := range dg.checks {
 						var detail string
 						checkErr := g.Spinner(hc.Name, func() error {
-							var err error
-							detail, err = hc.Check(ctx)
-							return err
+							return runCheck(ctx, hc, &detail)
 						})
 						emitCheckResult(g, hc, detail, checkErr, alignWidth, &passed, &warned, &failed)
 					}
@@ -105,6 +132,21 @@ func newDoctorCmd() *cobra.Command {
 
 	addProjectFlag(cmd)
 	return cmd
+}
+
+// runCheck invokes one health check under its own slice of the run
+// budget, writing the check's display detail through into detail.
+//
+// The per-check context derives from the run context, so whichever
+// deadline lands first wins: a check started late in an exhausted run
+// still fails immediately rather than being granted a fresh budget.
+func runCheck(ctx context.Context, hc healthCheck, detail *string) error {
+	checkCtx, cancel := context.WithTimeout(ctx, doctorCheckTimeout)
+	defer cancel()
+
+	var err error
+	*detail, err = hc.Check(checkCtx)
+	return err
 }
 
 // --- Providers ---
