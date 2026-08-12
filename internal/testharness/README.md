@@ -6,6 +6,16 @@ Used by `internal/cli/*_test.go` to exercise full command paths — flag
 parsing through context resolution through service calls through plan
 confirmation through git operations — as a user would experience them.
 
+> **Editing this document.** Sections are scoped by concern so that two
+> people documenting two different mechanisms touch two different
+> sections. Add a new `###` under the `##` that owns your concern rather
+> than extending someone else's prose, and prefer appending at the end of
+> a section over restructuring it. This file has produced merge conflicts
+> that git resolved *cleanly* and *wrongly* — twice, once leaving a
+> factually false claim in place — because several authors were editing
+> one shared narrative. If a rebase touches this file, re-read the merged
+> section rather than trusting a conflict-free merge.
+
 ## Quick start
 
 ```go
@@ -51,7 +61,7 @@ Four seams let the harness drive commands in-process:
    `git@github.com:acme/<name>.git` — required by code that parses the
    remote for a repository identity (`gh.ParseRemote`) — while a
    `core.sshCommand` shim routes the transport to the local bare repo
-   (see the gotcha below).
+   (see Environment gotchas).
 4. **Both config layers are scratch** — `XDG_CONFIG_HOME` points at a
    temp dir so the developer's real global config never leaks in.
    `Workspace.WriteConfig` writes the project layer;
@@ -81,6 +91,10 @@ TestStart/
 `cmd/gotree`. No separate scenario document is needed.
 
 ## Invariants — do not violate
+
+Three rules about how a harness test is *constructed*. Everything else
+in this document is guidance; these produce nondeterministic failures
+or silent state leaks when broken.
 
 ### Tests cannot run in parallel
 
@@ -118,7 +132,7 @@ trip the stub, even when no env is bound, so e.g. every `cleanup` test
 needs it (`cleanup` calls `newPreviewProvider` unconditionally and its
 plan leads with the teardown row).
 
-### When the collaborator IS the subject: `InstallPreviewAdapter`
+## Choosing fakes vs the production adapter
 
 `h.InstallPreviewAdapter()` points the PreviewProvider factory at
 bosun's *production* adapter (`internal/preview/cicd`) rather than a
@@ -136,7 +150,7 @@ Choose by what the command is *for*. `cleanup`, `status`, and
 `fakes.Preview`. `preview` exists to resolve an issue key to an
 environment and dispatch for it; a fake provider there can only
 confirm that `Create` was called, and leaves the resolution itself
-untested (see the key-binding note below).
+untested (see "Pin key bindings" under Writing assertions).
 
 The adapter probes `cicd.workflows.preview.url_template` over HTTP to
 decide whether an env is alive, so a scenario that cares about
@@ -145,6 +159,80 @@ liveness points that template at an `httptest` server and expresses
 indeterminate probe `--force` exists for). See
 `../cli/preview_e2e_test.go`. Without a template the adapter reports
 every bound env as exists-but-unverifiable.
+
+## Writing assertions
+
+Everything about *what is observable* lives here. The short version:
+three surfaces — `h.Reporter`, `h.Stdout()`, and the fakes — plus one
+category that is genuinely undrivable and shouldn't be chased.
+
+### What reaches `h.Reporter`
+
+`Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
+harness's output is a buffer — so every command runs under a **raw
+reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
+and draw nothing.
+
+Nothing is *drawn*, but the semantic calls are still recorded: the raw
+reporter the harness installs is a `ui.CaptureReporter`. For a command
+whose entire output is Reporter calls (`doctor`, `status`), assert on
+`h.Reporter`:
+
+```go
+if err := h.Run("doctor"); err != nil { ... }
+
+ev, ok := h.Reporter.Find("code host")   // one check's row
+// ev.Kind is ui.CaptureComplete / CaptureSkip / CaptureFail —
+// the ✓ / ! / ✗ states — ev.Value the inline detail,
+// ev.Group the enclosing Group's title.
+```
+
+`h.Reporter` records every Reporter call in order (`Events()`), filters
+by kind (`OfKind`), finds by label (`Find`), and renders itself for
+failure messages (`Dump()`). It's reset at the start of each `Run`.
+Values may carry ANSI styling where the command colored part of a
+string — strip with `ansi.Strip` before comparing.
+
+This reaches the package-level helpers too: `ui.Skip`, `ui.Fail`,
+`ui.Info` and `ui.Selected` all delegate to the active reporter, so a
+branch whose only effect is emitting one of them *is* assertable.
+
+### What reaches `h.Stdout()`
+
+**"`h.Stdout()` is empty" is about cards, not about stdout.** The
+shorthand has been over-applied and it costs real assertions, so state
+the boundary precisely: what short-circuits is `Card.Print` and the
+`RunCard*` helpers, because those consult the reporter. Anything that
+writes to the process's stdout directly still lands in `h.Stdout()` —
+`Harness.Run` swaps `os.Stdout` for a captured pipe (`captureFD`), so
+the bare `fmt.Print`/`fmt.Printf` family in `../ui/output.go` reaches
+the buffer whatever the reporter is doing.
+
+`ui.SuccessLine` is the one that matters in practice: it's how `config
+set`, `config unset` and `init` confirm *where* they wrote, it is not a
+Reporter call, and it is therefore assertable **only** through
+`h.Stdout()` — `init_test.go`'s
+`fresh_project/writes_config_with_minimum_fields` does exactly that.
+`ui.EmptyState` and `ui.Bold` are the same shape. `config get`, and
+anything annotated `output: raw`, also surface there.
+
+Two practical notes when you assert there. Live `huh` forms also render
+through `ui.Output()`, so for a prompt-driven command the buffer is
+mostly bubbletea's ANSI — match substrings rather than whole lines, and
+run it through `ansi.Strip` first, since each styled segment carries
+its own escapes. And the useful negative — "this line was NOT
+printed" — only means something once the positive case is pinned
+somewhere, for the usual reason.
+
+### What reaches the fakes
+
+Assert on **what the command asked for**: the fakes' `Calls()` logs,
+their recorded arguments, and post-run fake state — the other half
+of a read-only command's observable behavior.
+
+Cover section presence/absence by testing the card builders directly
+from `package cli` (see `../cli/status_test.go`). Splitting it this
+way also keeps the assertions off ANSI-styled strings.
 
 ### Pin key bindings, then mutation-check them
 
@@ -164,78 +252,38 @@ path and confirm the scenario fails. On the empty-registry path that
 mutation changes nothing else observable, so a scenario without the
 recorder assertion stays green.
 
-### A regression that reaches an unexpected prompt HANGS
+The same trap has a second shape: an assertion whose expected value
+also happens to be the code's default or fallback constant cannot
+fail. And a scenario asserting only on values already present in its
+own fixture before the command ran can catch a *wrong* write but never
+*no write at all*, because the correct end state is byte-identical to
+the seed — see `init_test.go`'s `quick_flag/*`, which needs both a
+rewrite guard and a dry-run scenario to close that shape. When a
+mutation survives, treat it as a question about the assertion before
+concluding the code is right.
 
-Worth knowing before you interpret a stuck test run. `chunkReader`
-returns `io.EOF` once its queued input is drained, but bubbletea's
-event loop doesn't terminate on input EOF — so a command that reaches
-a prompt the scenario didn't feed blocks forever instead of failing.
+### What is genuinely undrivable
 
-That is a regression signal, not a harness bug per se, but it is an
-expensive one: the hang burns the whole package's `go test` timeout
-and takes every other `internal/cli` result down with it. Several
-realistic regressions land here rather than on a clean failure — an
-ignored `--approve`, an ignored `--dry-run`, a registry lookup that
-silently misses (`preview` then falls through to its interactive
-env-name prompt).
+Don't chase these when you go looking for uncovered lines:
 
-Two consequences:
+- **Interactive form-takeover branches are PTY-only.** Commands that
+  morph a spinner program into a form (`review`, `prerelease`,
+  `release`) fork on whether a frame was painted to take the cursor
+  over from. Raw rendering never paints one, so the harness always
+  takes the "build the form standalone" arm and the takeover arm —
+  cursor arithmetic against that frame — is structurally undrivable.
+  Don't restructure to chase it; there is nothing to assert without a
+  terminal.
+- **The raw reporter's own empty methods** (`../ui/raw_reporter.go`)
+  never run under the harness at all, since the capture stands in for
+  it. They stay uncovered by design, not for want of a test.
 
-- Run mutation checks with an explicit short `-timeout`; the default
-  is 10 minutes per package.
-- Where a scenario can make a skipped prompt fail *fast*, do it.
-  Queueing the key that would produce the WRONG outcome turns the
-  hang into an assertion failure — `preview`'s
-  `plan_confirmation/yes_flag_skips_prompt` queues an `n` and asserts
-  the deploy happened anyway, so a gate that stopped being suppressed
-  reads the `n` and cancels instead of blocking.
+Forcing *actual* card rendering would still need a real PTY; nothing
+in-tree does that, and the spinner frames would make output assertions
+timing-dependent. The capture reporter sidesteps the problem by
+recording the semantic calls instead of the pixels.
 
-  This only protects the run the key is queued for. A regression in
-  something shared like `isAutoApprove` still hangs in whatever the
-  fixture ran first (usually the `bosun start` that builds the
-  workspace), so it buys a fast failure for the command under test,
-  not immunity.
-
-- Pick a sentinel that lets the run **succeed**, not one that produces
-  another cancellation. For a scenario whose subject *is* cancellation
-  (`init`'s `errors/*`), a trailing second `\x03` looks like the
-  obvious tripwire and is the wrong choice: a swallowed abort would
-  simply cancel at the next prompt, the run would still end in
-  `ErrCancelled`, and every assertion would still hold — masking the
-  exact bug the sentinel was added for. Queue the keys that would carry
-  the run to a clean finish instead, so the error assertion reports
-  `err = nil`. Verified on `init`: with the discriminating sentinel a
-  swallowed-abort mutation fails in ~1s; without it the same mutation
-  ran until the 25s `-timeout` killed the package.
-
-This predates any one command's suite (the same mutation hangs
-`TestCleanup` and `TestPrerelease`). A watchdog in `Harness.Run`, or
-aborting the form on EOF, would fix it centrally.
-
-## Asserting on what a command reported
-
-Commands run under a raw Reporter here, so the rendered timeline never
-reaches `h.Stdout()` — see "Card output is invisible to the harness"
-below for why. For a command whose entire output is Reporter calls
-(`doctor`, `status`), assert on `h.Reporter` instead:
-
-```go
-if err := h.Run("doctor"); err != nil { ... }
-
-ev, ok := h.Reporter.Find("code host")   // one check's row
-// ev.Kind is ui.CaptureComplete / CaptureSkip / CaptureFail —
-// the ✓ / ! / ✗ states — ev.Value the inline detail,
-// ev.Group the enclosing Group's title.
-```
-
-`h.Reporter` is a `ui.CaptureReporter`: it records every Reporter
-call in order (`Events()`), filters by kind (`OfKind`), finds by
-label (`Find`), and renders itself for failure messages (`Dump()`).
-It's reset at the start of each `Run`. Values may carry ANSI styling
-where the command colored part of a string — strip with
-`ansi.Strip` before comparing.
-
-## Gotchas
+## Driving forms
 
 ### huh keypress conventions
 
@@ -275,20 +323,6 @@ A single call spanning several fields (`h.Type("a\rb\r")`) is the
 racy shape — don't do it. Keys within one call are fine for a single
 field's compound sequences (`" \x1b[B \r"` on a multi-select).
 
-### GitHub-shaped remotes resolve through an ssh shim
-
-`gh.ParseRemote` runs `git remote get-url origin` and only accepts
-GitHub SSH/HTTPS URLs — a filesystem-path origin fails identity
-resolution and the repo surfaces as a ✗ row. AddRepo therefore sets
-origin to `git@github.com:acme/<name>.git` and points `core.sshCommand`
-at a per-workspace shim that executes the pack command against
-`remotes/` locally, so push/fetch never touch the network. (A
-`url.<path>.insteadOf` rewrite does NOT work here: `git remote get-url`
-expands it and hands the path to ParseRemote.) Host-side effects
-(release tags cut by `fakes.Host.CreateRelease`) land on the bare
-remote at `Repo.RemotePath`; assert with `Repo.HasTag` / seed with
-`Repo.Tag`, which operate on the remote for exactly that reason.
-
 ### Sequential forms in one Run
 
 bubbletea cannot cancel reads on a non-File reader, so each finished
@@ -306,105 +340,58 @@ in flight before the form returns, so it's stale by construction.
 This is automatic; it only means a chunk isn't consumed until the
 form it's meant for is actually the live consumer.
 
-### macOS symlinks + git worktree paths
+### A regression that reaches an unexpected prompt HANGS
 
-`t.TempDir()` returns paths under `/var/folders/...`, which is a
-symlink to `/private/var/folders/...`. `git worktree list --porcelain`
-prints the resolved path. `Repo.WorktreeExists` handles this with
-`filepath.EvalSymlinks` on both sides; if you write your own git-path
-comparisons, do the same.
+Worth knowing before you interpret a stuck test run. `chunkReader`
+returns `io.EOF` once its queued input is drained, but bubbletea's
+event loop doesn't terminate on input EOF — so a command that reaches
+a prompt the scenario didn't feed blocks forever instead of failing.
 
-### Default-branch resolution needs a remote
+That is a regression signal, not a harness bug per se, but it is an
+expensive one: the hang burns the whole package's `go test` timeout
+and takes every other `internal/cli` result down with it. Several
+realistic regressions land here rather than on a clean failure — an
+ignored `--approve`, an ignored `--dry-run`, a registry lookup that
+silently misses (`preview` then falls through to its interactive
+env-name prompt).
 
-`git.CreateBranch` runs `git rev-parse --abbrev-ref origin/HEAD` to
-find the default branch before branching from it. A repo without an
-origin will fail here. `Workspace.AddRepo` sets up a bare remote at
-`remotes/<name>.git` and points origin/HEAD at main so production
-code works unmodified.
+Three consequences:
 
-### huh + non-TTY output requires explicit width
+- Run mutation checks with an explicit short `-timeout`; the default
+  is 10 minutes per package.
+- Where a scenario can make a skipped prompt fail *fast*, do it.
+  Queueing the key that would produce the WRONG outcome turns the
+  hang into an assertion failure — `preview`'s
+  `plan_confirmation/yes_flag_skips_prompt` queues an `n` and asserts
+  the deploy happened anyway, so a gate that stopped being suppressed
+  reads the `n` and cancels instead of blocking.
 
-bubbletea's resize message never fires when output isn't a real
-terminal, leading to a 0-width slice panic inside `textinput`.
-`runForm` calls `huh.NewForm().WithWidth(ui.TermWidth())`
-unconditionally to sidestep this. If you bypass `runForm` for some
-reason, set width yourself.
+  This only protects the run the key is queued for. A regression in
+  something shared like `isAutoApprove` still hangs in whatever the
+  fixture ran first (usually the `bosun start` that builds the
+  workspace), so it buys a fast failure for the command under test,
+  not immunity.
 
-### `Interactive()` is permissive by design
+- Pick a sentinel that lets the run **succeed**, not one that produces
+  another cancellation. For a scenario whose subject *is* cancellation
+  (`init`'s `errors/*`), a trailing second `\x03` looks like the
+  obvious tripwire and is the wrong choice: a swallowed abort would
+  simply cancel at the next prompt, the run would still end in
+  `ErrCancelled`, and every assertion would still hold — masking the
+  exact bug the sentinel was added for. Queue the keys that would carry
+  the run to a clean finish instead, so the error assertion reports
+  `err = nil`. Verified on `init`: with the discriminating sentinel a
+  swallowed-abort mutation fails in ~1s; without it the same mutation
+  ran until the 25s `-timeout` killed the package.
 
-`ui.Interactive()` returns true for any non-`*os.File` reader — i.e.,
-the test buffer counts as interactive even though no human is typing.
-This is the test-injection escape hatch, not a security guarantee.
-The only in-tree producer of non-File readers is this harness; if
-that ever changes, the heuristic needs revisiting.
+This predates any one command's suite (the same mutation hangs
+`TestCleanup` and `TestPrerelease`). A watchdog in `Harness.Run`, or
+aborting the form on EOF, would fix it centrally — tracked in #59.
 
-### Card output is invisible to the harness
+## Command-specific notes
 
-`Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
-harness's output is a buffer — so every command runs under a **raw
-reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
-and draw nothing. `h.Stdout()` is therefore empty for any command whose
-output is entirely cards (`status`, `doctor`, the lifecycle preambles).
-Commands that write through `fmt.Fprint(ui.Output(), ...)` — `config
-get`, and anything annotated `output: raw` — do surface there.
-
-Nothing is *drawn*, but the semantic calls are still recorded: the raw
-reporter the harness installs is a `ui.CaptureReporter`. Three
-consequences when planning a command's scenarios:
-
-- Assert on **what the command reported** through `h.Reporter` — see
-  "Asserting on what a command reported" above. This reaches the
-  package-level helpers too: `ui.Skip`, `ui.Fail`, `ui.Info` and
-  `ui.Selected` all delegate to the active reporter, so a branch whose
-  only effect is emitting one of them *is* assertable.
-- Assert on **what the command asked for**: the fakes' `Calls()` logs,
-  their recorded arguments, and post-run fake state — the other half
-  of a read-only command's observable behavior.
-- Cover section presence/absence by testing the card builders directly
-  from `package cli` (see `../cli/status_test.go`). Splitting it this
-  way also keeps the assertions off ANSI-styled strings.
-
-What stays genuinely undrivable here, and shouldn't be chased when you
-go looking for uncovered lines:
-
-- **Interactive form-takeover branches are PTY-only.** Commands that
-  morph a spinner program into a form (`review`, `prerelease`,
-  `release`) fork on whether a frame was painted to take the cursor
-  over from. Raw rendering never paints one, so the harness always
-  takes the "build the form standalone" arm and the takeover arm —
-  cursor arithmetic against that frame — is structurally undrivable.
-  Don't restructure to chase it; there is nothing to assert without a
-  terminal.
-- **The raw reporter's own empty methods** (`../ui/raw_reporter.go`)
-  never run under the harness at all, since the capture stands in for
-  it. They stay uncovered by design, not for want of a test.
-
-Forcing *actual* card rendering would still need a real PTY; nothing
-in-tree does that, and the spinner frames would make output assertions
-timing-dependent. The capture reporter sidesteps the problem by
-recording the semantic calls instead of the pixels.
-
-**"`h.Stdout()` is empty" is about cards, not about stdout.** The
-shorthand has been over-applied and it costs real assertions, so state
-the boundary precisely: what short-circuits is `Card.Print` and the
-`RunCard*` helpers, because those consult the reporter. Anything that
-writes to the process's stdout directly still lands in `h.Stdout()` —
-`Harness.Run` swaps `os.Stdout` for a captured pipe (`captureFD`), so
-the bare `fmt.Print`/`fmt.Printf` family in `../ui/output.go` reaches
-the buffer whatever the reporter is doing. `ui.SuccessLine` is the one
-that matters in practice: it's how `config set`, `config unset` and
-`init` confirm *where* they wrote, it is not a Reporter call, and it is
-therefore assertable **only** through `h.Stdout()` —
-`init_test.go`'s `fresh_project/writes_config_with_minimum_fields`
-does exactly that. `ui.EmptyState` and `ui.Bold` are the same shape.
-
-Two practical notes when you assert there. Live `huh` forms also render
-through `ui.Output()`, so for a prompt-driven command the buffer is
-mostly bubbletea's ANSI — match substrings rather than whole lines, and
-run it through `ansi.Strip` first, since each styled segment carries
-its own escapes. And the useful negative — "this line was NOT
-printed" — only means something once the positive case is pinned
-somewhere, for the usual reason.
+Behaviour peculiar to one command, where a scenario author would
+otherwise have to rediscover it. Add a `###` per command.
 
 ### `bosun init` writes against the CWD, but still reads `--project`
 
@@ -464,10 +451,62 @@ values is conditional on the run being a reinit. On a fresh project,
 
 Since the whole command is prompts, a scenario that expects *not* to
 be asked something has no clean way to fail — it hangs. Queue a
-trailing `h.Type("\x03")` as a tripwire in those cases: nothing reads
-it on the intended path, and a regression that reaches an unplanned
-prompt aborts with `ErrCancelled` instead of eating the package
-timeout. See `../cli/init_test.go`.
+trailing `h.Type("\x03")` as a tripwire in those cases, subject to the
+sentinel caveat under Driving forms: nothing reads it on the intended
+path, and a regression that reaches an unplanned prompt aborts with
+`ErrCancelled` instead of eating the package timeout. See
+`../cli/init_test.go`.
+
+## Environment gotchas
+
+Things about git, the OS, and the absence of a TTY that bite
+regardless of which command you're testing.
+
+### GitHub-shaped remotes resolve through an ssh shim
+
+`gh.ParseRemote` runs `git remote get-url origin` and only accepts
+GitHub SSH/HTTPS URLs — a filesystem-path origin fails identity
+resolution and the repo surfaces as a ✗ row. AddRepo therefore sets
+origin to `git@github.com:acme/<name>.git` and points `core.sshCommand`
+at a per-workspace shim that executes the pack command against
+`remotes/` locally, so push/fetch never touch the network. (A
+`url.<path>.insteadOf` rewrite does NOT work here: `git remote get-url`
+expands it and hands the path to ParseRemote.) Host-side effects
+(release tags cut by `fakes.Host.CreateRelease`) land on the bare
+remote at `Repo.RemotePath`; assert with `Repo.HasTag` / seed with
+`Repo.Tag`, which operate on the remote for exactly that reason.
+
+### macOS symlinks + git worktree paths
+
+`t.TempDir()` returns paths under `/var/folders/...`, which is a
+symlink to `/private/var/folders/...`. `git worktree list --porcelain`
+prints the resolved path. `Repo.WorktreeExists` handles this with
+`filepath.EvalSymlinks` on both sides; if you write your own git-path
+comparisons, do the same.
+
+### Default-branch resolution needs a remote
+
+`git.CreateBranch` runs `git rev-parse --abbrev-ref origin/HEAD` to
+find the default branch before branching from it. A repo without an
+origin will fail here. `Workspace.AddRepo` sets up a bare remote at
+`remotes/<name>.git` and points origin/HEAD at main so production
+code works unmodified.
+
+### huh + non-TTY output requires explicit width
+
+bubbletea's resize message never fires when output isn't a real
+terminal, leading to a 0-width slice panic inside `textinput`.
+`runForm` calls `huh.NewForm().WithWidth(ui.TermWidth())`
+unconditionally to sidestep this. If you bypass `runForm` for some
+reason, set width yourself.
+
+### `Interactive()` is permissive by design
+
+`ui.Interactive()` returns true for any non-`*os.File` reader — i.e.,
+the test buffer counts as interactive even though no human is typing.
+This is the test-injection escape hatch, not a security guarantee.
+The only in-tree producer of non-File readers is this harness; if
+that ever changes, the heuristic needs revisiting.
 
 ## Fake conventions
 
