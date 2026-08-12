@@ -218,9 +218,24 @@ format:
 	@$(GO) generate ./...
 
 ## Fail if any Go file is not gofmt-clean
+#
+# Both guards below exist because this gate fails *open* by default, and it
+# is the first step in CI — a vacuous pass looks identical to a real one.
+# gofmt reports unparseable files on stderr and omits them from -l's stdout,
+# so capturing stdout alone and ignoring the exit status lets a file that
+# does not even compile sail through. An empty SRC is the same hazard from
+# the other side: `gofmt -l` with no operands reads stdin, prints nothing,
+# and exits 0.
 format/check:
 	@echo "Checking gofmt..."
-	@unformatted=$$(gofmt -l $(SRC)); \
+	@if [ -z "$(SRC)" ]; then \
+		echo "ERROR: no Go sources found — SRC is empty" >&2; \
+		exit 1; \
+	fi
+	@unformatted=$$(gofmt -l $(SRC)) || { \
+		echo "ERROR: gofmt failed — unparseable source?" >&2; \
+		exit 1; \
+	}; \
 	if [ -n "$$unformatted" ]; then \
 		echo "ERROR: not gofmt-clean:" >&2; \
 		echo "$$unformatted" >&2; \

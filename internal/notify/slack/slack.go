@@ -285,8 +285,9 @@ func truncate(s string, max int) string {
 }
 
 // runeBoundary returns the largest offset <= n at which a rune starts, so
-// that s[:runeBoundary(s, n)] is always valid UTF-8. Callers must pass an
-// n within s.
+// that s[:runeBoundary(s, n)] does not end mid-rune. It preserves validity
+// rather than conferring it: an s that is already invalid UTF-8 stays that
+// way. Callers must pass an n within s.
 func runeBoundary(s string, n int) int {
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--

@@ -56,12 +56,18 @@ func httpProbe(ctx context.Context, url string) (bool, error) {
 		if err != nil {
 			return 0, err
 		}
-		// Drain before closing, bounded: an unread body strands the
+		// Drain before closing: closing a partially-read body strands the
 		// connection instead of returning it to the pool, which would
-		// defeat the shared transport. HEAD has no body, so this is a
-		// no-op on the common path; the cap keeps a large GET-fallback
-		// page from being read in full just to be discarded.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		// defeat the shared transport above. HEAD has no body, so this is
+		// a no-op on the common path.
+		//
+		// Deliberately unbounded. A byte cap here would silently reinstate
+		// the very problem this avoids for any page larger than the cap —
+		// and a preview environment's landing page easily clears any cap
+		// worth writing down. The read is not open-ended: rc still governs
+		// the body, so a slow or endless response is cut off by the same
+		// 3s deadline as the request, and io.Discard accumulates nothing.
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		return resp.StatusCode, nil
 	}

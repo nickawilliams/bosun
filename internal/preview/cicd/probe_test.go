@@ -123,6 +123,21 @@ func TestHttpProbeReusesConnections(t *testing.T) {
 				_, _ = w.Write(bytes.Repeat([]byte("x"), 4096))
 			},
 		},
+		{
+			// A real preview landing page is far larger than any byte cap
+			// worth writing down. Draining only the first N bytes would
+			// strand the connection here while the small case above kept
+			// passing, so the large case is the one that pins the property.
+			name: "GET fallback with a body larger than any drain cap",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodHead {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(bytes.Repeat([]byte("x"), 512<<10))
+			},
+		},
 	}
 
 	for _, tc := range cases {
