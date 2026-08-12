@@ -334,7 +334,9 @@ func (h *Harness) Type(s string) {
 
 // Run executes the bosun command tree with the given args. The
 // workspace path is injected as --project so commands resolve config
-// from the temp dir without depending on the test's CWD.
+// from the temp dir without depending on the test's CWD — unless the
+// test called Workspace.Uninitialize, in which case there is no
+// project to point at yet and the run goes bare (see below).
 //
 // Both cobra's cmd.OutOrStdout / cmd.ErrOrStderr streams AND the
 // process-wide os.Stdout / os.Stderr file descriptors are captured
@@ -368,7 +370,12 @@ func (h *Harness) Run(args ...string) error {
 	cmd.SetErr(h.stderr)
 
 	final := append([]string{}, args...)
-	if !hasFlag(final, "--project") {
+	// --project only works against an already-initialized project —
+	// Bootstrap rejects a directory with no .bosun/ — so a workspace a
+	// test deliberately uninitialized (bosun init's fresh-project
+	// scenarios) runs bare and resolves its project from the working
+	// directory instead.
+	if !hasFlag(final, "--project") && h.Workspace.Initialized() {
 		final = append(final, "--project", h.Workspace.Dir)
 	}
 	cmd.SetArgs(final)

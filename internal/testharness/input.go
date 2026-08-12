@@ -38,7 +38,19 @@ const chunkPause = 200 * time.Millisecond
 // currently focused field consumes" per Type call.
 //
 // When all chunks are drained, Read returns io.EOF, matching
-// bytes.Buffer semantics (a form still waiting for input aborts).
+// bytes.Buffer semantics. That does NOT abort a form still waiting for
+// input: the EOF does not propagate out through bubbletea's input
+// loop, and the run BLOCKS until the package's test timeout fires,
+// taking every other test in the package down with it. Measured
+// directly — a scenario one prompt short of what the command asks for
+// sat there until the -timeout killed it, with no error surfaced.
+//
+// So a scenario must always account for every prompt its command
+// reaches. Where it expects NOT to be asked something, queue a
+// trailing sentinel keystroke so the unplanned prompt consumes that
+// instead of blocking (see `tripwire` in ../cli/init_test.go). Fixing
+// this properly means a watchdog in Harness.Run rather than anything
+// here; see the harness README's "An unexpected prompt hangs" note.
 //
 // Session tracking: bubbletea cannot cancel reads on a non-File
 // reader, so a finished form leaks a read-loop goroutine blocked in

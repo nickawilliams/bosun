@@ -59,6 +59,48 @@ func (w *Workspace) WriteConfig(yaml string) {
 	}
 }
 
+// ConfigPath is the absolute path to the project config file,
+// whether or not it exists — the file `bosun init` writes.
+func (w *Workspace) ConfigPath() string {
+	return filepath.Join(w.Dir, ".bosun", "config.yaml")
+}
+
+// ReadConfig returns the raw contents of .bosun/config.yaml, failing
+// the test if it can't be read. The round-trip counterpart to
+// WriteConfig: use it to assert on what a command persisted.
+func (w *Workspace) ReadConfig() string {
+	w.t.Helper()
+	b, err := os.ReadFile(w.ConfigPath())
+	if err != nil {
+		w.t.Fatalf("read config: %v", err)
+	}
+	return string(b)
+}
+
+// Initialized reports whether the workspace still has its .bosun/
+// directory. NewWorkspace creates one, so this is true unless a test
+// called Uninitialize.
+func (w *Workspace) Initialized() bool {
+	info, err := os.Stat(filepath.Join(w.Dir, ".bosun"))
+	return err == nil && info.IsDir()
+}
+
+// Uninitialize removes .bosun/ so the workspace looks like a
+// directory bosun has never seen. Needed by `bosun init`'s
+// fresh-project scenarios: init branches on whether .bosun/ exists,
+// and NewWorkspace creates it up front for every other command.
+//
+// Harness.Run stops injecting --project for an uninitialized
+// workspace (the flag requires an existing .bosun/), so such a run
+// resolves its project from the working directory — which the test
+// must point at Dir via t.Chdir.
+func (w *Workspace) Uninitialize() {
+	w.t.Helper()
+	if err := os.RemoveAll(filepath.Join(w.Dir, ".bosun")); err != nil {
+		w.t.Fatalf("remove .bosun: %v", err)
+	}
+}
+
 // AddRepo creates a git repository under repos/<name>/ with an
 // initial commit on the default branch (main) and a bare remote at
 // remotes/acme/<name>.git wired as origin with HEAD pointing at main.
