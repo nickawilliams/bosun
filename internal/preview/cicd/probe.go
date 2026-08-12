@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 )
@@ -25,16 +26,25 @@ func classifyProbeStatus(status int) (alive, definitive bool) {
 	}
 }
 
+// probeClient is shared across every probe. http.Transport is designed to be
+// long-lived and pools connections, so building one per call both stranded its
+// idle connections (nothing closed them) and defeated reuse across the repeated
+// probes a multi-repo fan-out issues.
+//
+// InsecureSkipVerify is deliberate: preview environments routinely run behind
+// self-signed or short-lived certs, and the probe only classifies reachability.
+// Per-attempt deadlines come from the request context, not the client.
+var probeClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
+}
+
 // httpProbe sends a HEAD (falling back to GET on 405) and classifies the
 // response. One retry on transient errors. Returns (alive, nil) on a
 // definitive 2xx-4xx, (false, nil) on a definitive 404, and an error
 // when no attempt produced a definitive result.
 func httpProbe(ctx context.Context, url string) (bool, error) {
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
 	do := func(method string) (int, error) {
 		rc, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
@@ -42,10 +52,16 @@ func httpProbe(ctx context.Context, url string) (bool, error) {
 		if err != nil {
 			return 0, err
 		}
-		resp, err := client.Do(req)
+		resp, err := probeClient.Do(req)
 		if err != nil {
 			return 0, err
 		}
+		// Drain before closing, bounded: an unread body strands the
+		// connection instead of returning it to the pool, which would
+		// defeat the shared transport. HEAD has no body, so this is a
+		// no-op on the common path; the cap keeps a large GET-fallback
+		// page from being read in full just to be discarded.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 		return resp.StatusCode, nil
 	}

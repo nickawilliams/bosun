@@ -1,7 +1,9 @@
 package cicd
 
 import (
+	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -90,6 +92,63 @@ func TestHttpProbeHEADFallbackToGET(t *testing.T) {
 	}
 	if len(methods) != 2 || methods[0] != http.MethodHead || methods[1] != http.MethodGet {
 		t.Errorf("expected [HEAD, GET], got %v", methods)
+	}
+}
+
+// A transport built per call opens a fresh connection every probe and strands
+// the previous one; so does closing a response body without draining it. Both
+// regressions surface the same way — the server sees a new connection per probe
+// instead of one reused across all of them.
+func TestHttpProbeReusesConnections(t *testing.T) {
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "HEAD path",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			},
+		},
+		{
+			// The GET fallback carries a body, so this case is the one
+			// that fails if the body is closed without being drained.
+			name: "GET fallback with body",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodHead {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(bytes.Repeat([]byte("x"), 4096))
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var newConns atomic.Int32
+			// Unstarted so ConnState is installed before the serve
+			// goroutine reads it.
+			server := httptest.NewUnstartedServer(tc.handler)
+			server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateNew {
+					newConns.Add(1)
+				}
+			}
+			server.Start()
+			defer server.Close()
+
+			for i := range 3 {
+				if _, err := httpProbe(context.Background(), server.URL); err != nil {
+					t.Fatalf("probe %d: %v", i, err)
+				}
+			}
+
+			if got := newConns.Load(); got != 1 {
+				t.Errorf("expected 1 connection reused across 3 probes, got %d", got)
+			}
+		})
 	}
 }
 
