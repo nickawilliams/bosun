@@ -352,16 +352,23 @@ func NewWithOptions(token string, opts ...slackapi.Option) *Adapter {
 	return &Adapter{client: slackapi.New(token, opts...)}
 }
 
-// NewWithCookie returns a Slack adapter that authenticates using a xoxc-
-// token and d cookie (extracted from the Slack desktop app).
-func NewWithCookie(token, cookie string) *Adapter {
-	client := &http.Client{
+// newCookieClient returns the client used for xoxc- token auth. Same
+// backstop as newHTTPClient, with the cookie transport layered over
+// http.DefaultTransport so pooling is unchanged.
+func newCookieClient(cookie string) *http.Client {
+	return &http.Client{
 		Timeout: requestTimeout,
 		Transport: &cookieTransport{
 			base:   http.DefaultTransport,
 			cookie: cookie,
 		},
 	}
+}
+
+// NewWithCookie returns a Slack adapter that authenticates using a xoxc-
+// token and d cookie (extracted from the Slack desktop app).
+func NewWithCookie(token, cookie string) *Adapter {
+	client := newCookieClient(cookie)
 	return &Adapter{
 		client: slackapi.New(token,
 			slackapi.OptionHTTPClient(client),
