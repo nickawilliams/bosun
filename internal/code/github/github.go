@@ -18,6 +18,24 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 )
 
+// requestTimeout bounds a single HTTP request as a backstop for
+// callers that pass a context carrying no deadline. The caller's
+// context stays the primary bound — every request is issued with
+// http.NewRequestWithContext, so a caller's deadline still cancels an
+// in-flight request earlier than this. The backstop only bites when
+// there is no deadline to honor, which is what keeps an unreachable
+// host from hanging such a caller indefinitely.
+//
+// Note this bounds one request, not one call: the paginating methods
+// issue N requests, so their total is bounded by the caller's context
+// rather than by this constant.
+const requestTimeout = 30 * time.Second
+
+// defaultClient is the adapter's own client rather than
+// http.DefaultClient, which carries no timeout and is shared
+// process-wide (mutating it would reach into unrelated callers).
+var defaultClient = &http.Client{Timeout: requestTimeout}
+
 // Adapter implements code.Host using the GitHub REST API v3.
 type Adapter struct {
 	client  *http.Client
@@ -28,7 +46,7 @@ type Adapter struct {
 // New returns a new GitHub adapter.
 func New(token string) *Adapter {
 	return &Adapter{
-		client:  http.DefaultClient,
+		client:  defaultClient,
 		baseURL: "https://api.github.com",
 		token:   token,
 	}
