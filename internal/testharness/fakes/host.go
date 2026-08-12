@@ -48,9 +48,14 @@ type Host struct {
 	// metadata (base, title, body) each repo was given.
 	createPRRequests []code.CreatePRRequest
 	editPRRequests   []code.EditPRRequest
-	// reviewerRequests / assigneeRequests record who was requested or
-	// assigned, keyed "owner/name#number".
+	// reviewerRequests / teamRequests / assigneeRequests record who was
+	// requested or assigned, keyed "owner/name#number". Users and teams
+	// are kept apart because RequestReviewers takes them as separate
+	// arguments and the host treats them differently — folding them into
+	// one list would let a test asserting on a team pass when the value
+	// was sent as an individual reviewer.
 	reviewerRequests map[string][]string
+	teamRequests     map[string][]string
 	assigneeRequests map[string][]string
 	// prsInRange are keyed by "owner/name" — returned by PRsInRange
 	// minus the excluded numbers.
@@ -70,12 +75,22 @@ type Host struct {
 	collaborators map[string][]string
 	teams         map[string][]string
 
-	// CreateReleaseErr, GetLatestTagErr, GetPRErr, MergePRErr,
+	// CreateReleaseErr, GetLatestTagErr, GetPRErr, CreatePRErr,
+	// EditPRErr, RequestReviewersErr, AddAssigneesErr, MergePRErr,
 	// GetDefaultBranchErr, ListCollaboratorsErr, ListTeamsErr override
 	// default behavior to force error paths. nil means success.
+	//
+	// EditPRErr / RequestReviewersErr / AddAssigneesErr exist for the
+	// best-effort writes that follow a PR create or update: the caller
+	// reports them and keeps going, which is only observable if the
+	// write can be made to fail.
 	CreateReleaseErr     error
 	GetLatestTagErr      error
 	GetPRErr             error
+	CreatePRErr          error
+	EditPRErr            error
+	RequestReviewersErr  error
+	AddAssigneesErr      error
 	MergePRErr           error
 	GetDefaultBranchErr  error
 	ListCollaboratorsErr error
@@ -113,6 +128,7 @@ func NewHost() *Host {
 		teams:           map[string][]string{},
 
 		reviewerRequests: map[string][]string{},
+		teamRequests:     map[string][]string{},
 		assigneeRequests: map[string][]string{},
 	}
 }
@@ -242,16 +258,27 @@ func (h *Host) EditPRRequests() []code.EditPRRequest {
 	return out
 }
 
-// ReviewersRequested returns the users and teams requested across every
-// PR in a repo: grouped by PR (PRs in lexical key order, NOT call
-// order), requests within a PR in call order. Keyed by repo rather than
-// PR number because callers assert on what a REPOSITORY was given — the
-// number a freshly created PR happens to get is an artifact of seeding
-// order.
+// ReviewersRequested returns the individual users requested as
+// reviewers across every PR in a repo: grouped by PR (PRs in lexical
+// key order, NOT call order), requests within a PR in call order. Keyed
+// by repo rather than PR number because callers assert on what a
+// REPOSITORY was given — the number a freshly created PR happens to get
+// is an artifact of seeding order.
+//
+// Team reviewers are reported separately by TeamsRequested.
 func (h *Host) ReviewersRequested(owner, name string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.requestsForRepo(h.reviewerRequests, owner, name)
+}
+
+// TeamsRequested returns the teams requested as reviewers across every
+// PR in a repo, with the same grouping and ordering as
+// ReviewersRequested.
+func (h *Host) TeamsRequested(owner, name string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.requestsForRepo(h.teamRequests, owner, name)
 }
 
 // AssigneesAdded returns the users assigned across every PR in a repo,
@@ -441,10 +468,18 @@ func (h *Host) CreatePR(_ context.Context, req code.CreatePRRequest) (code.PullR
 	defer h.mu.Unlock()
 	h.recordCall("CreatePR")
 	h.createPRRequests = append(h.createPRRequests, req)
+	if h.CreatePRErr != nil {
+		return code.PullRequest{}, h.CreatePRErr
+	}
 	key := repoKey(req.Owner, req.Repository) + "@" + req.Head
 	if existing, ok := h.prs[key]; ok && existing.Number > 0 {
 		return existing, nil // idempotent, like the real host
 	}
+	// Fuller than the GitHub adapter, which returns only number/URL/
+	// state from its create call — BaseRef and the echoed title/body are
+	// here so a follow-up GetPRForBranch in the same test sees a
+	// realistic PR. Assert on CreatePRRequests for what was *asked for*;
+	// asserting these fields on the returned PR tests the fake.
 	pr := code.PullRequest{
 		Number:  len(h.prs) + 1,
 		Title:   req.Title,
@@ -462,6 +497,9 @@ func (h *Host) EditPR(_ context.Context, req code.EditPRRequest) error {
 	defer h.mu.Unlock()
 	h.recordCall("EditPR")
 	h.editPRRequests = append(h.editPRRequests, req)
+	if h.EditPRErr != nil {
+		return h.EditPRErr
+	}
 	// Mirror the host: the edit lands on the PR, so a later lookup (or
 	// a second run in the same test) sees the updated content.
 	for k, pr := range h.prs {
@@ -478,10 +516,34 @@ func (h *Host) RequestReviewers(_ context.Context, owner, repository string, num
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("RequestReviewers")
+	if h.RequestReviewersErr != nil {
+		return h.RequestReviewersErr
+	}
 	key := prKey(owner, repository, number)
 	h.reviewerRequests[key] = append(h.reviewerRequests[key], reviewers...)
-	h.reviewerRequests[key] = append(h.reviewerRequests[key], teamReviewers...)
+	h.teamRequests[key] = append(h.teamRequests[key], teamReviewers...)
+	// Mirror the host: a requested reviewer shows up as pending on the
+	// PR, so a second run sees them already satisfied rather than
+	// re-requesting (and resetting) them. Appends unconditionally where
+	// GitHub would de-duplicate — strictly noisier than the real thing,
+	// so a test that passes here would pass against the host too.
+	h.recordOnPR(owner, repository, number, func(pr *code.PullRequest) {
+		pr.RequestedReviewers = append(pr.RequestedReviewers, reviewers...)
+		pr.RequestedTeams = append(pr.RequestedTeams, teamReviewers...)
+	})
 	return nil
+}
+
+// recordOnPR applies mutate to the seeded PR with the given number in
+// owner/repository, if one exists. Callers hold h.mu.
+func (h *Host) recordOnPR(owner, repository string, number int, mutate func(*code.PullRequest)) {
+	for k, pr := range h.prs {
+		if strings.HasPrefix(k, repoKey(owner, repository)+"@") && pr.Number == number {
+			mutate(&pr)
+			h.prs[k] = pr
+			return
+		}
+	}
 }
 
 func (h *Host) RemoveReviewers(_ context.Context, _, _ string, _ int, _, _ []string) error {
@@ -495,8 +557,14 @@ func (h *Host) AddAssignees(_ context.Context, owner, repository string, number 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("AddAssignees")
+	if h.AddAssigneesErr != nil {
+		return h.AddAssigneesErr
+	}
 	key := prKey(owner, repository, number)
 	h.assigneeRequests[key] = append(h.assigneeRequests[key], assignees...)
+	h.recordOnPR(owner, repository, number, func(pr *code.PullRequest) {
+		pr.Assignees = append(pr.Assignees, assignees...)
+	})
 	return nil
 }
 

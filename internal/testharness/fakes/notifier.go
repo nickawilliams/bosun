@@ -76,6 +76,11 @@ func (n *Notifier) SeedAnnouncement(channel, query string) *Notifier {
 }
 
 // Messages returns a snapshot of messages sent via Notify, in order.
+//
+// One entry per Notify CALL. The Slack adapter short-circuits a call
+// whose content hash matches the existing thread and posts nothing, so
+// a count here is an upper bound on real posts — asserting "exactly one
+// message" is therefore stricter than the host, never looser.
 func (n *Notifier) Messages() []notify.Message {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -142,9 +147,13 @@ func (n *Notifier) Notify(_ context.Context, msg notify.Message) (notify.ThreadR
 		return notify.ThreadRef{}, n.NotifyErr
 	}
 	n.messages = append(n.messages, msg)
+	// Mirror the Slack adapter: the posted message carries a hash of its
+	// content, and FindThread hands that hash back — which is what lets a
+	// re-run detect "nothing changed" instead of reposting.
 	ref := notify.ThreadRef{
-		Channel:   msg.Channel,
-		Timestamp: fmt.Sprintf("1700000000.%06d", len(n.messages)),
+		Channel:     msg.Channel,
+		Timestamp:   fmt.Sprintf("1700000000.%06d", len(n.messages)),
+		ContentHash: notify.ContentHash(msg.Content),
 	}
 	n.threads[msg.Channel+"|"+msg.IssueKey] = ref
 	return ref, nil

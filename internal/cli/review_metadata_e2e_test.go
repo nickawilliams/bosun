@@ -378,11 +378,11 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		if n := len(h.Host.CreatePRRequests()); n != 2 {
 			t.Fatalf("CreatePR requests = %d, want 2", n)
 		}
-		revs := h.Host.ReviewersRequested(owner, "web")
-		for _, want := range []string{"alice", "backend"} {
-			if !slices.Contains(revs, want) {
-				t.Errorf("web reviewers = %v, want the shared %q preserved", revs, want)
-			}
+		if revs := h.Host.ReviewersRequested(owner, "web"); !slices.Contains(revs, "alice") {
+			t.Errorf("web reviewers = %v, want the shared \"alice\" preserved", revs)
+		}
+		if teams := h.Host.TeamsRequested(owner, "web"); !slices.Contains(teams, "backend") {
+			t.Errorf("web team reviewers = %v, want the shared \"backend\" preserved", teams)
 		}
 		if asns := h.Host.AssigneesAdded(owner, "web"); !slices.Contains(asns, "bob") {
 			t.Errorf("web assignees = %v, want the shared \"bob\" preserved", asns)
