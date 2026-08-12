@@ -542,11 +542,17 @@ func TestInit(t *testing.T) {
 		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
 			t.Errorf("repositories = %v, want [repos/*]", got)
 		}
-		if got := configString(t, cfg, "workspace", "root"); got != ".workspaces" {
-			t.Errorf("workspace.root = %q, want %q", got, ".workspaces")
+		if got := configString(t, cfg, "workspace", "root"); got != ".wt" {
+			t.Errorf("workspace.root = %q, want %q", got, ".wt")
 		}
 		if got := configString(t, cfg, "issue_tracker", "project"); got != "ACME" {
 			t.Errorf("issue_tracker.project = %q, want it preserved", got)
+		}
+		// Non-default on purpose: quick mode resolves a group's unset
+		// keys, and this one is set, so it must come back untouched
+		// rather than reverting to the schema's "squash".
+		if got := configString(t, cfg, "code_host", "merge_method"); got != "rebase" {
+			t.Errorf("code_host.merge_method = %q, want it preserved", got)
 		}
 	})
 
@@ -634,13 +640,22 @@ func TestInit(t *testing.T) {
 // deliberately unlike anything the scenarios type in, and unlike the
 // schema defaults, so "preserved" and "rewritten" are distinguishable.
 //
+// That second property is load-bearing rather than tidy. A reinit
+// scenario asserts that an existing value survived; if the fixture
+// happens to hold what the code would have produced anyway, the
+// assertion passes whether or not anything was preserved. `workspace.
+// root` and `code_host.merge_method` are the two that previously
+// collided — with init.go's hardcoded ".workspaces" fallback and the
+// schema's "squash" default respectively — so both are now values
+// neither path can invent. Keep it that way when editing.
+//
 // Completeness matters for the quick-mode scenario specifically:
 // quick resolves each service group's unset keys by prompting, so a
 // gap here becomes an unfed prompt.
 const configuredProject = `repositories:
   - repos/*
 workspace:
-  root: .workspaces
+  root: .wt
 issue_tracker:
   provider: jira
   base_url: https://acme.atlassian.net
@@ -651,7 +666,7 @@ issue_tracker:
 code_host:
   provider: github
   token: seeded-gh-token
-  merge_method: squash
+  merge_method: rebase
 notification:
   provider: slack
   auth: token
