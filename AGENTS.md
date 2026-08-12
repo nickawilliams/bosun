@@ -125,6 +125,42 @@ Releases are cut automatically by git-cliff from conventional commit
 types (`.github/workflows/release.yaml`, `cliff.toml`). The bump is
 computed from commit messages alone — nothing else votes.
 
+### Commit types
+
+The type decides whether a commit reaches the release notes, so pick it
+for the audience, not the diff. Nothing validates it — a type outside
+this table is silently dropped from the changelog with no error, so a
+typo costs the entry.
+
+| Type       | Use for                                          | Release notes   |
+|------------|--------------------------------------------------|-----------------|
+| `feat`     | New user-facing capability                        | New Features    |
+| `fix`      | Corrected behavior                                | Fixes           |
+| `refactor` | Internal restructuring, behavior unchanged        | Improvements    |
+| `perf`     | Faster, behavior unchanged                        | Improvements    |
+| `style`    | **Appearance of command output**                  | Appearance      |
+| `build`    | Build, tooling, dependencies, **and CI**          | skipped         |
+| `test`     | Tests and harness                                 | skipped         |
+| `docs`     | Documentation                                     | skipped         |
+| `chore`    | Maintenance with no user-visible effect, incl. code formatting | skipped |
+
+Two conventions here differ from the Angular defaults; both are
+deliberate.
+
+**`style` is about what the user sees, not how the code is laid out.**
+It has always meant terminal appearance in this repo — glyphs, color,
+spacing, card layout. Those are user-visible, so they render under
+**Appearance**. Pure code formatting (a `gofmt` sweep) is `chore`. Using
+`style` for formatting buries it in the release notes next to real
+presentation work.
+
+**`build` covers CI.** These were once split, and the split did not
+hold — workflow edits landed as both `build(ci)` and `ci(...)` in
+roughly equal numbers. One type, with the area in the scope:
+`build(ci)`, `build(make)`, `build(release)`. `ci` still parses so the
+commits already in history stay explicitly skipped; don't use it for
+new work.
+
 ### The breaking-change bar
 
 A `!` marker or `BREAKING CHANGE:` footer forces a **major** bump.
