@@ -402,3 +402,56 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 		}
 	})
 }
+
+// sortIssues only picks between the two strategies, both of which are
+// covered directly above. What is untested is the choice itself — and the
+// two orderings are distinguishable, so a dispatcher wired backwards would
+// silently reorder every issue list the user sees.
+func TestSortIssuesDispatch(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(func() { viper.Reset() })
+
+	// Board order deliberately contradicts lifecycle order: the board puts
+	// Done first, the lifecycle sequence puts it last.
+	columns := []issue.BoardColumn{
+		{Name: "Done", StatusIDs: []string{"done"}},
+		{Name: "Ready", StatusIDs: []string{"ready"}},
+	}
+	newIssues := func() []issue.Issue {
+		return []issue.Issue{
+			{Key: "P-1", Status: "Ready", StatusID: "ready"},
+			{Key: "P-2", Status: "Done", StatusID: "done"},
+		}
+	}
+	keys := func(issues []issue.Issue) []string {
+		out := make([]string, len(issues))
+		for i, iss := range issues {
+			out[i] = iss.Key
+		}
+		return out
+	}
+
+	t.Run("board columns present take precedence", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, columns)
+		if want := []string{"P-2", "P-1"}; !equalSlices(keys(issues), want) {
+			t.Errorf("order = %v, want %v (board order)", keys(issues), want)
+		}
+	})
+
+	t.Run("no columns falls back to lifecycle status", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, nil)
+		if want := []string{"P-1", "P-2"}; !equalSlices(keys(issues), want) {
+			t.Errorf("order = %v, want %v (lifecycle order)", keys(issues), want)
+		}
+	})
+
+	t.Run("empty column slice falls back too", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, []issue.BoardColumn{})
+		if want := []string{"P-1", "P-2"}; !equalSlices(keys(issues), want) {
+			t.Errorf("order = %v, want %v (lifecycle order)", keys(issues), want)
+		}
+	})
+}
