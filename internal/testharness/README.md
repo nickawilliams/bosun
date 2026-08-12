@@ -196,6 +196,18 @@ Two consequences:
   workspace), so it buys a fast failure for the command under test,
   not immunity.
 
+- Pick a sentinel that lets the run **succeed**, not one that produces
+  another cancellation. For a scenario whose subject *is* cancellation
+  (`init`'s `errors/*`), a trailing second `\x03` looks like the
+  obvious tripwire and is the wrong choice: a swallowed abort would
+  simply cancel at the next prompt, the run would still end in
+  `ErrCancelled`, and every assertion would still hold — masking the
+  exact bug the sentinel was added for. Queue the keys that would carry
+  the run to a clean finish instead, so the error assertion reports
+  `err = nil`. Verified on `init`: with the discriminating sentinel a
+  swallowed-abort mutation fails in ~1s; without it the same mutation
+  ran until the 25s `-timeout` killed the package.
+
 This predates any one command's suite (the same mutation hangs
 `TestCleanup` and `TestPrerelease`). A watchdog in `Harness.Run`, or
 aborting the form on EOF, would fix it centrally.
@@ -372,14 +384,49 @@ in-tree does that, and the spinner frames would make output assertions
 timing-dependent. The capture reporter sidesteps the problem by
 recording the semantic calls instead of the pixels.
 
-### `bosun init` runs against the CWD, not `--project`
+**"`h.Stdout()` is empty" is about cards, not about stdout.** The
+shorthand has been over-applied and it costs real assertions, so state
+the boundary precisely: what short-circuits is `Card.Print` and the
+`RunCard*` helpers, because those consult the reporter. Anything that
+writes to the process's stdout directly still lands in `h.Stdout()` —
+`Harness.Run` swaps `os.Stdout` for a captured pipe (`captureFD`), so
+the bare `fmt.Print`/`fmt.Printf` family in `../ui/output.go` reaches
+the buffer whatever the reporter is doing. `ui.SuccessLine` is the one
+that matters in practice: it's how `config set`, `config unset` and
+`init` confirm *where* they wrote, it is not a Reporter call, and it is
+therefore assertable **only** through `h.Stdout()` —
+`init_test.go`'s `fresh_project/writes_config_with_minimum_fields`
+does exactly that. `ui.EmptyState` and `ui.Bold` are the same shape.
+
+Two practical notes when you assert there. Live `huh` forms also render
+through `ui.Output()`, so for a prompt-driven command the buffer is
+mostly bubbletea's ANSI — match substrings rather than whole lines, and
+run it through `ansi.Strip` first, since each styled segment carries
+its own escapes. And the useful negative — "this line was NOT
+printed" — only means something once the positive case is pinned
+somewhere, for the usual reason.
+
+### `bosun init` writes against the CWD, but still reads `--project`
 
 Every other command resolves its project through the `--project` flag
-`Run` injects. `init` doesn't: it writes `.bosun/` relative to
-`os.Getwd()`, and errors out if `config.FindProjectRoot()` finds a
-project anywhere else. A scenario for it therefore has to
+`Run` injects. `init` decides *where to write* differently: it creates
+`.bosun/` relative to `os.Getwd()`. A scenario for it therefore has to
 `t.Chdir(h.Workspace.Dir)` — which is safe here for the same reason
 `t.Setenv` is, since harness tests never run in parallel.
+
+It does not *ignore* the flag, though, and the difference is
+load-bearing. `newInitCmd` calls `addProjectFlag`, and the
+nested-project guard asks `config.FindProjectRoot()` whether it is
+already inside a project — which returns `config.ProjectRootOverride`
+outright when `--project` set one, and only walks up from the CWD when
+it didn't. So `init` ignores `--project` for where it writes and
+consults it for whether it refuses to write at all. A scenario that
+means to exercise the guard's real (upward-walk) path must therefore
+run with the workspace uninitialized so `Run` injects no `--project`,
+and build the enclosing project by hand somewhere under it; with the
+flag injected the guard fires on the override and the walk is never
+reached. `init_test.go`'s `already_initialized/nested_project_rejected`
+is laid out that way for exactly this reason.
 
 `--project` is also useless before a project exists: `Bootstrap`
 rejects a directory with no `.bosun/`. So `Workspace.Uninitialize()`
@@ -397,6 +444,23 @@ non-`--quick` run ends with four provider gates that each need a `\r`.
 And `resolveGroupAsForm`'s fields arrive pre-filled with the schema's
 example rather than showing it as a placeholder, so typing appends;
 send `\x15` (ctrl+u) first to clear the field.
+
+The two input shapes are easy to mix up, so both are now pinned by
+`integration_groups/form_fields_arrive_prefilled`. Confirmed by
+mutation: drop the `\x15` and `issue_tracker.base_url` comes back as
+`https://mycompany.atlassian.nethttps://acme.test` — the example with
+the typed value glued on. The project-settings prompts
+(`newDefaultInput`) are the *opposite* shape — the default is a
+placeholder, so a bare `\r` accepts it and typing replaces rather than
+appends. A field left untouched in a `resolveGroupAsForm` form persists
+its prefill as a real configured value, which is what makes clearing
+matter.
+
+`--quick` trims the four gates (each group goes through `resolveGroup`,
+which prompts only for missing required keys) but does NOT trim the
+repository-patterns and workspace-root prompts — its reuse of existing
+values is conditional on the run being a reinit. On a fresh project,
+`--quick` still asks for both.
 
 Since the whole command is prompts, a scenario that expects *not* to
 be asked something has no clean way to fail — it hangs. Queue a
