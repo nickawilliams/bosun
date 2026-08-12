@@ -146,9 +146,9 @@ type CreateReleaseRequest struct {
 // whether a deploy is needed, already-live, or a rollback.
 type Deployment struct {
 	Environment string
-	Ref         string    // the ref requested at deploy time (branch/tag/SHA)
-	SHA         string    // resolved commit SHA that was deployed
-	State       string    // latest status: "success" | "failure" | "inactive" | ...
+	Ref         string // the ref requested at deploy time (branch/tag/SHA)
+	SHA         string // resolved commit SHA that was deployed
+	State       string // latest status: "success" | "failure" | "inactive" | ...
 	CreatedAt   time.Time
 }
 

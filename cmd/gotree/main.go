@@ -83,7 +83,7 @@ const valueWidth = 6
 // tests are quiet (muted); anything past a second gets warning
 // (yellow) and >3s gets error (red) so slow tests stand out.
 const (
-	slowTestSeconds    = 1.0
+	slowTestSeconds     = 1.0
 	verySlowTestSeconds = 3.0
 )
 

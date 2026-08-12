@@ -198,7 +198,6 @@ func (c *Card) GlyphColor(col color.Color) *Card {
 	return c
 }
 
-
 // Breadcrumb appends a data segment to this card's breadcrumb.
 // Only meaningful for CardRoot; lazy-initializes the breadcrumb
 // component on first call. Use when the segment value is known
@@ -883,9 +882,9 @@ type cardSpinnerModel struct {
 	done        bool
 	err         error
 	resultCh    <-chan error
-	successCard func() *Card   // optional: if set, render this instead of card on success
-	prefix      string         // rendered before the first frame (e.g., comfy connector)
-	vanish      bool           // render an empty final frame on success (spinner clears itself)
+	successCard func() *Card // optional: if set, render this instead of card on success
+	prefix      string       // rendered before the first frame (e.g., comfy connector)
+	vanish      bool         // render an empty final frame on success (spinner clears itself)
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {

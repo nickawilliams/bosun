@@ -274,10 +274,10 @@ func TestDefaultSubjectsFor(t *testing.T) {
 // long-ass inline list.
 func TestFormatSubjects(t *testing.T) {
 	tests := []struct {
-		name             string
-		services         []string
-		subjects         []string
-		want             string
+		name     string
+		services []string
+		subjects []string
+		want     string
 	}{
 		{
 			name:     "no subjects → repo name",
@@ -328,12 +328,12 @@ func TestCompareSemverTag(t *testing.T) {
 		{"v0.4.582", "v0.4.583", -1}, // patch differs
 		{"v0.4.583", "v0.4.582", 1},
 		{"v0.4.583", "v0.4.583", 0},
-		{"v1.0.0", "v0.99.99", 1},   // major dominates
-		{"v0.5.0", "v0.4.999", 1},   // minor dominates
-		{"v0.4.2", "v0.4.10", -1},   // numeric compare, not lexicographic
-		{"0.4.5", "v0.4.5", 0},      // optional v prefix
-		{"junk", "v1.0.0", 1},       // non-semver sorts after
-		{"junk", "junk2", -1},       // both non-semver → string compare
+		{"v1.0.0", "v0.99.99", 1}, // major dominates
+		{"v0.5.0", "v0.4.999", 1}, // minor dominates
+		{"v0.4.2", "v0.4.10", -1}, // numeric compare, not lexicographic
+		{"0.4.5", "v0.4.5", 0},    // optional v prefix
+		{"junk", "v1.0.0", 1},     // non-semver sorts after
+		{"junk", "junk2", -1},     // both non-semver → string compare
 	}
 	for _, tt := range tests {
 		t.Run(tt.a+" vs "+tt.b, func(t *testing.T) {
@@ -426,10 +426,10 @@ func TestFormatExtrasNote(t *testing.T) {
 
 func TestParseSubjectKey(t *testing.T) {
 	tests := []struct {
-		key       string
-		wantRepo  int
-		wantSvc   int
-		wantOk    bool
+		key      string
+		wantRepo int
+		wantSvc  int
+		wantOk   bool
 	}{
 		{"0.0", 0, 0, true},
 		{"3.2", 3, 2, true},
@@ -481,10 +481,10 @@ func TestCanMergePR(t *testing.T) {
 // shows, derived from mergeable_state + review decision.
 func TestPRMergeBlockReason(t *testing.T) {
 	tests := []struct {
-		name       string
-		state      string
-		review     string
-		want       string
+		name   string
+		state  string
+		review string
+		want   string
 	}{
 		{"conflicts", "dirty", "", "conflicts"},
 		{"behind base", "behind", "", "behind base"},

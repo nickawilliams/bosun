@@ -23,10 +23,10 @@ func TestClassifyProbeStatus(t *testing.T) {
 		{http.StatusOK, true, true},
 		{http.StatusNoContent, true, true},
 		{http.StatusMovedPermanently, true, true},
-		{http.StatusUnauthorized, true, true},   // auth-gated env, host responds
-		{http.StatusForbidden, true, true},      // ditto
-		{http.StatusNotFound, false, true},      // env doesn't exist
-		{http.StatusBadGateway, false, false},   // ambiguous, retry
+		{http.StatusUnauthorized, true, true}, // auth-gated env, host responds
+		{http.StatusForbidden, true, true},    // ditto
+		{http.StatusNotFound, false, true},    // env doesn't exist
+		{http.StatusBadGateway, false, false}, // ambiguous, retry
 		{http.StatusServiceUnavailable, false, false},
 		{http.StatusGatewayTimeout, false, false},
 		{0, false, false},

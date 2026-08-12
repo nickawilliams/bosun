@@ -492,4 +492,3 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))
 	}
 }
-

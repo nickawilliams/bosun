@@ -23,7 +23,7 @@ type cacheEntry[T any] struct {
 
 // persistentCache is the on-disk representation of the Slack API cache.
 type persistentCache struct {
-	Channels map[string]cacheEntry[string]          `json:"channels,omitempty"`
+	Channels map[string]cacheEntry[string]           `json:"channels,omitempty"`
 	Threads  map[string]cacheEntry[notify.ThreadRef] `json:"threads,omitempty"`
 }
 

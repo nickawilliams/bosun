@@ -26,25 +26,25 @@ func SetRawReporterFactory(f func() Reporter) func() {
 	return func() { rawFactory = prev }
 }
 
-func (r *rawReporter) Header(_ string, _ ...string)        {}
-func (r *rawReporter) Complete(_ string)                   {}
-func (r *rawReporter) CompleteDetail(_ string, _ []string) {}
-func (r *rawReporter) CompleteValue(_, _ string, _ ...int) {}
-func (r *rawReporter) Skip(_ string)                       {}
-func (r *rawReporter) SkipValue(_, _ string, _ ...int)     {}
-func (r *rawReporter) Fail(_ string)                       {}
-func (r *rawReporter) FailValue(_, _ string, _ ...int)     {}
-func (r *rawReporter) Success(_ string, _ ...any)    {}
-func (r *rawReporter) Warning(_ string, _ ...any)    {}
-func (r *rawReporter) Info(_ string, _ ...any)       {}
-func (r *rawReporter) Muted(_ string, _ ...any)      {}
-func (r *rawReporter) DryRun(_ string, _ ...any)     {}
-func (r *rawReporter) Saved(_ string, _ string)      {}
+func (r *rawReporter) Header(_ string, _ ...string)          {}
+func (r *rawReporter) Complete(_ string)                     {}
+func (r *rawReporter) CompleteDetail(_ string, _ []string)   {}
+func (r *rawReporter) CompleteValue(_, _ string, _ ...int)   {}
+func (r *rawReporter) Skip(_ string)                         {}
+func (r *rawReporter) SkipValue(_, _ string, _ ...int)       {}
+func (r *rawReporter) Fail(_ string)                         {}
+func (r *rawReporter) FailValue(_, _ string, _ ...int)       {}
+func (r *rawReporter) Success(_ string, _ ...any)            {}
+func (r *rawReporter) Warning(_ string, _ ...any)            {}
+func (r *rawReporter) Info(_ string, _ ...any)               {}
+func (r *rawReporter) Muted(_ string, _ ...any)              {}
+func (r *rawReporter) DryRun(_ string, _ ...any)             {}
+func (r *rawReporter) Saved(_ string, _ string)              {}
 func (r *rawReporter) Selected(_ string, _ string)           {}
 func (r *rawReporter) SelectedIdentifier(_ string, _ string) {}
 func (r *rawReporter) SelectedMulti(_ string, _ []string)    {}
-func (r *rawReporter) Details(_ string, _ Fields)           {}
-func (r *rawReporter) Summary(_ string, _ []SummarySegment) {}
+func (r *rawReporter) Details(_ string, _ Fields)            {}
+func (r *rawReporter) Summary(_ string, _ []SummarySegment)  {}
 
 // Task runs fn synchronously without a spinner. The function still
 // executes — raw mode suppresses rendering, not behavior.

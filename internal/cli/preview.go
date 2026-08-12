@@ -356,4 +356,3 @@ type repoPR struct {
 	Repo     string
 	PR       code.PullRequest
 }
-

@@ -8,14 +8,14 @@ type SourceOption struct {
 
 // ConfigKey describes a single configuration value.
 type ConfigKey struct {
-	Key      string   // Config key (relative to group, e.g. "base_url").
-	Label    string   // Human-readable label for prompts.
-	Example  string   // Example value shown as placeholder.
-	Default  string   // Default value if not set.
-	Options  []string // Valid values (renders as select if non-empty).
-	EnvVar   string   // Environment variable name (if value comes from env).
-	Secret   bool     // Mask input (for tokens/passwords).
-	Required bool     // Must have a value for the group to be valid.
+	Key      string                         // Config key (relative to group, e.g. "base_url").
+	Label    string                         // Human-readable label for prompts.
+	Example  string                         // Example value shown as placeholder.
+	Default  string                         // Default value if not set.
+	Options  []string                       // Valid values (renders as select if non-empty).
+	EnvVar   string                         // Environment variable name (if value comes from env).
+	Secret   bool                           // Mask input (for tokens/passwords).
+	Required bool                           // Must have a value for the group to be valid.
 	Source   func() ([]SourceOption, error) // Dynamic value source for interactive picker.
 }
 

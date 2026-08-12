@@ -40,11 +40,11 @@ func TestCreatePR(t *testing.T) {
 	a := NewWithClient(server.Client(), server.URL, "token")
 
 	pr, err := a.CreatePR(context.Background(), code.CreatePRRequest{
-		Owner: "org",
+		Owner:      "org",
 		Repository: "repo",
-		Head:  "feature/test",
-		Base:  "main",
-		Title: "[PROJ-1] Test",
+		Head:       "feature/test",
+		Base:       "main",
+		Title:      "[PROJ-1] Test",
 	})
 	if err != nil {
 		t.Fatalf("CreatePR() error: %v", err)
@@ -180,13 +180,13 @@ func TestGetPRForBranchMerged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
-				"number":            10,
-				"title":             "Merged PR",
-				"html_url":          "https://github.com/org/repo/pull/10",
-				"state":             "closed",
-				"merged_at":         merged,
-				"merge_commit_sha":  "sq11122",
-				"user":              map[string]any{"login": "alice"},
+				"number":           10,
+				"title":            "Merged PR",
+				"html_url":         "https://github.com/org/repo/pull/10",
+				"state":            "closed",
+				"merged_at":        merged,
+				"merge_commit_sha": "sq11122",
+				"user":             map[string]any{"login": "alice"},
 			},
 		})
 	}))
@@ -982,11 +982,11 @@ func TestGetChecks(t *testing.T) {
 
 func TestReviewDecision(t *testing.T) {
 	cases := []struct {
-		name             string
-		reviews          []map[string]any
-		requestedUsers   []string
-		requestedTeams   []string
-		wantDecision     string
+		name           string
+		reviews        []map[string]any
+		requestedUsers []string
+		requestedTeams []string
+		wantDecision   string
 	}{
 		{
 			name:         "approved by one",
@@ -1010,10 +1010,10 @@ func TestReviewDecision(t *testing.T) {
 			wantDecision: "approved",
 		},
 		{
-			name:         "no reviews but reviewers requested → awaiting",
-			reviews:      []map[string]any{},
+			name:           "no reviews but reviewers requested → awaiting",
+			reviews:        []map[string]any{},
 			requestedUsers: []string{"carol"},
-			wantDecision: "awaiting",
+			wantDecision:   "awaiting",
 		},
 		{
 			name:         "no reviews and no requests → empty",

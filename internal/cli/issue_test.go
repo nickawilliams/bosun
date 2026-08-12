@@ -340,7 +340,7 @@ func TestExtractIssue(t *testing.T) {
 		{"", ""},
 		{"feature/no-ticket-here", ""},
 		{"ABC-1", "ABC-1"},
-		{"A-1", ""},  // single letter prefix — not a match
+		{"A-1", ""}, // single letter prefix — not a match
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

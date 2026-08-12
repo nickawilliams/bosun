@@ -269,7 +269,6 @@ func strayFilesMessage(files []string) string {
 		len(files), strings.Join(files[:limit], ", "), len(files)-limit)
 }
 
-
 // emitCleanupReadiness gathers each repo's safety signals + workspace-
 // scoped signals under one spinner, classifies them via the safety
 // matrix, renders the result card, and gates accordingly.
@@ -659,4 +658,3 @@ func buildCleanupReadinessCard(repos []repoCleanup, wsFindings []cleanupFinding)
 	}
 	return card
 }
-

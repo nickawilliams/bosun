@@ -31,8 +31,8 @@ type repoReadiness struct {
 // AffectedResult holds the change-detection outcome for a single repository.
 type AffectedResult struct {
 	RepoName   string
-	RepoPath   string   // Absolute path to the repository.
-	Branch     string   // Current branch name.
+	RepoPath   string // Absolute path to the repository.
+	Branch     string // Current branch name.
 	HasChanges bool
 	Services   []string // Services to deploy.
 	Skipped    []string // Services excluded (for display).
@@ -539,11 +539,11 @@ func (sr sourceRepo) prResolved(withPRs bool) bool {
 //     program boundary (and no blank-frame seam) anywhere in the
 //     sequence:
 //
-//	✓  extracker · activity-api      (deploying)
-//	▲  extracker · pdfgen            (excluded — path map or toggle)
-//	▲  web · no changes
-//	▲  repo · no PR for branch "x"
-//	✗  repo · <error>                (detection or remote failure)
+//     ✓  extracker · activity-api      (deploying)
+//     ▲  extracker · pdfgen            (excluded — path map or toggle)
+//     ▲  web · no changes
+//     ▲  repo · no PR for branch "x"
+//     ✗  repo · <error>                (detection or remote failure)
 //
 // Returns the (selection-adjusted) detection results for the caller's
 // services list, the overrides map (service → "pr-N", withPRs only),

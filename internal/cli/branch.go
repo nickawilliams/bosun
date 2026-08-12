@@ -17,7 +17,7 @@ type branchData struct {
 }
 
 var (
-	slugRe      = regexp.MustCompile(`[^a-z0-9]+`)
+	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
 	defaultPattern = "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"
 )
 
