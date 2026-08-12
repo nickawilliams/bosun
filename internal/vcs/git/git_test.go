@@ -39,7 +39,7 @@ func initTestRepositoryWithRemote(t *testing.T) string {
 	base, _ = filepath.EvalSymlinks(base)
 
 	bare := filepath.Join(base, "origin.git")
-	repository :=filepath.Join(base, "repository")
+	repository := filepath.Join(base, "repository")
 
 	steps := []struct {
 		dir  string
@@ -65,7 +65,7 @@ func initTestRepositoryWithRemote(t *testing.T) string {
 }
 
 func TestCreateBranch(t *testing.T) {
-	repository :=initTestRepositoryWithRemote(t)
+	repository := initTestRepositoryWithRemote(t)
 	a := New()
 	ctx := context.Background()
 
@@ -88,7 +88,7 @@ func TestCreateBranch(t *testing.T) {
 }
 
 func TestCreateBranchFromHead(t *testing.T) {
-	repository :=initTestRepository(t)
+	repository := initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
@@ -106,7 +106,7 @@ func TestCreateBranchFromHead(t *testing.T) {
 }
 
 func TestDeleteBranch(t *testing.T) {
-	repository :=initTestRepository(t)
+	repository := initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
@@ -127,7 +127,7 @@ func TestDeleteBranch(t *testing.T) {
 }
 
 func TestGetCurrentBranch(t *testing.T) {
-	repository :=initTestRepository(t)
+	repository := initTestRepository(t)
 	a := New()
 
 	branch, err := a.GetCurrentBranch(context.Background(), repository)
@@ -141,7 +141,7 @@ func TestGetCurrentBranch(t *testing.T) {
 }
 
 func TestGetDefaultBranch(t *testing.T) {
-	repository :=initTestRepositoryWithRemote(t)
+	repository := initTestRepositoryWithRemote(t)
 	a := New()
 
 	branch, err := a.GetDefaultBranch(context.Background(), repository)
@@ -244,7 +244,7 @@ func contains(s []string, target string) bool {
 }
 
 func TestIsDirty(t *testing.T) {
-	repository :=initTestRepository(t)
+	repository := initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 
@@ -312,7 +312,7 @@ func TestChangedFiles(t *testing.T) {
 }
 
 func TestWorktree(t *testing.T) {
-	repository :=initTestRepository(t)
+	repository := initTestRepository(t)
 	a := New()
 	ctx := context.Background()
 

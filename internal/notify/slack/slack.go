@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nickawilliams/bosun/internal/notify"
 	slackapi "github.com/slack-go/slack"
@@ -258,12 +259,40 @@ func slackIconURL(rawURL string) string {
 	return u.String()
 }
 
-// truncate shortens s to max bytes, adding "…" if truncated.
+// truncate shortens s to at most max bytes, marking the cut with "…".
+//
+// Two things the obvious implementation gets wrong. The ellipsis is three
+// bytes in UTF-8, so it has to come out of the budget rather than be added
+// on top; and the cut has to land on a rune boundary, or a multi-byte
+// character is sliced in half and the result is invalid UTF-8. Bodies
+// reaching here are issue and PR descriptions, which routinely carry
+// em-dashes, smart quotes, and accented names.
+//
+// When max cannot even hold the marker, s is hard-cut instead — still on
+// a rune boundary.
 func truncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	const ellipsis = "…"
+	if cut := max - len(ellipsis); cut >= 0 {
+		return s[:runeBoundary(s, cut)] + ellipsis
+	}
+	return s[:runeBoundary(s, max)]
+}
+
+// runeBoundary returns the largest offset <= n at which a rune starts, so
+// that s[:runeBoundary(s, n)] does not end mid-rune. It preserves validity
+// rather than conferring it: an s that is already invalid UTF-8 stays that
+// way. Callers must pass an n within s.
+func runeBoundary(s string, n int) int {
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
 }
 
 // Adapter implements notify.Notifier using the Slack API.

@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-
 // Source-encoded glyphs and colors for the config tree.
 const (
 	glyphDefault = "◻︎"

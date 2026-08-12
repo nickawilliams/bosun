@@ -60,6 +60,54 @@ func diff(a, b uint8) uint8 {
 	return b - a
 }
 
+// Every palette constructor must end with applyRoleAliases. Forgetting it
+// leaves all seven Role* fields nil and the state grammar renders colorless
+// in that one color mode — no panic, no build error, just wrong output. The
+// nil check catches that in any constructor.
+//
+// Each role is also compared against its source, which catches a miswiring
+// (RoleOpen aliased to Error, say) that a nil check cannot. Only the colored
+// palettes can detect that: noColorPalette sets every field to the same
+// lipgloss.NoColor{}, so equality there holds no matter how it is wired.
+func TestPaletteConstructorsApplyRoleAliases(t *testing.T) {
+	constructors := []struct {
+		name string
+		fn   func() palette
+	}{
+		{"default", defaultPalette},
+		{"ansi", ansiPalette},
+		{"none", noColorPalette},
+	}
+
+	for _, tc := range constructors {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.fn()
+			roles := []struct {
+				name       string
+				got, want  color.Color
+				sourceName string
+			}{
+				{"RoleOpen", p.RoleOpen, p.Success, "Success"},
+				{"RoleDone", p.RoleDone, p.Primary, "Primary"},
+				{"RoleClosed", p.RoleClosed, p.Error, "Error"},
+				{"RoleAttention", p.RoleAttention, p.Warning, "Warning"},
+				{"RoleInFlight", p.RoleInFlight, p.Info, "Info"},
+				{"RoleNeutral", p.RoleNeutral, p.Muted, "Muted"},
+				{"Keyword", p.Keyword, p.Primary, "Primary"},
+			}
+			for _, r := range roles {
+				if r.got == nil {
+					t.Errorf("%s is nil — did %sPalette skip applyRoleAliases?", r.name, tc.name)
+					continue
+				}
+				if r.got != r.want {
+					t.Errorf("%s = %v, want %s (%v)", r.name, r.got, r.sourceName, r.want)
+				}
+			}
+		})
+	}
+}
+
 func TestSpacerPrefix(t *testing.T) {
 	t.Cleanup(func() { needsSpacer = false })
 

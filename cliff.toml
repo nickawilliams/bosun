@@ -62,7 +62,7 @@ body = """
 ## {{ self::title(current=version, previous=commit_range.from, unreleased="Unreleased", timestamp=timestamp) }}
 
 {% set grouped = commits | group_by(attribute="group") -%}
-{%- set preferred = ["New Features", "Improvements", "Fixes"] -%}
+{%- set preferred = ["New Features", "Improvements", "Fixes", "Appearance"] -%}
 
 {%- for name in preferred -%}
   {%- for group, group_commits in grouped -%}
@@ -103,7 +103,17 @@ commit_parsers = [
   { message = "^refactor", group = "Improvements" },
   { message = "^perf", group = "Improvements" },
   { message = "^fix", group = "Fixes" },
-  { message = "^(build|chore|test|docs|iac|ci|style|release|pr)", skip = true },
+  # `style` here means the appearance of command output, not code
+  # formatting — that is what it has always meant in this repo. Those
+  # changes are user-visible, so they render rather than skip. Pure
+  # formatting is `chore`.
+  { message = "^style", group = "Appearance" },
+  # `ci` is retained for the commits already in history; `build` is the
+  # type to use going forward, with the area in the scope (build(ci),
+  # build(make), build(release)). Dropping `ci` outright would leave
+  # those commits unmatched and filtered implicitly rather than skipped
+  # on purpose.
+  { message = "^(build|chore|test|docs|iac|ci|release|pr)", skip = true },
 ]
 protect_breaking_commits = true
 filter_commits = true

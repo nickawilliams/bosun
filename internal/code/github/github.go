@@ -270,7 +270,7 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repository str
 		User struct {
 			Login string `json:"login"`
 		} `json:"user"`
-		State       string `json:"state"`         // "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"
+		State       string `json:"state"` // "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING"
 		SubmittedAt string `json:"submitted_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&reviews); err != nil {
@@ -447,16 +447,16 @@ var semverTag = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 // GetLatestTag returns the most recent semver tag for a repository.
 // Resolution order:
-//   1. GitHub's /releases/latest endpoint — respects the
-//      marked-as-latest flag maintainers can set, and defaults to
-//      the highest-semver release when unset. This is the
-//      authoritative answer for "what's the current released version?"
-//   2. Fall back to walking /tags and picking the highest-semver
-//      tag, for repos that have tags but no releases (or where
-//      /releases/latest 404s for an unrelated reason). Order-by-
-//      semver, NOT the order the API returns — GitHub's /tags
-//      endpoint sorts by creation time, which can put a stale,
-//      manually-pushed tag ahead of the actual latest release.
+//  1. GitHub's /releases/latest endpoint — respects the
+//     marked-as-latest flag maintainers can set, and defaults to
+//     the highest-semver release when unset. This is the
+//     authoritative answer for "what's the current released version?"
+//  2. Fall back to walking /tags and picking the highest-semver
+//     tag, for repos that have tags but no releases (or where
+//     /releases/latest 404s for an unrelated reason). Order-by-
+//     semver, NOT the order the API returns — GitHub's /tags
+//     endpoint sorts by creation time, which can put a stale,
+//     manually-pushed tag ahead of the actual latest release.
 //
 // Returns empty string if neither path yields a semver-shaped tag.
 func (a *Adapter) GetLatestTag(ctx context.Context, owner, repository string) (string, error) {

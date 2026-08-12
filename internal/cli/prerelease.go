@@ -124,9 +124,9 @@ const (
 	// gateUnknown is the zero value — the gate hasn't been computed
 	// (or couldn't be). Treated as not-allowed by eligible().
 	gateUnknown releaseGate = iota
-	gateAllow                // work is on the default branch — release it
-	gateBlock                // work is NOT on default — refuse, with a reason
-	gateSkip                 // nothing of ours to release — no-op, with a reason
+	gateAllow               // work is on the default branch — release it
+	gateBlock               // work is NOT on default — refuse, with a reason
+	gateSkip                // nothing of ours to release — no-op, with a reason
 )
 
 // classifyReleaseGate decides whether a repo may be released, from the
@@ -924,7 +924,7 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 
 	type optRow struct {
 		repoIdx    int
-		serviceIdx int  // -1 = fallback "no services configured" row; -2 = containing-release info row
+		serviceIdx int // -1 = fallback "no services configured" row; -2 = containing-release info row
 		preselect  bool
 	}
 	const infoOnlyServiceIdx = -2
@@ -1551,7 +1551,7 @@ func detectAffectedServices(ctx context.Context, g vcs.VCS, repoPath string, cur
 // services (or when no services are configured), because a "we shipped
 // everything" announcement reads cleaner as the repo name than as a
 // long comma list. Otherwise joins subjects with sep so callers can
-// pick a separator that matches their surrounding context (`` `, ` ``
+// pick a separator that matches their surrounding context (“ `, ` “
 // inside backticks for the Slack template, `, ` plain for the result
 // card).
 //

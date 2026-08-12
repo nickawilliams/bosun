@@ -244,4 +244,3 @@ func (r *cardReporter) Summary(total string, segments []SummarySegment) {
 		GlyphColor(summaryGlyphColor(segments)).
 		Print()
 }
-

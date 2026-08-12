@@ -119,6 +119,86 @@ them short so the generated slugs stay a reasonable length.
 - No scope prefixes (`cli:`, `ui:`) and no trailing punctuation; the
   issue body carries the detail.
 
+## Versioning
+
+Releases are cut automatically by git-cliff from conventional commit
+types (`.github/workflows/release.yaml`, `cliff.toml`). The bump is
+computed from commit messages alone — nothing else votes.
+
+### Commit types
+
+The type decides whether a commit reaches the release notes, so pick it
+for the audience, not the diff. Nothing validates it — a type outside
+this table is silently dropped from the changelog with no error, so a
+typo costs the entry.
+
+| Type       | Use for                                          | Release notes   |
+|------------|--------------------------------------------------|-----------------|
+| `feat`     | New user-facing capability                        | New Features    |
+| `fix`      | Corrected behavior                                | Fixes           |
+| `refactor` | Internal restructuring, behavior unchanged        | Improvements    |
+| `perf`     | Faster, behavior unchanged                        | Improvements    |
+| `style`    | **Appearance of command output**                  | Appearance      |
+| `build`    | Build, tooling, dependencies, **and CI**          | skipped         |
+| `test`     | Tests and harness                                 | skipped         |
+| `docs`     | Documentation                                     | skipped         |
+| `chore`    | Maintenance with no user-visible effect, incl. code formatting | skipped |
+
+Two conventions here differ from the Angular defaults; both are
+deliberate.
+
+**`style` is about what the user sees, not how the code is laid out.**
+It has always meant terminal appearance in this repo — glyphs, color,
+spacing, card layout. Those are user-visible, so they render under
+**Appearance**. Pure code formatting (a `gofmt` sweep) is `chore`. Using
+`style` for formatting buries it in the release notes next to real
+presentation work.
+
+**`build` covers CI.** These were once split, and the split did not
+hold — workflow edits landed as both `build(ci)` and `ci(...)` in
+roughly equal numbers. One type, with the area in the scope:
+`build(ci)`, `build(make)`, `build(release)`. `ci` still parses so the
+commits already in history stay explicitly skipped; don't use it for
+new work.
+
+### The breaking-change bar
+
+A `!` marker or `BREAKING CHANGE:` footer forces a **major** bump.
+Once the project is at 1.x this is unconditional: no `cliff.toml`
+setting downgrades it, so the commit message is the only control.
+Treat the marker as the version decision it is.
+
+Bosun's public surface is its **commands, flags, and config keys** —
+not its Go API, which is entirely `internal/` and importable by no one.
+
+Reserve the marker for changes that break a working invocation **with
+no diagnostic** — the user gets silence, wrong behavior, or a failure
+that doesn't name the cause:
+
+| Change                                          | Marker |
+|-------------------------------------------------|--------|
+| Command or flag removed                         | Yes    |
+| Flag's meaning changes, same name                | Yes    |
+| Config key removed; absence silently changes behavior | Yes |
+| Config key renamed; old key errors and names the new one | No |
+| Default changes, with the new value reported     | No     |
+| Output shape or wording changes                  | No     |
+
+A rename that **fails loudly and names the migration** is a warned
+migration, not a break. Use `feat` and put the migration in the commit
+body — it lands in the changelog without burning a major.
+
+Two majors so far have both been incidental side effects of a marker
+rather than deliberate decisions. If a change genuinely warrants a
+major, say so in the PR and cut it on purpose.
+
+### Go module path
+
+`go.mod` declares `github.com/nickawilliams/bosun` with no `/vN`
+suffix, so Go's semantic import versioning ignores any `v2+` tag —
+`@latest` silently resolves to the newest `v1`. Any real major needs
+the module path and every internal import updated in the same change.
+
 ## Polish-Before-Refactor Discipline
 
 When polish or feature work surfaces an architectural smell that's out

@@ -31,18 +31,18 @@ import (
 // choices and decides which vocabulary applies in which context.
 type palette struct {
 	// Semantic colors.
-	Primary   color.Color // Titles, headings
-	Secondary color.Color // Secondary headings
-	Brand     color.Color // Application name in breadcrumbs
-	LogoTop   color.Color // Logo gradient start (top line)
+	Primary    color.Color // Titles, headings
+	Secondary  color.Color // Secondary headings
+	Brand      color.Color // Application name in breadcrumbs
+	LogoTop    color.Color // Logo gradient start (top line)
 	LogoBottom color.Color // Logo gradient end (bottom line)
-	Accent    color.Color // Selectors, prompts, interactive elements
-	Info     color.Color // Informational, non-actionable signals
-	Success  color.Color // Confirmations, selected items
-	Error    color.Color // Errors, validation failures
-	Warning  color.Color // Caution, dry-run indicators
-	Muted    color.Color // Secondary text, descriptions
-	NormalFg color.Color // Default foreground
+	Accent     color.Color // Selectors, prompts, interactive elements
+	Info       color.Color // Informational, non-actionable signals
+	Success    color.Color // Confirmations, selected items
+	Error      color.Color // Errors, validation failures
+	Warning    color.Color // Caution, dry-run indicators
+	Muted      color.Color // Secondary text, descriptions
+	NormalFg   color.Color // Default foreground
 
 	// Resolution-role colors — for state-context rows (see
 	// state_grammar.go). Alias the severity colors but read as
@@ -191,22 +191,22 @@ func lerpColors(a, b color.Color, n int) []color.Color {
 
 func defaultPalette() palette {
 	p := palette{
-		Primary:   lipgloss.Color("#7571F9"), // Indigo
-		Secondary: lipgloss.Color("#9997CC"), // Desaturated indigo
+		Primary:    lipgloss.Color("#7571F9"), // Indigo
+		Secondary:  lipgloss.Color("#9997CC"), // Desaturated indigo
 		Brand:      lipgloss.Color("#9997CC"), // Desaturated indigo (app name in breadcrumbs)
 		LogoTop:    lipgloss.Color("#7571F9"), // Bright indigo (logo gradient start)
 		LogoBottom: lipgloss.Color("#9997CC"), // Desaturated indigo (logo gradient end)
-		Accent:    lipgloss.Color("#F780E2"), // Fuchsia
-		Info:     lipgloss.Color("#5DA9F8"), // Sky blue
-		Success:  lipgloss.Color("#02BF87"), // Green
-		Error:    lipgloss.Color("#ED567A"), // Red
-		Warning:  lipgloss.Color("#FFA500"), // Orange
-		Muted:    lipgloss.Color("243"),     // Gray
-		NormalFg: lipgloss.Color("252"),
-		Recessed: lipgloss.Color("237"),
-		Border:   lipgloss.Color("238"),
-		Subtle:   lipgloss.Color("239"),
-		ButtonFg: lipgloss.Color("#FFFDF5"),
+		Accent:     lipgloss.Color("#F780E2"), // Fuchsia
+		Info:       lipgloss.Color("#5DA9F8"), // Sky blue
+		Success:    lipgloss.Color("#02BF87"), // Green
+		Error:      lipgloss.Color("#ED567A"), // Red
+		Warning:    lipgloss.Color("#FFA500"), // Orange
+		Muted:      lipgloss.Color("243"),     // Gray
+		NormalFg:   lipgloss.Color("252"),
+		Recessed:   lipgloss.Color("237"),
+		Border:     lipgloss.Color("238"),
+		Subtle:     lipgloss.Color("239"),
+		ButtonFg:   lipgloss.Color("#FFFDF5"),
 
 		Check:  "✓",
 		Cross:  "✗",
@@ -220,22 +220,22 @@ func defaultPalette() palette {
 
 func ansiPalette() palette {
 	p := palette{
-		Primary:   lipgloss.BrightBlue,
-		Secondary: lipgloss.Blue,
+		Primary:    lipgloss.BrightBlue,
+		Secondary:  lipgloss.Blue,
 		Brand:      lipgloss.Blue,
 		LogoTop:    lipgloss.BrightBlue,
 		LogoBottom: lipgloss.Blue,
-		Accent:    lipgloss.BrightMagenta,
-		Info:     lipgloss.Cyan,
-		Success:  lipgloss.Green,
-		Error:    lipgloss.Red,
-		Warning:  lipgloss.Yellow,
-		Muted:    lipgloss.BrightBlack,
-		NormalFg: lipgloss.White,
-		Recessed: lipgloss.BrightBlack,
-		Border:   lipgloss.BrightBlack,
-		Subtle:   lipgloss.BrightBlack,
-		ButtonFg: lipgloss.BrightWhite,
+		Accent:     lipgloss.BrightMagenta,
+		Info:       lipgloss.Cyan,
+		Success:    lipgloss.Green,
+		Error:      lipgloss.Red,
+		Warning:    lipgloss.Yellow,
+		Muted:      lipgloss.BrightBlack,
+		NormalFg:   lipgloss.White,
+		Recessed:   lipgloss.BrightBlack,
+		Border:     lipgloss.BrightBlack,
+		Subtle:     lipgloss.BrightBlack,
+		ButtonFg:   lipgloss.BrightWhite,
 
 		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}

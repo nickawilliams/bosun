@@ -340,7 +340,7 @@ func TestExtractIssue(t *testing.T) {
 		{"", ""},
 		{"feature/no-ticket-here", ""},
 		{"ABC-1", "ABC-1"},
-		{"A-1", ""},  // single letter prefix — not a match
+		{"A-1", ""}, // single letter prefix — not a match
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -399,6 +399,78 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 		got := extractIssue("feature/proj-99_stuff")
 		if got != "proj-99" {
 			t.Errorf("extractIssue() = %q, want %q", got, "proj-99")
+		}
+	})
+}
+
+// sortIssues only picks between the two strategies, both of which are
+// covered directly above. What is untested is the choice itself.
+//
+// Three issues, in an input order that matches neither the board order nor
+// the lifecycle order — so every subtest fails if the wrong strategy runs,
+// and also if nothing sorts at all. Two issues would not do: the orderings
+// here are exact reverses, so a two-element input necessarily equals one of
+// them and that subtest passes without anything having to sort.
+func TestSortIssuesDispatch(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(func() { viper.Reset() })
+
+	newIssues := func() []issue.Issue {
+		return []issue.Issue{
+			{Key: "P-A", Status: "In Progress", StatusID: "inprog"},
+			{Key: "P-B", Status: "Done", StatusID: "done"},
+			{Key: "P-C", Status: "Ready", StatusID: "ready"},
+		}
+	}
+	// Board order deliberately contradicts the lifecycle sequence.
+	columns := []issue.BoardColumn{
+		{Name: "Done", StatusIDs: []string{"done"}},
+		{Name: "Ready", StatusIDs: []string{"ready"}},
+		{Name: "In Progress", StatusIDs: []string{"inprog"}},
+	}
+	var (
+		inputOrder     = []string{"P-A", "P-B", "P-C"}
+		boardOrder     = []string{"P-B", "P-C", "P-A"}
+		lifecycleOrder = []string{"P-C", "P-A", "P-B"}
+	)
+	keys := func(issues []issue.Issue) []string {
+		out := make([]string, len(issues))
+		for i, iss := range issues {
+			out[i] = iss.Key
+		}
+		return out
+	}
+
+	// Guard the premise: if these ever coincide, the subtests below stop
+	// discriminating and would pass for the wrong reason.
+	if equalSlices(boardOrder, lifecycleOrder) ||
+		equalSlices(inputOrder, boardOrder) ||
+		equalSlices(inputOrder, lifecycleOrder) {
+		t.Fatalf("fixture no longer distinguishes the strategies: input=%v board=%v lifecycle=%v",
+			inputOrder, boardOrder, lifecycleOrder)
+	}
+
+	t.Run("board columns present take precedence", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, columns)
+		if !equalSlices(keys(issues), boardOrder) {
+			t.Errorf("order = %v, want %v (board order)", keys(issues), boardOrder)
+		}
+	})
+
+	t.Run("no columns falls back to lifecycle status", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, nil)
+		if !equalSlices(keys(issues), lifecycleOrder) {
+			t.Errorf("order = %v, want %v (lifecycle order)", keys(issues), lifecycleOrder)
+		}
+	})
+
+	t.Run("empty column slice falls back too", func(t *testing.T) {
+		issues := newIssues()
+		sortIssues(issues, []issue.BoardColumn{})
+		if !equalSlices(keys(issues), lifecycleOrder) {
+			t.Errorf("order = %v, want %v (lifecycle order)", keys(issues), lifecycleOrder)
 		}
 	})
 }
