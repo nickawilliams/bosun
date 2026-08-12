@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nickawilliams/bosun/internal/cli"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -21,12 +22,19 @@ import (
 //
 // Three things about this command shape the scenarios below.
 //
-// First, init is the one command that ignores --project: it writes
-// `.bosun/` relative to os.Getwd(), and refuses to nest inside an
-// existing project. Every scenario therefore t.Chdir's into the
-// workspace, and fresh-project scenarios call Uninitialize first
-// (NewWorkspace creates .bosun/ for every other command's benefit,
-// which init would read as a reinit).
+// First, init resolves where it WRITES from os.Getwd() rather than
+// from --project: it creates `.bosun/` under the working directory.
+// It does not ignore --project, though — the flag is registered
+// (addProjectFlag) and the nested-project guard reads it, because
+// config.FindProjectRoot() returns config.ProjectRootOverride when
+// one is set and only walks up from the CWD when one isn't. So every
+// scenario t.Chdir's into the directory it means to initialize, and
+// fresh-project scenarios call Uninitialize first (NewWorkspace
+// creates .bosun/ for every other command's benefit, which init would
+// read as a reinit — and which is also what makes Harness.Run inject
+// --project). The nested-project scenario has to stay uninitialized
+// for exactly that reason: with --project injected the guard fires on
+// the override and the upward walk is never exercised.
 //
 // Second, the harness counts as interactive (ui.Interactive is true
 // for any injected reader), so the optional-service wizard runs on
@@ -66,6 +74,15 @@ func TestInit(t *testing.T) {
 		}
 		assertSaved(t, h, "Repository Patterns", "src/*")
 		assertSaved(t, h, "Workspace Root", "worktrees")
+		// The write confirmation is a plain ui.SuccessLine, not a card
+		// or a Reporter call — it goes straight to os.Stdout, which the
+		// harness captures. It's the only thing telling the user where
+		// the project settings landed, so it's worth pinning; see the
+		// harness README's note on which output does reach h.Stdout().
+		wrote := "Wrote Project Settings to "
+		if out := ansi.Strip(h.Stdout()); !strings.Contains(out, wrote) {
+			t.Errorf("no %q line on stdout; got:\n%s", wrote, out)
+		}
 	})
 
 	t.Run("fresh_project/detects_repos_from_cwd", func(t *testing.T) {
@@ -366,11 +383,18 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
+		// Presence-only, by construction: every group in configSchema
+		// offers exactly one provider, so "the gate's pick was honoured"
+		// and "the schema's only option was written" are the same
+		// string. This line pins that the group was configured at all —
+		// it cannot distinguish a run that discarded the selection.
+		// Give it teeth by adding a second provider to the schema.
 		if got := configString(t, cfg, "code_host", "provider"); got != "github" {
 			t.Errorf("code_host.provider = %q, want %q", got, "github")
 		}
-		// "merge" rather than the schema default "squash", so the
-		// assertion fails if the form's selection is discarded.
+		// merge_method is where the discrimination lives: "merge" is one
+		// past the schema default "squash", so this fails if the form's
+		// selection is discarded.
 		if got := configString(t, cfg, "code_host", "merge_method"); got != "merge" {
 			t.Errorf("code_host.merge_method = %q, want %q", got, "merge")
 		}
@@ -405,11 +429,70 @@ func TestInit(t *testing.T) {
 		if !ok {
 			t.Fatalf("cicd = %#v, want a map", cfg["cicd"])
 		}
+		// The key set is the assertion with teeth: ProviderOnly means the
+		// eight workflow keys stay unasked and unwritten.
 		if got := sortedKeys(group); !reflect.DeepEqual(got, []string{"provider"}) {
 			t.Errorf("cicd keys = %v, want [provider]", got)
 		}
+		// Presence-only for the same reason as code_host.provider above:
+		// cicd offers exactly one provider, so this can't fail while the
+		// group is configured at all.
 		if group["provider"] != "github_actions" {
 			t.Errorf("cicd.provider = %v, want github_actions", group["provider"])
+		}
+	})
+
+	t.Run("integration_groups/form_fields_arrive_prefilled", func(t *testing.T) {
+		h := newInitHarness(t)
+
+		h.Type("src/*\r")
+		h.Type("worktrees\r")
+		h.Type("\x1b[B\r") // issue tracker gate — jira
+		// The per-field form now runs over the group's non-provider,
+		// non-secret keys in schema order. Unlike the project-settings
+		// prompts (placeholder-style: blank accepts the default), these
+		// fields arrive with the current/default/example value already
+		// IN the buffer, so typing appends to it. \x15 (ctrl+u) clears
+		// the line first.
+		h.Type("\x15https://acme.test\r") // base URL — cleared, replaced
+		h.Type("dev@acme.test\r")         // email — no example, so nothing to clear
+		h.Type("\x15ACME\r")              // project key — cleared, replaced
+		h.Type("\r")                      // board ID — accept the example as-is
+		h.Type("\r")                      // code host gate — skip
+		h.Type("\r")                      // notification gate — skip
+		h.Type("\r")                      // ci/cd gate — skip
+		tripwire(h)
+
+		if err := h.Run("init"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		cfg := readInitConfig(t, h)
+		// Had \x15 not cleared the field, this would be the schema
+		// example with the typed text appended to it.
+		if got := configString(t, cfg, "issue_tracker", "base_url"); got != "https://acme.test" {
+			t.Errorf("issue_tracker.base_url = %q, want %q", got, "https://acme.test")
+		}
+		if got := configString(t, cfg, "issue_tracker", "email"); got != "dev@acme.test" {
+			t.Errorf("issue_tracker.email = %q, want %q", got, "dev@acme.test")
+		}
+		if got := configString(t, cfg, "issue_tracker", "project"); got != "ACME" {
+			t.Errorf("issue_tracker.project = %q, want %q", got, "ACME")
+		}
+		// An untouched field persists its prefill — the schema example
+		// becomes a real configured value, which is the flip side of the
+		// prefill behavior and the reason \x15 matters at all.
+		if got := configString(t, cfg, "issue_tracker", "board_id"); got != "123" {
+			t.Errorf("issue_tracker.board_id = %q, want the example %q", got, "123")
+		}
+		// Secrets are filtered out of the form — the token lives in
+		// BOSUN_JIRA_TOKEN, never in the file.
+		group, ok := cfg["issue_tracker"].(map[string]any)
+		if !ok {
+			t.Fatalf("issue_tracker = %#v, want a map", cfg["issue_tracker"])
+		}
+		if _, ok := group["token"]; ok {
+			t.Errorf("issue_tracker.token written to config: %v", group)
 		}
 	})
 
@@ -442,6 +525,7 @@ func TestInit(t *testing.T) {
 		if got := configString(t, cfg, "issue_tracker", "project"); got != "ACME" {
 			t.Errorf("issue_tracker.project = %q, want it preserved", got)
 		}
+		assertWorkflowsPreserved(t, cfg)
 	})
 
 	t.Run("already_initialized/declines_reconfigure_keeps_config", func(t *testing.T) {
@@ -498,12 +582,31 @@ func TestInit(t *testing.T) {
 		if got := configString(t, cfg, "issue_tracker", "project"); got != "ACME" {
 			t.Errorf("issue_tracker.project = %q, want it preserved", got)
 		}
+		assertWorkflowsPreserved(t, cfg)
 	})
 
 	t.Run("already_initialized/nested_project_rejected", func(t *testing.T) {
 		h := testharness.New(t)
-		h.Workspace.WriteConfig(configuredProject)
-		nested := filepath.Join(h.Workspace.Dir, "nested")
+		// The enclosing project is built by hand INSIDE an
+		// uninitialized workspace rather than being the workspace
+		// itself. That is the whole point of the scenario: while
+		// h.Workspace has no .bosun/, Harness.Run injects no --project,
+		// so config.ProjectRootOverride stays empty and
+		// config.FindProjectRoot() has to discover the project by
+		// walking up from the working directory — the path a real
+		// `bosun init` takes. Point --project at the outer project
+		// instead and the guard fires on the override, leaving the walk
+		// (and therefore the production behavior) untested.
+		h.Workspace.Uninitialize()
+		outer := filepath.Join(h.Workspace.Dir, "outer")
+		if err := os.MkdirAll(filepath.Join(outer, ".bosun"), 0o755); err != nil {
+			t.Fatalf("create outer project: %v", err)
+		}
+		outerConfig := filepath.Join(outer, ".bosun", "config.yaml")
+		if err := os.WriteFile(outerConfig, []byte(configuredProject), 0o644); err != nil {
+			t.Fatalf("write outer config: %v", err)
+		}
+		nested := filepath.Join(outer, "nested")
 		if err := os.MkdirAll(nested, 0o755); err != nil {
 			t.Fatalf("create nested dir: %v", err)
 		}
@@ -517,6 +620,12 @@ func TestInit(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "nested projects are not supported") {
 			t.Errorf("err = %v, want a nested-project rejection", err)
+		}
+		// The message names the project it found, which is how the user
+		// knows which directory to go argue with. It is also what
+		// distinguishes a discovered root from an injected one.
+		if !strings.Contains(err.Error(), outer) {
+			t.Errorf("err = %v, want it to name the enclosing project %s", err, outer)
 		}
 		if _, statErr := os.Stat(filepath.Join(nested, ".bosun")); statErr == nil {
 			t.Errorf("nested .bosun/ created")
@@ -538,6 +647,20 @@ func TestInit(t *testing.T) {
 			t.Fatalf("init: %v", err)
 		}
 
+		// A preservation scenario has a structural blind spot: the
+		// correct end state is the state it started in, so every
+		// value-level assertion below is equally happy with a run that
+		// did nothing at all (`if quick { return nil }` at the top of
+		// runInit used to sail through them). This is the assertion that
+		// closes it. Reinit's targeted updates go through viper —
+		// ReadInConfig, Set, WriteConfigAs — which reserializes the
+		// whole document, so a run that reached the write leaves a file
+		// that is no longer byte-identical to the seed even though every
+		// value in it is. Nothing else here can tell the two apart.
+		if got := h.Workspace.ReadConfig(); got == configuredProject {
+			t.Errorf("config is byte-identical to the seed — init never wrote:\n%s", got)
+		}
+
 		cfg := readInitConfig(t, h)
 		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
 			t.Errorf("repositories = %v, want [repos/*]", got)
@@ -554,6 +677,115 @@ func TestInit(t *testing.T) {
 		if got := configString(t, cfg, "code_host", "merge_method"); got != "rebase" {
 			t.Errorf("code_host.merge_method = %q, want it preserved", got)
 		}
+		assertWorkflowsPreserved(t, cfg)
+	})
+
+	t.Run("quick_flag/dry_run_reports_the_reused_settings", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(configuredProject)
+		t.Chdir(h.Workspace.Dir)
+
+		tripwire(h) // quick + a configured project asks nothing
+
+		if err := h.Run("init", "--quick", "--approve", "--dry-run"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		// The dry-run preview is where quick mode's reuse becomes
+		// directly observable rather than merely indistinguishable from
+		// the seed: these rows are rendered from the in-memory
+		// repositoryGlobs / wsRoot that the quick+reinit branch loaded
+		// out of the existing config. A run that skipped that branch
+		// reports different rows (or, having prompted for them instead,
+		// trips the tripwire) — where the on-disk assertions above would
+		// still have found the seeded values sitting untouched.
+		details := h.Reporter.OfKind(ui.CaptureDetails)
+		if len(details) != 1 {
+			t.Fatalf("details blocks = %d, want 1; reported:\n%s", len(details), h.Reporter.Dump())
+		}
+		want := []string{
+			"Config: .bosun/config.yaml",
+			"Repositories: repos/*",
+			"Workspace Root: .wt",
+		}
+		if got := details[0].Items; !reflect.DeepEqual(got, want) {
+			t.Errorf("details = %v, want %v", got, want)
+		}
+		if got := h.Workspace.ReadConfig(); got != configuredProject {
+			t.Errorf("config rewritten during --dry-run:\n%s", got)
+		}
+	})
+
+	t.Run("quick_flag/prompts_only_for_a_missing_required_key", func(t *testing.T) {
+		h := testharness.New(t)
+		// Everything the fixture has, minus one required key. Quick mode
+		// skips the four provider gates entirely and calls resolveGroup,
+		// which is just-in-time: keys that already have values are left
+		// alone and only the gap is asked about.
+		h.Workspace.WriteConfig(strings.Replace(configuredProject,
+			"  email: dev@acme.test\n", "", 1))
+		t.Chdir(h.Workspace.Dir)
+
+		h.Type("dev@acme.test\r") // the one gap — issue_tracker.email
+		// No gate keystrokes queued. If quick mode stopped bypassing the
+		// gates, the issue-tracker gate would eat the line above and the
+		// code-host gate would hit the tripwire.
+		tripwire(h)
+
+		if err := h.Run("init", "--quick", "--approve"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		cfg := readInitConfig(t, h)
+		if got := configString(t, cfg, "issue_tracker", "email"); got != "dev@acme.test" {
+			t.Errorf("issue_tracker.email = %q, want it filled in", got)
+		}
+		assertSaved(t, h, "email", "dev@acme.test")
+		// resolveGroup, not resolveGroupReconfigure: the keys that were
+		// already set are neither re-asked nor rewritten.
+		if got := configString(t, cfg, "issue_tracker", "base_url"); got != "https://acme.atlassian.net" {
+			t.Errorf("issue_tracker.base_url = %q, want it preserved", got)
+		}
+		if got := configString(t, cfg, "code_host", "merge_method"); got != "rebase" {
+			t.Errorf("code_host.merge_method = %q, want it preserved", got)
+		}
+		if got := configString(t, cfg, "notification", "auth"); got != "local" {
+			t.Errorf("notification.auth = %q, want it preserved", got)
+		}
+		assertWorkflowsPreserved(t, cfg)
+	})
+
+	t.Run("quick_flag/fresh_project_still_asks_for_project_settings", func(t *testing.T) {
+		h := newInitHarness(t)
+
+		// Quick mode's reuse is conditional on reinit. On a fresh
+		// project there is nothing to reuse, so both project settings
+		// are still prompted for — --quick trims the optional service
+		// wizard, not the required values. Stopping at --dry-run keeps
+		// the scenario to those two prompts instead of the ~20 the full
+		// quick wizard would ask on an empty config.
+		h.Type("src/*\r")
+		h.Type("worktrees\r")
+		tripwire(h)
+
+		if err := h.Run("init", "--quick", "--dry-run"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		details := h.Reporter.OfKind(ui.CaptureDetails)
+		if len(details) != 1 {
+			t.Fatalf("details blocks = %d, want 1; reported:\n%s", len(details), h.Reporter.Dump())
+		}
+		want := []string{
+			"Config: .bosun/config.yaml",
+			"Repositories: src/*",
+			"Workspace Root: worktrees",
+		}
+		if got := details[0].Items; !reflect.DeepEqual(got, want) {
+			t.Errorf("details = %v, want %v", got, want)
+		}
+		assertSaved(t, h, "Repository Patterns", "src/*")
+		assertSaved(t, h, "Workspace Root", "worktrees")
 	})
 
 	t.Run("dry_run/skips_apply", func(t *testing.T) {
@@ -602,6 +834,23 @@ func TestInit(t *testing.T) {
 		h.Type("src/*\r")
 		h.Type("worktrees\r")
 		h.Type("\x03") // ctrl+c at the issue-tracker gate
+		// Sentinel, not input — nothing on the intended path reads past
+		// the ctrl+c. It exists because the regression this scenario is
+		// here to catch (runForm's huh.ErrUserAborted -> ErrCancelled
+		// mapping breaking, or the abort being swallowed) would
+		// otherwise run on into the next gate against a drained reader
+		// and HANG rather than fail. These let the run finish instead,
+		// so the ErrCancelled assertion below reports err = nil.
+		//
+		// A second \x03 would be the obvious sentinel and is the wrong
+		// one here: it would cancel at the code-host gate and every
+		// assertion in this scenario would still hold, masking exactly
+		// the bug it was added for. The sentinel has to let the run
+		// SUCCEED to be discriminating.
+		for range 3 { // code host, notifications, CI/CD gates
+			h.Type("\r")
+		}
+		tripwire(h)
 
 		err := h.Run("init")
 		if !errors.Is(err, cli.ErrCancelled) {
@@ -620,10 +869,47 @@ func TestInit(t *testing.T) {
 		}
 	})
 
+	t.Run("errors/cancelled_at_reconfigure_dialog", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(configuredProject)
+		t.Chdir(h.Workspace.Dir)
+
+		h.Type("\x03") // ctrl+c at the Already Initialized dialog
+		// Sentinel — see errors/cancelled_at_integration_gate. The keys
+		// a run that ignored the abort would need, so it finishes and
+		// fails the assertions instead of blocking.
+		h.Type("src/*\r")
+		h.Type("worktrees\r")
+		skipIntegrationGates(h)
+
+		err := h.Run("init")
+		if !errors.Is(err, cli.ErrCancelled) {
+			t.Fatalf("err = %v, want ErrCancelled", err)
+		}
+		// Aborting the question is not the same as answering "no" to
+		// it: declining reports why it stopped, cancelling just stops.
+		if _, ok := h.Reporter.Find("keeping existing configuration"); ok {
+			t.Errorf("reported a decline for a cancellation:\n%s", h.Reporter.Dump())
+		}
+		if got := h.Workspace.ReadConfig(); got != configuredProject {
+			t.Errorf("config rewritten after cancelling:\n%s", got)
+		}
+	})
+
 	t.Run("errors/cancelled_at_prompt_aborts", func(t *testing.T) {
 		h := newInitHarness(t)
 
 		h.Type("\x03") // ctrl+c at the repository-patterns prompt
+		// Sentinel — same reasoning as the integration-gate scenario
+		// above: let a swallowed abort run to completion so this fails
+		// instead of hanging on a drained reader. The discriminating
+		// assertion is the .bosun/ check, which a completed run trips
+		// no matter which of these keys it happened to consume; a bare
+		// second \x03 would abort at the workspace-root prompt and
+		// still look like a clean cancellation.
+		h.Type("\r") // workspace root
+		h.Type("\r") // second chance at repository patterns
+		skipIntegrationGates(h)
 
 		err := h.Run("init")
 		if !errors.Is(err, cli.ErrCancelled) {
@@ -643,11 +929,13 @@ func TestInit(t *testing.T) {
 // That second property is load-bearing rather than tidy. A reinit
 // scenario asserts that an existing value survived; if the fixture
 // happens to hold what the code would have produced anyway, the
-// assertion passes whether or not anything was preserved. `workspace.
-// root` and `code_host.merge_method` are the two that previously
-// collided — with init.go's hardcoded ".workspaces" fallback and the
-// schema's "squash" default respectively — so both are now values
-// neither path can invent. Keep it that way when editing.
+// assertion passes whether or not anything was preserved. Four values
+// previously collided and have all been moved off their defaults:
+// `workspace.root` (init.go's hardcoded ".workspaces" fallback),
+// `code_host.merge_method` ("squash"), `notification.auth` ("token")
+// and `cicd.workflows.release.inputs.version` ("version"). Every value
+// below is now one neither path can invent. Keep it that way when
+// editing: grep the key in schema.go for a Default before choosing.
 //
 // Completeness matters for the quick-mode scenario specifically:
 // quick resolves each service group's unset keys by prompting, so a
@@ -669,7 +957,7 @@ code_host:
   merge_method: rebase
 notification:
   provider: slack
-  auth: token
+  auth: local
   token: seeded-slack-token
   workspace: acme
   channel_review: reviews
@@ -691,8 +979,49 @@ cicd:
     release:
       target: acme/infra/.github/workflows/release.yml
       inputs:
-        version: version
+        version: release_version
 `
+
+// configuredWorkflows is configuredProject's cicd.workflows tree in
+// parsed form — the deepest nested structure in the schema, and the
+// one most at risk from reinit's write path. Reinit rewrites the WHOLE
+// file through viper (ReadInConfig, Set, WriteConfigAs) to update two
+// keys, so every untouched branch survives only because viper's
+// round-trip happens to preserve it. Asserting on the tree wholesale
+// rather than on a leaf means a serializer change that flattened,
+// reordered into strings, or dropped a level fails here instead of
+// shipping.
+var configuredWorkflows = map[string]any{
+	"preview": map[string]any{
+		"url_template": "https://preview-{{.Name}}.acme.test",
+		"up": map[string]any{
+			"target": "acme/infra/.github/workflows/up.yml",
+			"inputs": map[string]any{"services": "services", "name": "name"},
+		},
+		"down": map[string]any{
+			"target": "acme/infra/.github/workflows/down.yml",
+			"inputs": map[string]any{"name": "name"},
+		},
+	},
+	"release": map[string]any{
+		"target": "acme/infra/.github/workflows/release.yml",
+		"inputs": map[string]any{"version": "release_version"},
+	},
+}
+
+// assertWorkflowsPreserved checks that the seeded cicd.workflows tree
+// came back byte-for-byte after a reinit. Use it in any scenario that
+// re-runs init over configuredProject without revisiting CI/CD.
+func assertWorkflowsPreserved(t *testing.T, cfg map[string]any) {
+	t.Helper()
+	group, ok := cfg["cicd"].(map[string]any)
+	if !ok {
+		t.Fatalf("cicd = %#v, want a map", cfg["cicd"])
+	}
+	if got := group["workflows"]; !reflect.DeepEqual(got, configuredWorkflows) {
+		t.Errorf("cicd.workflows = %#v,\nwant %#v", got, configuredWorkflows)
+	}
+}
 
 // newInitHarness builds a harness whose workspace is an ordinary
 // empty directory: .bosun/ removed (so init takes its fresh-project
