@@ -30,34 +30,59 @@ type healthCheck struct {
 // rather than a failure (✗).
 var errNotConfigured = fmt.Errorf("(not configured)")
 
-// doctorRunTimeout caps the whole run and doctorCheckTimeout caps each
-// individual check. Both are needed, and they bound different things.
+// doctorRunTimeout caps the whole run; doctorProbeTimeout caps the
+// network portion of one check. Both are needed, and they bound
+// different things.
 //
 // The run timeout is the caller's contract: `bosun doctor` invoked
 // from CI to gate a pipeline must return within a bounded time no
 // matter how many integrations are wedged.
 //
-// The per-check timeout exists because the run budget alone is a
-// shared pool, and a single unreachable host drains it. Every check
-// receives one context, so the first integration pointed at a
-// blackholed address consumes the entire run budget in its dial and
-// every check after it fails instantly with "context deadline
-// exceeded" — reporting a broken code host, notifier, and CI/CD that
-// are in fact fine. That failure mode is worst precisely when doctor
-// is most needed, since diagnosing one broken integration is the
-// reason to run it. Slicing the budget per check keeps one wedged
-// integration from being reported as four.
+// The probe timeout exists because the run budget alone is a shared
+// pool, and a single unreachable host drains it. When every check
+// shares one context, the first integration pointed at a blackholed
+// address spends the entire run budget in its dial and every check
+// after it fails instantly with "context deadline exceeded" —
+// reporting a broken code host, notifier, and CI/CD that are in fact
+// fine. That failure mode is worst precisely when doctor is most
+// needed, since diagnosing one broken integration is the reason to
+// run it. Slicing the budget per probe keeps one wedged integration
+// from being reported as four.
+//
+// It bounds the *probe* rather than the whole check on purpose. A
+// check does two separable things: resolve the service (read config,
+// shell out to `gh`, and on a TTY prompt for missing keys), then
+// reach the network. Only the second is a connectivity measurement.
+// Timing the first would charge the user's typing against the
+// integration and report "connection failed: context deadline
+// exceeded" for a tracker that was never contacted — a wrong answer,
+// which is worse than the slow one it replaced. Every check therefore
+// resolves its service on the run context and starts the probe clock
+// at the network boundary.
 //
 // The run timeout remains the hard cap: with four integration checks
 // these do not multiply out to fit inside it, so enough simultaneously
 // unreachable hosts can still exhaust the run budget before the last
 // check runs. Bounding the total is the property that matters more,
-// and the common case — one broken integration — now costs one check's
-// budget rather than everything.
+// and the common case — one broken integration — now costs one probe
+// rather than everything.
 var (
 	doctorRunTimeout   = 30 * time.Second
-	doctorCheckTimeout = 10 * time.Second
+	doctorProbeTimeout = 10 * time.Second
 )
+
+// probeContext bounds the network portion of a check. It derives from
+// the run context, so whichever deadline lands first wins: a probe
+// started after the run budget is gone fails immediately rather than
+// being granted a fresh one.
+//
+// A check that issues several calls (notification probes auth and then
+// each channel) shares one probe context across all of them, so the
+// budget is per check rather than per request — otherwise a check with
+// N calls could claim N slices of a pool its siblings still need.
+func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, doctorProbeTimeout)
+}
 
 func newDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -106,7 +131,9 @@ func newDoctorCmd() *cobra.Command {
 					for _, hc := range dg.checks {
 						var detail string
 						checkErr := g.Spinner(hc.Name, func() error {
-							return runCheck(ctx, hc, &detail)
+							var err error
+							detail, err = hc.Check(ctx)
+							return err
 						})
 						emitCheckResult(g, hc, detail, checkErr, alignWidth, &passed, &warned, &failed)
 					}
@@ -132,21 +159,6 @@ func newDoctorCmd() *cobra.Command {
 
 	addProjectFlag(cmd)
 	return cmd
-}
-
-// runCheck invokes one health check under its own slice of the run
-// budget, writing the check's display detail through into detail.
-//
-// The per-check context derives from the run context, so whichever
-// deadline lands first wins: a check started late in an exhausted run
-// still fails immediately rather than being granted a fresh budget.
-func runCheck(ctx context.Context, hc healthCheck, detail *string) error {
-	checkCtx, cancel := context.WithTimeout(ctx, doctorCheckTimeout)
-	defer cancel()
-
-	var err error
-	*detail, err = hc.Check(checkCtx)
-	return err
 }
 
 // --- Providers ---
@@ -354,13 +366,19 @@ func checkIssueTracker(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("unsupported: %q", provider)
 	}
 
-	// Test connectivity.
+	// Test connectivity. Construction stays on the run context —
+	// newIssueTracker resolves config and may prompt on a TTY, and
+	// charging that to the probe budget would report a healthy tracker
+	// as unreachable.
 	tracker, err := newIssueTracker()
 	if err != nil {
 		return "", err
 	}
 
-	_, err = tracker.GetIssue(ctx, "BOSUN-0")
+	probeCtx, cancel := probeContext(ctx)
+	defer cancel()
+
+	_, err = tracker.GetIssue(probeCtx, "BOSUN-0")
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
@@ -382,12 +400,18 @@ func checkIssueTracker(ctx context.Context) (string, error) {
 }
 
 func checkCodeHost(ctx context.Context) (string, error) {
+	// newCodeHost shells out to `gh auth token` and may prompt; it
+	// stays outside the probe budget for the same reason as the
+	// tracker's construction.
 	host, err := newCodeHost()
 	if err != nil {
 		return "", errNotConfigured
 	}
 
-	username, err := host.GetAuthenticatedUser(ctx)
+	probeCtx, cancel := probeContext(ctx)
+	defer cancel()
+
+	username, err := host.GetAuthenticatedUser(probeCtx)
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
@@ -415,7 +439,13 @@ func checkNotification(ctx context.Context) (string, error) {
 	}
 	defer notifier.Close()
 
-	user, err := notifier.AuthTest(notify.WithNoCache(ctx))
+	// One probe context spans auth and every channel: this check makes
+	// several calls, and giving each its own slice would let it claim
+	// N budgets from a pool its siblings still need.
+	probeCtx, cancel := probeContext(ctx)
+	defer cancel()
+
+	user, err := notifier.AuthTest(notify.WithNoCache(probeCtx))
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
@@ -433,7 +463,7 @@ func checkNotification(ctx context.Context) (string, error) {
 			continue
 		}
 		display := "#" + strings.TrimPrefix(ch, "#")
-		_, err := notifier.FindThread(notify.WithNoCache(ctx), ch, "__bosun_doctor_probe__")
+		_, err := notifier.FindThread(notify.WithNoCache(probeCtx), ch, "__bosun_doctor_probe__")
 		if err != nil {
 			failedCount++
 			lines = append(lines, errorStyle.Render(display))
@@ -474,7 +504,11 @@ func checkCICD(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot verify token: %w", err)
 	}
-	username, err := host.GetAuthenticatedUser(ctx)
+
+	probeCtx, cancel := probeContext(ctx)
+	defer cancel()
+
+	username, err := host.GetAuthenticatedUser(probeCtx)
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
