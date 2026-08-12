@@ -1,15 +1,32 @@
 # Changelog
 
-## [v2.0.0](https://github.com/nickawilliams/bosun/compare/ffc38c737c78bacaf24b3d0eb94539575239eae9...v2.0.0) - 2026-08-10
+## [v1.1.0](https://github.com/nickawilliams/bosun/compare/ffc38c737c78bacaf24b3d0eb94539575239eae9...v1.1.0) - 2026-08-12
 
 ### New Features
 
-- **CLI:** Surface a skip when notification is configured but channel is unset - ([b9b356e](https://github.com/nickawilliams/bosun/commit/b9b356e6545a8326a361ee61229b940adc28d7d8))
+- **CLI**
+  - Surface a skip when notification is configured but channel is unset - ([b9b356e](https://github.com/nickawilliams/bosun/commit/b9b356e6545a8326a361ee61229b940adc28d7d8))
+  - Resolve review's PR metadata per repository - ([30e1b87](https://github.com/nickawilliams/bosun/commit/30e1b875d9b54ff97ded10d5f0e46399e70e61c1))
+- **UI:** Add a recording Reporter for command tests - ([56170a3](https://github.com/nickawilliams/bosun/commit/56170a38ee46a851fb8a8f2f626e89548cb7218e))
+- **Code:** Add a Host default-branch method - ([b1b7ef5](https://github.com/nickawilliams/bosun/commit/b1b7ef51ee359591ca885c0c7c6f35e4a6cdc497))
 
 ### Improvements
 
-- **CLI:** Flat per-command notification channel + template keys - ([8f00bc7](https://github.com/nickawilliams/bosun/commit/8f00bc71f15ae88519ff484d82deabc8885740c2))
+- **CLI**
+  - Flat per-command notification channel + template keys - ([8f00bc7](https://github.com/nickawilliams/bosun/commit/8f00bc71f15ae88519ff484d82deabc8885740c2))
+  - Drop review's vestigial removal formatting - ([bbfac26](https://github.com/nickawilliams/bosun/commit/bbfac26c1ab419b230462718c76e9223a6b34e33))
+  - Assess a repo's PR with the shared active predicate - ([4f43778](https://github.com/nickawilliams/bosun/commit/4f437787ebff4e8b05febfc262913043b3d2768e))
+- **UI:** Enumerate raw reporters instead of marking them - ([e36d6a7](https://github.com/nickawilliams/bosun/commit/e36d6a7725750e7cc101583bcfac3243376f93bc))
 - **Notify:** Split notification content from provider presentation - ([ffc38c7](https://github.com/nickawilliams/bosun/commit/ffc38c737c78bacaf24b3d0eb94539575239eae9))
+
+### Fixes
+
+- **CLI**
+  - Build prerelease selection form when takeover frame never painted - ([f5413d5](https://github.com/nickawilliams/bosun/commit/f5413d52e2c063dd574c720c684b93f8b7e0e58c))
+  - Build the review PR-target form when rendering raw - ([9cbe9f5](https://github.com/nickawilliams/bosun/commit/9cbe9f51f277a9c78fbfe939c5da14889ab669e8))
+  - Review follow-ups from the independent review - ([3edab56](https://github.com/nickawilliams/bosun/commit/3edab56ef2e7354291e5f206c2dd0b708e476942))
+  - Build release's deploy picker when no frame was painted - ([17dfc21](https://github.com/nickawilliams/bosun/commit/17dfc2197244303f01b4eec8c2e021f90efc01aa))
+- **Harness:** Disable commit signing in test repos - ([c59f7af](https://github.com/nickawilliams/bosun/commit/c59f7af193769c90aaeb60a1d97ce38c98a13c4a))
 
 ## [v1.0.1](https://github.com/nickawilliams/bosun/compare/31487cec7ed061e5ad9bb97f4cbd7c257804b464...v1.0.1) - 2026-08-03
 
