@@ -115,13 +115,43 @@ func TestCreatePRHonorsContextDeadline(t *testing.T) {
 func TestNewSetsRequestTimeout(t *testing.T) {
 	adapter := New("token")
 
-	if adapter.client.Timeout == 0 {
-		t.Fatal("New returned an adapter whose client has no timeout")
+	// Identity first: http.DefaultClient's Timeout is zero, so a
+	// Timeout assertion alone would fire before ever reaching this and
+	// leave the real regression — silently sharing the process-wide
+	// client — untested.
+	if adapter.client == http.DefaultClient {
+		t.Fatal("adapter uses http.DefaultClient, which is shared process-wide and has no timeout")
 	}
 	if adapter.client.Timeout != requestTimeout {
 		t.Errorf("client.Timeout = %v, want %v", adapter.client.Timeout, requestTimeout)
 	}
-	if adapter.client == http.DefaultClient {
-		t.Error("adapter uses http.DefaultClient, which is shared process-wide and has no timeout")
+}
+
+// The backstop has to actually bound a call, not just populate a
+// field. This is the path that matters for it: a caller handing over a
+// context with no deadline at all.
+func TestRequestTimeoutBoundsDeadlinelessCaller(t *testing.T) {
+	server, _ := hangingServer(t)
+
+	// The backstop is baked into defaultClient at init, so the knob
+	// that matters is the client's own field. Overriding it here keeps
+	// the test on the exact client New installs rather than a stand-in.
+	orig := defaultClient.Timeout
+	defaultClient.Timeout = 150 * time.Millisecond
+	t.Cleanup(func() { defaultClient.Timeout = orig })
+
+	adapter := New("token")
+	adapter.baseURL = server.URL
+
+	err := mustReturnWithin(t, 5*time.Second, func() error {
+		//nolint:usetesting // context.Background is the condition under test.
+		_, err := adapter.GetAuthenticatedUser(context.Background())
+		return err
+	})
+	if err == nil {
+		t.Fatal("GetAuthenticatedUser with a deadline-free context returned nil against a hanging server")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want it to wrap context.DeadlineExceeded", err)
 	}
 }

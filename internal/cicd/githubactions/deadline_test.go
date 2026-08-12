@@ -59,21 +59,25 @@ func TestTriggerWorkflowHonorsContextDeadline(t *testing.T) {
 		t.Fatal("TriggerWorkflow did not return within 5s; the context deadline was not honored")
 	}
 
-	if got := requests.Load(); got != 1 {
-		t.Errorf("issued %d requests, want 1 — the adapter must not retry", got)
+	// Asserts "never more than one", not "exactly one": the handler
+	// goroutine may not be scheduled before a deadline this short, and
+	// the guarantee under test is the absence of a retry.
+	if got := requests.Load(); got > 1 {
+		t.Errorf("issued %d requests, want at most 1 — the adapter must not retry", got)
 	}
 }
 
 func TestNewSetsRequestTimeout(t *testing.T) {
 	adapter := New("token")
 
-	if adapter.client.Timeout == 0 {
-		t.Fatal("New returned an adapter whose client has no timeout")
+	// Identity first: http.DefaultClient's Timeout is zero, so a
+	// Timeout assertion alone would fire before ever reaching this and
+	// leave the real regression — silently sharing the process-wide
+	// client — untested.
+	if adapter.client == http.DefaultClient {
+		t.Fatal("adapter uses http.DefaultClient, which is shared process-wide and has no timeout")
 	}
 	if adapter.client.Timeout != requestTimeout {
 		t.Errorf("client.Timeout = %v, want %v", adapter.client.Timeout, requestTimeout)
-	}
-	if adapter.client == http.DefaultClient {
-		t.Error("adapter uses http.DefaultClient, which is shared process-wide and has no timeout")
 	}
 }
