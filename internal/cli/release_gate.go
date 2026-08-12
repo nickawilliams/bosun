@@ -482,14 +482,29 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return states, nil
 	}
 
-	// Seamless takeover: the form's first frame is already on screen —
-	// move the cursor to its origin and let huh repaint the same bytes
-	// in place.
-	fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-	ui.ClearSpacer()
-	if err := runForm(msField); err != nil {
-		ui.RequestSpacer()
-		return nil, err
+	if msField == nil {
+		// Raw rendering: RunCardStepsInto never runs its final-frame
+		// closure (there's no frame to take over), so the form hasn't
+		// been built. Build it now and run it standalone, skipping the
+		// cursor takeover below, which assumes a painted frame to
+		// repaint over. Mirrors prerelease's selectReleaseTargets. The
+		// form runs when stdin can drive it (the harness's injected
+		// reader); a TTY-stdin/piped-stdout session is refused cleanly
+		// by runForm's render guard instead.
+		buildSelectionForm()
+		if err := runForm(msField); err != nil {
+			return nil, err
+		}
+	} else {
+		// Seamless takeover: the form's first frame is already on screen —
+		// move the cursor to its origin and let huh repaint the same bytes
+		// in place.
+		fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+		ui.ClearSpacer()
+		if err := runForm(msField); err != nil {
+			ui.RequestSpacer()
+			return nil, err
+		}
 	}
 
 	for i := range states {
@@ -526,9 +541,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 // between the gather's progressively-filling card, the selection form,
 // and the final record card, so none of the three can drift. selected
 // is the effective inclusion (the classification default during
-// gather, the user's choice afterward). Repo-level context ("newer
-// release exists") is NOT on the rows — deployNewerNotes renders it
-// once under the header.
+// gather, the user's choice afterward).
 func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content string) {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -570,8 +583,7 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 
 // buildDeployTargetsCard renders the "deploy" record card: one row per
 // service target with a glyph (✓ deploying / ○ deselected, skipped, or
-// blocked / ✗ error) and the classification reason, plus a muted
-// continuation row for any "newer release exists" note. Mirrors
+// blocked / ✗ error) and the classification reason. Mirrors
 // buildReleaseTargetsCard: rows are status, the plan owns the change.
 func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	idx := make([]int, len(states))

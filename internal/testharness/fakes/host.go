@@ -74,27 +74,34 @@ type Host struct {
 	// respectively; unseeded lookups return nil.
 	collaborators map[string][]string
 	teams         map[string][]string
+	// deployments are keyed "owner/name@environment" — the latest
+	// deployment of that environment. An unseeded environment answers
+	// code.ErrNotFound ("never deployed"), which is the distinction
+	// release's classifier draws against a lookup failure.
+	deployments map[string]code.Deployment
 
 	// CreateReleaseErr, GetLatestTagErr, GetPRErr, CreatePRErr,
 	// EditPRErr, RequestReviewersErr, AddAssigneesErr, MergePRErr,
-	// GetDefaultBranchErr, ListCollaboratorsErr, ListTeamsErr override
-	// default behavior to force error paths. nil means success.
+	// GetDefaultBranchErr, ListCollaboratorsErr, ListTeamsErr,
+	// GetLatestDeploymentErr override default behavior to force error
+	// paths. nil means success.
 	//
 	// EditPRErr / RequestReviewersErr / AddAssigneesErr exist for the
 	// best-effort writes that follow a PR create or update: the caller
 	// reports them and keeps going, which is only observable if the
 	// write can be made to fail.
-	CreateReleaseErr     error
-	GetLatestTagErr      error
-	GetPRErr             error
-	CreatePRErr          error
-	EditPRErr            error
-	RequestReviewersErr  error
-	AddAssigneesErr      error
-	MergePRErr           error
-	GetDefaultBranchErr  error
-	ListCollaboratorsErr error
-	ListTeamsErr         error
+	CreateReleaseErr       error
+	GetLatestTagErr        error
+	GetPRErr               error
+	CreatePRErr            error
+	EditPRErr              error
+	RequestReviewersErr    error
+	AddAssigneesErr        error
+	MergePRErr             error
+	GetDefaultBranchErr    error
+	ListCollaboratorsErr   error
+	ListTeamsErr           error
+	GetLatestDeploymentErr error
 
 	// AuthErr forces GetAuthenticatedUser to fail — the seam for
 	// "host constructed, but the token is rejected".
@@ -126,6 +133,7 @@ func NewHost() *Host {
 		defaultBranches: map[string]string{},
 		collaborators:   map[string][]string{},
 		teams:           map[string][]string{},
+		deployments:     map[string]code.Deployment{},
 
 		reviewerRequests: map[string][]string{},
 		teamRequests:     map[string][]string{},
@@ -189,6 +197,28 @@ func (h *Host) SeedDefaultBranch(owner, name, branch string) *Host {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.defaultBranches[repoKey(owner, name)] = branch
+	return h
+}
+
+// SeedDeployment sets the deployment GetLatestDeployment returns for
+// an environment — the "what's live in production right now" half of
+// release's deploy classification. Environments no test seeds answer
+// code.ErrNotFound (never deployed).
+//
+// State is honored rather than decorative: the production contract is
+// the most recent *successful* deployment, with failed or inactive
+// ones skipped so they aren't read as what's live. A seed with any
+// State other than "" or "success" therefore reads back as
+// ErrNotFound, the same as the real adapter — seeding a failed deploy
+// and asserting it counts as live would be asserting on a state the
+// host cannot produce.
+func (h *Host) SeedDeployment(owner, name, environment string, dep code.Deployment) *Host {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if dep.Environment == "" {
+		dep.Environment = environment
+	}
+	h.deployments[repoKey(owner, name)+"@"+environment] = dep
 	return h
 }
 
@@ -633,11 +663,25 @@ func (h *Host) GetChecks(_ context.Context, owner, repository, ref string) (code
 	return code.CheckRollup{State: "none"}, nil
 }
 
-func (h *Host) GetLatestDeployment(_ context.Context, _, _, _ string) (code.Deployment, error) {
+func (h *Host) GetLatestDeployment(_ context.Context, owner, repository, environment string) (code.Deployment, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("GetLatestDeployment")
-	return code.Deployment{}, code.ErrNotFound
+	if h.GetLatestDeploymentErr != nil {
+		return code.Deployment{}, h.GetLatestDeploymentErr
+	}
+	dep, ok := h.deployments[repoKey(owner, repository)+"@"+environment]
+	if !ok {
+		return code.Deployment{}, code.ErrNotFound
+	}
+	// "Most recent SUCCESSFUL deployment" — a failed or inactive one is
+	// skipped by the real adapter rather than reported as live. An
+	// unset State is taken as success so scenarios that don't care can
+	// leave it off.
+	if dep.State != "" && dep.State != "success" {
+		return code.Deployment{}, code.ErrNotFound
+	}
+	return dep, nil
 }
 
 // semverLess reports a < b for release-shaped tags.
