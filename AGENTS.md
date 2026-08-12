@@ -119,6 +119,50 @@ them short so the generated slugs stay a reasonable length.
 - No scope prefixes (`cli:`, `ui:`) and no trailing punctuation; the
   issue body carries the detail.
 
+## Versioning
+
+Releases are cut automatically by git-cliff from conventional commit
+types (`.github/workflows/release.yaml`, `cliff.toml`). The bump is
+computed from commit messages alone — nothing else votes.
+
+### The breaking-change bar
+
+A `!` marker or `BREAKING CHANGE:` footer forces a **major** bump.
+Once the project is at 1.x this is unconditional: no `cliff.toml`
+setting downgrades it, so the commit message is the only control.
+Treat the marker as the version decision it is.
+
+Bosun's public surface is its **commands, flags, and config keys** —
+not its Go API, which is entirely `internal/` and importable by no one.
+
+Reserve the marker for changes that break a working invocation **with
+no diagnostic** — the user gets silence, wrong behavior, or a failure
+that doesn't name the cause:
+
+| Change                                          | Marker |
+|-------------------------------------------------|--------|
+| Command or flag removed                         | Yes    |
+| Flag's meaning changes, same name                | Yes    |
+| Config key removed; absence silently changes behavior | Yes |
+| Config key renamed; old key errors and names the new one | No |
+| Default changes, with the new value reported     | No     |
+| Output shape or wording changes                  | No     |
+
+A rename that **fails loudly and names the migration** is a warned
+migration, not a break. Use `feat` and put the migration in the commit
+body — it lands in the changelog without burning a major.
+
+Two majors so far have both been incidental side effects of a marker
+rather than deliberate decisions. If a change genuinely warrants a
+major, say so in the PR and cut it on purpose.
+
+### Go module path
+
+`go.mod` declares `github.com/nickawilliams/bosun` with no `/vN`
+suffix, so Go's semantic import versioning ignores any `v2+` tag —
+`@latest` silently resolves to the newest `v1`. Any real major needs
+the module path and every internal import updated in the same change.
+
 ## Polish-Before-Refactor Discipline
 
 When polish or feature work surfaces an architectural smell that's out
