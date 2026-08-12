@@ -204,6 +204,14 @@ func (h *Host) SeedDefaultBranch(owner, name, branch string) *Host {
 // an environment — the "what's live in production right now" half of
 // release's deploy classification. Environments no test seeds answer
 // code.ErrNotFound (never deployed).
+//
+// State is honored rather than decorative: the production contract is
+// the most recent *successful* deployment, with failed or inactive
+// ones skipped so they aren't read as what's live. A seed with any
+// State other than "" or "success" therefore reads back as
+// ErrNotFound, the same as the real adapter — seeding a failed deploy
+// and asserting it counts as live would be asserting on a state the
+// host cannot produce.
 func (h *Host) SeedDeployment(owner, name, environment string, dep code.Deployment) *Host {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -664,6 +672,13 @@ func (h *Host) GetLatestDeployment(_ context.Context, owner, repository, environ
 	}
 	dep, ok := h.deployments[repoKey(owner, repository)+"@"+environment]
 	if !ok {
+		return code.Deployment{}, code.ErrNotFound
+	}
+	// "Most recent SUCCESSFUL deployment" — a failed or inactive one is
+	// skipped by the real adapter rather than reported as live. An
+	// unset State is taken as success so scenarios that don't care can
+	// leave it off.
+	if dep.State != "" && dep.State != "success" {
 		return code.Deployment{}, code.ErrNotFound
 	}
 	return dep, nil

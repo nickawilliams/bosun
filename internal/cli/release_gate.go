@@ -541,9 +541,7 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 // between the gather's progressively-filling card, the selection form,
 // and the final record card, so none of the three can drift. selected
 // is the effective inclusion (the classification default during
-// gather, the user's choice afterward). Repo-level context ("newer
-// release exists") is NOT on the rows — deployNewerNotes renders it
-// once under the header.
+// gather, the user's choice afterward).
 func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content string) {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -585,8 +583,7 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 
 // buildDeployTargetsCard renders the "deploy" record card: one row per
 // service target with a glyph (✓ deploying / ○ deselected, skipped, or
-// blocked / ✗ error) and the classification reason, plus a muted
-// continuation row for any "newer release exists" note. Mirrors
+// blocked / ✗ error) and the classification reason. Mirrors
 // buildReleaseTargetsCard: rows are status, the plan owns the change.
 func buildDeployTargetsCard(states []releaseServiceTarget) *ui.Card {
 	idx := make([]int, len(states))
