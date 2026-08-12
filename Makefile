@@ -17,7 +17,10 @@ export PKG_MAINTAINER_EMAIL := $(shell yq -r '.maintainer.email' $(PROJECT_YAML)
 # Source & Output
 # ============================================================================
 
-SRC := $(shell find . -name '*.go')
+# Prune dot-directories: .claude/worktrees holds full source checkouts, so an
+# unpruned find makes `format` rewrite other worktrees and gives `build` 1700+
+# spurious prerequisites.
+SRC := $(shell find . -path './.*' -prune -o -name '*.go' -print)
 OUT_DIR := .out
 BUILD_BIN := $(OUT_DIR)/build/$(BINARY)
 
@@ -164,7 +167,7 @@ endef
 # Main Targets
 # ============================================================================
 
-.PHONY: all build clean test test/tree test/tree/stream bench lint format prep watch
+.PHONY: all build clean test test/tree test/tree/stream bench lint format format/check prep watch
 
 ## Build all artifacts
 all: build
@@ -213,6 +216,17 @@ format:
 	@gofmt -w $(SRC)
 	@echo "Regenerating code..."
 	@$(GO) generate ./...
+
+## Fail if any Go file is not gofmt-clean
+format/check:
+	@echo "Checking gofmt..."
+	@unformatted=$$(gofmt -l $(SRC)); \
+	if [ -n "$$unformatted" ]; then \
+		echo "ERROR: not gofmt-clean:" >&2; \
+		echo "$$unformatted" >&2; \
+		echo "Run 'make format' to fix." >&2; \
+		exit 1; \
+	fi
 
 ## Prepare the codebase for a new commit
 prep: format
