@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -319,9 +320,31 @@ type apiCache struct {
 	threads  map[string]notify.ThreadRef // "channelID:issueKey" → ThreadRef
 }
 
+// requestTimeout bounds a single HTTP request as a backstop for
+// callers that pass a context carrying no deadline. slack-go's default
+// client sets no timeout, and this adapter is reached from doctor,
+// review, prerelease, and release — all of which hand it the command
+// context, which has no deadline of its own. The caller's context
+// stays the primary bound; this only bites when there is no deadline
+// to honor.
+const requestTimeout = 30 * time.Second
+
+// newHTTPClient returns the client the adapter hands to slack-go.
+// Transport is nil so it still uses http.DefaultTransport, keeping
+// connection pooling identical to slack-go's own default.
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: requestTimeout}
+}
+
 // New returns a new Slack adapter.
 func New(token string) *Adapter {
-	return &Adapter{client: slackapi.New(token, slackapi.OptionRetry(3)), cache: loadCache()}
+	return &Adapter{
+		client: slackapi.New(token,
+			slackapi.OptionHTTPClient(newHTTPClient()),
+			slackapi.OptionRetry(3),
+		),
+		cache: loadCache(),
+	}
 }
 
 // NewWithOptions returns a Slack adapter with custom options (for testing).
@@ -329,13 +352,23 @@ func NewWithOptions(token string, opts ...slackapi.Option) *Adapter {
 	return &Adapter{client: slackapi.New(token, opts...)}
 }
 
+// newCookieClient returns the client used for xoxc- token auth. Same
+// backstop as newHTTPClient, with the cookie transport layered over
+// http.DefaultTransport so pooling is unchanged.
+func newCookieClient(cookie string) *http.Client {
+	return &http.Client{
+		Timeout: requestTimeout,
+		Transport: &cookieTransport{
+			base:   http.DefaultTransport,
+			cookie: cookie,
+		},
+	}
+}
+
 // NewWithCookie returns a Slack adapter that authenticates using a xoxc-
 // token and d cookie (extracted from the Slack desktop app).
 func NewWithCookie(token, cookie string) *Adapter {
-	client := &http.Client{Transport: &cookieTransport{
-		base:   http.DefaultTransport,
-		cookie: cookie,
-	}}
+	client := newCookieClient(cookie)
 	return &Adapter{
 		client: slackapi.New(token,
 			slackapi.OptionHTTPClient(client),
