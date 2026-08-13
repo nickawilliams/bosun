@@ -30,6 +30,52 @@ type healthCheck struct {
 // rather than a failure (✗).
 var errNotConfigured = fmt.Errorf("(not configured)")
 
+// ErrChecksFailed is the sentinel every non-zero `doctor` exit wraps.
+// It marks the one error the command returns by design — the gate
+// tripping — so a caller can tell "checks failed" apart from "the run
+// itself broke" (bad flag value, unreadable project) without matching
+// on message text.
+var ErrChecksFailed = errors.New("checks failed")
+
+// The --require levels: which failures gate the run.
+//
+// Only `global config` and `git` are classified Required, so gating on
+// those alone would exit 0 with a completely broken tracker — which
+// defeats the purpose of gating. `all` is therefore the default, and
+// `required` is the narrowing escape hatch for pipelines that need
+// only the fundamentals sound and can tolerate a flaky integration.
+const (
+	requireAll      = "all"      // any check that failed
+	requireRequired = "required" // only checks classified Required
+)
+
+// checkOutcome classifies one check's result. The summary rolls
+// outcomeSkipped and outcomeWarned together — both render the warn
+// glyph (!) — but the gate has to tell them apart. An integration
+// that was never set up is not a broken one, and a project that
+// doesn't use Slack must not fail a pipeline over its absence.
+type checkOutcome int
+
+const (
+	outcomePassed  checkOutcome = iota
+	outcomeSkipped              // absent integration — never gates
+	outcomeWarned               // configured but failing (non-required check)
+	outcomeFailed               // a Required check failed
+)
+
+// gates reports whether an outcome should fail the run at the given
+// --require level.
+func (o checkOutcome) gates(level string) bool {
+	switch o {
+	case outcomeFailed:
+		return true
+	case outcomeWarned:
+		return level == requireAll
+	default:
+		return false
+	}
+}
+
 // doctorRunTimeout caps the whole run; doctorProbeTimeout caps the
 // network portion of one check. Both are needed, and they bound
 // different things.
@@ -92,6 +138,19 @@ func newDoctorCmd() *cobra.Command {
 			headerAnnotationTitle: "system check",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validated before anything runs: an unusable --require
+			// value is the caller's mistake, and reporting it after a
+			// full 30s of probing would bury it under the report it
+			// was meant to gate.
+			level, _ := cmd.Flags().GetString("require")
+			switch level {
+			case requireAll, requireRequired:
+				// ok
+			default:
+				return fmt.Errorf("unknown require level %q (valid: %s, %s)",
+					level, requireAll, requireRequired)
+			}
+
 			r := ui.Default()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorRunTimeout)
@@ -125,7 +184,8 @@ func newDoctorCmd() *cobra.Command {
 			}
 			alignWidth := maxCheckTitleWidth(allChecks)
 
-			passed, warned, failed := 0, 0, 0
+			passed, skipped, warned, failed := 0, 0, 0, 0
+			gating := 0
 			for _, dg := range groups {
 				r.Group(dg.label, func(g ui.Reporter) {
 					for _, hc := range dg.checks {
@@ -135,7 +195,20 @@ func newDoctorCmd() *cobra.Command {
 							detail, err = hc.Check(ctx)
 							return err
 						})
-						emitCheckResult(g, hc, detail, checkErr, alignWidth, &passed, &warned, &failed)
+						outcome := emitCheckResult(g, hc, detail, checkErr, alignWidth)
+						switch outcome {
+						case outcomePassed:
+							passed++
+						case outcomeSkipped:
+							skipped++
+						case outcomeWarned:
+							warned++
+						case outcomeFailed:
+							failed++
+						}
+						if outcome.gates(level) {
+							gating++
+						}
 					}
 				})
 			}
@@ -143,23 +216,56 @@ func newDoctorCmd() *cobra.Command {
 			// Summary card — segments ordered ascending by severity
 			// so the last non-zero one (failed > warned > passed)
 			// drives the glyph color via the order-based rollup.
-			total := passed + warned + failed
+			// Absent and broken integrations share the warning segment
+			// because they render the same glyph; splitting them here
+			// would show a count no row accounts for. The gate is the
+			// only place the distinction is load-bearing.
+			warnings := skipped + warned
+			total := passed + warnings + failed
 			r.Summary(
 				fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
 				[]ui.SummarySegment{
 					{Count: passed, Label: "passed", Color: ui.Palette.Success},
-					{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
+					{Count: warnings, Label: pluralize(warnings, "warning", "warnings"), Color: ui.Palette.Warning},
 					{Count: failed, Label: "failed", Color: ui.Palette.Error},
 				},
 			)
 
+			if gating > 0 {
+				return doctorGateError(level, gating)
+			}
 			return nil
 		},
 	}
 
 	addProjectFlag(cmd)
+	cmd.Flags().String("require", requireAll,
+		"checks that must pass for a zero exit (all|required)")
 	return cmd
 }
+
+// doctorGateError names the failures that tripped the gate. The
+// wording tracks the level so a narrowed run doesn't report a count
+// the summary contradicts: under `--require required` the number is
+// exactly the summary's failed segment, and saying "required" keeps
+// the two readings of one run consistent.
+func doctorGateError(level string, n int) error {
+	noun := pluralize(n, "check", "checks")
+	if level == requireRequired {
+		return gateError{fmt.Sprintf("%d required %s failed", n, noun)}
+	}
+	return gateError{fmt.Sprintf("%d %s failed", n, noun)}
+}
+
+// gateError carries the count the user reads and unwraps to
+// ErrChecksFailed for the callers that match on it. It is a type
+// rather than a %w wrap because wrapping appends the sentinel's own
+// text: the rendered error read "3 checks failed: checks failed",
+// which is the last line a CI log shows before the pipeline stops.
+type gateError struct{ msg string }
+
+func (e gateError) Error() string { return e.msg }
+func (gateError) Unwrap() error   { return ErrChecksFailed }
 
 // --- Providers ---
 
@@ -170,7 +276,13 @@ func newDoctorCmd() *cobra.Command {
 // continuation lines aligned under the first value character. The
 // alignWidth pads every row's title to a common column so the value
 // dividers line up across siblings.
-func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, alignWidth int, passed, warned, failed *int) {
+//
+// The returned outcome is what the caller tallies for the summary
+// and tests against the gate. Rendering and classification stay in
+// one place on purpose: the glyph a row shows and the category it
+// counts under are the same decision, and splitting them is how
+// they drift.
+func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr error, alignWidth int) checkOutcome {
 	if checkErr != nil {
 		// Prefer the check's detail when it provided one — lets a
 		// check supply a formatted display string alongside an error
@@ -180,34 +292,32 @@ func emitCheckResult(g ui.Reporter, hc healthCheck, detail string, checkErr erro
 		if reason == "" {
 			reason = checkErr.Error()
 		}
-		// Required failures get the hard-fail glyph (✗) and counter;
-		// anything else — not-required failures and errNotConfigured —
-		// counts as a warning and uses the warn glyph (!) so the row's
-		// visible state matches the summary count category.
+		// Required failures get the hard-fail glyph (✗); anything
+		// else — not-required failures and errNotConfigured — uses the
+		// warn glyph (!) so the row's visible state matches the
+		// summary count category it lands in.
 		if errors.Is(checkErr, errNotConfigured) {
-			*warned++
 			g.SkipValue(hc.Name, reason, alignWidth)
-			return
+			return outcomeSkipped
 		}
 		if hc.Required {
-			*failed++
 			g.FailValue(hc.Name, reason, alignWidth)
-			return
+			return outcomeFailed
 		}
 		// Optional integration that IS configured but failing — same
-		// warn category (it doesn't gate the run) but labeled: a broken
-		// token and an absent integration are different problems, and
-		// the row must not read as "just not set up".
-		*warned++
+		// warn glyph (a broken Slack token doesn't earn the ✗ the
+		// required checks own) but labeled, and its own outcome: an
+		// absent integration and a broken one are different problems,
+		// and only the second one gates.
 		g.SkipValue(hc.Name, "configured but failing — "+reason, alignWidth)
-		return
+		return outcomeWarned
 	}
-	*passed++
 	if detail == "" {
 		g.Complete(hc.Name)
-		return
+		return outcomePassed
 	}
 	g.CompleteValue(hc.Name, detail, alignWidth)
+	return outcomePassed
 }
 
 // maxCheckTitleWidth computes the maximum visual width across the
