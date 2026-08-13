@@ -111,6 +111,24 @@ func TermWidth() int {
 	return w
 }
 
+// TermHeight returns the current output terminal height in rows,
+// defaulting to 24 when the output isn't a *os.File or the syscall
+// fails — the classic terminal height, and the conservative answer
+// for its callers: sizing a frame for a shorter terminal than the
+// real one costs nothing, while overshooting is what the callers are
+// guarding against.
+func TermHeight() int {
+	f, ok := defaultOutput.(*os.File)
+	if !ok {
+		return 24
+	}
+	_, h, err := term.GetSize(int(f.Fd()))
+	if err != nil || h <= 0 {
+		return 24
+	}
+	return h
+}
+
 // IsTerminal reports whether the current output stream is a TTY.
 func IsTerminal() bool { return IsTerminalWriter(defaultOutput) }
 
