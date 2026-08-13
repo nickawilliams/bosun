@@ -728,9 +728,13 @@ issue_tracker:
 		// The exit message is the only thing explaining the non-zero
 		// status, so it has to account for the same failures the rows
 		// showed. A count the report doesn't explain is worse than none.
+		//
+		// Exact, not contains: the gate sentinel was once joined on with
+		// %w, which rendered "3 checks failed: checks failed" and passed
+		// a containment check while reading as a bug in the CI log.
 		want := fmt.Sprintf("%d checks failed", warned+failed)
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to contain %q", err, want)
+		if err.Error() != want {
+			t.Errorf("error = %q, want exactly %q", err, want)
 		}
 	})
 
@@ -776,8 +780,8 @@ issue_tracker:
 		// The message says which gate tripped, so a narrowed run that
 		// still fails doesn't read as the default one having counted
 		// the integrations it was told to ignore.
-		if !strings.Contains(err.Error(), "required check") {
-			t.Errorf("error = %q, want it to name the narrowed gate", err)
+		if err.Error() != "1 required check failed" {
+			t.Errorf("error = %q, want exactly %q", err, "1 required check failed")
 		}
 	})
 

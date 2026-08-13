@@ -252,10 +252,20 @@ func newDoctorCmd() *cobra.Command {
 func doctorGateError(level string, n int) error {
 	noun := pluralize(n, "check", "checks")
 	if level == requireRequired {
-		return fmt.Errorf("%d required %s failed: %w", n, noun, ErrChecksFailed)
+		return gateError{fmt.Sprintf("%d required %s failed", n, noun)}
 	}
-	return fmt.Errorf("%d %s failed: %w", n, noun, ErrChecksFailed)
+	return gateError{fmt.Sprintf("%d %s failed", n, noun)}
 }
+
+// gateError carries the count the user reads and unwraps to
+// ErrChecksFailed for the callers that match on it. It is a type
+// rather than a %w wrap because wrapping appends the sentinel's own
+// text: the rendered error read "3 checks failed: checks failed",
+// which is the last line a CI log shows before the pipeline stops.
+type gateError struct{ msg string }
+
+func (e gateError) Error() string { return e.msg }
+func (gateError) Unwrap() error   { return ErrChecksFailed }
 
 // --- Providers ---
 
