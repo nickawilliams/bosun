@@ -26,10 +26,11 @@ package cli_test
 //     set up but broken. Conflating them is the bug these scenarios
 //     guard against.
 //
-//  3. doctor always exits 0 — it reports state, it doesn't gate on
-//     it. The exit_code scenarios pin that contract rather than the
-//     non-zero-on-failure behavior the issue assumed; see the group's
-//     comment.
+//  3. doctor gates on what it finds: any failing check is a
+//     non-zero exit, and --require narrows that to the checks
+//     classified Required. An integration that isn't configured
+//     never gates under either level — the same warn/skip
+//     distinction from (2), now with an exit code riding on it.
 
 import (
 	"errors"
@@ -38,6 +39,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nickawilliams/bosun/internal/cli"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -109,15 +111,14 @@ func withoutConfig(t *testing.T, snippet string) string {
 	return strings.Replace(doctorConfig, snippet, "", 1)
 }
 
-// newDoctorHarness builds the healthy baseline every scenario starts
-// from: a global config on disk (the required global-config check
-// looks for the file), a fully-configured project with one repo, the
-// CI/CD fake installed, and the tracker's connectivity probe issue
-// seeded.
-func newDoctorHarness(t *testing.T) *testharness.Harness {
+// newDoctorProject sets up the project every scenario shares: a
+// fully-configured project with one repo, the CI/CD fake installed,
+// and the tracker's connectivity probe issue seeded. It deliberately
+// stops short of the global config, which is the one Required check a
+// fixture can break.
+func newDoctorProject(t *testing.T) *testharness.Harness {
 	t.Helper()
 	h := testharness.New(t)
-	h.WriteGlobalConfig("# bosun global config\n")
 	h.Workspace.WriteConfig(doctorConfig)
 	h.Workspace.AddRepo("api")
 	h.InstallCICD()
@@ -127,14 +128,61 @@ func newDoctorHarness(t *testing.T) *testharness.Harness {
 	return h
 }
 
-// runDoctor executes the command and fails the test if it errors —
-// doctor reports problems rather than returning them, so a non-nil
-// error means the run itself broke (bad flags, unreadable project),
-// not that a check failed.
-func runDoctor(t *testing.T, h *testharness.Harness) {
+// newDoctorHarness builds the healthy baseline every scenario starts
+// from: the shared project plus a global config on disk, so all ten
+// checks pass and nothing gates.
+func newDoctorHarness(t *testing.T) *testharness.Harness {
 	t.Helper()
-	if err := h.Run("doctor"); err != nil {
+	h := newDoctorProject(t)
+	h.WriteGlobalConfig("# bosun global config\n")
+	return h
+}
+
+// newRequiredFailureHarness is that baseline without the global config
+// file: exactly one check fails, and it is a Required one. The gate
+// scenarios need it to tell the two --require levels apart, since a
+// Required failure is the one thing both levels agree on.
+func newRequiredFailureHarness(t *testing.T) *testharness.Harness {
+	t.Helper()
+	return newDoctorProject(t)
+}
+
+// runDoctor executes the command and fails the test if it errors for
+// any reason other than the exit gate. Most scenarios here assert on
+// what doctor *reported*, and the gate fires on any failing check, so
+// treating it as fatal would take down every scenario that
+// deliberately breaks one. An error the gate didn't produce still
+// fails the test: that means the run itself broke (bad flags,
+// unreadable project), which is a different problem from a check
+// reporting a broken integration. The exit_code scenarios are where
+// the gate's own behavior is asserted.
+func runDoctor(t *testing.T, h *testharness.Harness, args ...string) {
+	t.Helper()
+	if err := h.Run(append([]string{"doctor"}, args...)...); err != nil &&
+		!errors.Is(err, cli.ErrChecksFailed) {
 		t.Fatalf("doctor: %v\n%s", err, h.Reporter.Dump())
+	}
+}
+
+// assertGated / assertNotGated are the two exit-code assertions.
+// Both go through cli.ErrChecksFailed rather than "err != nil": a
+// scenario that fails because the harness misconfigured the project
+// would otherwise read as the gate working.
+func assertGated(t *testing.T, h *testharness.Harness, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("doctor exited 0, want the gate to trip\n%s", h.Reporter.Dump())
+	}
+	if !errors.Is(err, cli.ErrChecksFailed) {
+		t.Fatalf("doctor error = %v, want one wrapping cli.ErrChecksFailed\n%s",
+			err, h.Reporter.Dump())
+	}
+}
+
+func assertNotGated(t *testing.T, h *testharness.Harness, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("doctor exited non-zero: %v\n%s", err, h.Reporter.Dump())
 	}
 }
 
@@ -585,11 +633,7 @@ issue_tracker:
 		// The required checks are the ones that produce ✗. Without a
 		// global config the check fails hard and names the path it
 		// looked at, so the user knows where to create it.
-		h := testharness.New(t)
-		h.Workspace.WriteConfig(doctorConfig)
-		h.Workspace.AddRepo("api")
-		h.InstallCICD()
-		h.Tracker.SeedIssue(issue.Issue{Key: doctorProbeIssue, Title: "connectivity probe"})
+		h := newRequiredFailureHarness(t)
 
 		runDoctor(t, h)
 
@@ -637,40 +681,129 @@ issue_tracker:
 		}
 	})
 
-	// doctor is a report, not a gate: it exits 0 whatever it finds, so
-	// that a broken integration doesn't take down a shell script that
-	// runs it for information. Issue #24 assumed the opposite (a
-	// non-zero exit when any check fails) — these scenarios pin the
-	// behavior as built. Making doctor gate is a product decision, not
-	// a test fix; see the PR description.
+	// doctor gates on what it finds. A pipeline that runs bosun
+	// doctor before its real work needs the broken integration to
+	// stop it there, rather than proceed into a downstream failure
+	// that names something else. --require narrows the gate for
+	// callers that only need the fundamentals sound and can ride
+	// out a flaky integration.
+	//
+	// Three properties hold the contract together, and each has a
+	// scenario: every failing check gates by default, only Required
+	// ones gate under --require required, and an integration that
+	// was never configured gates under neither. The third is what
+	// keeps the gate usable — most projects leave some capability
+	// unset, and a gate that failed on absence would be one every
+	// caller disables.
 	t.Run("exit_code/zero_when_all_pass", func(t *testing.T) {
 		h := newDoctorHarness(t)
 
-		if err := h.Run("doctor"); err != nil {
-			t.Fatalf("doctor: %v\n%s", err, h.Reporter.Dump())
+		assertNotGated(t, h, h.Run("doctor"))
+	})
+
+	t.Run("exit_code/nonzero_when_an_integration_fails", func(t *testing.T) {
+		// Nothing Required is broken here — the environment is healthy
+		// and only integrations fail, so the summary reports zero in
+		// its failed segment. The default gate still trips, which is
+		// the whole point: a completely broken tracker exiting 0 would
+		// make gating theater.
+		h := newDoctorHarness(t)
+		h.Tracker.NewErr = errors.New("invalid api token")
+		h.Host.AuthErr = errors.New("401 Bad credentials")
+		h.Notifier.AuthTestErr = errors.New("invalid_auth")
+
+		err := h.Run("doctor")
+
+		assertGated(t, h, err)
+		_, warned, failed := doctorSummary(t, h)
+		if warned == 0 {
+			t.Errorf("warned count = 0, want the broken integrations to warn\n%s",
+				h.Reporter.Dump())
+		}
+		if failed != 0 {
+			t.Errorf("failed count = %d, want 0 — no Required check is broken\n%s",
+				failed, h.Reporter.Dump())
 		}
 	})
 
-	t.Run("exit_code/zero_when_checks_fail", func(t *testing.T) {
-		// A required check failing (✗) and three integrations broken
-		// still leaves the command successful.
-		h := testharness.New(t)
-		h.Workspace.WriteConfig(doctorConfig)
-		h.InstallCICD()
+	t.Run("exit_code/nonzero_when_a_required_check_fails", func(t *testing.T) {
+		// No global config: the one Required check a fixture can break,
+		// with every integration healthy. Gates by default.
+		h := newRequiredFailureHarness(t)
+
+		err := h.Run("doctor")
+
+		assertGated(t, h, err)
+		_, _, failed := doctorSummary(t, h)
+		if failed != 1 {
+			t.Errorf("failed count = %d, want 1\n%s", failed, h.Reporter.Dump())
+		}
+	})
+
+	t.Run("exit_code/narrowed_gate_ignores_integration_failures", func(t *testing.T) {
+		// The same broken integrations as the default-gate scenario,
+		// run with --require required: identical report, different
+		// exit code. This is the flag's whole purpose.
+		h := newDoctorHarness(t)
 		h.Tracker.NewErr = errors.New("invalid api token")
-		h.Host.NewErr = errors.New("no github token configured")
-		h.Notifier.NewErr = errors.New("missing slack token")
+		h.Host.AuthErr = errors.New("401 Bad credentials")
+		h.Notifier.AuthTestErr = errors.New("invalid_auth")
 
-		if err := h.Run("doctor"); err != nil {
-			t.Fatalf("doctor: %v\n%s", err, h.Reporter.Dump())
-		}
+		err := h.Run("doctor", "--require", "required")
 
-		_, warned, failed := doctorSummary(t, h)
-		if failed == 0 {
-			t.Errorf("failed count = 0, want the global-config check to fail\n%s", h.Reporter.Dump())
+		assertNotGated(t, h, err)
+		// Narrowing the gate must not quiet the report — the rows still
+		// say what is broken, they just stop deciding the exit code.
+		assertWarned(t, h, rowTracker, "configured but failing — invalid api token")
+		assertWarned(t, h, rowCodeHost, "auth failed: 401 Bad credentials")
+	})
+
+	t.Run("exit_code/narrowed_gate_still_fails_required_checks", func(t *testing.T) {
+		// --require required narrows the gate. It does not remove it.
+		h := newRequiredFailureHarness(t)
+
+		assertGated(t, h, h.Run("doctor", "--require", "required"))
+	})
+
+	t.Run("exit_code/unconfigured_integration_does_not_gate", func(t *testing.T) {
+		// Slack absent entirely. Under the strictest level this is
+		// still a zero exit: not-configured is a warning about
+		// coverage, not a broken integration, and conflating the two
+		// would fail every pipeline whose project doesn't use every
+		// capability bosun supports.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withoutConfig(t, "  provider: \"slack\"\n"))
+
+		err := h.Run("doctor", "--require", "all")
+
+		assertNotGated(t, h, err)
+		assertNotConfigured(t, h, rowNotification)
+	})
+
+	t.Run("exit_code/rejects_an_unknown_require_level", func(t *testing.T) {
+		// A typo in the gate level must not be read as one of the real
+		// levels — silently gating on the wrong set is worse than not
+		// gating. The error names the valid values, and no check runs:
+		// a 30s report the caller has to scroll past to find the
+		// typo buries it.
+		h := newDoctorHarness(t)
+
+		err := h.Run("doctor", "--require", "sometimes")
+
+		if err == nil {
+			t.Fatalf("doctor accepted an unknown --require level\n%s", h.Reporter.Dump())
 		}
-		if warned == 0 {
-			t.Errorf("warned count = 0, want the broken integrations to warn\n%s", h.Reporter.Dump())
+		if errors.Is(err, cli.ErrChecksFailed) {
+			t.Errorf("error = %v, want a usage error rather than a gate trip", err)
+		}
+		for _, want := range []string{"sometimes", "all", "required"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to mention %q", err, want)
+			}
+		}
+		if events := h.Reporter.Events(); len(events) != 0 {
+			t.Errorf("ran %d checks before rejecting the flag, want none\n%s",
+				len(events), h.Reporter.Dump())
 		}
 	})
 }
