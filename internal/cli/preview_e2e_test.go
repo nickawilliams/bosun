@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
+	"github.com/nickawilliams/bosun/internal/cli"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -620,6 +621,55 @@ func TestPreview(t *testing.T) {
 		// never reaching it — would fail this.
 		if !strings.Contains(err.Error(), "plan cancelled") {
 			t.Fatalf("error = %v, want the answered-decline \"plan cancelled\"", err)
+		}
+
+		if n := len(f.h.CICD.Triggers()); n != 0 {
+			t.Errorf("cancelled run dispatched %d workflow(s); want 0", n)
+		}
+		if got := f.boundName(t, "EX-1"); got != "" {
+			t.Errorf("cancelled run bound env %q; want nothing bound", got)
+		}
+		if newCalls := f.h.Tracker.Calls()[before:]; slices.Contains(newCalls, "SetStatus") {
+			t.Errorf("cancelled run called SetStatus; calls=%v", newCalls)
+		}
+	})
+
+	t.Run("service_selection/cancelled_aborts", func(t *testing.T) {
+		// Ctrl+c at the Services picker — the gate BEFORE the plan.
+		// Aborting there has to end the run: resolvePreviewInputs
+		// treats the form's error as fatal precisely so a cancelled
+		// picker can't fall through to deploying whatever detection
+		// happened to pick (or nothing at all, silently).
+		f := setupPreview(t, "api")
+		f.h.Type("\x03")
+
+		before := len(f.h.Tracker.Calls())
+
+		err := f.run("--name", "brave-falcon")
+		if err == nil {
+			t.Fatalf("expected ErrCancelled; got nil")
+		}
+		// Bare "cancelled", not "plan cancelled": the two gates abort
+		// through different code, and this asserts the run stopped at
+		// the picker rather than sailing on to the plan card.
+		if !errors.Is(err, cli.ErrCancelled) {
+			t.Fatalf("error = %v, want ErrCancelled", err)
+		}
+		if strings.Contains(err.Error(), "plan cancelled") {
+			t.Fatalf("error = %v, want the abort to happen at the picker, before the plan gate", err)
+		}
+		// Bracket the abort rather than trusting prompt ordering: the
+		// readiness gather (which precedes the picker) reported its
+		// repo, and the plan never ran. A ctrl+c swallowed by an
+		// earlier prompt would fail the first check.
+		var readinessRan bool
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureComplete) {
+			if strings.Contains(ev.Label, "api") {
+				readinessRan = true
+			}
+		}
+		if !readinessRan {
+			t.Fatalf("run aborted before the readiness gather, not at the picker\n%s", f.h.Reporter.Dump())
 		}
 
 		if n := len(f.h.CICD.Triggers()); n != 0 {

@@ -273,6 +273,19 @@ func TestSourceRows(t *testing.T) {
 		}
 	})
 
+	t.Run("single-service repo excluded recedes to the bare name", func(t *testing.T) {
+		// The twin of the row above: a one-service repo the user
+		// unchecked. Same no-trailing-separator rule, muted throughout.
+		sr := sourceRepo{res: AffectedResult{RepoName: "api", HasChanges: true,
+			Skipped: []string{"api-svc"}}, pr: code.PullRequest{Number: 7}}
+
+		got := strip(sourceRows(sr, true))
+		want := []string{"○ api"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the bare receded repo name %q", got, want)
+		}
+	})
+
 	t.Run("stale fetch rides above the repo's outcome row", func(t *testing.T) {
 		sr := sourceRepo{res: AffectedResult{RepoName: "cron", HasChanges: true,
 			Services: []string{"jobs"}, StaleRemote: true}, pr: code.PullRequest{Number: 9}}
