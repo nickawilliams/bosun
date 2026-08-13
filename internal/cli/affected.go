@@ -510,17 +510,52 @@ func (sr sourceRepo) prResolved(withPRs bool) bool {
 	return !withPRs || (sr.prErr == nil && sr.pr.Number > 0)
 }
 
+// resolveDeploymentSource runs one repo's gather work: change
+// detection, then (withPRs) the identity + PR lookup its image
+// override needs. Pulled out of the gather step so the step reads as
+// resolve → render, mirroring prerelease's resolveReleaseTarget.
+//
+// The second return is false when the repo has no services configured
+// — it contributes nothing to the Services section. A non-nil error is
+// a detection failure: it becomes a ✗ row and the caller's returned
+// error, but never stops the remaining repos. PR-lookup failures ride
+// on the returned sourceRepo's prErr instead (non-fatal).
+//
+// The PR lookup runs for unchanged repos too — their services are
+// toggleable in the selection form (redeploy after an env was
+// externally cleaned up), and a toggled-on service needs its pr-N tag
+// just like a changed one.
+func resolveDeploymentSource(ctx context.Context, g vcs.VCS, host code.Host, repo Repository, branch string, withPRs bool) (sourceRepo, bool, error) {
+	var sr sourceRepo
+	res, tracked, err := detectRepoAffected(ctx, g, repo, branch)
+	if err != nil {
+		return sr, false, err
+	}
+	if !tracked {
+		return sr, false, nil
+	}
+	sr.res = res
+	if withPRs {
+		sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
+		if sr.prErr == nil {
+			sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+		}
+	}
+	return sr, true, nil
+}
+
 // emitDeploymentSources renders the Observe-phase "Services" section
 // that precedes the deploy plan, in three phases:
 //
 //  1. Detection + PR lookup. All repos run as steps of ONE spinner
-//     program (RunCardSteps) — stable "Services" title, per-repo
-//     status on the muted body line — whose final frame morphs into
-//     phase 2's form header or phase 3's card, so the whole cycle
-//     has zero TUI program boundaries (no blank-frame seams between
-//     repos). Prompts can't run during this phase, which is why
-//     prepareAffectedRepos (push offer, readiness gate) stays a
-//     separate pre-flight step.
+//     program (RunCardStepsInto) whose cards accumulate: each step
+//     carries the rows resolved so far plus a pending row for the
+//     in-flight repo, so the Services list materializes in place and
+//     the program's final frame hands straight off to phase 2's form
+//     or phase 3's card — zero TUI program boundaries (no blank-frame
+//     seams between repos). Prompts can't run during this phase,
+//     which is why prepareAffectedRepos (push offer, readiness gate)
+//     stays a separate pre-flight step.
 //
 //  2. Optional selection form. When interactive, not auto-approved
 //     (-y), and the caller passed no --service values, a multi-select
@@ -562,51 +597,70 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	}
 
 	// --- Phase 1: detection + PR lookup, one program over all repos ---
+	//
+	// Accumulating gather (the release-command pattern): each step's
+	// card carries the rows resolved so far plus a pending row — the
+	// in-flight repo with the live spinner in its glyph slot — so the
+	// list materializes in place and then swaps into the form (or the
+	// record card) with the same rows. Rows render via sourceRows /
+	// detFailRow, the record card's own renderers, so gather and record
+	// can't drift. A repo contributes as many rows as it has to say
+	// (a stale-fetch caveat, one row per service, or none at all when
+	// no services are configured for it).
+	//
+	// Mutating later cards from a step's Run is race-free: the runner's
+	// worker sends each step's result over a channel before the model
+	// advances to the next card (happens-before; see release_gate.go).
 
 	var sources []sourceRepo
 	var detFails []detFail
 	var firstDetErr error
 
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	steps := make([]ui.CardStep, 0, len(repos))
-	for _, repo := range repos {
-		spin := ui.NewCard(ui.CardRunning, "services").
-			Raw(statusMuted.Render("Detecting changes in ") +
-				ui.Keyword(repo.Name) +
-				statusMuted.Render("..."))
+	n := len(repos)
+	pendingRow := func(c *ui.Card, i int) {
+		c.Item(ui.GlyphSlot, statusMuted.Render(repos[i].Name))
+	}
+	cards := make([]*ui.Card, n)
+	for i := range cards {
+		cards[i] = ui.NewCard(ui.CardRunning, "services")
+	}
+	if n > 0 {
+		pendingRow(cards[0], 0)
+	}
+
+	steps := make([]ui.CardStep, 0, n)
+	for i, repo := range repos {
 		steps = append(steps, ui.CardStep{
-			Card: spin,
+			Card: cards[i],
 			// Errors ride on detErr/prErr rather than the step's error
 			// path — a failed repo becomes a ✗ row in the final card
 			// and the sequence continues to the remaining repos.
 			Run: func() error {
-				var (
-					sr      sourceRepo
-					tracked bool
-					detErr  error
-				)
-				sr.res, tracked, detErr = detectRepoAffected(ctx, g, repo, repoBranch[repo.Name])
-				if detErr != nil {
+				var rows []serviceRow
+				sr, tracked, detErr := resolveDeploymentSource(ctx, g, host, repo, repoBranch[repo.Name], withPRs)
+				switch {
+				case detErr != nil:
 					if firstDetErr == nil {
 						firstDetErr = detErr
 					}
-					detFails = append(detFails, detFail{repo.Name, detErr})
-					return nil
+					f := detFail{repo.Name, detErr}
+					detFails = append(detFails, f)
+					rows = []serviceRow{detFailRow(f)}
+				case tracked:
+					sources = append(sources, sr)
+					// Gather-time inclusion IS detection's classification:
+					// Services deploying, Skipped receded.
+					rows = sourceRows(sr, withPRs)
 				}
-				if !tracked {
-					return nil
-				}
-				// PR lookup runs for unchanged repos too — their services
-				// are toggleable in the selection form (redeploy after an
-				// env was externally cleaned up), and a toggled-on service
-				// needs its pr-N tag just like a changed one.
-				if withPRs {
-					sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
-					if sr.prErr == nil {
-						sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
+				for j := i + 1; j < n; j++ {
+					for _, row := range rows {
+						cards[j].Item(row.glyph, row.content)
 					}
 				}
-				sources = append(sources, sr)
+				if i+1 < n {
+					pendingRow(cards[i+1], i+1)
+				}
 				return nil
 			},
 		})
@@ -645,23 +699,23 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			isInteractive() && !isAutoApprove(cmd)
 	}
 
-	// The spinner program's final frame morphs into whatever comes
-	// next — the selection form's header when the form will show, the
-	// final Services card otherwise — so the program's exit paints
-	// content instead of clearing to blank.
-	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
-		if formGate() {
-			return ui.NewCard(ui.CardInput, "services").Tight()
+	// The form is built inside a closure because the steps program's
+	// final frame paints the form header plus the form's EXACT first
+	// frame (formFirstFrame — same construction as runForm), so the
+	// takeover below repaints identical bytes and the gather → form
+	// transition has no collapse and no flash.
+	var (
+		picked      []string
+		toggles     []toggle
+		msField     *huh.MultiSelect[string]
+		formFrame   string
+		headerLines int
+	)
+	buildSelectionForm := func() {
+		if msField != nil {
+			return
 		}
-		return buildServicesCard(sources, detFails, withPRs)
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	formShown := formGate()
-	if formShown {
-		toggles := buildToggles()
+		toggles = buildToggles()
 		sort.SliceStable(toggles, func(i, j int) bool {
 			ri, rj := sources[toggles[i].src].res.RepoName, sources[toggles[j].src].res.RepoName
 			if ri != rj {
@@ -685,24 +739,63 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			}
 			opts[i] = huh.NewOption(label, strconv.Itoa(i)).Selected(t.selected)
 		}
-
-		var picked []string
-		// The header was painted by the spinner program's final frame
-		// (not via Print), so suppress the spacer manually the way
-		// Tight-on-Print would have.
-		ui.ClearSpacer()
 		// Full height — no viewport cap. The submitted form is
 		// replaced by the final Services card listing the same rows,
 		// so matching the form's height to the list makes the
 		// swap read as in-place rather than an expand/collapse.
-		if err := runForm(
-			huh.NewMultiSelect[string]().
-				Options(opts...).
-				Height(len(opts)).
-				Value(&picked),
-		); err != nil {
-			ui.RequestSpacer()
-			return nil, nil, nil, err
+		msField = huh.NewMultiSelect[string]().
+			Options(opts...).
+			Height(len(opts)).
+			Value(&picked)
+		formFrame = formFirstFrame(msField)
+		if !strings.HasSuffix(formFrame, "\n") {
+			formFrame += "\n"
+		}
+	}
+
+	// The spinner program's final frame morphs into whatever comes
+	// next — the selection form's header plus its first frame when the
+	// form will show, the final Services card otherwise — so the
+	// program's exit paints content instead of clearing to blank.
+	if err := ui.RunCardStepsInto(steps, func() string {
+		if formGate() {
+			buildSelectionForm()
+			header := ui.NewCard(ui.CardInput, "services").Tight().Render()
+			headerLines = strings.Count(header, "\n")
+			return header + formFrame
+		}
+		return buildServicesCard(sources, detFails, withPRs).Render()
+	}); err != nil {
+		return nil, nil, nil, err
+	}
+
+	formShown := formGate()
+	if formShown {
+		if msField == nil {
+			// Raw rendering: RunCardStepsInto never runs its final-frame
+			// closure (there's no frame to take over), so the form hasn't
+			// been built. Build it now and run it standalone, skipping the
+			// cursor takeover below, which assumes a painted frame to
+			// repaint over. Mirrors release's selectServiceDeploys. The
+			// form runs when stdin can drive it (the harness's injected
+			// reader); a TTY-stdin/piped-stdout session is refused cleanly
+			// by runForm's render guard instead.
+			buildSelectionForm()
+			if err := runForm(msField); err != nil {
+				return nil, nil, nil, err
+			}
+		} else {
+			// Seamless takeover: the form's first frame is already on
+			// screen — move the cursor to its origin and let huh repaint
+			// the same bytes in place. ClearSpacer: the header was painted
+			// by the spinner program's final frame (not via Print), so
+			// suppress the spacer the way Tight-on-Print would.
+			fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
+			ui.ClearSpacer()
+			if err := runForm(msField); err != nil {
+				ui.RequestSpacer()
+				return nil, nil, nil, err
+			}
 		}
 
 		pickedSet := make(map[int]bool, len(picked))
@@ -769,9 +862,18 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 
 	if formShown {
 		// The no-form path's final card was already painted by the
-		// spinner program's final frame; the form path erases its
-		// header and prints the selection-adjusted card.
-		rewind()
+		// spinner program's final frame. On the form path huh cleared
+		// its own frame on submit, leaving the cursor at the form's
+		// origin (the line below the header) — erase the header above
+		// and drop the selection-adjusted card in its place.
+		// ClearSpacer first: runForm's prologue armed the spacer flag,
+		// but the gather program's original spacer line is still on
+		// screen above the header, so printing another would
+		// double-space.
+		if headerLines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", headerLines)
+		}
+		ui.ClearSpacer()
 		buildServicesCard(sources, detFails, withPRs).Print()
 	}
 
@@ -781,10 +883,67 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	return results, overrides, prs, firstDetErr
 }
 
-// buildServicesCard composes the final static "Services" card: the
-// flat sorted repo·service list as Item rows, with the card glyph
-// aggregated worst-first (fail > skipped > success) the same way
-// group parents aggregate their children.
+// rowSeverity is what a Services row contributes to the card's
+// aggregate glyph. rowNote rows (the stale-fetch caveat) are additive
+// context about a repo whose real outcome another row states, so they
+// count toward nothing.
+type rowSeverity int
+
+const (
+	rowNote rowSeverity = iota
+	rowOK
+	rowSkip
+	rowFail
+)
+
+// serviceRow is one row of the Services surface: the rendered glyph +
+// content, the service it speaks for (its order within the repo; "" on
+// the rows that speak for the whole repo), and the severity it
+// contributes to the card's aggregate state.
+type serviceRow struct {
+	svc            string
+	glyph, content string
+	sev            rowSeverity
+}
+
+// svcOn composes a Services row that stays in the foreground: the
+// label in primary with an optional muted note after a separator. A
+// blank note renders the label alone, no trailing " · ".
+func svcOn(label, note string) string {
+	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	if note == "" {
+		return primary.Render(label)
+	}
+	return primary.Render(label) + lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render(" · "+note)
+}
+
+// svcOff is svcOn's fully-muted variant for rows that aren't included
+// — the label drops its primary color so the whole row recedes.
+func svcOff(label, note string) string {
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	if note == "" {
+		return muted.Render(label)
+	}
+	return muted.Render(label + " · " + note)
+}
+
+// detFailRow renders a repo whose change detection errored: ✗ with the
+// error as the row's note.
+func detFailRow(f detFail) serviceRow {
+	return serviceRow{
+		glyph:   lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+		content: svcOn(f.repo, f.err.Error()),
+		sev:     rowFail,
+	}
+}
+
+// sourceRows renders one repo's Services rows — the shared shape
+// between the gather's progressively-filling card and the final record
+// card, so the two can't drift. Inclusion is read from the result's
+// Services/Skipped split: detection's classification during gather,
+// the user's choice after the selection form. Rows come back in the
+// card's own order (the stale caveat first, then services by name), so
+// callers only have to order repos.
 //
 // Row severity follows what the row means, not just "included or
 // not": excluded services and no-changes repos are a normal,
@@ -792,94 +951,126 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 // glyph, muted text), not as warnings. The ▲ warning glyph is
 // reserved for rows the user might *expect* to deploy but that
 // can't (no PR for the branch); ✗ for actual failures.
-func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *ui.Card {
-	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+func sourceRows(sr sourceRepo, withPRs bool) []serviceRow {
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
 	glyphOff := muted.Render("○")
 	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
 	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
 
-	type row struct {
-		repo, svc, glyph, content string
-	}
-	var rows []row
-	var nOK, nSkip, nFail int
-
-	pair := func(r AffectedResult, svc string) string {
-		if len(r.Services)+len(r.Skipped) == 1 {
-			return repoStyle.Render(r.RepoName)
-		}
-		return repoStyle.Render(r.RepoName) + muted.Render(" · "+svc)
-	}
-	// pairOff/noteOff: the fully-muted variants for not-included
-	// rows — the repo segment drops its primary color so the whole
-	// row recedes.
-	pairOff := func(r AffectedResult, svc string) string {
-		if len(r.Services)+len(r.Skipped) == 1 {
-			return muted.Render(r.RepoName)
-		}
-		return muted.Render(r.RepoName + " · " + svc)
-	}
-	note := func(repoName, text string) string {
-		return repoStyle.Render(repoName) + muted.Render(" · "+text)
-	}
-	noteOff := func(repoName, text string) string {
-		return muted.Render(repoName + " · " + text)
+	r := sr.res
+	var rows []serviceRow
+	if r.StaleRemote {
+		rows = append(rows, serviceRow{
+			glyph:   glyphWarn,
+			content: svcOn(r.RepoName, "remote fetch failed — diff may be stale"),
+			sev:     rowNote,
+		})
 	}
 
+	switch {
+	case withPRs && len(r.Services) == 0 && sr.prErr != nil:
+		// PR lookup failed — surface it regardless of whether the
+		// repo had changes. An unchanged repo whose lookup errored
+		// would otherwise mask as a plain "no changes" row and
+		// silently keep itself out of the selection form (a PR is
+		// what makes a repo selectable). ✗ so the user can retry.
+		rows = append(rows, serviceRow{
+			glyph:   glyphFail,
+			content: svcOn(r.RepoName, sr.prErr.Error()),
+			sev:     rowFail,
+		})
+	case !r.HasChanges && len(r.Services) == 0:
+		// Unchanged and nothing toggled on — one compact receded
+		// row instead of a ○ row per service. When the user DID
+		// toggle services on (redeploy without changes), the
+		// default branch renders the per-service pairs instead.
+		// A "no PR" note when the branch has none, since under
+		// PR-backed selection that's why it wasn't offered.
+		msg := "no changes"
+		if withPRs && sr.pr.Number == 0 {
+			msg = "no changes · no PR"
+		}
+		rows = append(rows, serviceRow{
+			glyph:   glyphOff,
+			content: svcOff(r.RepoName, msg),
+			sev:     rowSkip,
+		})
+	case withPRs && r.HasChanges && sr.pr.Number == 0:
+		rows = append(rows, serviceRow{
+			glyph:   glyphWarn,
+			content: svcOn(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch)),
+			sev:     rowSkip,
+		})
+	default:
+		// Single-service repos show just the repo name — the service
+		// segment would only restate the row.
+		pairNote := func(svc string) string {
+			if len(r.Services)+len(r.Skipped) == 1 {
+				return ""
+			}
+			return svc
+		}
+		pairs := make([]serviceRow, 0, len(r.Services)+len(r.Skipped))
+		for _, svc := range r.Services {
+			pairs = append(pairs, serviceRow{
+				svc:     svc,
+				glyph:   glyphOK,
+				content: svcOn(r.RepoName, pairNote(svc)),
+				sev:     rowOK,
+			})
+		}
+		for _, svc := range r.Skipped {
+			pairs = append(pairs, serviceRow{
+				svc:     svc,
+				glyph:   glyphOff,
+				content: svcOff(r.RepoName, pairNote(svc)),
+				sev:     rowSkip,
+			})
+		}
+		sort.Slice(pairs, func(i, j int) bool { return pairs[i].svc < pairs[j].svc })
+		rows = append(rows, pairs...)
+	}
+	return rows
+}
+
+// buildServicesCard composes the final static "Services" card: every
+// repo's rows (from the same renderers the gather paints), repos in
+// name order, with the card glyph aggregated worst-first (fail >
+// skipped > success) the same way group parents aggregate their
+// children.
+func buildServicesCard(sources []sourceRepo, detFails []detFail, withPRs bool) *ui.Card {
+	// Grouped by repo rather than sorted row-by-row: the renderers own
+	// the order within a repo, so the card can't reshuffle rows the
+	// gather already painted in that order.
+	type group struct {
+		repo string
+		rows []serviceRow
+	}
+	groups := make([]group, 0, len(detFails)+len(sources))
 	for _, f := range detFails {
-		nFail++
-		rows = append(rows, row{f.repo, "", glyphFail, note(f.repo, f.err.Error())})
+		groups = append(groups, group{f.repo, []serviceRow{detFailRow(f)}})
 	}
 	for _, sr := range sources {
-		r := sr.res
-		if r.StaleRemote {
-			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, "remote fetch failed — diff may be stale")})
-		}
-		switch {
-		case withPRs && len(r.Services) == 0 && sr.prErr != nil:
-			// PR lookup failed — surface it regardless of whether the
-			// repo had changes. An unchanged repo whose lookup errored
-			// would otherwise mask as a plain "no changes" row and
-			// silently keep itself out of the selection form (a PR is
-			// what makes a repo selectable). ✗ so the user can retry.
-			nFail++
-			rows = append(rows, row{r.RepoName, "", glyphFail, note(r.RepoName, sr.prErr.Error())})
-		case !r.HasChanges && len(r.Services) == 0:
-			// Unchanged and nothing toggled on — one compact receded
-			// row instead of a ○ row per service. When the user DID
-			// toggle services on (redeploy without changes), the
-			// default branch renders the per-service pairs instead.
-			// A "no PR" note when the branch has none, since under
-			// PR-backed selection that's why it wasn't offered.
-			nSkip++
-			msg := "no changes"
-			if withPRs && sr.pr.Number == 0 {
-				msg = "no changes · no PR"
-			}
-			rows = append(rows, row{r.RepoName, "", glyphOff, noteOff(r.RepoName, msg)})
-		case withPRs && r.HasChanges && sr.pr.Number == 0:
-			nSkip++
-			rows = append(rows, row{r.RepoName, "", glyphWarn, note(r.RepoName, fmt.Sprintf("no PR for branch %q", r.Branch))})
-		default:
-			for _, svc := range r.Services {
+		groups = append(groups, group{sr.res.RepoName, sourceRows(sr, withPRs)})
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].repo < groups[j].repo })
+
+	var rows []serviceRow
+	var nOK, nSkip, nFail int
+	for _, grp := range groups {
+		for _, r := range grp.rows {
+			switch r.sev {
+			case rowOK:
 				nOK++
-				rows = append(rows, row{r.RepoName, svc, glyphOK, pair(r, svc)})
-			}
-			for _, svc := range r.Skipped {
+			case rowSkip:
 				nSkip++
-				rows = append(rows, row{r.RepoName, svc, glyphOff, pairOff(r, svc)})
+			case rowFail:
+				nFail++
 			}
+			rows = append(rows, r)
 		}
 	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].repo != rows[j].repo {
-			return rows[i].repo < rows[j].repo
-		}
-		return rows[i].svc < rows[j].svc
-	})
 
 	state := ui.CardSuccess
 	switch {
