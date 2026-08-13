@@ -347,10 +347,10 @@ func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 // branch and fetches it for an accurate merge-base, then diffs against
 // it — callers should run this under a spinner.
 func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch string) (AffectedResult, bool, error) {
-	services := resolveRepoServiceNames(r.Name)
-	if len(services) == 0 {
+	if !repoHasServices(r.Name) {
 		return AffectedResult{}, false, nil
 	}
+	services := resolveRepoServiceNames(r.Name)
 
 	defaultBranch, err := g.GetDefaultBranch(ctx, r.Path)
 	if err != nil {
@@ -515,11 +515,14 @@ func (sr sourceRepo) prResolved(withPRs bool) bool {
 // override needs. Pulled out of the gather step so the step reads as
 // resolve → render, mirroring prerelease's resolveReleaseTarget.
 //
-// The second return is false when the repo has no services configured
-// — it contributes nothing to the Services section. A non-nil error is
-// a detection failure: it becomes a ✗ row and the caller's returned
-// error, but never stops the remaining repos. PR-lookup failures ride
-// on the returned sourceRepo's prErr instead (non-fatal).
+// The second return is false when the repo has no services (it
+// contributes nothing to the Services section). The gather filters
+// those repos out ahead of time, so this is a guard against the two
+// rules disagreeing rather than a path taken — both ask
+// repoHasServices. A non-nil error is a detection failure: it becomes
+// a ✗ row and the caller's returned error, but never stops the
+// remaining repos. PR-lookup failures ride on the returned
+// sourceRepo's prErr instead (non-fatal).
 //
 // The PR lookup runs for unchanged repos too — their services are
 // toggleable in the selection form (redeploy after an env was
@@ -609,9 +612,8 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	// more than one row (a stale-fetch caveat above its outcome, or one
 	// row per service), which is why steps append a slice.
 	//
-	// Repos whose services config resolves to nothing (an explicitly
-	// empty list — an absent config falls back to the repo name as its
-	// own service) are dropped before the gather rather than stepped
+	// Repos with no services (repoHasServices — the same rule detection
+	// applies) are dropped before the gather rather than stepped
 	// through: detection returns before its first git call for them and
 	// they contribute no row, so a step would paint a pending row that
 	// resolves into nothing and the list would shrink at the handoff.
@@ -626,7 +628,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 
 	gathered := make([]Repository, 0, len(repos))
 	for _, repo := range repos {
-		if len(resolveRepoServiceNames(repo.Name)) > 0 {
+		if repoHasServices(repo.Name) {
 			gathered = append(gathered, repo)
 		}
 	}
