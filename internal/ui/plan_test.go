@@ -185,6 +185,7 @@ func TestPlan_SummaryPartial(t *testing.T) {
 		name      string
 		succeeded int
 		failed    int
+		skipped   int
 		details   int // number of PlanDetail items to add
 		contains  []string
 	}{
@@ -193,6 +194,20 @@ func TestPlan_SummaryPartial(t *testing.T) {
 			succeeded: 2,
 			failed:    1,
 			contains:  []string{"1 failed", "2 applied"},
+		},
+		{
+			name:      "gated action skipped behind a failure",
+			succeeded: 1,
+			failed:    1,
+			skipped:   1,
+			contains:  []string{"1 failed", "1 skipped", "1 applied"},
+		},
+		{
+			name:      "skipped alone when the failure was an assessment",
+			succeeded: 0,
+			failed:    0,
+			skipped:   1,
+			contains:  []string{"1 skipped"},
 		},
 		{
 			name:      "all failed",
@@ -219,18 +234,18 @@ func TestPlan_SummaryPartial(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewPlan()
 			// Add enough items to make a valid plan.
-			for i := 0; i < tt.succeeded+tt.failed; i++ {
+			for i := 0; i < tt.succeeded+tt.failed+tt.skipped; i++ {
 				p.Add(PlanCreate, "a", "b", "c"+strings.Repeat("x", i), "")
 			}
 			for i := 0; i < tt.details; i++ {
 				p.Add(PlanDetail, "a", "b", "d"+strings.Repeat("x", i), "")
 			}
 
-			got := p.SummaryPartial(tt.succeeded, tt.failed)
+			got := p.SummaryPartial(tt.succeeded, tt.failed, tt.skipped)
 			for _, want := range tt.contains {
 				if !strings.Contains(got, want) {
-					t.Errorf("SummaryPartial(%d, %d) = %q, missing %q",
-						tt.succeeded, tt.failed, got, want)
+					t.Errorf("SummaryPartial(%d, %d, %d) = %q, missing %q",
+						tt.succeeded, tt.failed, tt.skipped, got, want)
 				}
 			}
 		})

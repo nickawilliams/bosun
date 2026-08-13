@@ -23,6 +23,33 @@ const (
 	PlanCancelled                      // ! — user declined
 )
 
+// PlanAction is one queued unit of work in a plan apply: the closure
+// that performs it, plus the gating that decides whether it runs at
+// all.
+type PlanAction struct {
+	// Run performs the action.
+	Run func() error
+
+	// RequiresPriorSuccess gates the action on a clean run so far:
+	// it is skipped if any earlier action in the queue failed, or if
+	// the plan carries an assessment failure (a ✗ row).
+	//
+	// This is for actions whose side effect asserts something about
+	// the run as a whole — an issue-tracker transition claims the
+	// work is done. Applying one behind a failure publishes a state
+	// that never happened, somewhere the error message does not
+	// reach. Actions that only describe their own subject (a
+	// worktree removal, a per-repo push) leave this false and stay
+	// best-effort: independent work should not be held hostage to an
+	// unrelated failure.
+	RequiresPriorSuccess bool
+
+	// Skip, when set, is marked instead of running whenever the gate
+	// closes, so the plan row renders as skipped rather than as the
+	// change it planned.
+	Skip *SkipRef
+}
+
 // PlanCard is a stateful plan component that transitions through lifecycle
 // states, updating in place. It owns the visual representation of the entire
 // plan from proposal through execution.
@@ -31,6 +58,7 @@ type PlanCard struct {
 	state     PlanCardState
 	succeeded int
 	failed    int
+	skipped   int
 }
 
 // NewPlanCard creates a plan card in the Proposed state.
@@ -43,10 +71,12 @@ func (pc *PlanCard) SetState(s PlanCardState) {
 	pc.state = s
 }
 
-// SetResults records how many actions succeeded/failed (for partial/success).
-func (pc *PlanCard) SetResults(succeeded, failed int) {
+// SetResults records how many actions succeeded, failed, and were
+// skipped by the gate (for partial/success).
+func (pc *PlanCard) SetResults(succeeded, failed, skipped int) {
 	pc.succeeded = succeeded
 	pc.failed = failed
+	pc.skipped = skipped
 }
 
 // Render returns the card as a styled string.
@@ -116,7 +146,7 @@ func (pc *PlanCard) summary() string {
 	case PlanSuccess:
 		return pc.plan.SummaryPastTense()
 	case PlanPartial:
-		return pc.plan.SummaryPartial(pc.succeeded, pc.failed)
+		return pc.plan.SummaryPartial(pc.succeeded, pc.failed, pc.skipped)
 	default:
 		return pc.plan.Summary()
 	}
@@ -157,6 +187,7 @@ type planApplyResult struct {
 	err       error
 	succeeded int
 	failed    int
+	skipped   int
 }
 
 func newPlanCardSpinnerModel(card *PlanCard, resultCh <-chan planApplyResult) planCardSpinnerModel {
@@ -176,11 +207,10 @@ func (m planCardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case planApplyDoneMsg:
 		m.done = true
 		m.err = msg.result.err
-		m.card.SetResults(msg.result.succeeded, msg.result.failed)
+		m.card.SetResults(msg.result.succeeded, msg.result.failed, msg.result.skipped)
 		// Set final state so View() renders it as BubbleTea's last
 		// frame, avoiding a clear-then-reprint flash.
-		result := planApplyResult{err: m.err, succeeded: msg.result.succeeded, failed: msg.result.failed}
-		m.card.setFinalState(result)
+		m.card.setFinalState(msg.result)
 		return m, tea.Quit
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -216,16 +246,14 @@ type planApplyDoneMsg struct {
 // RunApply executes the given actions with an animated spinner, transitioning
 // the card from Applying to its final state (Success/Partial/Failure).
 // Returns nil on full success, or the first error encountered.
-func (pc *PlanCard) RunApply(actions []func() error) error {
+//
+// Execution is best-effort by default — every action is attempted and
+// the first error is reported at the end — except for actions that set
+// RequiresPriorSuccess, which are skipped once anything has failed.
+func (pc *PlanCard) RunApply(actions []PlanAction) error {
 	// Raw mode: run actions synchronously without BubbleTea.
 	if IsRaw() {
-		var firstErr error
-		for _, action := range actions {
-			if err := action(); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-		return firstErr
+		return pc.applyActions(actions).err
 	}
 
 	pc.SetState(PlanApplying)
@@ -233,20 +261,9 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 	resultCh := make(chan planApplyResult, 1)
 	go func() {
 		start := time.Now()
-		succeeded, failed := 0, 0
-		var firstErr error
-		for _, action := range actions {
-			if err := action(); err != nil {
-				failed++
-				if firstErr == nil {
-					firstErr = err
-				}
-			} else {
-				succeeded++
-			}
-		}
+		result := pc.applyActions(actions)
 		holdSpinner(start)
-		resultCh <- planApplyResult{err: firstErr, succeeded: succeeded, failed: failed}
+		resultCh <- result
 	}()
 
 	fmt.Print(spacerPrefix())
@@ -257,7 +274,7 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 		// Non-interactive fallback — wait for result synchronously.
 		pc.Print()
 		result := <-resultCh
-		pc.SetResults(result.succeeded, result.failed)
+		pc.SetResults(result.succeeded, result.failed, result.skipped)
 		pc.setFinalState(result)
 		pc.Print()
 		return result.err
@@ -269,13 +286,55 @@ func (pc *PlanCard) RunApply(actions []func() error) error {
 	return m.err
 }
 
+// applyActions runs the queue and tallies the outcome. Shared by the
+// raw and spinner paths so the gate can't drift between them.
+//
+// The gate starts closed when the plan already carries an assessment
+// failure: a ✗ row is a target the run could not even evaluate, which
+// is as good a reason not to publish a run-wide claim as an apply that
+// blew up. Only RequiresPriorSuccess actions consult it — everything
+// else runs regardless, preserving the best-effort contract the
+// independent per-target actions were written against.
+func (pc *PlanCard) applyActions(actions []PlanAction) planApplyResult {
+	var result planApplyResult
+	anyFailed := pc.plan != nil && pc.plan.HasFailures()
+
+	for _, action := range actions {
+		if action.RequiresPriorSuccess && anyFailed {
+			result.skipped++
+			if action.Skip != nil {
+				action.Skip.Set()
+			}
+			continue
+		}
+		if err := action.Run(); err != nil {
+			anyFailed = true
+			result.failed++
+			if result.err == nil {
+				result.err = err
+			}
+			continue
+		}
+		result.succeeded++
+	}
+
+	return result
+}
+
 // setFinalState determines the terminal state based on action results.
+//
+// A skipped action is enough to deny Success even when everything that
+// ran succeeded: the gate only closes behind a failure, so the plan did
+// not fully apply. That case is a plan whose failure was an assessment
+// (a ✗ row, no apply error) with a gated action behind it — Partial,
+// not Success.
 func (pc *PlanCard) setFinalState(result planApplyResult) {
-	if result.err != nil && result.succeeded == 0 {
+	switch {
+	case result.err != nil && result.succeeded == 0:
 		pc.SetState(PlanFailure)
-	} else if result.err != nil {
+	case result.err != nil || result.skipped > 0:
 		pc.SetState(PlanPartial)
-	} else {
+	default:
 		pc.SetState(PlanSuccess)
 	}
 }

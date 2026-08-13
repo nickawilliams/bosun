@@ -23,6 +23,19 @@ func (r *DetailRef) Get() string {
 	return s
 }
 
+// SkipRef is a render-safe flag marking a planned row as never
+// attempted — the apply runner declined to run it because an earlier
+// action failed. Sibling of DetailRef, and atomic for the same
+// reason: the runner sets it from the apply goroutine while the plan
+// card's render loop reads the item every frame.
+type SkipRef struct{ v atomic.Bool }
+
+// Set marks the row as not attempted. Safe from any goroutine.
+func (r *SkipRef) Set() { r.v.Store(true) }
+
+// Get reports whether the row was skipped.
+func (r *SkipRef) Get() bool { return r.v.Load() }
+
 // PlanOp represents what kind of change a plan item describes.
 type PlanOp int
 
@@ -53,6 +66,14 @@ type PlanItem struct {
 	// "known after apply" placeholder. Sibling of Action.OpRef, which
 	// does the same for the operation glyph at assess time.
 	DetailRef *DetailRef
+
+	// SkipRef, when set and marked, renders the row as skipped rather
+	// than as the operation it planned: the apply runner never ran it
+	// because an earlier action failed. Without it a gated row would
+	// still read as "~ status  issue  EX-1  In Progress → Done" on a
+	// card that only says "1 failed" — exactly the ambiguity the
+	// gating exists to remove.
+	SkipRef *SkipRef
 }
 
 // Plan collects planned actions and renders them as a diff-style list.
@@ -77,7 +98,23 @@ func (p *Plan) Add(op PlanOp, action, subjectType, name, detail string) *Plan {
 // calls ref.Set, subsequent renders — including the card's final
 // success frame — show the resolved text instead.
 func (p *Plan) AddWithDetailRef(op PlanOp, action, subjectType, name, detail string, ref *DetailRef) *Plan {
-	p.items = append(p.items, PlanItem{Op: op, Action: action, Type: subjectType, Name: name, Detail: detail, DetailRef: ref})
+	return p.AddWithRefs(op, action, subjectType, name, detail, ref, nil)
+}
+
+// AddWithRefs appends a plan item carrying both apply-time refs. Either
+// may be nil; AddWithDetailRef is the detail-only shorthand. skipRef is
+// non-nil only for rows whose action is gated on everything before it
+// succeeding — the runner marks it instead of running the action.
+func (p *Plan) AddWithRefs(op PlanOp, action, subjectType, name, detail string, detailRef *DetailRef, skipRef *SkipRef) *Plan {
+	p.items = append(p.items, PlanItem{
+		Op:        op,
+		Action:    action,
+		Type:      subjectType,
+		Name:      name,
+		Detail:    detail,
+		DetailRef: detailRef,
+		SkipRef:   skipRef,
+	})
 	return p
 }
 
@@ -239,7 +276,10 @@ func (p *Plan) SummaryPastTense() string {
 }
 
 // SummaryPartial returns a mixed-tense summary for partial application.
-func (p *Plan) SummaryPartial(succeeded, failed int) string {
+// skipped counts gated actions the runner declined to run because an
+// earlier one failed — reported separately from failed, since nothing
+// was attempted, and separately from applied, since nothing landed.
+func (p *Plan) SummaryPartial(succeeded, failed, skipped int) string {
 	// Detail items are display-only and always succeed with the parent action.
 	detailCount := 0
 	for _, item := range p.items {
@@ -251,10 +291,14 @@ func (p *Plan) SummaryPartial(succeeded, failed int) string {
 
 	failStyle := lipgloss.NewStyle().Foreground(Palette.Error)
 	successStyle := lipgloss.NewStyle().Foreground(Palette.Success)
+	skipStyle := lipgloss.NewStyle().Foreground(Palette.Warning)
 
 	var parts []string
 	if failed > 0 {
 		parts = append(parts, failStyle.Render(fmt.Sprintf("%d failed", failed)))
+	}
+	if skipped > 0 {
+		parts = append(parts, skipStyle.Render(fmt.Sprintf("%d skipped", skipped)))
 	}
 	if succeeded > 0 {
 		parts = append(parts, successStyle.Render(fmt.Sprintf("%d applied", succeeded)))
@@ -311,14 +355,22 @@ func (p *Plan) columnWidths() planColumnWidths {
 // uses (RenderItems / RenderItemLines / PlanCard body), callers
 // can rejoin via "<glyph>  <content>".
 func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
+	skipped := item.SkipRef != nil && item.SkipRef.Get()
+
 	symbol, symbolStyle := planSymbol(item.Op)
+	if skipped {
+		symbol, symbolStyle = planSkippedSymbol()
+	}
 	g := symbolStyle.Render(symbol)
 
 	actionStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
 	typeStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	nameStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 	detailStyle := lipgloss.NewStyle().Foreground(Palette.NormalFg)
-	if item.Op == PlanNoChange {
+	// A skipped row describes work that did not happen, so it reads
+	// like the no-change rows rather than like the pending change it
+	// no longer is.
+	if item.Op == PlanNoChange || skipped {
 		muted := lipgloss.NewStyle().Foreground(Palette.Muted)
 		actionStyle, typeStyle, nameStyle, detailStyle = muted, muted, muted, muted
 	}
@@ -328,6 +380,9 @@ func planItemParts(item PlanItem, w planColumnWidths) (glyph, content string) {
 		if d := item.DetailRef.Get(); d != "" {
 			detail = d
 		}
+	}
+	if skipped {
+		detail = strings.TrimSpace(detail + " (skipped)")
 	}
 	c := fmt.Sprintf("%s  %s  %s  %s",
 		actionStyle.Render(fmt.Sprintf("%-*s", w.action, item.Action)),
@@ -364,4 +419,13 @@ func planSymbol(op PlanOp) (string, lipgloss.Style) {
 		return "\u2717", lipgloss.NewStyle().Foreground(Palette.Error)
 	}
 	return " ", lipgloss.NewStyle()
+}
+
+// planSkippedSymbol returns the symbol and style for a row the apply
+// runner declined to run. It borrows the card's skipped glyph and
+// warning color \u2014 the same pair the Partial card state uses \u2014 rather
+// than a diff symbol, because nothing was diffed: the row is a
+// statement about the run, not about the resource.
+func planSkippedSymbol() (string, lipgloss.Style) {
+	return cardGlyphSkipped, lipgloss.NewStyle().Foreground(Palette.Warning)
 }
