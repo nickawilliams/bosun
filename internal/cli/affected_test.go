@@ -145,6 +145,37 @@ func TestEmitDeploymentSourcesUnchangedRepo(t *testing.T) {
 	}
 }
 
+// TestEmitDeploymentSourcesServicelessRepo locks which repos the
+// gather walks: a repo whose services config resolves to nothing is
+// dropped before the spinner sequence (it would paint a pending row
+// that resolves into no rows at all, shrinking the list at the
+// handoff), and the repos beside it must survive that filter
+// untouched. An *absent* config isn't this case — resolveRepoServiceNames
+// falls back to the repo name as its own service — so the trigger is
+// an explicitly empty list.
+func TestEmitDeploymentSourcesServicelessRepo(t *testing.T) {
+	cmd := affSetup(t) // configures services for "api"
+	viper.Set("services.tools", []any{})
+	g := affVCS{defaultBranch: "main", changed: []string{"svc-a/main.go"}}
+	repos := []Repository{
+		{Name: "api", Path: t.TempDir()},
+		{Name: "tools", Path: t.TempDir()},
+	}
+
+	results, _, _, err := emitDeploymentSources(
+		context.Background(), cmd, g, repos,
+		map[string]string{"api": "feature-x", "tools": "feature-x"}, false)
+	if err != nil {
+		t.Fatalf("emitDeploymentSources: %v", err)
+	}
+	if len(results) != 1 || results[0].RepoName != "api" {
+		t.Fatalf("results = %+v, want only the repo with services configured", results)
+	}
+	if len(results[0].Services) != 1 || results[0].Services[0] != "svc-a" {
+		t.Errorf("Services = %v, want the configured repo's detection intact", results[0].Services)
+	}
+}
+
 // TestPRResolved locks the deployability predicate: withPRs requires
 // a successful lookup AND an existing PR; the release path (no PRs
 // needed) always resolves. HasChanges deliberately doesn't factor in

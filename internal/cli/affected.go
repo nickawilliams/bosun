@@ -568,15 +568,16 @@ func resolveDeploymentSource(ctx context.Context, g vcs.VCS, host code.Host, rep
 //     detection as-is. Only repos without a resolvable PR (withPRs)
 //     are excluded from toggling.
 //
-//  3. Final static card. The flat, alphabetically-sorted repo·service
-//     list (single-service repos show just the repo name), rendered
-//     as one Card with Item rows — a plain print, so there's no TUI
-//     program boundary (and no blank-frame seam) anywhere in the
-//     sequence:
+//  3. Final static card. The same repo·service rows the gather
+//     painted — repos alphabetically, sourceRows owning the order
+//     within a repo, single-service repos showing just the repo name
+//     — rendered as one Card with Item rows. A plain print, so there's
+//     no TUI program boundary (and no blank-frame seam) anywhere in
+//     the sequence:
 //
 //     ✓  extracker · activity-api      (deploying)
-//     ▲  extracker · pdfgen            (excluded — path map or toggle)
-//     ▲  web · no changes
+//     ○  extracker · pdfgen            (excluded — path map or toggle)
+//     ○  web · no changes
 //     ▲  repo · no PR for branch "x"
 //     ✗  repo · <error>                (detection or remote failure)
 //
@@ -604,9 +605,16 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	// list materializes in place and then swaps into the form (or the
 	// record card) with the same rows. Rows render via sourceRows /
 	// detFailRow, the record card's own renderers, so gather and record
-	// can't drift. A repo contributes as many rows as it has to say
-	// (a stale-fetch caveat, one row per service, or none at all when
-	// no services are configured for it).
+	// can't drift. Unlike the sibling gathers a repo can contribute
+	// more than one row (a stale-fetch caveat above its outcome, or one
+	// row per service), which is why steps append a slice.
+	//
+	// Repos whose services config resolves to nothing (an explicitly
+	// empty list — an absent config falls back to the repo name as its
+	// own service) are dropped before the gather rather than stepped
+	// through: detection returns before its first git call for them and
+	// they contribute no row, so a step would paint a pending row that
+	// resolves into nothing and the list would shrink at the handoff.
 	//
 	// Mutating later cards from a step's Run is race-free: the runner's
 	// worker sends each step's result over a channel before the model
@@ -616,10 +624,17 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	var detFails []detFail
 	var firstDetErr error
 
+	gathered := make([]Repository, 0, len(repos))
+	for _, repo := range repos {
+		if len(resolveRepoServiceNames(repo.Name)) > 0 {
+			gathered = append(gathered, repo)
+		}
+	}
+
 	statusMuted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	n := len(repos)
+	n := len(gathered)
 	pendingRow := func(c *ui.Card, i int) {
-		c.Item(ui.GlyphSlot, statusMuted.Render(repos[i].Name))
+		c.Item(ui.GlyphSlot, statusMuted.Render(gathered[i].Name))
 	}
 	cards := make([]*ui.Card, n)
 	for i := range cards {
@@ -630,7 +645,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	}
 
 	steps := make([]ui.CardStep, 0, n)
-	for i, repo := range repos {
+	for i, repo := range gathered {
 		steps = append(steps, ui.CardStep{
 			Card: cards[i],
 			// Errors ride on detErr/prErr rather than the step's error
@@ -897,11 +912,10 @@ const (
 )
 
 // serviceRow is one row of the Services surface: the rendered glyph +
-// content, the service it speaks for (its order within the repo; "" on
-// the rows that speak for the whole repo), and the severity it
-// contributes to the card's aggregate state.
+// content, and the severity it contributes to the card's aggregate
+// state. Rows arrive in display order — sourceRows sorts before it
+// renders — so nothing downstream needs the sort key back.
 type serviceRow struct {
-	svc            string
 	glyph, content string
 	sev            rowSeverity
 }
@@ -1003,33 +1017,43 @@ func sourceRows(sr sourceRepo, withPRs bool) []serviceRow {
 			sev:     rowSkip,
 		})
 	default:
-		// Single-service repos show just the repo name — the service
-		// segment would only restate the row.
-		pairNote := func(svc string) string {
-			if len(r.Services)+len(r.Skipped) == 1 {
-				return ""
-			}
-			return svc
+		// One row per service, name-ordered across both lists so the
+		// deploying and excluded rows interleave the way the record
+		// card has always shown them.
+		type pick struct {
+			svc string
+			on  bool
 		}
-		pairs := make([]serviceRow, 0, len(r.Services)+len(r.Skipped))
+		picks := make([]pick, 0, len(r.Services)+len(r.Skipped))
 		for _, svc := range r.Services {
-			pairs = append(pairs, serviceRow{
-				svc:     svc,
-				glyph:   glyphOK,
-				content: svcOn(r.RepoName, pairNote(svc)),
-				sev:     rowOK,
-			})
+			picks = append(picks, pick{svc, true})
 		}
 		for _, svc := range r.Skipped {
-			pairs = append(pairs, serviceRow{
-				svc:     svc,
+			picks = append(picks, pick{svc, false})
+		}
+		sort.SliceStable(picks, func(i, j int) bool { return picks[i].svc < picks[j].svc })
+
+		for _, p := range picks {
+			// Single-service repos show just the repo name — the
+			// service segment would only restate the row.
+			note := p.svc
+			if len(picks) == 1 {
+				note = ""
+			}
+			if p.on {
+				rows = append(rows, serviceRow{
+					glyph:   glyphOK,
+					content: svcOn(r.RepoName, note),
+					sev:     rowOK,
+				})
+				continue
+			}
+			rows = append(rows, serviceRow{
 				glyph:   glyphOff,
-				content: svcOff(r.RepoName, pairNote(svc)),
+				content: svcOff(r.RepoName, note),
 				sev:     rowSkip,
 			})
 		}
-		sort.Slice(pairs, func(i, j int) bool { return pairs[i].svc < pairs[j].svc })
-		rows = append(rows, pairs...)
 	}
 	return rows
 }
