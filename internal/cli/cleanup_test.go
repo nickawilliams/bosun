@@ -603,12 +603,15 @@ func TestCleanup(t *testing.T) {
 		// The provider rejects the teardown at apply time. The error
 		// propagates out of the plan apply as the command's return.
 		//
-		// Plan rows are independent: RunApply attempts every action and
-		// returns the FIRST error, so the local destruction still runs
-		// to completion. That's deliberate — a stranded preview env is
+		// These plan rows are independent, so they stay best-effort:
+		// RunApply attempts every ungated action and returns the FIRST
+		// error, and the local destruction runs to completion. That's
+		// deliberate — a stranded preview env is
 		// a remote-side loose end the user can chase from the error,
 		// and holding the worktrees hostage to it would leave the
-		// workspace half-cleaned on every provider hiccup. The
+		// workspace half-cleaned on every provider hiccup. (Only an
+		// action marked RequiresPriorSuccess is withheld behind a
+		// failure; cleanup queues none.) The
 		// post-apply workspace-directory removal is the one step that
 		// doesn't run: it sits past the runActions error return, so a
 		// failed apply leaves the directory behind as the visible sign

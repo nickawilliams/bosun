@@ -19,8 +19,11 @@ var ErrCancelled = errors.New("cancelled")
 // still matches.
 var errPlanCancelled = fmt.Errorf("plan %w", ErrCancelled)
 
-// PlanAction is a function that executes one step of a plan.
-type PlanAction func() error
+// PlanAction is one step of a plan: the closure that performs it plus
+// the gating that decides whether it runs behind a failure. Aliased
+// rather than redeclared so the CLI and the card runner share one
+// notion of a queued action.
+type PlanAction = ui.PlanAction
 
 // PlanOpts controls the two independent axes of Plan Card behavior.
 type PlanOpts struct {
@@ -123,11 +126,7 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 // applyPlanCard runs actions with an animated spinner, transitioning the
 // card through applying → success/partial/failure.
 func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
-	wrappedActions := make([]func() error, len(actions))
-	for i, a := range actions {
-		wrappedActions[i] = a
-	}
-	return pc.RunApply(wrappedActions)
+	return pc.RunApply(actions)
 }
 
 // newPlanPendingHeader builds the title-bar-only card shown above

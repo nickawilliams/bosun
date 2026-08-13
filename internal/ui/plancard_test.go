@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -63,7 +65,7 @@ func TestPlanCard_Summary(t *testing.T) {
 	}
 
 	// Partial state uses SummaryPartial.
-	pc.SetResults(1, 1)
+	pc.SetResults(1, 1, 0)
 	pc.SetState(PlanPartial)
 	got = pc.summary()
 	if !strings.Contains(got, "failed") || !strings.Contains(got, "applied") {
@@ -71,11 +73,47 @@ func TestPlanCard_Summary(t *testing.T) {
 	}
 }
 
+// TestPlanCard_FailureSummary covers the two ways into PlanFailure.
+// The motivating case for the apply gate — one target, its deploy
+// fails, the transition behind it is skipped — lands here rather than
+// in Partial, so the Failure caption has to report results too.
+func TestPlanCard_FailureSummary(t *testing.T) {
+	t.Run("failed apply reports its results", func(t *testing.T) {
+		plan := NewPlan().
+			Add(PlanCreate, "deploy", "service", "api", "v1.2.4").
+			Add(PlanModify, "status", "issue", "EX-1", "In Progress → Done")
+		pc := NewPlanCard(plan)
+		pc.SetResults(0, 1, 1)
+		pc.SetState(PlanFailure)
+
+		got := pc.summary()
+		if !strings.Contains(got, "1 failed") || !strings.Contains(got, "1 skipped") {
+			t.Errorf("summary() = %q, want it to report 1 failed and 1 skipped", got)
+		}
+		if strings.Contains(got, "to update") {
+			t.Errorf("summary() = %q, still promises the change the skipped row didn't make", got)
+		}
+	})
+
+	t.Run("all-assess-failed plan keeps the op counts", func(t *testing.T) {
+		// Nothing applied, so there are no results to report — the ✗
+		// rows are the whole story.
+		plan := NewPlan().Add(PlanFailed, "deploy", "service", "api", "boom")
+		pc := NewPlanCard(plan)
+		pc.SetState(PlanFailure)
+
+		if got := pc.summary(); !strings.Contains(got, "1 failed") {
+			t.Errorf("summary() = %q, want the ✗ row counted", got)
+		}
+	})
+}
+
 func TestPlanCard_SetFinalState(t *testing.T) {
 	tests := []struct {
 		name      string
 		err       error
 		succeeded int
+		skipped   int
 		want      PlanCardState
 	}{
 		{
@@ -96,6 +134,16 @@ func TestPlanCard_SetFinalState(t *testing.T) {
 			succeeded: 2,
 			want:      PlanPartial,
 		},
+		{
+			// The gate closed on an assess failure, so no action
+			// errored — but the plan did not fully apply, and a ✓
+			// Success card would say it had.
+			name:      "skipped action without an apply error yields partial",
+			err:       nil,
+			succeeded: 1,
+			skipped:   1,
+			want:      PlanPartial,
+		},
 	}
 
 	for _, tt := range tests {
@@ -107,6 +155,7 @@ func TestPlanCard_SetFinalState(t *testing.T) {
 				err:       tt.err,
 				succeeded: tt.succeeded,
 				failed:    0,
+				skipped:   tt.skipped,
 			}
 			if tt.err != nil {
 				result.failed = 1
@@ -156,6 +205,157 @@ func TestPlanCard_Glyph(t *testing.T) {
 			t.Errorf("glyph() for unknown state = %q, want %q", got, " ")
 		}
 	})
+}
+
+// TestPlanCard_ApplyActions_Gating covers the apply queue's execution
+// contract: ungated actions are best-effort, gated ones are not.
+func TestPlanCard_ApplyActions_Gating(t *testing.T) {
+	// record builds an action that appends its name to ran.
+	record := func(ran *[]string, name string, err error, gated bool) (PlanAction, *SkipRef) {
+		skip := &SkipRef{}
+		return PlanAction{
+			Run: func() error {
+				*ran = append(*ran, name)
+				return err
+			},
+			RequiresPriorSuccess: gated,
+			Skip:                 skip,
+		}, skip
+	}
+
+	t.Run("gated action is skipped behind a failed action", func(t *testing.T) {
+		var ran []string
+		deploy, _ := record(&ran, "deploy", errSentinel, false)
+		status, statusSkip := record(&ran, "status", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanCreate, "deploy", "service", "api", "").
+			Add(PlanModify, "status", "issue", "EX-1", ""))
+		got := pc.applyActions([]PlanAction{deploy, status})
+
+		if slices.Contains(ran, "status") {
+			t.Errorf("gated action ran behind a failure; ran = %v", ran)
+		}
+		if got.skipped != 1 || got.failed != 1 || got.succeeded != 0 {
+			t.Errorf("result = %+v, want 1 failed, 1 skipped, 0 succeeded", got)
+		}
+		if !errors.Is(got.err, errSentinel) {
+			t.Errorf("err = %v, want the failing action's error", got.err)
+		}
+		if !statusSkip.Get() {
+			t.Error("skip ref not marked; the plan row would still read as applied")
+		}
+	})
+
+	t.Run("ungated actions stay best-effort", func(t *testing.T) {
+		var ran []string
+		first, _ := record(&ran, "first", errSentinel, false)
+		second, _ := record(&ran, "second", nil, false)
+
+		pc := NewPlanCard(NewPlan().Add(PlanDestroy, "worktree", "repo", "api", ""))
+		got := pc.applyActions([]PlanAction{first, second})
+
+		if !slices.Contains(ran, "second") {
+			t.Errorf("independent action was withheld behind a failure; ran = %v", ran)
+		}
+		if got.skipped != 0 || got.succeeded != 1 || got.failed != 1 {
+			t.Errorf("result = %+v, want 1 failed, 1 applied, 0 skipped", got)
+		}
+	})
+
+	t.Run("gated action is skipped behind an assess failure", func(t *testing.T) {
+		// No action errors — the ✗ row is the only failure, and it
+		// happened before the queue was built, so it arrives as the
+		// action's PriorFailure seed.
+		var ran []string
+		status, statusSkip := record(&ran, "status", nil, true)
+		status.PriorFailure = true
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanFailed, "deploy", "service", "api", "deployments API 500").
+			Add(PlanModify, "status", "issue", "EX-1", ""))
+		got := pc.applyActions([]PlanAction{status})
+
+		if len(ran) != 0 {
+			t.Errorf("gated action ran past an assess failure; ran = %v", ran)
+		}
+		if got.skipped != 1 || got.err != nil {
+			t.Errorf("result = %+v, want 1 skipped and no apply error", got)
+		}
+		if !statusSkip.Get() {
+			t.Error("skip ref not marked")
+		}
+	})
+
+	t.Run("a later assess failure does not close the gate", func(t *testing.T) {
+		// The ✗ row belongs to an action queued AFTER the gated one
+		// (review and preview both queue their notification there),
+		// so it is not prior and must not withhold the transition.
+		// The plan carries the ✗ row; only the seed decides.
+		var ran []string
+		status, statusSkip := record(&ran, "status", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanModify, "status", "issue", "EX-1", "").
+			Add(PlanFailed, "notify", "channel", "#reviews", "host unavailable"))
+		got := pc.applyActions([]PlanAction{status})
+
+		if !slices.Contains(ran, "status") {
+			t.Errorf("a later failure withheld the transition; ran = %v", ran)
+		}
+		if got.skipped != 0 || got.succeeded != 1 {
+			t.Errorf("result = %+v, want 1 applied and nothing skipped", got)
+		}
+		if statusSkip.Get() {
+			t.Error("skip ref marked by a failure that came after it")
+		}
+	})
+
+	t.Run("gated action runs on a clean plan", func(t *testing.T) {
+		var ran []string
+		deploy, _ := record(&ran, "deploy", nil, false)
+		status, statusSkip := record(&ran, "status", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanCreate, "deploy", "service", "api", "").
+			Add(PlanModify, "status", "issue", "EX-1", ""))
+		got := pc.applyActions([]PlanAction{deploy, status})
+
+		if !slices.Contains(ran, "status") {
+			t.Errorf("gated action withheld from a clean run; ran = %v", ran)
+		}
+		if got.succeeded != 2 || got.skipped != 0 || got.err != nil {
+			t.Errorf("result = %+v, want 2 applied and nothing skipped", got)
+		}
+		if statusSkip.Get() {
+			t.Error("skip ref marked on a clean run")
+		}
+	})
+}
+
+// TestPlan_SkippedRowRendering checks that a marked row stops
+// advertising the change it never made.
+func TestPlan_SkippedRowRendering(t *testing.T) {
+	skip := &SkipRef{}
+	p := NewPlan().AddWithRefs(PlanModify, "status", "issue", "EX-1",
+		"In Progress → Done", nil, skip)
+
+	before := p.RenderItems()
+	if strings.Contains(before, "skipped") {
+		t.Errorf("unmarked row already reads as skipped: %q", before)
+	}
+
+	skip.Set()
+	after := p.RenderItems()
+	if !strings.Contains(after, "(skipped)") {
+		t.Errorf("marked row = %q, want it to say it was skipped", after)
+	}
+	if !strings.Contains(after, cardGlyphSkipped) {
+		t.Errorf("marked row = %q, want the skipped glyph %q", after, cardGlyphSkipped)
+	}
+	if strings.Contains(after, "~") {
+		t.Errorf("marked row = %q, still shows the modify symbol it never applied", after)
+	}
 }
 
 // errSentinel is a reusable non-nil error for tests.
