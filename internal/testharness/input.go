@@ -34,19 +34,29 @@ const chunkPause = 200 * time.Millisecond
 // starvationGrace is how long a live form's read may sit on an empty
 // queue before the harness calls it starved (see errStarvedInput).
 //
-// The wait exists for exactly one race: a form's read loop can be
-// parked on the next read while the form is still tearing down after
-// its final keystroke. That teardown ends in ui.ReleaseInput, which
-// bumps the session and releases the parked read with io.EOF — so the
-// grace only has to outlast form teardown, never a command's own work
-// between prompts (a read cannot be parked while no form is running).
+// The wait exists for one race: a form's read loop parks on the next
+// read while the form is still tearing down after its final keystroke.
+// That teardown ends in ui.ReleaseInput, whose session bump releases
+// the parked read with io.EOF — so in the normal case the grace only
+// has to outlast form teardown. Measured across the whole internal/cli
+// suite: 61 parks, every one retired by a session bump, longest 12ms
+// (17ms under -race). Nothing there comes within two orders of
+// magnitude of this.
 //
-// It is therefore paid only by runs that genuinely hang. Two seconds
-// is orders of magnitude above observed teardown even under the race
-// detector, and still ~1% of the package timeout a starved run used to
-// burn. Raise it if a loaded machine ever trips a false positive; the
-// symptom would be a starvation failure naming a prompt the scenario
-// demonstrably did feed.
+// The bound is empirical rather than structural, though, and the gap
+// is worth knowing. ultraviolet issues its next Read immediately after
+// handing bytes to the parser, so a leaked read almost always begins
+// BEFORE ReleaseInput's bump and is stale by construction. Deschedule
+// that goroutine between the two and the read begins after the bump —
+// live-session, with no form running and nothing to bump the session
+// again until the next prompt starts or the run ends. The grace then
+// has to cover the command's post-prompt work as well. Two seconds is
+// chosen for that case, not the 12ms one.
+//
+// It is paid only by runs that genuinely hang, and is still ~1% of the
+// package timeout a starved run used to burn. Raise it if a loaded
+// machine ever trips a false positive; the symptom would be a
+// starvation failure naming a prompt the scenario demonstrably fed.
 const starvationGrace = 2 * time.Second
 
 // errStarvedInput is what a starved read returns instead of blocking
@@ -86,7 +96,8 @@ var errStarvedInput = errors.New(
 //
 //   - the session is bumped (the form that owned the read finished, or
 //     another took the stream): io.EOF, nothing consumed;
-//   - release: Harness.Run is over, so parked readers can retire;
+//   - the epoch moves (Harness.Run is over, or the next one started),
+//     so parked readers retire: io.EOF;
 //   - starvationGrace elapses with the read still live and the queue
 //     still empty: errStarvedInput, and starved is latched so
 //     Harness.Run can name the failure.
@@ -139,11 +150,21 @@ type chunkReader struct {
 	// walks straight into its next prompt, and one grace per remaining
 	// prompt would put the hang back.
 	starved bool
-	// released marks the end of a Run. Parked readers (a finished
-	// form's leaked read loop, most often) retire on it instead of
-	// sitting out the grace and latching a starvation the run never
+	// epoch increments on every run boundary — release at the end of a
+	// Run, beginRun at the start of the next. A parked read snapshots
+	// it and retires when it changes, so a finished form's leaked read
+	// loop can't sit out the grace and latch a starvation the run never
 	// suffered.
-	released bool
+	//
+	// A counter rather than a "released" flag because the signal is
+	// edge-triggered: a reader that loses the race for r.mu after
+	// release() would find a flag the next beginRun had already
+	// cleared, and nothing would ever signal it again. It would then
+	// either starve against the NEXT run — reporting a prompt that run
+	// fed, or never asked for — or wake on that run's first chunk and
+	// swallow it. An epoch only ever moves forward, so a stale snapshot
+	// stays stale.
+	epoch uint64
 }
 
 // newChunkReader returns a reader with the default starvation grace.
@@ -180,13 +201,16 @@ func (r *chunkReader) append(s string) {
 	r.notify()
 }
 
-// beginRun clears the per-run state so a harness reused across several
-// Run calls starts each one un-starved and un-released. Queued input
-// deliberately survives: Type may be called once for a whole test.
+// beginRun opens a run: the starvation latch clears and the epoch
+// moves, retiring any read still parked from the run before. Queued
+// input deliberately survives — Type may be called once for a whole
+// test, ahead of several Runs.
 func (r *chunkReader) beginRun() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.starved, r.released = false, false
+	r.starved = false
+	r.epoch++
+	r.notify()
 }
 
 // release ends a run: parked reads retire with io.EOF rather than
@@ -194,7 +218,7 @@ func (r *chunkReader) beginRun() {
 func (r *chunkReader) release() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.released = true
+	r.epoch++
 	r.notify()
 }
 
@@ -249,12 +273,30 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 // session is the caller's snapshot: once it goes stale the read is a
 // leaked form's, and the queue — empty or not — is not its business.
 func (r *chunkReader) awaitChunk(session uint64) error {
+	epoch := r.epoch
 	var timeout <-chan time.Time
-	for len(r.chunks) == 0 {
-		switch {
-		case r.released, r.session != session:
+	var expired bool
+	for {
+		// Retirement is tested before availability, not as part of the
+		// wait condition: a read parked across a run boundary must not
+		// be rescued by the next run's first chunk — it would consume
+		// input the live form needs, and a leaked read loop discards
+		// what it consumes.
+		if r.epoch != epoch || r.session != session {
 			return io.EOF
+		}
+		if len(r.chunks) > 0 {
+			return nil
+		}
+		switch {
 		case r.starved:
+			return errStarvedInput
+		case expired:
+			// The grace ran out on an earlier lap and this read is
+			// still live on an empty queue. Decided here rather than
+			// in the select so a spent timer is never waited on twice
+			// — a second wait on a drained channel would park forever.
+			r.starved = true
 			return errStarvedInput
 		}
 		if timeout == nil {
@@ -269,15 +311,11 @@ func (r *chunkReader) awaitChunk(session uint64) error {
 		select {
 		case <-wake:
 		case <-timeout:
-			r.mu.Lock()
-			// The state can have moved while the timer ran; the loop
-			// head re-reads it and only latches if nothing did.
-			if len(r.chunks) == 0 && !r.released && r.session == session {
-				r.starved = true
-			}
-			continue
+			// Not starvation yet: the state can have moved while the
+			// timer ran, and the loop head is where that is re-read.
+			// Input that arrives late is still input.
+			expired = true
 		}
 		r.mu.Lock()
 	}
-	return nil
 }

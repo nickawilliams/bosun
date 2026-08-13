@@ -173,8 +173,14 @@ func TestChunkReaderReleaseRetiresParkedRead(t *testing.T) {
 
 // Blocking must not mean deadlock: input queued while a read is parked
 // wakes it.
+//
+// The grace is set out of reach on purpose. At testGrace the timer
+// doubles as a poll — its re-check finds the chunk and serves it — so
+// the case would pass with append's wake removed entirely, testing
+// nothing.
 func TestChunkReaderAppendWakesParkedRead(t *testing.T) {
 	r := newTestReader()
+	r.starveAfter = time.Minute
 
 	type result struct {
 		s   string
@@ -196,6 +202,58 @@ func TestChunkReaderAppendWakesParkedRead(t *testing.T) {
 		}
 	case <-time.After(testGrace * 4):
 		t.Fatal("parked Read never woke on the appended chunk")
+	}
+}
+
+// A read parked when a run ends must stay retired once the NEXT run
+// opens — it must not wake on that run's input and swallow it (leaked
+// read loops discard what they read), nor sit out the grace and blame
+// the new run for a prompt it fed or never asked for.
+//
+// This is why the run boundary is an epoch rather than a flag cleared
+// by the next beginRun: the parked read has to re-acquire the mutex to
+// see it, and by then beginRun may have run. The grace is out of reach
+// here so a read that fails to retire is caught by the deadline rather
+// than rescued by the timer.
+//
+// As a mutation detector this is probabilistic — a flag implementation
+// passes whenever the parked goroutine wins the race for the mutex —
+// but the invariant it asserts holds deterministically for an epoch,
+// since an epoch only ever moves forward.
+func TestChunkReaderStaysRetiredAcrossRuns(t *testing.T) {
+	r := newTestReader()
+	r.starveAfter = time.Minute
+
+	type result struct {
+		s   string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, err := readOnce(t, r)
+		done <- result{s, err}
+	}()
+	time.Sleep(10 * time.Millisecond) // let it park
+
+	r.release()  // Run ends
+	r.beginRun() // the next Run opens
+	r.append("next run's input")
+
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, io.EOF) || got.s != "" {
+			t.Fatalf("read parked across the run boundary = %q, %v; want \"\", io.EOF",
+				got.s, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read parked across the run boundary never retired")
+	}
+
+	if got, err := readOnce(t, r); err != nil || got != "next run's input" {
+		t.Fatalf("new run's Read = %q, %v; want %q, nil", got, err, "next run's input")
+	}
+	if starved, _, _ := r.starvation(); starved {
+		t.Error("starvation() = true; the retired read must not blame the new run")
 	}
 }
 

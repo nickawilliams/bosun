@@ -419,33 +419,50 @@ func (h *Harness) Run(args ...string) error {
 }
 
 // starvationReport explains a starved run: which invocation blocked,
-// how much input the scenario had thought would cover it, and what was
-// on screen when it stopped.
+// how much input the scenario had queued against it, and how far the
+// command had got when it stopped.
 //
-// The trailing output is the part that names the prompt. Prompts are
-// preceded by a rewindable input card (ui.CardInput) written straight
-// to the output buffer, and a buffer keeps what a terminal would have
-// erased — so the last card in the capture is the question the command
-// is sitting on. Rendering the prompt itself would not help: with a
-// non-TTY output bubbletea uses the nil renderer and the form draws
+// "How far" is answered from two sources because neither covers every
+// prompt. Rendering the prompt itself covers none of them: with a
+// non-TTY output bubbletea uses the nil renderer, so the form draws
 // nothing at all.
+//
+//   - Reported steps. The capture reporter records the semantic
+//     timeline whatever the renderer does, so this is the one that
+//     always says something — including for gates drawn by a tea
+//     program (start's plan confirmation), which leave the output
+//     buffer holding nothing but control bytes.
+//   - Trailing output. Prompts wrapped in a rewindable input card
+//     (ui.CardInput) write that card straight to the buffer before
+//     handing over the stream, and a buffer keeps what a terminal
+//     would have erased — so where there is one, the last card IS the
+//     question the command is sitting on. Where there isn't, this is
+//     empty or a bare timeline connector, hence the pairing above.
 func (h *Harness) starvationReport(args []string, queued int, grace time.Duration) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "bosun %s reached a prompt this scenario never fed.\n\n",
 		strings.Join(args, " "))
-	fmt.Fprintf(&b, "The scenario queued %d input(s) via Type(); the command "+
-		"consumed all of them and asked for more, so the harness aborted the "+
+	fmt.Fprintf(&b, "All %d input(s) queued via Type() in this test have been "+
+		"consumed and the command asked for more, so the harness aborted the "+
 		"form after %s instead of blocking until the package test timeout.\n\n",
 		queued, grace)
 	b.WriteString("Either feed the prompt with another h.Type(...) call, or — if " +
 		"the command should not be prompting here at all — that is the " +
 		"regression under test.\n\n")
 
-	if tail := outputTail(h.Stdout(), starvationTailLines); tail != "" {
-		fmt.Fprintf(&b, "Last output before it blocked (the prompt is usually the "+
-			"final card):\n%s", tail)
-	} else {
-		b.WriteString("The command produced no output before it blocked.")
+	steps := outputTail(h.Reporter.Dump(), starvationTailLines)
+	out := outputTail(h.Stdout(), starvationTailLines)
+	if steps == "" && out == "" {
+		b.WriteString("The command reported nothing and produced no output " +
+			"before it blocked, so it stalled on its first prompt.")
+		return b.String()
+	}
+	if steps != "" {
+		fmt.Fprintf(&b, "Last steps reported before it blocked:\n%s\n", steps)
+	}
+	if out != "" {
+		fmt.Fprintf(&b, "Last output before it blocked (where a prompt printed "+
+			"an input card, it is the final one):\n%s", out)
 	}
 	return b.String()
 }

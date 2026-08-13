@@ -348,13 +348,24 @@ itself, with a report naming the run and quoting what was on screen:
 ```
 bosun preview acme --env staging reached a prompt this scenario never fed.
 
-It consumed 2 of 2 queued Type() input(s) and then asked for more, so
-the harness aborted the form after 2s instead of blocking until the
-package test timeout.
+All 2 input(s) queued via Type() in this test have been consumed and the
+command asked for more, so the harness aborted the form after 2s instead
+of blocking until the package test timeout.
 ...
-Last output before it blocked (the prompt is usually the final card):
-     ❯  Environment Name
+Last steps reported before it blocked:
+    complete Resolved Environment
+Last output before it blocked (where a prompt printed an input card, it
+is the final one):
+    ❯  Environment Name
 ```
+
+Two "how far it got" sections because neither covers every prompt. The
+reported steps come from the capture reporter, which records the
+timeline whatever the renderer does — that one always says something.
+The output tail is where a prompt's `CardInput` header lands, so where
+there is one it names the question exactly; a gate drawn by a tea
+program (`start`'s plan confirmation) leaves nothing there but control
+bytes.
 
 Read it as a regression signal, not a harness complaint: several
 realistic regressions land here rather than on a clean assertion
