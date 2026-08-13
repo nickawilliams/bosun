@@ -740,15 +740,13 @@ func TestRelease(t *testing.T) {
 		if !slices.Contains(f.h.CICD.Calls(), "TriggerWorkflow") {
 			t.Errorf("dispatch never attempted; calls=%v", f.h.CICD.Calls())
 		}
-		// Plan apply is best-effort by design (PlanCard.RunApply runs
-		// every action and returns the FIRST error), so the status
-		// transition queued behind the deploy still lands: the issue
-		// reads Done even though nothing reached production. That is
-		// the shared runner's semantics rather than anything
-		// release-specific — pinned here so a change to it is a
-		// deliberate one, not a silent drift.
-		if got := f.status(t); got != "Done" {
-			t.Errorf("issue status = %q, want %q (plan apply is best-effort)", got, "Done")
+		// The status transition is queued behind the deploy and gated
+		// on it (Action.RequiresPriorSuccess), so a failed dispatch
+		// holds the issue where it was. Moving it to Done here would
+		// tell everyone reading the board that a deploy that never
+		// reached production had shipped.
+		if got := f.status(t); got != "In Progress" {
+			t.Errorf("issue status = %q, want %q — the deploy failed, so nothing is Done", got, "In Progress")
 		}
 	})
 

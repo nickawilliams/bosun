@@ -26,6 +26,12 @@ func statusAction(tracker issue.Tracker, issueKey, currentStatus, targetStatusKe
 		Action: "status",
 		Type:   "issue",
 		Name:   issueKey,
+		// The transition speaks for the whole run — "Done" claims the
+		// deploy landed, "In Review" claims the PRs exist. Every
+		// command queues it last, behind the work it describes, so
+		// applying it past a failure publishes a state that never
+		// happened to a board the error message never reaches.
+		RequiresPriorSuccess: true,
 		Assess: func(_ context.Context) (ActionState, string, error) {
 			if currentStatus != "" && strings.EqualFold(currentStatus, statusName) {
 				return ActionCompleted, currentStatus, nil

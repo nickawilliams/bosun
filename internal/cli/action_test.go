@@ -58,6 +58,124 @@ func TestRunActionsFailedAssessDoesNotAbortSiblings(t *testing.T) {
 	}
 }
 
+// TestRunActionsGatedActionSkippedBehindFailure locks the other half
+// of that contract: siblings proceeding is the point, but an action
+// that speaks for the whole run (RequiresPriorSuccess — the
+// issue-tracker transition) must not. Both failure shapes close the
+// gate, since both leave the run with work that did not happen.
+func TestRunActionsGatedActionSkippedBehindFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		broken Action
+	}{
+		{
+			name: "apply failure",
+			broken: Action{
+				Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: "api",
+				Assess: func(context.Context) (ActionState, string, error) {
+					return ActionNeeded, "ready", nil
+				},
+				Apply: func(context.Context) error {
+					return errors.New("workflow dispatch 422")
+				},
+			},
+		},
+		{
+			name: "assess failure",
+			broken: Action{
+				Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: "api",
+				Assess: func(context.Context) (ActionState, string, error) {
+					return 0, "", errors.New("deployments API 500")
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.IsRaw()
+			ui.SetDefault(ui.NewRawReporter())
+			defer func() {
+				if !prev {
+					ui.SetDefault(ui.NewCardReporter())
+				}
+			}()
+
+			cmd := &cobra.Command{Use: "t"}
+			cmd.Flags().Bool("approve", true, "")
+			cmd.Flags().Bool("dry-run", false, "")
+
+			transitioned := false
+			actions := []Action{
+				tt.broken,
+				{
+					Op: ui.PlanModify, Action: "status", Type: "issue", Name: "EX-1",
+					RequiresPriorSuccess: true,
+					Assess: func(context.Context) (ActionState, string, error) {
+						return ActionNeeded, "In Progress → Done", nil
+					},
+					Apply: func(context.Context) error {
+						transitioned = true
+						return nil
+					},
+				},
+			}
+
+			if err := runActions(cmd, context.Background(), actions); err == nil {
+				t.Error("err = nil, want the failure to surface")
+			}
+			if transitioned {
+				t.Error("the issue was moved behind a failure that never shipped")
+			}
+		})
+	}
+}
+
+// TestRunActionsGatedActionRunsOnCleanPlan is the companion: the gate
+// must not become a blanket refusal to transition.
+func TestRunActionsGatedActionRunsOnCleanPlan(t *testing.T) {
+	prev := ui.IsRaw()
+	ui.SetDefault(ui.NewRawReporter())
+	defer func() {
+		if !prev {
+			ui.SetDefault(ui.NewCardReporter())
+		}
+	}()
+
+	cmd := &cobra.Command{Use: "t"}
+	cmd.Flags().Bool("approve", true, "")
+	cmd.Flags().Bool("dry-run", false, "")
+
+	transitioned := false
+	actions := []Action{
+		{
+			Op: ui.PlanCreate, Action: "deploy", Type: "service", Name: "api",
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "ready", nil
+			},
+			Apply: func(context.Context) error { return nil },
+		},
+		{
+			Op: ui.PlanModify, Action: "status", Type: "issue", Name: "EX-1",
+			RequiresPriorSuccess: true,
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "In Progress → Done", nil
+			},
+			Apply: func(context.Context) error {
+				transitioned = true
+				return nil
+			},
+		},
+	}
+
+	if err := runActions(cmd, context.Background(), actions); err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
+	if !transitioned {
+		t.Error("the gate withheld the transition from a run where everything succeeded")
+	}
+}
+
 // TestRunActionsAllAssessFailedReturnsError covers the all-failed
 // shape: nothing to apply, no PlanVerified misread, aggregate error.
 func TestRunActionsAllAssessFailedReturnsError(t *testing.T) {

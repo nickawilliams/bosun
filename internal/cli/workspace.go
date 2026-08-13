@@ -220,9 +220,9 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				return err
 			}
 
-			actions := []PlanAction{func() error {
+			actions := []PlanAction{{Run: func() error {
 				return mgr.Create(cmd.Context(), name, repositories, fromHead)
-			}}
+			}}}
 
 			return runPlanCard(cmd, plan, actions, PlanOpts{
 				Confirm: false,
@@ -279,9 +279,9 @@ func newWorkspaceAddCmd() *cobra.Command {
 				plan.Add(ui.PlanCreate, "worktree", "repo", r.Name, name)
 			}
 
-			actions := []PlanAction{func() error {
+			actions := []PlanAction{{Run: func() error {
 				return mgr.Add(ctx, name, repositories, fromHead)
-			}}
+			}}}
 
 			return runPlanCard(cmd, plan, actions, PlanOpts{
 				Confirm: false,
@@ -362,7 +362,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 			// "cd back" hint after the plan finalizes.
 			var movedFrom string
 			projectRoot := config.FindProjectRoot()
-			actions := []PlanAction{func() error {
+			actions := []PlanAction{{Run: func() error {
 				if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
 					wsRoot := viper.GetString("workspace.root")
 					if !filepath.IsAbs(wsRoot) {
@@ -380,7 +380,7 @@ func newWorkspaceRmCmd() *cobra.Command {
 					}
 				}
 				return mgr.RemoveRepositories(ctx, name, wsRepos, repositoryNames, force)
-			}}
+			}}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
 				Confirm: true,
@@ -458,7 +458,7 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 			// "cd back" hint after the plan finalizes.
 			var movedFrom string
 			projectRoot := config.FindProjectRoot()
-			actions := []PlanAction{func() error {
+			actions := []PlanAction{{Run: func() error {
 				if detected, _ := detectWorkspaceFromCWD(); detected == name && projectRoot != "" {
 					cwd, _ := os.Getwd()
 					if err := os.Chdir(projectRoot); err != nil {
@@ -467,7 +467,7 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 					movedFrom = cwd
 				}
 				return mgr.Remove(cmd.Context(), name, wsRepos, force)
-			}}
+			}}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
 				Confirm: true,
