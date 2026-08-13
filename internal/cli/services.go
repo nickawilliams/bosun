@@ -983,6 +983,21 @@ func resolveWorkflowFilename(ctx context.Context, repo Repository, path string) 
 	return parseWorkflowPath(path)
 }
 
+// repoHasServices reports whether a repository contributes anything to
+// the deployment surfaces — the rule detectRepoAffected applies to
+// decide whether a repo is tracked at all. Note an *absent* config
+// isn't the empty case: resolveRepoServiceNames falls back to the repo
+// name as its own service, so only an explicitly empty list or a map
+// with nothing but _shared answers false.
+//
+// Exposed so callers that need the answer *before* spending work on a
+// repo (emitDeploymentSources drops these repos ahead of its gather
+// rather than stepping through them) ask the same question rather than
+// a lookalike of it.
+func repoHasServices(repoName string) bool {
+	return len(resolveRepoServiceNames(repoName)) > 0
+}
+
 // resolveRepoServiceNames returns the service names configured for a single
 // repository. Supports string, list, and map config shapes. Falls back to
 // the repo name when not configured.
