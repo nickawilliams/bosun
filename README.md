@@ -60,9 +60,14 @@ to set up interactively, or `bosun doctor` to verify connectivity.
 ```sh
 bosun config {get,set,list,edit,path,show,check,unset}
 bosun workspace {create,add,status,rm}
-bosun doctor
+bosun doctor [--require all|required]
 bosun init [--quick] [--approve]
 ```
+
+`doctor` exits non-zero when a check fails, so a pipeline can gate on it.
+An integration that isn't configured is reported but never gates; use
+`--require required` to narrow the gate to the global config and git
+checks when a flaky integration shouldn't stop the pipeline.
 
 ## Related Tools and Alternatives
 
