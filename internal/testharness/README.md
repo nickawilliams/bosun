@@ -340,53 +340,84 @@ in flight before the form returns, so it's stale by construction.
 This is automatic; it only means a chunk isn't consumed until the
 form it's meant for is actually the live consumer.
 
-### A regression that reaches an unexpected prompt HANGS
+### A regression that reaches an unexpected prompt FAILS THE TEST
 
-Worth knowing before you interpret a stuck test run. `chunkReader`
-returns `io.EOF` once its queued input is drained, but bubbletea's
-event loop doesn't terminate on input EOF — so a command that reaches
-a prompt the scenario didn't feed blocks forever instead of failing.
+A command that reaches a prompt the scenario never fed fails, by
+itself, with a report naming the run and quoting what was on screen:
 
-That is a regression signal, not a harness bug per se, but it is an
-expensive one: the hang burns the whole package's `go test` timeout
-and takes every other `internal/cli` result down with it. Several
-realistic regressions land here rather than on a clean failure — an
-ignored `--approve`, an ignored `--dry-run`, a registry lookup that
-silently misses (`preview` then falls through to its interactive
-env-name prompt).
+```
+bosun preview acme --env staging reached a prompt this scenario never fed.
 
-Three consequences:
+All 2 input(s) queued via Type() in this test have been consumed and the
+command asked for more, so the harness aborted the form after 2s instead
+of blocking until the package test timeout.
+...
+Last steps reported before it blocked:
+    complete Resolved Environment
+Last output before it blocked (where a prompt printed an input card, it
+is the final one):
+    ❯  Environment Name
+```
 
-- Run mutation checks with an explicit short `-timeout`; the default
-  is 10 minutes per package.
-- Where a scenario can make a skipped prompt fail *fast*, do it.
-  Queueing the key that would produce the WRONG outcome turns the
-  hang into an assertion failure — `preview`'s
-  `plan_confirmation/yes_flag_skips_prompt` queues an `n` and asserts
-  the deploy happened anyway, so a gate that stopped being suppressed
-  reads the `n` and cancels instead of blocking.
+Two "how far it got" sections because neither covers every prompt. The
+reported steps come from the capture reporter, which records the
+timeline whatever the renderer does — that one always says something.
+The output tail is where a prompt's `CardInput` header lands, so where
+there is one it names the question exactly; a gate drawn by a tea
+program (`start`'s plan confirmation) leaves nothing there but control
+bytes.
 
-  This only protects the run the key is queued for. A regression in
-  something shared like `isAutoApprove` still hangs in whatever the
-  fixture ran first (usually the `bosun start` that builds the
-  workspace), so it buys a fast failure for the command under test,
-  not immunity.
+Read it as a regression signal, not a harness complaint: several
+realistic regressions land here rather than on a clean assertion
+failure — an ignored `--approve`, an ignored `--dry-run`, a registry
+lookup that silently misses (`preview` then falls through to its
+interactive env-name prompt).
 
-- Pick a sentinel that lets the run **succeed**, not one that produces
-  another cancellation. For a scenario whose subject *is* cancellation
-  (`init`'s `errors/*`), a trailing second `\x03` looks like the
-  obvious tripwire and is the wrong choice: a swallowed abort would
-  simply cancel at the next prompt, the run would still end in
-  `ErrCancelled`, and every assertion would still hold — masking the
-  exact bug the sentinel was added for. Queue the keys that would carry
-  the run to a clean finish instead, so the error assertion reports
-  `err = nil`. Verified on `init`: with the discriminating sentinel a
-  swallowed-abort mutation fails in ~1s; without it the same mutation
-  ran until the 25s `-timeout` killed the package.
+**How it works.** A drained `chunkReader` BLOCKS rather than returning
+`io.EOF`, and a blocked read exits one of three ways: the session is
+bumped (its form finished — `io.EOF`, no harm), the `Run` ends
+(likewise), or `starvationGrace` elapses with the form still live and
+the queue still empty. The last is starvation: the read returns a
+non-EOF error, which unwinds the form and the command, and `Harness.Run`
+then fails the test with the report above. The session bumps are what
+make this precise — a read can only be parked while a form is running,
+so the grace is never racing a command's own between-prompt work.
 
-This predates any one command's suite (the same mutation hangs
-`TestCleanup` and `TestPrerelease`). A watchdog in `Harness.Run`, or
-aborting the form on EOF, would fix it centrally — tracked in #59.
+**What it costs.** One `starvationGrace` (2s) per starved run — versus
+the package's whole `go test` timeout, and every other `internal/cli`
+result along with it, which is what this used to cost.
+
+**What the command sees.** Not the harness's error: bubbletea reports
+a killed program as `ErrProgramKilled`, huh maps that to its own
+`ErrTimeout`, and the cause is discarded. So `h.Run` returns a bare
+`timeout` and the *report* is the diagnosis. Don't assert on the
+returned error to detect this.
+
+#### The tripwire idiom is no longer required
+
+Scenarios across the suites queue a trailing `h.Type("\x03")`, or a
+key chosen to produce the wrong outcome, so that an unplanned prompt
+aborts instead of hanging. That was the workaround for the hang; the
+watchdog now covers the same ground centrally, including the case a
+tripwire never could — a regression in something shared like
+`isAutoApprove`, which hangs in whatever the fixture ran first (usually
+the `bosun start` that builds the workspace) rather than in the command
+under test.
+
+Existing tripwires are harmless — unconsumed queued input is not an
+error — and the ones that discriminate still say something a bare
+watchdog doesn't. If you add one, the old caveat still applies: pick a
+sentinel that lets the run **succeed** rather than one producing
+another cancellation. For a scenario whose subject *is* cancellation
+(`init`'s `errors/*`), a trailing second `\x03` is the wrong choice —
+a swallowed abort would simply cancel at the next prompt, the run
+would still end in `ErrCancelled`, and every assertion would still
+hold, masking the exact bug the sentinel was added for. Queue the keys
+that would carry the run to a clean finish instead, so the error
+assertion reports `err = nil`.
+
+For a *new* scenario, though, feed the prompts you expect and stop
+there. An unplanned prompt is now a named failure on its own.
 
 ## Command-specific notes
 
@@ -450,12 +481,12 @@ values is conditional on the run being a reinit. On a fresh project,
 `--quick` still asks for both.
 
 Since the whole command is prompts, a scenario that expects *not* to
-be asked something has no clean way to fail — it hangs. Queue a
-trailing `h.Type("\x03")` as a tripwire in those cases, subject to the
-sentinel caveat under Driving forms: nothing reads it on the intended
-path, and a regression that reaches an unplanned prompt aborts with
-`ErrCancelled` instead of eating the package timeout. See
-`../cli/init_test.go`.
+be asked something used to have no clean way to fail — it hung. The
+watchdog covers that now (see "A regression that reaches an unexpected
+prompt FAILS THE TEST"), so a new scenario needs no tripwire. The
+trailing `h.Type("\x03")` calls still in `../cli/init_test.go` predate
+it; where the sentinel *discriminates* — `errors/*`, whose subject is
+cancellation — it is still worth its keystroke.
 
 ## Environment gotchas
 
