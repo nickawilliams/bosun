@@ -233,9 +233,12 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 			}
 			opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rc.preselect())
 		}
+		// Full height whenever it fits, capped to the terminal: a frame
+		// taller than the screen breaks the takeover below rather than
+		// just overflowing.
 		msField = huh.NewMultiSelect[string]().
 			Options(opts...).
-			Height(len(opts)).
+			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
 		formFrame = formFirstFrame(msField)
 		if !strings.HasSuffix(formFrame, "\n") {

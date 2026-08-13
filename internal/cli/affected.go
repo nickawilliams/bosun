@@ -756,13 +756,15 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			}
 			opts[i] = huh.NewOption(label, strconv.Itoa(i)).Selected(t.selected)
 		}
-		// Full height — no viewport cap. The submitted form is
-		// replaced by the final Services card listing the same rows,
-		// so matching the form's height to the list makes the
-		// swap read as in-place rather than an expand/collapse.
+		// Full height whenever it fits: the submitted form is replaced
+		// by the final Services card listing the same rows, so matching
+		// the form's height to the list makes the swap read as in-place
+		// rather than an expand/collapse. fittedSelectHeight caps it to
+		// the terminal — a frame taller than the screen breaks the
+		// takeover below rather than just overflowing.
 		msField = huh.NewMultiSelect[string]().
 			Options(opts...).
-			Height(len(opts)).
+			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
 		formFrame = formFirstFrame(msField)
 		if !strings.HasSuffix(formFrame, "\n") {

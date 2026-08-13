@@ -1002,9 +1002,12 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 			key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
 			opts[k] = huh.NewOption(label, key).Selected(row.preselect)
 		}
+		// Full height whenever it fits, capped to the terminal: a frame
+		// taller than the screen breaks the takeover below rather than
+		// just overflowing.
 		msField = huh.NewMultiSelect[string]().
 			Options(opts...).
-			Height(len(opts)).
+			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
 		formFrame = formFirstFrame(msField)
 		if !strings.HasSuffix(formFrame, "\n") {

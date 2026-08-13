@@ -186,6 +186,48 @@ func formFirstFrame(fields ...huh.Field) string {
 	return f.View()
 }
 
+// gatherFrameChrome is how many terminal rows a gather's selection
+// frame occupies beyond its option rows: the section spacer and the
+// input-card header the steps program paints above the form (one row
+// each), the two rows huh's field adds below the options (a separator
+// and the help line), and one row of slack so an off-by-one in any of
+// them still leaves the whole frame on screen. Measured against
+// formFirstFrame — see TestFittedSelectHeightFitsTheFrame, which
+// fails if huh's chrome ever grows.
+const gatherFrameChrome = 5
+
+// minSelectHeight is the shortest option list worth rendering. A
+// terminal too short for even this can't be served correctly, so the
+// floor keeps the field usable (huh scrolls within it) instead of
+// collapsing it to nothing.
+const minSelectHeight = 3
+
+// fittedSelectHeight returns the height a gather's selection list
+// should be given: its full length, unless that would paint a frame
+// taller than the terminal.
+//
+// Full height is the wanted default — the submitted form is replaced
+// by a record card listing the same rows, so matching the two makes
+// the swap read as in-place rather than an expand/collapse. But an
+// oversized frame isn't merely ugly, it's broken: bubbletea's inline
+// renderer drops the top of a frame taller than the screen, so the
+// header and the first options never paint, and the cursor-up that
+// hands the frame over to huh (formFirstFrame's takeover) then moves
+// against rows that aren't there — the repaint lands offset and the
+// post-submit erase eats real output above. Capping trades the
+// in-place swap for a scrolling viewport (huh's own, first-class)
+// exactly when the in-place swap was unachievable anyway.
+//
+// Inert whenever the list fits: the frame, and every byte of the
+// takeover arithmetic, is unchanged.
+func fittedSelectHeight(options int) int {
+	fit := ui.TermHeight() - gatherFrameChrome
+	if fit < minSelectHeight {
+		fit = minSelectHeight
+	}
+	return min(options, fit)
+}
+
 // buildForm constructs a huh.Form with the app's theme, layout,
 // help, and I/O bindings. Single source of truth so any change to
 // the form's chrome (theme, layout, help, width) flows to every
