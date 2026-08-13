@@ -570,21 +570,28 @@ func demoPlanApply(cmd *cobra.Command) {
 	_ = runPlanCard(cmd, plan, actions, PlanOpts{Confirm: true, Apply: true})
 }
 
-// demoPlanGated shows the apply gate: the deploy fails, and the status
-// transition queued behind it is withheld rather than applied. The
-// card finalizes Partial with a muted "(skipped)" row — the visual
+// demoPlanGated shows the apply gate: one deploy lands, the other
+// fails, and the status transition queued behind them is withheld
+// rather than applied. The card finalizes Partial — "1 failed, 1
+// skipped, 1 applied" — over a muted "(skipped)" row, the visual
 // vocabulary for work that was planned and deliberately not done,
 // distinct from both the ✗ of a failure and the = of no change.
+//
+// Two deploys rather than one so all three counts appear at once; with
+// a single failing deploy nothing succeeds and the card finalizes
+// Failure instead.
 func demoPlanGated(cmd *cobra.Command) {
 	ui.Info("apply gate (a queued action withheld behind a failure)")
 
 	statusSkip := &ui.SkipRef{}
 	plan := ui.NewPlan().
+		Add(ui.PlanCreate, "deploy", "service", "web", "v1.2.4").
 		Add(ui.PlanCreate, "deploy", "service", "api", "v1.2.4").
 		AddWithRefs(ui.PlanModify, "status", "issue", "ABC-123",
 			"In Progress → Done", nil, statusSkip)
 
 	actions := []PlanAction{
+		{Run: func() error { time.Sleep(300 * time.Millisecond); return nil }},
 		{Run: func() error {
 			time.Sleep(400 * time.Millisecond)
 			return fmt.Errorf("workflow dispatch 422: no ref v1.2.4")

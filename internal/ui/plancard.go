@@ -30,9 +30,10 @@ type PlanAction struct {
 	// Run performs the action.
 	Run func() error
 
-	// RequiresPriorSuccess gates the action on a clean run so far:
-	// it is skipped if any earlier action in the queue failed, or if
-	// the plan carries an assessment failure (a ✗ row).
+	// RequiresPriorSuccess gates the action on a clean run so far: it
+	// is skipped if any earlier action in the queue failed, or if
+	// PriorFailure says something had already failed by the time it
+	// was queued.
 	//
 	// This is for actions whose side effect asserts something about
 	// the run as a whole — an issue-tracker transition claims the
@@ -43,6 +44,18 @@ type PlanAction struct {
 	// best-effort: independent work should not be held hostage to an
 	// unrelated failure.
 	RequiresPriorSuccess bool
+
+	// PriorFailure records that the run had already failed before
+	// this action was queued — an assessment that errored into a ✗
+	// row rather than into the apply queue, so the runner cannot see
+	// it by watching Run results.
+	//
+	// It is a per-action seed rather than a question asked of the
+	// whole plan because "prior" has to mean prior: a ✗ row for an
+	// action queued *after* the gated one is a later failure, and
+	// closing the gate on it would let, say, a notification whose
+	// lookup failed withhold a transition for work that succeeded.
+	PriorFailure bool
 
 	// Skip, when set, is marked instead of running whenever the gate
 	// closes, so the plan row renders as skipped rather than as the
@@ -147,6 +160,19 @@ func (pc *PlanCard) summary() string {
 		return pc.plan.SummaryPastTense()
 	case PlanPartial:
 		return pc.plan.SummaryPartial(pc.succeeded, pc.failed, pc.skipped)
+	case PlanFailure:
+		// Failure is reached two ways. An apply that failed outright
+		// has results to report, and reporting them matters most in
+		// exactly the case that motivates the gate: one target, its
+		// deploy fails, the transition behind it is skipped. Falling
+		// through to Summary() there would caption a "(skipped)" row
+		// with the future-tense "1 to update" it no longer plans. The
+		// other way in is a plan of nothing but ✗ assess rows, where
+		// no apply ran and the op counts are the whole story.
+		if pc.succeeded+pc.failed+pc.skipped > 0 {
+			return pc.plan.SummaryPartial(pc.succeeded, pc.failed, pc.skipped)
+		}
+		return pc.plan.Summary()
 	default:
 		return pc.plan.Summary()
 	}
@@ -289,18 +315,23 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 // applyActions runs the queue and tallies the outcome. Shared by the
 // raw and spinner paths so the gate can't drift between them.
 //
-// The gate starts closed when the plan already carries an assessment
-// failure: a ✗ row is a target the run could not even evaluate, which
-// is as good a reason not to publish a run-wide claim as an apply that
-// blew up. Only RequiresPriorSuccess actions consult it — everything
+// Two things close the gate, and both are strictly positional: an
+// earlier action in this queue returning an error, and the action's own
+// PriorFailure seed for a failure that happened before it was queued
+// (an assessment that ✗-rowed instead of reaching the queue). A ✗ row
+// is a target the run could not even evaluate, which is as good a
+// reason not to publish a run-wide claim as an apply that blew up —
+// but only if it came first.
+//
+// Only RequiresPriorSuccess actions consult any of this; everything
 // else runs regardless, preserving the best-effort contract the
 // independent per-target actions were written against.
 func (pc *PlanCard) applyActions(actions []PlanAction) planApplyResult {
 	var result planApplyResult
-	anyFailed := pc.plan != nil && pc.plan.HasFailures()
+	anyFailed := false
 
 	for _, action := range actions {
-		if action.RequiresPriorSuccess && anyFailed {
+		if action.RequiresPriorSuccess && (anyFailed || action.PriorFailure) {
 			result.skipped++
 			if action.Skip != nil {
 				action.Skip.Set()

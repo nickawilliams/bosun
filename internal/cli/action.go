@@ -115,7 +115,12 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 					pending = append(pending, PlanAction{
 						Run:                  func() error { return apply(ctx) },
 						RequiresPriorSuccess: a.RequiresPriorSuccess,
-						Skip:                 skipRef,
+						// Assess failures never reach the queue, so
+						// seed the gate with the ones that happened
+						// before this action was queued. Later ones
+						// are not "prior" and must not close it.
+						PriorFailure: assessFailures > 0,
+						Skip:         skipRef,
 					})
 				}
 			case ActionCompleted:

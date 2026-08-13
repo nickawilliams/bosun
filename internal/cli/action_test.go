@@ -131,6 +131,63 @@ func TestRunActionsGatedActionSkippedBehindFailure(t *testing.T) {
 	}
 }
 
+// TestRunActionsLaterAssessFailureDoesNotGate pins the "prior" in
+// RequiresPriorSuccess. review and preview queue their notification
+// after the status transition, and review's notify Assess ✗-rows a
+// failed thread lookup — so a Slack outage must not withhold a
+// transition for PRs that were created successfully.
+func TestRunActionsLaterAssessFailureDoesNotGate(t *testing.T) {
+	prev := ui.IsRaw()
+	ui.SetDefault(ui.NewRawReporter())
+	defer func() {
+		if !prev {
+			ui.SetDefault(ui.NewCardReporter())
+		}
+	}()
+
+	cmd := &cobra.Command{Use: "t"}
+	cmd.Flags().Bool("approve", true, "")
+	cmd.Flags().Bool("dry-run", false, "")
+
+	transitioned := false
+	actions := []Action{
+		{
+			Op: ui.PlanCreate, Action: "pr", Type: "repo", Name: "api",
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "branch → main", nil
+			},
+			Apply: func(context.Context) error { return nil },
+		},
+		{
+			Op: ui.PlanModify, Action: "status", Type: "issue", Name: "EX-1",
+			RequiresPriorSuccess: true,
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "In Progress → In Review", nil
+			},
+			Apply: func(context.Context) error {
+				transitioned = true
+				return nil
+			},
+		},
+		{
+			// Queued last, and it fails at assess — a ✗ row that is
+			// not prior to the transition above it.
+			Op: ui.PlanCreate, Action: "notify", Type: "channel", Name: "#reviews",
+			Assess: func(context.Context) (ActionState, string, error) {
+				return 0, "", errors.New("finding notification thread: host unavailable")
+			},
+		},
+	}
+
+	err := runActions(cmd, context.Background(), actions)
+	if err == nil || !strings.Contains(err.Error(), "host unavailable") {
+		t.Errorf("err = %v, want the notification failure to still surface", err)
+	}
+	if !transitioned {
+		t.Error("a notification failure queued AFTER the transition withheld it")
+	}
+}
+
 // TestRunActionsGatedActionRunsOnCleanPlan is the companion: the gate
 // must not become a blanket refusal to transition.
 func TestRunActionsGatedActionRunsOnCleanPlan(t *testing.T) {

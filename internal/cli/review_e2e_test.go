@@ -794,6 +794,13 @@ func TestReview(t *testing.T) {
 		if msgs := h.Notifier.Messages(); len(msgs) != 0 {
 			t.Errorf("messages = %+v, want none — a duplicate is worse than silence", msgs)
 		}
+		// The transition is gated on the run succeeding, but the
+		// notification is queued AFTER it, so this ✗ row is not prior
+		// to it. Slack being down must not strand the issue: the PR
+		// was created, and the board should say so.
+		if got := issueStatus(t, h); got != "Review" {
+			t.Errorf("issue status = %q, want %q — the PR landed; only the announcement failed", got, "Review")
+		}
 	})
 
 	t.Run("notification/skipped_when_channel_unconfigured", func(t *testing.T) {
