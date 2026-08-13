@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -202,6 +203,177 @@ func TestBuildServicesCard(t *testing.T) {
 	}
 	if !strings.Contains(out, "✗") {
 		t.Errorf("card missing the failure glyph:\n%s", out)
+	}
+}
+
+// TestSourceRows locks the row renderer the gather and the record card
+// share — the whole point of extracting it is that neither surface can
+// describe a repo differently from the other.
+func TestSourceRows(t *testing.T) {
+	// strip flattens a repo's rows to "<glyph> <content>" lines.
+	strip := func(rows []serviceRow) []string {
+		out := make([]string, len(rows))
+		for i, r := range rows {
+			out[i] = ansi.Strip(r.glyph) + " " + ansi.Strip(r.content)
+		}
+		return out
+	}
+
+	t.Run("multi-service repo pairs each service, name-ordered", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "api", HasChanges: true,
+			Services: []string{"svc-c"}, Skipped: []string{"svc-b"}},
+			pr: code.PullRequest{Number: 7}}
+
+		got := strip(sourceRows(sr, true))
+		want := []string{"○ api · svc-b", "✓ api · svc-c"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the pairs sorted by service %q", got, want)
+		}
+	})
+
+	t.Run("single-service repo shows the name alone", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "api", HasChanges: true,
+			Services: []string{"api-svc"}}, pr: code.PullRequest{Number: 7}}
+
+		got := strip(sourceRows(sr, true))
+		want := []string{"✓ api"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the bare repo name %q", got, want)
+		}
+	})
+
+	t.Run("stale fetch rides above the repo's outcome row", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "cron", HasChanges: true,
+			Services: []string{"jobs"}, StaleRemote: true}, pr: code.PullRequest{Number: 9}}
+
+		rows := sourceRows(sr, true)
+		got := strip(rows)
+		if len(got) != 2 || !strings.Contains(got[0], "diff may be stale") {
+			t.Fatalf("rows = %q, want the stale caveat first", got)
+		}
+		// The caveat is context about a repo that IS deploying — it
+		// must not drag the card's aggregate toward skipped/failed.
+		if rows[0].sev != rowNote {
+			t.Errorf("stale row severity = %v, want rowNote (no aggregate contribution)", rows[0].sev)
+		}
+	})
+
+	t.Run("unchanged repo collapses to one receded row", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "web",
+			Skipped: []string{"web-svc", "worker"}}}
+
+		got := strip(sourceRows(sr, true))
+		want := []string{"○ web · no changes · no PR"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want one compact row %q", got, want)
+		}
+	})
+
+	t.Run("changed repo without a PR warns and names the branch", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "docs", Branch: "feat",
+			HasChanges: true, Services: []string{"site"}}}
+
+		got := strip(sourceRows(sr, true))
+		want := []string{`▲ docs · no PR for branch "feat"`}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the warn row %q", got, want)
+		}
+	})
+
+	t.Run("PR lookup failure renders as a failure row", func(t *testing.T) {
+		sr := sourceRepo{res: AffectedResult{RepoName: "docs"}, prErr: errors.New("api down")}
+
+		rows := sourceRows(sr, true)
+		got := strip(rows)
+		want := []string{"✗ docs · api down"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the failure row %q", got, want)
+		}
+		if rows[0].sev != rowFail {
+			t.Errorf("severity = %v, want rowFail", rows[0].sev)
+		}
+	})
+
+	t.Run("the release path ignores PR state entirely", func(t *testing.T) {
+		// withPRs=false: no PR, no lookup error to report — the
+		// services detection found flow straight through.
+		sr := sourceRepo{res: AffectedResult{RepoName: "api", HasChanges: true,
+			Services: []string{"svc-a"}, Skipped: []string{"svc-b"}}}
+
+		got := strip(sourceRows(sr, false))
+		want := []string{"✓ api · svc-a", "○ api · svc-b"}
+		if !slices.Equal(got, want) {
+			t.Errorf("rows = %q, want the pairs %q", got, want)
+		}
+	})
+}
+
+// TestBuildServicesCardOrdering locks the record card's ordering
+// contract: repos in name order, each repo's rows exactly as its
+// renderer produced them. The gather paints rows repo-by-repo in that
+// same order, so any reshuffling here would make the form → card swap
+// jump.
+func TestBuildServicesCardOrdering(t *testing.T) {
+	sources := []sourceRepo{
+		{res: AffectedResult{RepoName: "web", HasChanges: true,
+			Services: []string{"web-svc"}}, pr: code.PullRequest{Number: 3}},
+		{res: AffectedResult{RepoName: "api", HasChanges: true, StaleRemote: true,
+			Services: []string{"svc-b"}, Skipped: []string{"svc-a"}},
+			pr: code.PullRequest{Number: 7}},
+	}
+	fails := []detFail{{repo: "ghost", err: errors.New("exploded")}}
+
+	out := ansi.Strip(buildServicesCard(sources, fails, true).Render())
+	// Item lines carry the card's timeline spine and column padding —
+	// collapse both so the assertion reads as the row content it means.
+	var got []string
+	for line := range strings.SplitSeq(out, "\n") {
+		row := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "│"))
+		if row == "" || strings.HasSuffix(row, "Services") {
+			continue
+		}
+		got = append(got, strings.Join(strings.Fields(row), " "))
+	}
+	want := []string{
+		"▲ api · remote fetch failed — diff may be stale",
+		"○ api · svc-a",
+		"✓ api · svc-b",
+		"✗ ghost · exploded",
+		"✓ web",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("card rows =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestBuildServicesCardState locks the aggregate glyph: worst-first,
+// with the stale-fetch caveat deliberately not counting — a deploying
+// repo whose fetch failed is still a success row.
+func TestBuildServicesCardState(t *testing.T) {
+	deploying := sourceRepo{res: AffectedResult{RepoName: "api", HasChanges: true,
+		Services: []string{"svc-a"}, StaleRemote: true}, pr: code.PullRequest{Number: 7}}
+	unchanged := sourceRepo{res: AffectedResult{RepoName: "web"}}
+	broken := sourceRepo{res: AffectedResult{RepoName: "docs"}, prErr: errors.New("api down")}
+
+	tests := []struct {
+		name    string
+		sources []sourceRepo
+		fails   []detFail
+		want    string
+	}{
+		{"a deploying repo with a stale fetch stays success", []sourceRepo{deploying}, nil, "✓"},
+		{"nothing deploying reads as skipped", []sourceRepo{unchanged}, nil, "▲"},
+		{"a mix stays success", []sourceRepo{deploying, unchanged}, nil, "✓"},
+		{"a PR-lookup failure dominates", []sourceRepo{deploying, broken}, nil, "✗"},
+		{"a detection failure dominates", []sourceRepo{deploying}, []detFail{{repo: "ghost", err: errNope}}, "✗"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := buildServicesCard(tt.sources, tt.fails, true).Render()
+			if got := cardGlyph(t, out); got != tt.want {
+				t.Errorf("card glyph = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
