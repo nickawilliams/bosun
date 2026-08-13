@@ -34,6 +34,7 @@ package cli_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -724,6 +725,13 @@ issue_tracker:
 			t.Errorf("failed count = %d, want 0 — no Required check is broken\n%s",
 				failed, h.Reporter.Dump())
 		}
+		// The exit message is the only thing explaining the non-zero
+		// status, so it has to account for the same failures the rows
+		// showed. A count the report doesn't explain is worse than none.
+		want := fmt.Sprintf("%d checks failed", warned+failed)
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
 	})
 
 	t.Run("exit_code/nonzero_when_a_required_check_fails", func(t *testing.T) {
@@ -762,7 +770,15 @@ issue_tracker:
 		// --require required narrows the gate. It does not remove it.
 		h := newRequiredFailureHarness(t)
 
-		assertGated(t, h, h.Run("doctor", "--require", "required"))
+		err := h.Run("doctor", "--require", "required")
+
+		assertGated(t, h, err)
+		// The message says which gate tripped, so a narrowed run that
+		// still fails doesn't read as the default one having counted
+		// the integrations it was told to ignore.
+		if !strings.Contains(err.Error(), "required check") {
+			t.Errorf("error = %q, want it to name the narrowed gate", err)
+		}
 	})
 
 	t.Run("exit_code/unconfigured_integration_does_not_gate", func(t *testing.T) {
