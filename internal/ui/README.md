@@ -106,8 +106,11 @@ command will (or would) perform (`Plan`, `PlanCard`).
   attempted and the first error is returned at the end, so an
   independent row isn't held hostage to an unrelated failure. Actions
   that set `PlanAction.RequiresPriorSuccess` are the exception —
-  they're skipped once anything in the run has failed (an apply error
-  or a ✗ assess row). That's for side effects asserting something
+  they're skipped once anything *earlier* has failed (an earlier
+  action's apply error, or a ✗ assess row that landed before they were
+  queued, via `PlanAction.PriorFailure`). Failures after them don't
+  count, so a notification queued behind a transition can't withhold
+  it. That's for side effects asserting something
   about the run as a whole; the issue-tracker transition is the
   motivating case, since moving an issue to Done behind a failed
   deploy publishes a success that never happened. A skipped row
