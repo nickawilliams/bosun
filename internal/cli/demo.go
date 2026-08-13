@@ -65,6 +65,7 @@ func newDemoCmd() *cobra.Command {
 				return err
 			}
 			demoPlanApply(cmd)
+			demoPlanGated(cmd)
 			demoPlanDryRun(cmd)
 			demoPlanNoWork(cmd)
 
@@ -561,12 +562,40 @@ func demoPlanApply(cmd *cobra.Command) {
 	// Full lifecycle: proposed → confirmation gate → apply → success.
 	plan := buildDemoPlan()
 	actions := []PlanAction{
-		func() error { time.Sleep(400 * time.Millisecond); return nil },
-		func() error { time.Sleep(300 * time.Millisecond); return nil },
-		func() error { time.Sleep(500 * time.Millisecond); return nil },
-		func() error { time.Sleep(200 * time.Millisecond); return nil },
+		{Run: func() error { time.Sleep(400 * time.Millisecond); return nil }},
+		{Run: func() error { time.Sleep(300 * time.Millisecond); return nil }},
+		{Run: func() error { time.Sleep(500 * time.Millisecond); return nil }},
+		{Run: func() error { time.Sleep(200 * time.Millisecond); return nil }},
 	}
 	_ = runPlanCard(cmd, plan, actions, PlanOpts{Confirm: true, Apply: true})
+}
+
+// demoPlanGated shows the apply gate: the deploy fails, and the status
+// transition queued behind it is withheld rather than applied. The
+// card finalizes Partial with a muted "(skipped)" row — the visual
+// vocabulary for work that was planned and deliberately not done,
+// distinct from both the ✗ of a failure and the = of no change.
+func demoPlanGated(cmd *cobra.Command) {
+	ui.Info("apply gate (a queued action withheld behind a failure)")
+
+	statusSkip := &ui.SkipRef{}
+	plan := ui.NewPlan().
+		Add(ui.PlanCreate, "deploy", "service", "api", "v1.2.4").
+		AddWithRefs(ui.PlanModify, "status", "issue", "ABC-123",
+			"In Progress → Done", nil, statusSkip)
+
+	actions := []PlanAction{
+		{Run: func() error {
+			time.Sleep(400 * time.Millisecond)
+			return fmt.Errorf("workflow dispatch 422: no ref v1.2.4")
+		}},
+		{
+			Run:                  func() error { return nil },
+			RequiresPriorSuccess: true,
+			Skip:                 statusSkip,
+		},
+	}
+	_ = runPlanCard(cmd, plan, actions, PlanOpts{Confirm: false, Apply: true})
 }
 
 func demoPlanDryRun(cmd *cobra.Command) {

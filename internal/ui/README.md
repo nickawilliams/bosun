@@ -102,6 +102,17 @@ command will (or would) perform (`Plan`, `PlanCard`).
 - **No-work branch**: when assess yields nothing to do, the plan
   renders proposed and finalizes without confirmation or apply.
 - **Confirmation denied**: all rows finalize as skipped.
+- **Apply is best-effort, with one gate**: every queued action is
+  attempted and the first error is returned at the end, so an
+  independent row isn't held hostage to an unrelated failure. Actions
+  that set `PlanAction.RequiresPriorSuccess` are the exception —
+  they're skipped once anything in the run has failed (an apply error
+  or a ✗ assess row). That's for side effects asserting something
+  about the run as a whole; the issue-tracker transition is the
+  motivating case, since moving an issue to Done behind a failed
+  deploy publishes a success that never happened. A skipped row
+  renders with the skipped glyph and `(skipped)`, and denies the card
+  its Success state.
 - **Aggregate status**: same rules as Timeline Card.
 
 ### Input Card
