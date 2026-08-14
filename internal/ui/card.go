@@ -381,6 +381,51 @@ func (c *Card) Print() {
 	}
 }
 
+// EmitToReporter routes the card's completion state through the
+// Reporter interface. Used in raw-mode paths where Card.Print() is
+// suppressed: plainReporter emits a plain-text line; rawReporter stays
+// silent (correct for machine-readable mode). CardInput and spinner
+// states (running, pending) are intentionally omitted. CardWaiting is
+// a terminal semantic state ("CI running, PR under review") and maps
+// to Info.
+//
+// Subtitle takes priority over Value when both are set on terminal-state
+// cards — the subtitle is the human-readable annotation in most
+// successor cards (e.g. "✓ preview · env-name").
+func (c *Card) EmitToReporter(r Reporter) {
+	switch c.state {
+	case CardSuccess, CardReady:
+		switch {
+		case c.subtitle != "":
+			r.CompleteValue(c.title, c.subtitle)
+		case c.value != "":
+			r.CompleteValue(c.title, c.value)
+		default:
+			r.Complete(c.title)
+		}
+	case CardFailed:
+		switch {
+		case c.subtitle != "":
+			r.FailValue(c.title, c.subtitle)
+		case c.value != "":
+			r.FailValue(c.title, c.value)
+		default:
+			r.Fail(c.title)
+		}
+	case CardSkipped:
+		switch {
+		case c.subtitle != "":
+			r.SkipValue(c.title, c.subtitle)
+		case c.value != "":
+			r.SkipValue(c.title, c.value)
+		default:
+			r.Skip(c.title)
+		}
+	case CardInfo, CardData, CardWaiting:
+		r.Info("%s", c.title)
+	}
+}
+
 // PrintRewindable writes the card to stdout and returns a function
 // that, when called, erases the card by moving the cursor back to
 // its first row and clearing from there to the end of the screen.

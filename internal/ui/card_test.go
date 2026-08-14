@@ -231,6 +231,154 @@ func TestMultiLineSubtitleKeepsConnector(t *testing.T) {
 	}
 }
 
+// TestCardEmitToReporter locks the Reporter routing contract:
+// each terminal state maps to the correct Reporter method,
+// subtitle takes priority over value, and transient/input states
+// stay silent.
+func TestCardEmitToReporter(t *testing.T) {
+	cases := []struct {
+		name       string
+		card       *Card
+		wantKind   string
+		wantLabel  string
+		wantValue  string
+		wantSilent bool
+	}{
+		{
+			name:      "CardSuccess title-only → Complete",
+			card:      NewCard(CardSuccess, "preview"),
+			wantKind:  CaptureComplete,
+			wantLabel: "preview",
+		},
+		{
+			name:      "CardSuccess value → CompleteValue",
+			card:      NewCard(CardSuccess, "preview").Value("staging"),
+			wantKind:  CaptureComplete,
+			wantLabel: "preview",
+			wantValue: "staging",
+		},
+		{
+			name:      "CardSuccess subtitle → CompleteValue (subtitle wins)",
+			card:      NewCard(CardSuccess, "preview").Subtitle("prod-env"),
+			wantKind:  CaptureComplete,
+			wantLabel: "preview",
+			wantValue: "prod-env",
+		},
+		{
+			name:      "CardReady title-only → Complete",
+			card:      NewCard(CardReady, "workspace"),
+			wantKind:  CaptureComplete,
+			wantLabel: "workspace",
+		},
+		{
+			name:      "CardFailed title-only → Fail",
+			card:      NewCard(CardFailed, "build"),
+			wantKind:  CaptureFail,
+			wantLabel: "build",
+		},
+		{
+			name:      "CardFailed value → FailValue",
+			card:      NewCard(CardFailed, "build").Value("missing binary"),
+			wantKind:  CaptureFail,
+			wantLabel: "build",
+			wantValue: "missing binary",
+		},
+		{
+			name:      "CardFailed subtitle → FailValue (subtitle wins)",
+			card:      NewCard(CardFailed, "build").Subtitle("exit 1"),
+			wantKind:  CaptureFail,
+			wantLabel: "build",
+			wantValue: "exit 1",
+		},
+		{
+			name:      "CardSkipped title-only → Skip",
+			card:      NewCard(CardSkipped, "lint"),
+			wantKind:  CaptureSkip,
+			wantLabel: "lint",
+		},
+		{
+			name:      "CardSkipped value → SkipValue",
+			card:      NewCard(CardSkipped, "lint").Value("not configured"),
+			wantKind:  CaptureSkip,
+			wantLabel: "lint",
+			wantValue: "not configured",
+		},
+		{
+			name:      "CardSkipped subtitle → SkipValue (subtitle wins)",
+			card:      NewCard(CardSkipped, "lint").Subtitle("no config found"),
+			wantKind:  CaptureSkip,
+			wantLabel: "lint",
+			wantValue: "no config found",
+		},
+		{
+			name:      "CardInfo → Info",
+			card:      NewCard(CardInfo, "running tests"),
+			wantKind:  CaptureInfo,
+			wantLabel: "running tests",
+		},
+		{
+			name:      "CardData → Info",
+			card:      NewCard(CardData, "schema snapshot"),
+			wantKind:  CaptureInfo,
+			wantLabel: "schema snapshot",
+		},
+		{
+			name:       "CardInput → silent (form header, raw mode never runs prompts)",
+			card:       NewCard(CardInput, "select workspace"),
+			wantSilent: true,
+		},
+		{
+			name:       "CardRunning → silent (transient)",
+			card:       NewCard(CardRunning, "building"),
+			wantSilent: true,
+		},
+		{
+			name:       "CardPending → silent (transient)",
+			card:       NewCard(CardPending, "waiting"),
+			wantSilent: true,
+		},
+		{
+			name:      "CardWaiting → Info (terminal: CI running, PR under review)",
+			card:      NewCard(CardWaiting, "ci running"),
+			wantKind:  CaptureInfo,
+			wantLabel: "ci running",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := NewCaptureReporter()
+			tc.card.EmitToReporter(cap)
+			evts := cap.Events()
+			if tc.wantSilent {
+				if len(evts) != 0 {
+					t.Errorf(
+						"expected silent, got %d events: %s",
+						len(evts), cap.Dump(),
+					)
+				}
+				return
+			}
+			if len(evts) != 1 {
+				t.Fatalf(
+					"got %d events, want 1: %s",
+					len(evts), cap.Dump(),
+				)
+			}
+			e := evts[0]
+			if e.Kind != tc.wantKind {
+				t.Errorf("Kind = %q, want %q", e.Kind, tc.wantKind)
+			}
+			if e.Label != tc.wantLabel {
+				t.Errorf("Label = %q, want %q", e.Label, tc.wantLabel)
+			}
+			if e.Value != tc.wantValue {
+				t.Errorf("Value = %q, want %q", e.Value, tc.wantValue)
+			}
+		})
+	}
+}
+
 // TestCardValueWrapsAtValueColumn locks value-line width handling: a
 // value line wider than the space left of the value column wraps
 // inside the renderer with fragments aligned under the first value

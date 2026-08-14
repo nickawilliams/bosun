@@ -1016,7 +1016,7 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 	}
 
 	err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() {
+		if formGate() && !ui.IsRaw() {
 			buildSelectionForm()
 			header := ui.NewCard(ui.CardInput, "releases").Tight().Render()
 			headerLines = strings.Count(header, "\n")
@@ -1029,18 +1029,18 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		return err
 	}
 	if !formGate() {
-		applyDefaults() // no-op when the closure already ran; needed in raw mode
+		applyDefaults() // no-op when the closure already ran
 		return nil
 	}
 
 	if msField == nil {
-		// Raw rendering: RunCardStepsInto never runs its final-frame
-		// closure (there's no frame to take over), so the form hasn't
-		// been built. Build it now and run it standalone, skipping the
-		// cursor takeover below, which assumes a painted frame to
-		// repaint over. The form runs when stdin can drive it (the
-		// harness's injected reader); a TTY-stdin/piped-stdout session
-		// is refused cleanly by runForm's render guard instead.
+		// Raw rendering: RunCardStepsInto runs its final-frame closure
+		// in raw mode for side effects only (no ANSI painted), so the
+		// form hasn't been built. Build it now and run it standalone,
+		// skipping the cursor takeover below, which assumes a painted
+		// frame to repaint over. The form runs when stdin can drive it
+		// (the harness's injected reader); a TTY-stdin/piped-stdout
+		// session is refused cleanly by runForm's render guard instead.
 		buildSelectionForm()
 		if err := runForm(msField); err != nil {
 			return err

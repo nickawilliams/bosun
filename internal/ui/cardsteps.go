@@ -52,14 +52,16 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 				return nil, err
 			}
 		}
-		// Raw output gets the successor too — piped/CI runs would
-		// otherwise lose the final result card entirely (interactive
-		// runs paint it as the program's last frame). Input-state
-		// successors are form headers for prompts raw mode never
+		// Route through the Reporter interface so plainReporter can
+		// emit a plain-text line for the successor card; rawReporter
+		// stays silent (correct for machine-readable output). Card.Print()
+		// is suppressed in raw mode — it checks IsRaw() and returns
+		// immediately — so we call EmitToReporter instead. Input-state
+		// successors are form headers for prompts that raw mode never
 		// runs, so those stay silent.
 		if successor != nil {
 			if final := successor(); final != nil && final.state != CardInput {
-				final.Print()
+				final.EmitToReporter(defaultReporter)
 			}
 		}
 		return func() {}, nil
@@ -156,6 +158,13 @@ func RunCardStepsInto(steps []CardStep, finalView func() string) error {
 			if err := s.Run(); err != nil {
 				return err
 			}
+		}
+		// Invoke the finalView closure for its side effects (e.g.
+		// applyDefaults, formGate state) even though we do not render
+		// its ANSI string — the callers' post-call branches rely on the
+		// side effects rather than the rendered output.
+		if finalView != nil {
+			finalView()
 		}
 		return nil
 	}
