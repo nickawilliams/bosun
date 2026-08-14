@@ -155,11 +155,16 @@ func New(t *testing.T) *Harness {
 	t.Cleanup(ui.ResetStreams)
 
 	// Commands run non-interactively here (output is a buffer, not a
-	// TTY), so cli.Bootstrap installs a raw Reporter that renders
-	// nothing — and re-installs one on every Run. Swapping the
-	// raw-mode constructor rather than the installed Reporter is what
-	// makes the capture survive that.
+	// TTY), so cli.Bootstrap installs a plain or raw Reporter and
+	// re-installs one on every Run. Swapping the mode constructors
+	// rather than the installed Reporter is what makes the capture
+	// survive that.
+	//
+	// Both factories are replaced: rawReporterFactory for commands that
+	// request machine-readable output (--output / output: raw), and
+	// plainReporterFactory for the common non-TTY case.
 	t.Cleanup(ui.SetRawReporterFactory(func() ui.Reporter { return h.Reporter }))
+	t.Cleanup(ui.SetPlainReporterFactory(func() ui.Reporter { return h.Reporter }))
 
 	// Reset cli.Bootstrap's once-per-process guard so each test's
 	// cmd.Execute re-runs config load + UI-mode setup against its

@@ -24,9 +24,14 @@ func HandleError(err error) {
 		return
 	}
 	if errors.Is(err, ErrCancelled) {
-		renderErrorHeader()
-		ui.NewCard(ui.CardSkipped, "user cancelled").Print()
-		if !ui.IsRaw() {
+		if ui.IsRaw() {
+			// Route through the Reporter so plainReporter emits a skip
+			// line; rawReporter's Skip is a no-op, which is correct for
+			// machine-readable mode.
+			ui.Default().Skip("user cancelled")
+		} else {
+			renderErrorHeader()
+			ui.NewCard(ui.CardSkipped, "user cancelled").Print()
 			ui.EndTimeline()
 		}
 		return
