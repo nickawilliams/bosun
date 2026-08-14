@@ -151,17 +151,24 @@ A hierarchical, recursive display of labeled nodes (`Tree`,
 ## Key abstractions
 
 - **`Reporter` interface** (`reporter.go`) — the seam between
-  commands and rendering. `cardReporter` is the interactive
-  implementation; `rawReporter` suppresses all output;
-  `CaptureReporter` (`capture_reporter.go`) records calls instead of
-  rendering them so tests can assert on what a command reported.
-  Commands emit through `Reporter` methods; the active implementation
-  decides how to present. `IsRaw()` covers every non-rendering
-  implementation (raw and capture) — it enumerates them, so a new one
-  needs a case added.
-  The test harness installs the capture reporter with
-  `SetRawReporterFactory` rather than `SetDefault`, because the CLI
-  bootstrap installs a fresh raw reporter on every command run.
+  commands and rendering. Three implementations exist:
+  - `cardReporter` — interactive TTY; full animated timeline.
+  - `plainReporter` (`plain_reporter.go`) — non-TTY stdout without
+    explicit structured-output request; emits plain, unstyled lines
+    like `[ok] label: value` so piped, redirected, and CI contexts see
+    the same semantic events as an interactive run.
+  - `rawReporter` (`raw_reporter.go`) — machine-readable mode
+    (`--output` flag or `output: raw` annotation); suppresses all
+    timeline output so the command can write its own payload cleanly.
+  - `CaptureReporter` (`capture_reporter.go`) — test-only; records
+    calls instead of rendering them so tests can assert on what a
+    command reported.
+  `IsRaw()` covers every non-card implementation (plain, raw, and
+  capture) — it enumerates them, so a new one needs a case added.
+  The test harness installs the capture reporter via both
+  `SetRawReporterFactory` and `SetPlainReporterFactory` rather than
+  `SetDefault`, because bootstrap installs a fresh reporter on every
+  command run.
 - **`Card`** (`card.go`) — the rendering primitive. All timeline
   output flows through Card: state glyph, title, subtitle, body
   variants (text, muted, KV, stdout, stderr, raw).

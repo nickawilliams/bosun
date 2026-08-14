@@ -168,10 +168,13 @@ category that is genuinely undrivable and shouldn't be chased.
 
 ### What reaches `h.Reporter`
 
-`Bootstrap` picks the reporter from `ui.IsTerminal()`, and the
-harness's output is a buffer — so every command runs under a **raw
-reporter**, where `Card.Print` and the `RunCard*` helpers short-circuit
-and draw nothing.
+`Bootstrap` picks the reporter based on `ui.IsTerminal()` and whether
+the command requests structured output. The harness's output is a
+buffer (not a TTY), so Bootstrap would normally install a **plain
+reporter** for human-readable non-TTY output — but the harness
+overrides both the raw- and plain-mode constructors so every command
+runs under a `CaptureReporter` instead. `Card.Print` and the
+`RunCard*` helpers short-circuit and draw nothing in either mode.
 
 Nothing is *drawn*, but the semantic calls are still recorded: the raw
 reporter the harness installs is a `ui.CaptureReporter`. For a command

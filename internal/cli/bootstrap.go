@@ -124,16 +124,25 @@ func Bootstrap(cmd *cobra.Command) error {
 	}
 	ui.ApplyColorMode(viper.GetString("display.color"))
 
-	raw := !ui.IsTerminal()
-	if cmd != nil {
-		raw = raw ||
-			cmd.Annotations["output"] == "raw" ||
-			(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != "")
-	}
+	// machineReadable is true when structured output was explicitly
+	// requested — either via --output or the command's own annotation.
+	// In that case the raw Reporter suppresses all timeline output so
+	// the command can write its own machine-readable payload cleanly.
+	//
+	// A non-TTY stdout without an explicit output request is handled
+	// separately: the plain Reporter emits human-readable but unstyled
+	// lines so piped, redirected, and CI contexts see the same semantic
+	// events as an interactive run.
+	machineReadable := cmd != nil && (
+		cmd.Annotations["output"] == "raw" ||
+		(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != ""))
 
-	if raw {
+	switch {
+	case machineReadable:
 		ui.SetDefault(ui.NewRawReporter())
-	} else {
+	case !ui.IsTerminal():
+		ui.SetDefault(ui.NewPlainReporter())
+	default:
 		ui.SetCompactHeader(viper.GetBool("display.compact_header"))
 		ui.BeginTimeline()
 	}
