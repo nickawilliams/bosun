@@ -777,7 +777,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	// form will show, the final Services card otherwise — so the
 	// program's exit paints content instead of clearing to blank.
 	if err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() {
+		if formGate() && !ui.IsRaw() {
 			buildSelectionForm()
 			header := ui.NewCard(ui.CardInput, "services").Tight().Render()
 			headerLines = strings.Count(header, "\n")

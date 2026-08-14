@@ -384,8 +384,10 @@ func (c *Card) Print() {
 // EmitToReporter routes the card's completion state through the
 // Reporter interface. Used in raw-mode paths where Card.Print() is
 // suppressed: plainReporter emits a plain-text line; rawReporter stays
-// silent (correct for machine-readable mode). CardInput and transient
-// states (running, pending) are intentionally omitted.
+// silent (correct for machine-readable mode). CardInput and spinner
+// states (running, pending) are intentionally omitted. CardWaiting is
+// a terminal semantic state ("CI running, PR under review") and maps
+// to Info.
 //
 // Subtitle takes priority over Value when both are set on terminal-state
 // cards — the subtitle is the human-readable annotation in most
@@ -419,7 +421,7 @@ func (c *Card) EmitToReporter(r Reporter) {
 		default:
 			r.Skip(c.title)
 		}
-	case CardInfo, CardData:
+	case CardInfo, CardData, CardWaiting:
 		r.Info("%s", c.title)
 	}
 }

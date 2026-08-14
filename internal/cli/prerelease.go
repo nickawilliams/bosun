@@ -1016,7 +1016,7 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 	}
 
 	err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() {
+		if formGate() && !ui.IsRaw() {
 			buildSelectionForm()
 			header := ui.NewCard(ui.CardInput, "releases").Tight().Render()
 			headerLines = strings.Count(header, "\n")

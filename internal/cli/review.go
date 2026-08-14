@@ -247,7 +247,7 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 	}
 
 	err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() {
+		if formGate() && !ui.IsRaw() {
 			buildSelectionForm()
 			header := ui.NewCard(ui.CardInput, "pull requests").Tight().Render()
 			headerLines = strings.Count(header, "\n")

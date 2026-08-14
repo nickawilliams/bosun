@@ -338,9 +338,10 @@ func TestCardEmitToReporter(t *testing.T) {
 			wantSilent: true,
 		},
 		{
-			name:       "CardWaiting → silent (transient)",
-			card:       NewCard(CardWaiting, "ci running"),
-			wantSilent: true,
+			name:      "CardWaiting → Info (terminal: CI running, PR under review)",
+			card:      NewCard(CardWaiting, "ci running"),
+			wantKind:  CaptureInfo,
+			wantLabel: "ci running",
 		},
 	}
 

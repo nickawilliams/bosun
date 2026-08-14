@@ -19,12 +19,15 @@ var headerRendered bool
 func SetContext(project, workContext, command string) {
 	headerRendered = true
 	if IsRaw() {
-		if IsPlain() {
+		if IsPlain() && command != "" {
 			// plainReporter emits human-readable output to non-TTY
 			// stdout. Route through the Reporter interface so it gets
 			// a header line. rawReporter.Header is a no-op (correct
 			// for machine-readable mode) — reached via IsRaw &&
 			// !IsPlain, which falls through to the return below.
+			// Guard on command != "": EnsureHeader() calls with an
+			// empty command string (timeline marker only, no title),
+			// and plainReporter.Header("") would emit a blank line.
 			var ctx []string
 			if project != "" {
 				ctx = append(ctx, project)
