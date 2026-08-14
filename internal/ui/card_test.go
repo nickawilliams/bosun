@@ -284,6 +284,13 @@ func TestCardEmitToReporter(t *testing.T) {
 			wantValue: "missing binary",
 		},
 		{
+			name:      "CardFailed subtitle → FailValue (subtitle wins)",
+			card:      NewCard(CardFailed, "build").Subtitle("exit 1"),
+			wantKind:  CaptureFail,
+			wantLabel: "build",
+			wantValue: "exit 1",
+		},
+		{
 			name:      "CardSkipped title-only → Skip",
 			card:      NewCard(CardSkipped, "lint"),
 			wantKind:  CaptureSkip,
@@ -295,6 +302,13 @@ func TestCardEmitToReporter(t *testing.T) {
 			wantKind:  CaptureSkip,
 			wantLabel: "lint",
 			wantValue: "not configured",
+		},
+		{
+			name:      "CardSkipped subtitle → SkipValue (subtitle wins)",
+			card:      NewCard(CardSkipped, "lint").Subtitle("no config found"),
+			wantKind:  CaptureSkip,
+			wantLabel: "lint",
+			wantValue: "no config found",
 		},
 		{
 			name:      "CardInfo → Info",
