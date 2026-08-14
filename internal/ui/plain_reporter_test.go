@@ -163,6 +163,60 @@ func TestPlainReporter_Group_RunsFnAndEmitsChildren(t *testing.T) {
 	}
 }
 
+func TestPlainReporter_CompleteDetail(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.CompleteDetail("Build", []string{"compiled main.go", "linked output"})
+	got := out.String()
+	if !strings.Contains(got, "[ok]") {
+		t.Errorf("CompleteDetail: missing [ok] in %q", got)
+	}
+	if !strings.Contains(got, "Build") {
+		t.Errorf("CompleteDetail: missing label in %q", got)
+	}
+	if !strings.Contains(got, "compiled main.go") {
+		t.Errorf("CompleteDetail: missing first item in %q", got)
+	}
+	if !strings.Contains(got, "linked output") {
+		t.Errorf("CompleteDetail: missing second item in %q", got)
+	}
+}
+
+func TestPlainReporter_Success(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.Success("created %d items", 3)
+	got := out.String()
+	if !strings.Contains(got, "[ok]") {
+		t.Errorf("Success: missing [ok] in %q", got)
+	}
+	if !strings.Contains(got, "created 3 items") {
+		t.Errorf("Success: format not expanded in %q", got)
+	}
+}
+
+func TestPlainReporter_SelectedMulti_NonEmpty(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.SelectedMulti("Reviewers", []string{"alice", "bob"})
+	got := out.String()
+	if !strings.Contains(got, "Reviewers") {
+		t.Errorf("SelectedMulti: missing label in %q", got)
+	}
+	if !strings.Contains(got, "alice") {
+		t.Errorf("SelectedMulti: missing first value in %q", got)
+	}
+	if !strings.Contains(got, "bob") {
+		t.Errorf("SelectedMulti: missing second value in %q", got)
+	}
+}
+
+func TestPlainReporter_SelectedMulti_Empty(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.SelectedMulti("Reviewers", []string{})
+	got := out.String()
+	if !strings.Contains(got, "(none)") {
+		t.Errorf("SelectedMulti empty: missing (none) in %q", got)
+	}
+}
+
 func TestPlainReporter_Details(t *testing.T) {
 	r, out, _ := withPlainReporter(t)
 	r.Details("Config", ui.NewFields("key", "value", "path", "/etc/bosun"))
@@ -180,6 +234,15 @@ func TestPlainReporter_Details_Empty(t *testing.T) {
 	r.Details("Config", ui.NewFields())
 	if out.Len() != 0 {
 		t.Errorf("Details empty: expected no output, got %q", out.String())
+	}
+}
+
+func TestPlainReporter_Details_EmptyHeading(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.Details("", ui.NewFields("key", "value"))
+	got := out.String()
+	if !strings.Contains(got, "Details") {
+		t.Errorf("Details empty heading: missing fallback heading in %q", got)
 	}
 }
 
@@ -210,6 +273,22 @@ func TestPlainReporter_Summary_ZeroSegmentsOmitted(t *testing.T) {
 	got := out.String()
 	if strings.Contains(got, "failed") {
 		t.Errorf("Summary: zero segment should be omitted, got %q", got)
+	}
+}
+
+func TestPlainReporter_Summary_AllZero(t *testing.T) {
+	r, out, _ := withPlainReporter(t)
+	r.Summary("no checks", []ui.SummarySegment{
+		{Count: 0, Label: "passed"},
+		{Count: 0, Label: "failed"},
+	})
+	got := out.String()
+	if !strings.Contains(got, "no checks") {
+		t.Errorf("Summary all-zero: missing total in %q", got)
+	}
+	// No parenthetical breakdown when all counts are zero.
+	if strings.Contains(got, "(") {
+		t.Errorf("Summary all-zero: unexpected breakdown in %q", got)
 	}
 }
 
