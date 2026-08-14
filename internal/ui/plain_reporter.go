@@ -53,11 +53,11 @@ const (
 )
 
 func (r *plainReporter) writeln(format string, args ...any) {
-	fmt.Fprintf(defaultOutput, format+"\n", args...)
+	_, _ = fmt.Fprintln(defaultOutput, fmt.Sprintf(format, args...))
 }
 
 func (r *plainReporter) warnln(format string, args ...any) {
-	fmt.Fprintf(defaultErr, format+"\n", args...)
+	_, _ = fmt.Fprintln(defaultErr, fmt.Sprintf(format, args...))
 }
 
 // plainLine writes a status-prefixed line, appending ": value" when
