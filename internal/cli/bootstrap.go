@@ -133,8 +133,7 @@ func Bootstrap(cmd *cobra.Command) error {
 	// separately: the plain Reporter emits human-readable but unstyled
 	// lines so piped, redirected, and CI contexts see the same semantic
 	// events as an interactive run.
-	machineReadable := cmd != nil && (
-		cmd.Annotations["output"] == "raw" ||
+	machineReadable := cmd != nil && (cmd.Annotations["output"] == "raw" ||
 		(cmd.Flag("output") != nil && cmd.Flag("output").Value.String() != ""))
 
 	switch {

@@ -14,10 +14,10 @@ import (
 // Output format: a fixed-width status prefix followed by the label,
 // optionally ": value" appended inline.
 //
-//   [ok]   Set up workspace
-//   [ok]   Create branch: feature-123
-//   [skip] Link to Jira: not configured
-//   [fail] Run tests: exit code 1
+//	[ok]   Set up workspace
+//	[ok]   Create branch: feature-123
+//	[skip] Link to Jira: not configured
+//	[fail] Run tests: exit code 1
 //
 // All lines go to stdout except Warning, which goes to stderr.
 // Group nesting is flattened — each child emits its own status line;
