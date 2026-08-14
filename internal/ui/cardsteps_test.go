@@ -159,6 +159,103 @@ func TestCardStepsModelInterruptFrame(t *testing.T) {
 	}
 }
 
+// TestRunCardStepsRawPathEmitsSuccessor locks the fix for issue #72:
+// in raw mode the successor card is routed through EmitToReporter so
+// that plainReporter can emit a plain-text line while rawReporter
+// stays silent. We install a CaptureReporter (which IsRaw counts as
+// raw) and verify a CardSuccess successor produces a CaptureComplete
+// event.
+func TestRunCardStepsRawPathEmitsSuccessor(t *testing.T) {
+	old := Default()
+	cap := NewCaptureReporter()
+	SetDefault(cap)
+	t.Cleanup(func() { SetDefault(old) })
+
+	steps := []CardStep{
+		{
+			Card: NewCard(CardInfo, "detect"),
+			Run:  func() error { return nil },
+		},
+	}
+	successor := func() *Card {
+		return NewCard(CardSuccess, "preview").Subtitle("prod-env")
+	}
+
+	rewind, err := RunCardSteps(steps, successor)
+	if err != nil {
+		t.Fatalf("RunCardSteps returned error: %v", err)
+	}
+	if rewind == nil {
+		t.Fatal("RunCardSteps returned nil rewind")
+	}
+
+	evts := cap.Events()
+	if len(evts) != 1 {
+		t.Fatalf("got %d events, want 1 for the successor: %s", len(evts), cap.Dump())
+	}
+	e := evts[0]
+	if e.Kind != CaptureComplete {
+		t.Errorf("Kind = %q, want %q", e.Kind, CaptureComplete)
+	}
+	if e.Label != "preview" {
+		t.Errorf("Label = %q, want %q", e.Label, "preview")
+	}
+	if e.Value != "prod-env" {
+		t.Errorf("Value = %q, want %q", e.Value, "prod-env")
+	}
+}
+
+// TestRunCardStepsRawPathSilentForInputSuccessor locks that CardInput
+// successors stay silent in raw mode: form headers are only meaningful
+// in interactive TTY mode, so emitting them to a plain reporter would
+// be noise.
+func TestRunCardStepsRawPathSilentForInputSuccessor(t *testing.T) {
+	old := Default()
+	cap := NewCaptureReporter()
+	SetDefault(cap)
+	t.Cleanup(func() { SetDefault(old) })
+
+	steps := []CardStep{
+		{Card: NewCard(CardInfo, "step"), Run: func() error { return nil }},
+	}
+	successor := func() *Card { return NewCard(CardInput, "select workspace") }
+
+	if _, err := RunCardSteps(steps, successor); err != nil {
+		t.Fatalf("RunCardSteps returned error: %v", err)
+	}
+	if evts := cap.Events(); len(evts) != 0 {
+		t.Errorf("expected no events for CardInput successor, got %d: %s",
+			len(evts), cap.Dump())
+	}
+}
+
+// TestRunCardStepsIntoRawPathCallsFinalView locks the fix for issue
+// #72: in raw mode RunCardStepsInto invokes the finalView closure for
+// its side effects even though no ANSI is painted. The callers' post-
+// call branches (applyDefaults, formGate state) rely on these side
+// effects.
+func TestRunCardStepsIntoRawPathCallsFinalView(t *testing.T) {
+	old := Default()
+	SetDefault(NewCaptureReporter())
+	t.Cleanup(func() { SetDefault(old) })
+
+	var sideEffectRan bool
+	steps := []CardStep{
+		{Card: NewCard(CardInfo, "step"), Run: func() error { return nil }},
+	}
+	finalView := func() string {
+		sideEffectRan = true
+		return "some ANSI frame\n"
+	}
+
+	if err := RunCardStepsInto(steps, finalView); err != nil {
+		t.Fatalf("RunCardStepsInto returned error: %v", err)
+	}
+	if !sideEffectRan {
+		t.Error("finalView was not called in raw mode (side effects skipped)")
+	}
+}
+
 // TestCardStepsModelRawSuccessorFrame locks RunCardStepsInto's
 // takeover contract: on success the final frame is finalView()'s
 // string verbatim, so the next program's first repaint is

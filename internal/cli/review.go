@@ -261,19 +261,19 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 	}
 
 	if !formGate() {
-		// No form — the successor card already recorded the outcome
-		// (except in raw mode, which skips it); re-apply defaults so the
-		// action loop sees them there too.
+		// No form — the successor card already recorded the outcome in
+		// interactive mode, and finalView()'s side effects (applyDefaults)
+		// already ran in raw/plain mode. Re-call to be safe: idempotent.
 		applyDefaults()
 		return nil
 	}
 
 	if msField == nil {
-		// Raw rendering: RunCardStepsInto never runs its final-frame
-		// closure (there's no frame to take over), so the form hasn't
-		// been built. Build it now and run it standalone, skipping the
-		// cursor takeover below, which assumes a painted frame to
-		// repaint over. Same shape as prerelease's target picker.
+		// Raw rendering: RunCardStepsInto runs its final-frame closure
+		// in raw mode for side effects only (no ANSI painted), so the
+		// form hasn't been built. Build it now and run it standalone,
+		// skipping the cursor takeover below, which assumes a painted
+		// frame to repaint over. Same shape as prerelease's target picker.
 		buildSelectionForm()
 		if err := runForm(msField); err != nil {
 			return err

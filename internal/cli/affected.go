@@ -791,12 +791,12 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	formShown := formGate()
 	if formShown {
 		if msField == nil {
-			// Raw rendering: RunCardStepsInto never runs its final-frame
-			// closure (there's no frame to take over), so the form hasn't
-			// been built. Build it now and run it standalone, skipping the
-			// cursor takeover below, which assumes a painted frame to
-			// repaint over. Mirrors release's selectServiceDeploys. The
-			// form runs when stdin can drive it (the harness's injected
+			// Raw rendering: RunCardStepsInto runs its final-frame closure
+			// in raw mode for side effects only (no ANSI painted), so the
+			// form hasn't been built. Build it now and run it standalone,
+			// skipping the cursor takeover below, which assumes a painted
+			// frame to repaint over. Mirrors release's selectServiceDeploys.
+			// The form runs when stdin can drive it (the harness's injected
 			// reader); a TTY-stdin/piped-stdout session is refused cleanly
 			// by runForm's render guard instead.
 			buildSelectionForm()
