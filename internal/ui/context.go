@@ -17,10 +17,25 @@ var headerRendered bool
 // workContext is the workspace display label (issue key or raw name);
 // command is the human-readable command title.
 func SetContext(project, workContext, command string) {
+	headerRendered = true
 	if IsRaw() {
+		if IsPlain() {
+			// plainReporter emits human-readable output to non-TTY
+			// stdout. Route through the Reporter interface so it gets
+			// a header line. rawReporter.Header is a no-op (correct
+			// for machine-readable mode) — reached via IsRaw &&
+			// !IsPlain, which falls through to the return below.
+			var ctx []string
+			if project != "" {
+				ctx = append(ctx, project)
+			}
+			if workContext != "" {
+				ctx = append(ctx, workContext)
+			}
+			defaultReporter.Header(command, ctx...)
+		}
 		return
 	}
-	headerRendered = true
 	title := "bosun"
 	if command != "" {
 		title += " › " + command
@@ -48,13 +63,19 @@ func EnsureHeader() { EnsureContext("", "", "") }
 // EnsureContext is the parameterized form of EnsureHeader: renders
 // the header with the given breadcrumb segments if no header has
 // been rendered yet. Idempotent: no-op when a header is already on
-// screen or output is raw. The leading timeline blank line is owned
-// by the CLI's Bootstrap (so success and error paths produce the
-// same single blank line above the header).
+// screen or when output is fully silent (raw / capture mode). In
+// plain mode, SetContext routes through the Reporter interface so a
+// header line is emitted — and EnsureContext calls SetContext rather
+// than short-circuiting, because IsRaw() is true for plain mode but
+// the header still needs to be emitted.
 func EnsureContext(project, workContext, command string) {
-	if headerRendered || IsRaw() {
+	if headerRendered {
 		return
 	}
+	// IsRaw() is true for both rawReporter (silent — skip) and
+	// plainReporter (emits output — proceed). SetContext handles the
+	// distinction internally, so we always delegate when not yet
+	// rendered.
 	SetContext(project, workContext, command)
 }
 

@@ -152,6 +152,9 @@ func TestPlainReporter_Group_RunsFnAndEmitsChildren(t *testing.T) {
 		g.SkipValue("Jira", "not configured")
 	})
 	got := out.String()
+	if !strings.Contains(got, "Checks") {
+		t.Errorf("Group: missing title in %q", got)
+	}
 	if !strings.Contains(got, "Git configured") {
 		t.Errorf("Group: missing child output in %q", got)
 	}

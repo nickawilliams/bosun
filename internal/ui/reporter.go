@@ -184,6 +184,16 @@ func IsRaw() bool {
 	return false
 }
 
+// IsPlain reports whether the default Reporter is a plainReporter —
+// i.e. stdout is not a terminal but no machine-readable output was
+// explicitly requested. Used by SetContext so it can emit a plain
+// header line without also triggering header recording in the test
+// CaptureReporter.
+func IsPlain() bool {
+	_, ok := defaultReporter.(*plainReporter)
+	return ok
+}
+
 // SetDefault replaces the default reporter. Intended for tests and
 // for eventual --output flags. Not thread-safe; set before any
 // goroutines call the package-level helpers.
