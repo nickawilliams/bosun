@@ -67,12 +67,30 @@ type palette struct {
 	Subtle   color.Color // Help description text
 	ButtonFg color.Color // Focused button foreground
 
-	// Symbols.
-	Check  string
-	Cross  string
-	Arrow  string
-	Bullet string
-	Dot    string
+	// State symbols — the glyph half of the state grammar. Shape
+	// encodes whether an aspect is locked in, active, or live;
+	// color (above) carries the role. See state_grammar.go for the
+	// decision rule, and read these rather than writing the literal
+	// so a future glyph mode (e.g. an ASCII fallback) can swap the
+	// whole vocabulary from one place.
+	//
+	// Structural box-drawing characters are deliberately absent —
+	// they encode no state and are load-bearing for layout width
+	// math. See glyphs.go.
+	Check     string // ✓ terminal positive: resolved / succeeded
+	Cross     string // ✗ terminal negative: closed / failed
+	Active    string // ● active state; the color says which role
+	Attention string // ▲ needs the user's attention now
+	Waiting   string // ⧗ live process visible in this frame
+	Unknown   string // ? outcome can't be determined
+	Pending   string // ◦ queued or running, no outcome yet
+	Inactive  string // ○ not reached yet / group node
+
+	// Text symbols — punctuation marks inside rendered prose and
+	// key/value rows rather than state signals.
+	Arrow  string // → transition
+	Bullet string // • list item
+	Dot    string // · key/value separator
 }
 
 // Palette is the active color palette. Swapped by ApplyColorMode before
@@ -149,7 +167,7 @@ func Divider() {
 
 	style := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	width := max(TermWidth()-2, 10)
-	fmt.Println(" " + style.Render("├"+strings.Repeat("─", width)))
+	fmt.Println(" " + style.Render(BoxTee+strings.Repeat(BoxHorizontal, width)))
 
 	// Trigger a │ row above the next card so the divider has
 	// breathing room beneath it too.
@@ -207,14 +225,9 @@ func defaultPalette() palette {
 		Border:     lipgloss.Color("238"),
 		Subtle:     lipgloss.Color("239"),
 		ButtonFg:   lipgloss.Color("#FFFDF5"),
-
-		Check:  "✓",
-		Cross:  "✗",
-		Arrow:  "→",
-		Bullet: "•",
-		Dot:    "·",
 	}
 	applyRoleAliases(&p)
+	applyUnicodeSymbols(&p)
 	return p
 }
 
@@ -236,10 +249,9 @@ func ansiPalette() palette {
 		Border:     lipgloss.BrightBlack,
 		Subtle:     lipgloss.BrightBlack,
 		ButtonFg:   lipgloss.BrightWhite,
-
-		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
 	applyRoleAliases(&p)
+	applyUnicodeSymbols(&p)
 	return p
 }
 
@@ -249,11 +261,32 @@ func noColorPalette() palette {
 		Primary: nc, Secondary: nc, Brand: nc, LogoTop: nc, LogoBottom: nc, Accent: nc, Info: nc, Success: nc, Error: nc, Warning: nc,
 		Muted: nc, NormalFg: nc, Recessed: nc, Border: nc, Subtle: nc,
 		ButtonFg: nc,
-
-		Check: "✓", Cross: "✗", Arrow: "→", Bullet: "•", Dot: "·",
 	}
 	applyRoleAliases(&p)
+	applyUnicodeSymbols(&p)
 	return p
+}
+
+// applyUnicodeSymbols populates the palette's symbol fields with the
+// default Unicode vocabulary. Symbols are orthogonal to color: all
+// three color palettes share this set, because "can this terminal
+// render 24-bit color" and "can it render ⧗" are different
+// questions. Kept as a separate applier (mirroring applyRoleAliases)
+// so a future glyph mode — an ASCII fallback rendering x for ✗, say —
+// drops in as a sibling function rather than a fourth palette.
+func applyUnicodeSymbols(p *palette) {
+	p.Check = "✓"
+	p.Cross = "✗"
+	p.Active = "●"
+	p.Attention = "▲"
+	p.Waiting = "⧗"
+	p.Unknown = "?"
+	p.Pending = "◦"
+	p.Inactive = "○"
+
+	p.Arrow = "→"
+	p.Bullet = "•"
+	p.Dot = "·"
 }
 
 // applyRoleAliases populates the palette's resolution-role color
@@ -367,8 +400,8 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// the result card's not-included/deploying vocabulary.
 	t.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(Palette.Accent).SetString(FocusMarker)
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(Palette.Success)
-	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" ✓  ")
-	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" ○  ")
+	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(Palette.Success).SetString(" " + Palette.Check + "  ")
+	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(Palette.Muted).SetString(" " + Palette.Inactive + "  ")
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(Palette.NormalFg)
 	// Buttons render in a left-aligned row at the base origin (col 3),
 	// which glues the leftmost chip's background to the spine. Indent
