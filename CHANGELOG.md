@@ -1,5 +1,46 @@
 # Changelog
 
+## [v1.2.0](https://github.com/nickawilliams/bosun/compare/250872585fb3151c44c6c629b04238e70e18ffde...v1.2.0) - 2026-08-17
+
+### New Features
+
+- **CLI:** Gate doctor on check failures - ([e0f36c0](https://github.com/nickawilliams/bosun/commit/e0f36c05f53dabfcca0dd8085570efec0333361f))
+- **UI**
+  - Let a plan action require everything before it to succeed - ([291d325](https://github.com/nickawilliams/bosun/commit/291d325802741817319304b8c302e80617de1d79))
+  - Add TermHeight alongside TermWidth - ([890180d](https://github.com/nickawilliams/bosun/commit/890180da586dd8f239a49b4558793f669706c63f))
+  - Add plain reporter for non-TTY stdout - ([42b3098](https://github.com/nickawilliams/bosun/commit/42b30985710082d3b477cd3f08182a3ab2a84107))
+
+### Improvements
+
+- **CLI**
+  - Services detection adopts the accumulating gather - ([7d2aac7](https://github.com/nickawilliams/bosun/commit/7d2aac78639b4937e8142e604db86aa7e92c12fd))
+  - One rule for whether a repo has services - ([c80123b](https://github.com/nickawilliams/bosun/commit/c80123bdbc1394a59177c6ca23d35de51f28eb9c))
+
+### Fixes
+
+- **CLI**
+  - Give each doctor check its own slice of the run budget - ([603a8fb](https://github.com/nickawilliams/bosun/commit/603a8fb6f6b185e7d67102a719759562eac5ccfa))
+  - Start the doctor check clock at the network boundary - ([773d652](https://github.com/nickawilliams/bosun/commit/773d652b3f1a6710205122f9d4a1d0f2d38f5ec6))
+  - Stop doctor's gate error repeating itself - ([153bca5](https://github.com/nickawilliams/bosun/commit/153bca53523d29e5a4c957e80f2ea5a2fb064bef))
+  - Hold the issue transition back when the run failed - ([6a3b353](https://github.com/nickawilliams/bosun/commit/6a3b353e9ed097c195359cbc0f8a9eb63d533f36))
+  - Review follow-ups on the services gather - ([bbad83d](https://github.com/nickawilliams/bosun/commit/bbad83d091d56b9c7145367206c139ddbd66151d))
+  - Cap gather selection forms to the terminal height - ([43e1605](https://github.com/nickawilliams/bosun/commit/43e160590796d761df08cb8d1fdc97d6e27ed952))
+- **UI**
+  - Make the apply gate positional, and caption the failed card - ([2459edb](https://github.com/nickawilliams/bosun/commit/2459edb39c09d1e2d8e262703accfeead448254d))
+  - Wire plain reporter header, error, and test paths - ([6029a67](https://github.com/nickawilliams/bosun/commit/6029a67267ec4550c585a8487101236896175ac7))
+  - Route RunCardSteps successor through Reporter in raw mode - ([3e91f05](https://github.com/nickawilliams/bosun/commit/3e91f0528c2871633f5d01606e7e57bc6f2a7105))
+- **Jira,github,githubactions:** Bound requests without a caller deadline - ([56fa4fc](https://github.com/nickawilliams/bosun/commit/56fa4fc8930da3aee3dcfa7f9361e708ea77b376))
+- **Lint:** Use _, _ = for io.Writer writes in plain_reporter - ([2a1fc03](https://github.com/nickawilliams/bosun/commit/2a1fc03ef43ef4924969172611e6188ab6bd6052))
+- **Notify:** Truncate honors its byte budget and rune boundaries - ([3a8cc7a](https://github.com/nickawilliams/bosun/commit/3a8cc7ad701d2bbd62cefe2a3743b1fcf616fc34))
+- **Preview:** Share the probe transport and drain probe responses - ([ef49373](https://github.com/nickawilliams/bosun/commit/ef49373ea9e3789ea9f40a397f39e8be9ec1a8a0))
+- **Preview,cli:** Close three defects found in adversarial review - ([ccef2ed](https://github.com/nickawilliams/bosun/commit/ccef2edee6e8ed68b1be152e105b218f54b9129a))
+- **Review:** Address adversarial review findings - ([5786ff0](https://github.com/nickawilliams/bosun/commit/5786ff0739961bddffb4e4f37127c10ec1f3b20c))
+- **Slack:** Bound requests when the caller sets no deadline - ([09d3550](https://github.com/nickawilliams/bosun/commit/09d3550bfa238e3a3cd9c0efa787130d4b265c22))
+
+### Appearance
+
+- Gofmt bootstrap and plain_reporter - ([f4ae00f](https://github.com/nickawilliams/bosun/commit/f4ae00f92883b0a3be2022c16f6f960484635f59))
+
 ## [v1.1.0](https://github.com/nickawilliams/bosun/compare/ffc38c737c78bacaf24b3d0eb94539575239eae9...v1.1.0) - 2026-08-12
 
 ### New Features
@@ -300,6 +341,26 @@
 - **Testharness:** Synchronized output buffers, reset per Run - ([217ab91](https://github.com/nickawilliams/bosun/commit/217ab91f13a153046e86131d3d8ad99dfd49581a))
 - **Ui,cli:** Make plan DetailRef access race-free - ([b9ea5f0](https://github.com/nickawilliams/bosun/commit/b9ea5f0b9692c20d8888010a4b0fe733685b6e85))
 
+### Appearance
+
+- **CLI**
+  - Rounded elbow in the lifecycle stepper - ([42c981b](https://github.com/nickawilliams/bosun/commit/42c981b81401fd7e11a6602556db03c563117b33))
+  - Detection spinner keeps the stable "Services" title - ([953f05a](https://github.com/nickawilliams/bosun/commit/953f05a5b6f7970b89f64894665be453eeccc16d))
+  - Bold the repo segment in the service-selection form - ([84258d5](https://github.com/nickawilliams/bosun/commit/84258d547223dc006c71e1d355941c2b0e9c25ce))
+  - Services spinner names the activity, not just the repo - ([79254a4](https://github.com/nickawilliams/bosun/commit/79254a4e4bc335d2e8ec061f4c553e79aeb9b3c5))
+  - Service-selection form expands to fit its option list - ([41d5539](https://github.com/nickawilliams/bosun/commit/41d55399b0faf4e454fc96f3cd40d90380426af1))
+  - Not-included service rows de-emphasize instead of warn - ([bb04e56](https://github.com/nickawilliams/bosun/commit/bb04e5657cf0ee2f031e1085eec6ce1269504601))
+  - Dirty-tree warning preserves repo casing - ([4d8aaf6](https://github.com/nickawilliams/bosun/commit/4d8aaf6d8ebc005d24b8216f70e7af84b6967e52))
+  - Status Preview/Workspace cards use title-plus-body layout - ([e3609ce](https://github.com/nickawilliams/bosun/commit/e3609cef02f0bcabf46b1bf6fd724da28a0d4c59))
+  - Separate workspace meta cards with a connector break - ([8607fcd](https://github.com/nickawilliams/bosun/commit/8607fcd89a8c79d33f161dd9ed1480c528c0ea73))
+  - Restyle preview adopt-conflict prompt - ([354ca61](https://github.com/nickawilliams/bosun/commit/354ca613205f9627d2d07a28abb2c867debf16b6))
+  - Accent connectors on the workspace-readiness dirty gate - ([8389df0](https://github.com/nickawilliams/bosun/commit/8389df0b20b8b15f93e7339c2ab0d71b99091cc4))
+- **UI**
+  - Group children render titles without bold - ([b7361d1](https://github.com/nickawilliams/bosun/commit/b7361d19b2c7e294c42bd082284ba6e4aef4cf9c))
+  - Multi-select rows align to Card.Item's grid - ([be2a0cd](https://github.com/nickawilliams/bosun/commit/be2a0cd8398820763768ce144f632afc5772ae5f))
+  - Indent confirm buttons off the spine - ([c9d22cb](https://github.com/nickawilliams/bosun/commit/c9d22cb809b9428edb2dfe51926c5cb897d8713f))
+  - Form focus marker ">" → "❭" - ([35c2c3e](https://github.com/nickawilliams/bosun/commit/35c2c3ee12bed98a037101b52a9b8c15afdff377))
+
 ## [v0.4.1](https://github.com/nickawilliams/bosun/compare/1ca8b3f20419ba73fe9ebbce67e6debae8358017...v0.4.1) - 2026-06-01
 
 ### Improvements
@@ -328,6 +389,11 @@
 - **CLI:** Restore workspace scoping for release command - ([1948675](https://github.com/nickawilliams/bosun/commit/19486753b04c26ef84d7fab5a2524f1dda9e958d))
 - **UI:** Ensure header renders for pre-RunE errors - ([d333b3c](https://github.com/nickawilliams/bosun/commit/d333b3c203bf4fc8ab4244e85e398e19b999f0a3))
 
+### Appearance
+
+- **CLI:** Render fatal error messages in red - ([9172ea8](https://github.com/nickawilliams/bosun/commit/9172ea8dfcd36fc103fdf133a26588446d0c92f8))
+- **UI:** Gradient text for compact header app name - ([0bf9ec5](https://github.com/nickawilliams/bosun/commit/0bf9ec56abfa54dfd58f3fa6079cafc9d73b6ff9))
+
 ## [v0.3.0](https://github.com/nickawilliams/bosun/compare/94ddc860208aa9fe1ca4e0cc4afe58310ff80073...v0.3.0) - 2026-05-27
 
 ### New Features
@@ -349,6 +415,12 @@
 
 - **UI:** Preserve case in Group.Selected and pad compact header - ([94ddc86](https://github.com/nickawilliams/bosun/commit/94ddc860208aa9fe1ca4e0cc4afe58310ff80073))
 - **Config:** Deduplicate dot-separated schema keys in config tree - ([4f5abf5](https://github.com/nickawilliams/bosun/commit/4f5abf5f8536877c05368f169b04b92c506aaa00))
+
+### Appearance
+
+- **UI**
+  - Logo gradient, spacer rename, and spinner flash fix - ([c1f16a8](https://github.com/nickawilliams/bosun/commit/c1f16a86494dc53c9e5bda95f3933307930b26b4))
+  - Add right-side padding to logo header box - ([5849201](https://github.com/nickawilliams/bosun/commit/5849201ac16a361095a4d472d0f366820c7894be))
 
 ## [v0.2.0](https://github.com/nickawilliams/bosun/compare/1bdd655d07f49148e5660a1b959a8c506d9b8a8f...v0.2.0) - 2026-05-19
 
@@ -409,6 +481,18 @@
   - Clamp statusKVWidth for Preview label + guard against panic - ([c1d5541](https://github.com/nickawilliams/bosun/commit/c1d554148cd5382d4101b3d5da7f84dbb90c2676))
   - Buffer provider OnInfo events until after card prints - ([fdfe1a7](https://github.com/nickawilliams/bosun/commit/fdfe1a7c0d51d4f948deab1036c33e3d157c4d20))
   - Add explicit draft case to resolveRepoCardState - ([c103b84](https://github.com/nickawilliams/bosun/commit/c103b846240f57a31ac46aef04ff991ebdabc8f7))
+
+### Appearance
+
+- **CLI**
+  - Align all commands on Project › Issue › Command breadcrumb convention - ([4e5ddea](https://github.com/nickawilliams/bosun/commit/4e5ddead4e24830027d9d8de8288531abca845dd))
+  - Drop redundant issue card title from breadcrumb trailing slot - ([dc24c24](https://github.com/nickawilliams/bosun/commit/dc24c249f45a5546d9936e74bff55f5b448b68e5))
+- **UI**
+  - Add Palette.Brand color for logo and compact-header app name - ([5fa4fd6](https://github.com/nickawilliams/bosun/commit/5fa4fd677f6746faddc4c439d9eb13f3ea158d24))
+  - Preserve case in Reporter.Selected labels - ([6cf8fe3](https://github.com/nickawilliams/bosun/commit/6cf8fe3591c9245efbb733e3bc69cdb4fbd99d09))
+- **Status**
+  - Group workspace issue card body into sections - ([9d97015](https://github.com/nickawilliams/bosun/commit/9d97015820a4699cb47d4aacda86be17e45c8f36))
+  - Drop workspace-status issue card title from breadcrumb - ([6d9807c](https://github.com/nickawilliams/bosun/commit/6d9807c973037edb9d6d7013d86f6e17f43a94dd))
 
 ## [v0.1.0](https://github.com/nickawilliams/bosun/compare/f6d91dbfbe461d24e150b1a6f4444283b294334f...v0.1.0) - 2026-05-12
 
