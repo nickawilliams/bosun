@@ -133,6 +133,9 @@ func pickWorkspaceReposDiff(ctx context.Context, mgr *workspace.Manager, name st
 		return reposDiff{}, err
 	}
 	repositorySlot.Clear()
+	if len(selected) > 0 {
+		ui.SelectedMulti("repositories", selected)
+	}
 
 	finalSet := make(map[string]bool, len(selected))
 	for _, n := range selected {
