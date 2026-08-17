@@ -119,6 +119,32 @@ func TestWorkspaceReposAdd(t *testing.T) {
 	})
 }
 
+// TestWorkspaceRepos exercises the `workspace repos` parent command
+// (interactive path). The form-driven add/remove flow is untestable
+// via the harness (Interactive() always returns true for the injected
+// reader, so the form blocks — see ui.Interactive). The test here
+// covers the pre-form guard: unknown subcommand names (including bare
+// repo names passed by mistake) are rejected by Cobra before the RunE
+// runs, since the parent only accepts the registered subcommands.
+func TestWorkspaceRepos(t *testing.T) {
+	t.Run("rejects unknown subcommands", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-g", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		err := h.Run("workspace", "repos", "api", "--workspace", "ws-g")
+		if err == nil {
+			t.Fatal("expected error for unknown subcommand, got nil")
+		}
+		if !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("err = %q, want unknown command error", err)
+		}
+	})
+}
 
 // TestWorkspaceDelete exercises `workspace delete`: the whole
 // workspace goes — worktree, branch, and the workspace directory.
