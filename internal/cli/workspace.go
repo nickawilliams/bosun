@@ -426,7 +426,7 @@ func newWorkspaceReposCmd() *cobra.Command {
 			}}}
 
 			if err := runPlanCard(cmd, plan, actions, PlanOpts{
-				Confirm: len(diff.toRm) > 0,
+				Confirm: true,
 				Apply:   !isDryRun(cmd),
 			}); err != nil {
 				return err
