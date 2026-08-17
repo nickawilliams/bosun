@@ -19,11 +19,12 @@ workspace:
   root: "workspaces"
 `
 
-// TestWorkspaceRm exercises `workspace rm` end-to-end: the repo-level
-// removal deletes the worktree AND the branch, unmatched repo names
-// error instead of silently narrowing, and the plan confirmation
-// gates non-interactive runs (--force alone must not approve).
-func TestWorkspaceRm(t *testing.T) {
+// TestWorkspaceReposRm exercises `workspace repos rm` end-to-end: the
+// repo-level removal deletes the worktree AND the branch, unmatched
+// repo names error instead of silently narrowing, and the plan
+// confirmation gates non-interactive runs (--force alone must not
+// approve).
+func TestWorkspaceReposRm(t *testing.T) {
 	t.Run("removes worktree and branch", func(t *testing.T) {
 		h := testharness.New(t)
 		h.Workspace.WriteConfig(workspaceConfig)
@@ -37,7 +38,7 @@ func TestWorkspaceRm(t *testing.T) {
 			t.Fatalf("fixture: worktree missing at %q", wt)
 		}
 
-		if err := h.Run("workspace", "rm", "api", "--workspace", "ws-a", "--approve"); err != nil {
+		if err := h.Run("workspace", "repos", "rm", "api", "--workspace", "ws-a", "--approve"); err != nil {
 			t.Fatalf("rm: %v", err)
 		}
 		if api.WorktreeExists(wt) {
@@ -57,7 +58,7 @@ func TestWorkspaceRm(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 
-		err := h.Run("workspace", "rm", "api", "typo", "--workspace", "ws-b", "--approve")
+		err := h.Run("workspace", "repos", "rm", "api", "typo", "--workspace", "ws-b", "--approve")
 		if err == nil || !strings.Contains(err.Error(), "typo") {
 			t.Fatalf("err = %v, want the unmatched name called out", err)
 		}
@@ -81,7 +82,7 @@ func TestWorkspaceRm(t *testing.T) {
 		}
 		h.Type("n")
 
-		err := h.Run("workspace", "rm", "api", "--workspace", "ws-c")
+		err := h.Run("workspace", "repos", "rm", "api", "--workspace", "ws-c")
 		if err == nil || !strings.Contains(err.Error(), "cancelled") {
 			t.Fatalf("err = %v, want cancellation", err)
 		}
@@ -90,6 +91,30 @@ func TestWorkspaceRm(t *testing.T) {
 		}
 		if !api.HasBranch("ws-c") {
 			t.Errorf("branch destroyed despite the declined confirmation")
+		}
+	})
+}
+
+// TestWorkspaceReposAdd exercises `workspace repos add`.
+func TestWorkspaceReposAdd(t *testing.T) {
+	t.Run("adds repo to existing workspace", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-e", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if !api.WorktreeExists(h.WorktreePath("ws-e", "api")) {
+			t.Fatalf("fixture: api worktree missing")
+		}
+
+		if err := h.Run("workspace", "repos", "add", "web", "--workspace", "ws-e"); err != nil {
+			t.Fatalf("repos add: %v", err)
+		}
+		if !web.WorktreeExists(h.WorktreePath("ws-e", "web")) {
+			t.Errorf("web worktree not created after repos add")
 		}
 	})
 }

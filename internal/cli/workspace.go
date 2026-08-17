@@ -24,8 +24,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
 		newWorkspaceDeleteCmd(),
-		newWorkspaceAddCmd(),
-		newWorkspaceRmCmd(),
+		newWorkspaceReposCmd(),
 	)
 
 	return cmd
@@ -74,9 +73,88 @@ func pickOrPromptWorkspace() string {
 	return selected
 }
 
-// pickWorkspaceAddRepositories prompts the user to select repositories to add
-// to the named workspace, excluding any already present. Returns the selected
-// names, or nil if there is nothing left to add.
+// reposDiff holds the result of the interactive repos picker: the sets
+// of repository names to add to and remove from the workspace.
+type reposDiff struct {
+	toAdd []string
+	toRm  []string
+}
+
+// pickWorkspaceReposDiff presents all configured repositories in a
+// single multi-select with the workspace's current members pre-checked.
+// The delta between the initial selection and the final selection drives
+// the add and remove sets. Returns a zero-value reposDiff (both slices
+// nil) if the user makes no change or there is nothing to show.
+func pickWorkspaceReposDiff(ctx context.Context, mgr *workspace.Manager, name string) (reposDiff, error) {
+	all, err := resolveRepositories(nil)
+	if err != nil {
+		return reposDiff{}, err
+	}
+
+	statuses, err := mgr.Status(ctx, name)
+	if err != nil {
+		return reposDiff{}, err
+	}
+	existing := make(map[string]bool, len(statuses))
+	for _, s := range statuses {
+		existing[s.Name] = true
+	}
+
+	if len(all) == 0 {
+		ui.Skip(fmt.Sprintf("no repositories configured for workspace %q", name))
+		return reposDiff{}, nil
+	}
+
+	if !isInteractive() {
+		return reposDiff{}, fmt.Errorf(
+			"no repositories specified (pass repository names or run interactively)",
+		)
+	}
+
+	opts := make([]huh.Option[string], len(all))
+	initial := make([]string, 0, len(statuses))
+	for i, r := range all {
+		opts[i] = huh.NewOption(r.Name, r.Name)
+		if existing[r.Name] {
+			initial = append(initial, r.Name)
+		}
+	}
+
+	selected := make([]string, len(initial))
+	copy(selected, initial)
+
+	repositorySlot := ui.NewSlot()
+	repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
+	if err := runForm(
+		huh.NewMultiSelect[string]().
+			Options(opts...).
+			Value(&selected),
+	); err != nil {
+		return reposDiff{}, err
+	}
+	repositorySlot.Clear()
+
+	finalSet := make(map[string]bool, len(selected))
+	for _, n := range selected {
+		finalSet[n] = true
+	}
+
+	var diff reposDiff
+	for _, r := range all {
+		was := existing[r.Name]
+		now := finalSet[r.Name]
+		switch {
+		case !was && now:
+			diff.toAdd = append(diff.toAdd, r.Name)
+		case was && !now:
+			diff.toRm = append(diff.toRm, r.Name)
+		}
+	}
+	return diff, nil
+}
+
+// pickWorkspaceAddRepositories prompts the user to select repositories
+// to add to the named workspace, excluding any already present.
 func pickWorkspaceAddRepositories(ctx context.Context, mgr *workspace.Manager, name string) ([]string, error) {
 	all, err := resolveRepositories(nil)
 	if err != nil {
@@ -137,9 +215,7 @@ func pickWorkspaceAddRepositories(ctx context.Context, mgr *workspace.Manager, n
 
 // pickWorkspaceRmRepositories prompts the user to select repositories to
 // remove from the named workspace. Enumerates from the workspace's
-// current repo statuses (so the picker shows only repos actually
-// present). Returns the selected names, or nil if there is nothing to
-// remove.
+// current repo statuses so the picker shows only repos actually present.
 func pickWorkspaceRmRepositories(ctx context.Context, mgr *workspace.Manager, name string) ([]string, error) {
 	statuses, err := mgr.Status(ctx, name)
 	if err != nil {
@@ -237,7 +313,146 @@ func newWorkspaceCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceAddCmd() *cobra.Command {
+// newWorkspaceReposCmd returns the `workspace repos` command. When
+// invoked without a subcommand it opens an interactive multi-select
+// showing all configured repositories with the workspace's current
+// members pre-checked; the delta drives a combined add+remove plan.
+func newWorkspaceReposCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "repos",
+		Short: "Manage repositories in a workspace",
+		Annotations: map[string]string{
+			headerAnnotationTitle: "workspace repos",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cc := commandContext(cmd)
+			if err := cc.RequireWorkspace(); err != nil {
+				return err
+			}
+			name := cc.Workspace
+			fromHead, _ := cmd.Flags().GetBool("from-head")
+			force, _ := cmd.Flags().GetBool("force")
+			ctx := cmd.Context()
+
+			mgr, err := newWorkspaceManager()
+			if err != nil {
+				return err
+			}
+
+			diff, err := pickWorkspaceReposDiff(ctx, mgr, name)
+			if err != nil {
+				return err
+			}
+			if len(diff.toAdd) == 0 && len(diff.toRm) == 0 {
+				return nil
+			}
+
+			// Build the plan: additions first, then removals.
+			plan := ui.NewPlan()
+			for _, n := range diff.toAdd {
+				plan.Add(ui.PlanCreate, "worktree", "repo", n, name)
+			}
+
+			var rmRepos []workspace.Repository
+			var branchOf map[string]string
+			if len(diff.toRm) > 0 {
+				resolved, err := resolveRepositories(diff.toRm)
+				if err != nil {
+					return err
+				}
+				rmRepos = cliRepositoriesToWorkspaceRepositories(resolved)
+
+				statuses, err := mgr.Status(ctx, name)
+				if err != nil {
+					return err
+				}
+				branchOf = make(map[string]string, len(statuses))
+				for _, s := range statuses {
+					branchOf[s.Name] = s.Branch
+				}
+				for _, r := range resolved {
+					plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
+					if b := branchOf[r.Name]; b != "" && b != "(unknown)" {
+						plan.Add(ui.PlanDestroy, "branch", "repo", r.Name,
+							fmt.Sprintf("%s (local + remote)", b))
+					}
+				}
+			}
+
+			var addRepos []workspace.Repository
+			if len(diff.toAdd) > 0 {
+				addRepos, err = argsToWorkspaceRepositories(diff.toAdd)
+				if err != nil {
+					return err
+				}
+			}
+
+			var movedFrom string
+			projectRoot := config.FindProjectRoot()
+			actions := []PlanAction{{Run: func() error {
+				if len(addRepos) > 0 {
+					if err := mgr.Add(ctx, name, addRepos, fromHead); err != nil {
+						return err
+					}
+				}
+				if len(rmRepos) > 0 {
+					if cwd, err := os.Getwd(); err == nil && projectRoot != "" {
+						wsRoot := viper.GetString("workspace.root")
+						if !filepath.IsAbs(wsRoot) {
+							wsRoot = filepath.Join(projectRoot, wsRoot)
+						}
+						for _, r := range diff.toRm {
+							wtPath := filepath.Join(wsRoot, name, r)
+							if cwd == wtPath || strings.HasPrefix(
+								cwd+string(os.PathSeparator),
+								wtPath+string(os.PathSeparator),
+							) {
+								if err := os.Chdir(projectRoot); err != nil {
+									return fmt.Errorf("moving to project root: %w", err)
+								}
+								movedFrom = cwd
+								break
+							}
+						}
+					}
+					if err := mgr.RemoveRepositories(
+						ctx, name, rmRepos, diff.toRm, force,
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			}}}
+
+			if err := runPlanCard(cmd, plan, actions, PlanOpts{
+				Confirm: len(diff.toRm) > 0,
+				Apply:   !isDryRun(cmd),
+			}); err != nil {
+				return err
+			}
+
+			if movedFrom != "" {
+				ui.Info("shell is in a removed directory (%s); cd to %s",
+					movedFrom, projectRoot)
+			}
+			return nil
+		},
+	}
+
+	addProjectFlag(cmd)
+	addWorkspaceFlag(cmd)
+	cmd.Flags().Bool("from-head", false, "branch from current HEAD instead of default branch")
+	cmd.Flags().Bool("force", false, "remove even with uncommitted changes")
+
+	cmd.AddCommand(
+		newWorkspaceReposAddCmd(),
+		newWorkspaceReposRmCmd(),
+	)
+
+	return cmd
+}
+
+func newWorkspaceReposAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [repositories...]",
 		Short: "Add repositories to an existing workspace",
@@ -297,7 +512,7 @@ func newWorkspaceAddCmd() *cobra.Command {
 	return cmd
 }
 
-func newWorkspaceRmCmd() *cobra.Command {
+func newWorkspaceReposRmCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rm [repositories...]",
 		Short: "Remove repositories from an existing workspace",
@@ -335,11 +550,6 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 			wsRepos := cliRepositoriesToWorkspaceRepositories(repositories)
 
-			// Removal deletes each repo's branch (local + remote)
-			// along with the worktree — the plan must say so. Branch
-			// names come from each worktree's actual HEAD via Status;
-			// repos whose branch couldn't be determined skip the
-			// branch delete in RemoveRepositories, so no row shows.
 			statuses, err := mgr.Status(ctx, name)
 			if err != nil {
 				return err
@@ -353,13 +563,11 @@ func newWorkspaceRmCmd() *cobra.Command {
 			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
 				if b := branchOf[r.Name]; b != "" && b != "(unknown)" {
-					plan.Add(ui.PlanDestroy, "branch", "repo", r.Name, fmt.Sprintf("%s (local + remote)", b))
+					plan.Add(ui.PlanDestroy, "branch", "repo", r.Name,
+						fmt.Sprintf("%s (local + remote)", b))
 				}
 			}
 
-			// movedFrom is set inside the apply action if the process is
-			// standing in a worktree about to disappear; surfaced as a
-			// "cd back" hint after the plan finalizes.
 			var movedFrom string
 			projectRoot := config.FindProjectRoot()
 			actions := []PlanAction{{Run: func() error {
@@ -370,7 +578,10 @@ func newWorkspaceRmCmd() *cobra.Command {
 					}
 					for _, r := range repositoryNames {
 						wtPath := filepath.Join(wsRoot, name, r)
-						if cwd == wtPath || strings.HasPrefix(cwd+string(os.PathSeparator), wtPath+string(os.PathSeparator)) {
+						if cwd == wtPath || strings.HasPrefix(
+							cwd+string(os.PathSeparator),
+							wtPath+string(os.PathSeparator),
+						) {
 							if err := os.Chdir(projectRoot); err != nil {
 								return fmt.Errorf("moving to project root: %w", err)
 							}
@@ -390,7 +601,8 @@ func newWorkspaceRmCmd() *cobra.Command {
 			}
 
 			if movedFrom != "" {
-				ui.Info("shell is in a removed directory (%s); cd to %s", movedFrom, projectRoot)
+				ui.Info("shell is in a removed directory (%s); cd to %s",
+					movedFrom, projectRoot)
 			}
 			return nil
 		},
