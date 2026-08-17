@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image/color"
+	"reflect"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -106,6 +107,106 @@ func TestPaletteConstructorsApplyRoleAliases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The symbol counterpart to the role-alias check above. Forgetting
+// applyUnicodeSymbols leaves every symbol field "", which renders as
+// a missing glyph in that one color mode — no panic, no build error,
+// just a blank gutter. Symbols are orthogonal to color, so all three
+// constructors must also agree: a glyph mode is a separate axis, and
+// picking "none" for color must never silently change the glyphs.
+func TestPaletteConstructorsApplyUnicodeSymbols(t *testing.T) {
+	symbolsOf := func(p palette) map[string]string {
+		return map[string]string{
+			"Check":     p.Check,
+			"Cross":     p.Cross,
+			"Active":    p.Active,
+			"Attention": p.Attention,
+			"Waiting":   p.Waiting,
+			"Unknown":   p.Unknown,
+			"Pending":   p.Pending,
+			"Inactive":  p.Inactive,
+			"Arrow":     p.Arrow,
+			"Bullet":    p.Bullet,
+			"Dot":       p.Dot,
+		}
+	}
+
+	want := symbolsOf(defaultPalette())
+
+	// Guard the guard: if a field is added to the struct but not to
+	// symbolsOf, this test would silently stop covering it.
+	if len(want) != countSymbolFields(t) {
+		t.Fatalf("symbolsOf covers %d fields, but palette declares %d string symbol fields — update the test",
+			len(want), countSymbolFields(t))
+	}
+
+	for name, glyph := range want {
+		if glyph == "" {
+			t.Errorf("default palette: %s is empty — did defaultPalette skip applyUnicodeSymbols?", name)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   func() palette
+	}{
+		{"ansi", ansiPalette},
+		{"none", noColorPalette},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for name, glyph := range symbolsOf(tc.fn()) {
+				if glyph != want[name] {
+					t.Errorf("%s = %q, want %q — symbols must not vary by color mode",
+						name, glyph, want[name])
+				}
+			}
+		})
+	}
+}
+
+// The concrete vocabulary, pinned. Everywhere else in the codebase a
+// literal ✓ is a bug — this is the one place the characters are
+// spelled out, so that repointing a call site at the wrong field
+// (Palette.Active where Palette.Check was meant) still changes what
+// the user sees, and a test somewhere fails. Update deliberately.
+func TestDefaultSymbolVocabulary(t *testing.T) {
+	p := defaultPalette()
+	for _, tc := range []struct {
+		name      string
+		got, want string
+	}{
+		{"Check", p.Check, "✓"},
+		{"Cross", p.Cross, "✗"},
+		{"Active", p.Active, "●"},
+		{"Attention", p.Attention, "▲"},
+		{"Waiting", p.Waiting, "⧗"},
+		{"Unknown", p.Unknown, "?"},
+		{"Pending", p.Pending, "◦"},
+		{"Inactive", p.Inactive, "○"},
+		{"Arrow", p.Arrow, "→"},
+		{"Bullet", p.Bullet, "•"},
+		{"Dot", p.Dot, "·"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// countSymbolFields reports how many string-typed fields the palette
+// struct declares. Every one of them is a symbol — the struct's other
+// fields are all color.Color.
+func countSymbolFields(t *testing.T) int {
+	t.Helper()
+	ty := reflect.TypeOf(palette{})
+	n := 0
+	for i := range ty.NumField() {
+		if ty.Field(i).Type.Kind() == reflect.String {
+			n++
+		}
+	}
+	return n
 }
 
 func TestSpacerPrefix(t *testing.T) {
