@@ -14,12 +14,17 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Source-encoded glyphs and colors for the config tree.
+// Source-encoded glyphs for the config tree. These encode *where a
+// value came from*, an axis the state grammar doesn't cover, so they
+// stay local rather than joining the palette's symbol set.
+//
+// The env source is the exception: "this value was overridden from
+// the environment" is a genuine attention signal, so it borrows
+// ui.Palette.Attention at the call site instead of redeclaring ▲.
 const (
 	glyphDefault = "◻︎"
 	glyphGlobal  = "◼︎"
 	glyphProject = "◆"
-	glyphEnv     = "▲"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -308,7 +313,7 @@ func sourceGlyph(source string) (string, color.Color) {
 	case sourceProject:
 		return glyphProject, ui.Palette.Success
 	case sourceEnv:
-		return glyphEnv, ui.Palette.Warning
+		return ui.Palette.Attention, ui.Palette.Warning
 	default:
 		return glyphDefault, ui.Palette.Muted
 	}
@@ -343,11 +348,11 @@ func renderSourcesHint(cs *configSources, globalOnly bool) string {
 			if envCount != 1 {
 				label += "s"
 			}
-			parts = append(parts, glyphFor(ui.Palette.Warning, glyphEnv)+" "+labelStyle.Render(label))
+			parts = append(parts, glyphFor(ui.Palette.Warning, ui.Palette.Attention)+" "+labelStyle.Render(label))
 		}
 	}
 
-	sep := " " + sepStyle.Render("·") + " "
+	sep := " " + sepStyle.Render(ui.Palette.Dot) + " "
 	return "  " + strings.Join(parts, sep)
 }
 
@@ -675,7 +680,7 @@ func severityGlyph(s configIssueSeverity) (glyph string, glyphColor color.Color)
 	if s == configFail {
 		return ui.Palette.Cross, ui.Palette.Error
 	}
-	return "▲", ui.Palette.Warning
+	return ui.Palette.Attention, ui.Palette.Warning
 }
 
 // issueDetail returns the per-key tree-leaf value for an issue: a
