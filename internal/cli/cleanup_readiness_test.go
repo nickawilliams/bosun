@@ -5,8 +5,77 @@ import (
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
+
+// The readiness card is the only consumer of three severity glyphs,
+// and severity→glyph is the mapping a reader scans first. Assert each
+// tier renders its own shape, and that the worst finding drives the
+// card's own state.
+func TestBuildCleanupReadinessCardGlyphs(t *testing.T) {
+	cases := []struct {
+		name      string
+		severity  findingSeverity
+		wantGlyph string
+		wantState string // the card's leading state glyph
+	}{
+		{name: "block", severity: findingBlock, wantGlyph: ui.Palette.Cross, wantState: ui.Palette.Cross},
+		{name: "warn", severity: findingWarn, wantGlyph: ui.Palette.Attention, wantState: ui.Palette.Attention},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			card := buildCleanupReadinessCard(
+				[]repoCleanup{{
+					repo:     Repository{Name: "api"},
+					branch:   "main",
+					findings: []cleanupFinding{{severity: tc.severity, code: "x", message: "something"}},
+				}},
+				nil,
+			)
+			out := stripANSI(card.Render())
+			if !strings.Contains(out, tc.wantGlyph) {
+				t.Errorf("card = %q, want the %s glyph %q", out, tc.name, tc.wantGlyph)
+			}
+			if !strings.HasPrefix(strings.TrimLeft(out, " "), tc.wantState) {
+				t.Errorf("card leads with %q, want the state glyph %q", out, tc.wantState)
+			}
+		})
+	}
+
+	// A repo with no findings collapses to a single safe row, and the
+	// card as a whole reads as success.
+	t.Run("safe", func(t *testing.T) {
+		card := buildCleanupReadinessCard(
+			[]repoCleanup{{repo: Repository{Name: "api"}, branch: "main"}},
+			nil,
+		)
+		out := stripANSI(card.Render())
+		if !strings.Contains(out, ui.Palette.Check) {
+			t.Errorf("card = %q, want the check glyph %q", out, ui.Palette.Check)
+		}
+		if strings.Contains(out, ui.Palette.Cross) || strings.Contains(out, ui.Palette.Attention) {
+			t.Errorf("card = %q, want no block/warn glyphs for an all-safe set", out)
+		}
+	})
+
+	// Workspace findings render alongside repo rows and are labeled
+	// "workspace" rather than a repo name.
+	t.Run("workspace finding", func(t *testing.T) {
+		card := buildCleanupReadinessCard(
+			[]repoCleanup{{repo: Repository{Name: "api"}, branch: "main"}},
+			[]cleanupFinding{{severity: findingWarn, code: "stray", message: "stray files"}},
+		)
+		out := stripANSI(card.Render())
+		if !strings.Contains(out, "workspace") {
+			t.Errorf("card = %q, want a workspace row", out)
+		}
+		if !strings.Contains(out, ui.Palette.Attention) {
+			t.Errorf("card = %q, want the warn glyph %q", out, ui.Palette.Attention)
+		}
+	})
+}
 
 // TestClassifyRepo locks every row of the safety matrix. Each case
 // fabricates the probe state, calls classifyRepo, and asserts the

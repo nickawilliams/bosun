@@ -530,3 +530,104 @@ func stripANSI(s string) string {
 func isAlpha(c byte) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
+
+// The stepper is where the single-cell box-drawing invariant is
+// load-bearing at a distance: the elbow is positioned by multiplying
+// stepperSlotWidth, so if the connector's width ever drifts from the
+// constant, the label silently stops lining up under its dot. Assert
+// the two agree rather than trusting the comment on the constant.
+func TestStepperSlotWidthMatchesConnector(t *testing.T) {
+	// One dot plus the connector that follows it.
+	if got := len([]rune(stepperConnector)) + 1; got != stepperSlotWidth {
+		t.Errorf("dot + connector spans %d cells, but stepperSlotWidth is %d", got, stepperSlotWidth)
+	}
+}
+
+func TestRenderLifecycleStepper(t *testing.T) {
+	cases := []struct {
+		name      string
+		key       string
+		wantGlyph string // glyph expected at the active slot
+		wantIdx   int
+	}{
+		{name: "ready is the first slot", key: "ready", wantGlyph: ui.Palette.Active, wantIdx: 0},
+		{name: "in_progress", key: "in_progress", wantGlyph: ui.Palette.Active, wantIdx: 1},
+		// Blocked is a real column in the sprint-board model, but the
+		// work in it is negatively interrupted — so it alone renders
+		// ✗ where every other active slot renders ●.
+		{name: "blocked renders a cross", key: "blocked", wantGlyph: ui.Palette.Cross, wantIdx: 2},
+		{name: "review", key: "review", wantGlyph: ui.Palette.Active, wantIdx: 3},
+		{name: "done is the last slot", key: "done", wantGlyph: ui.Palette.Active, wantIdx: 6},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := stripANSI(renderLifecycleStepper(tc.key))
+			track, elbow, found := strings.Cut(out, "\n")
+			if !found {
+				t.Fatalf("stepper = %q, want a track line and an elbow line", out)
+			}
+
+			// The track is one glyph per slot joined by connectors, so
+			// splitting on the connector recovers the slots.
+			slots := strings.Split(track, stepperConnector)
+			if len(slots) != len(stepperSlotKeys) {
+				t.Fatalf("track has %d slots, want %d (%q)", len(slots), len(stepperSlotKeys), track)
+			}
+			for i, got := range slots {
+				want := ui.Palette.Inactive
+				if i == tc.wantIdx {
+					want = tc.wantGlyph
+				}
+				if got != want {
+					t.Errorf("slot %d = %q, want %q", i, got, want)
+				}
+			}
+
+			// The elbow's indent is what points the label at the
+			// active slot.
+			wantIndent := tc.wantIdx * stepperSlotWidth
+			if gotIndent := len(elbow) - len(strings.TrimLeft(elbow, " ")); gotIndent != wantIndent {
+				t.Errorf("elbow indent = %d, want %d (slot %d)", gotIndent, wantIndent, tc.wantIdx)
+			}
+			if !strings.HasPrefix(strings.TrimLeft(elbow, " "), stepperElbow) {
+				t.Errorf("elbow = %q, want it to start with %q", elbow, stepperElbow)
+			}
+		})
+	}
+}
+
+func TestRenderLifecycleStepperUnmapped(t *testing.T) {
+	out := stripANSI(renderLifecycleStepperUnmapped("Triaging"))
+	track, elbow, found := strings.Cut(out, "\n")
+	if !found {
+		t.Fatalf("stepper = %q, want a track line and an elbow line", out)
+	}
+
+	// No slot is filled — the row reads "we got something, we don't
+	// know where it sits."
+	slots := strings.Split(track, stepperConnector)
+	if len(slots) != len(stepperSlotKeys) {
+		t.Fatalf("track has %d slots, want %d", len(slots), len(stepperSlotKeys))
+	}
+	for i, got := range slots {
+		if got != ui.Palette.Inactive {
+			t.Errorf("slot %d = %q, want the inactive glyph %q", i, got, ui.Palette.Inactive)
+		}
+	}
+
+	// The elbow points at slot 0 and carries the raw status text.
+	if strings.HasPrefix(elbow, " ") {
+		t.Errorf("elbow = %q, want no indent (points at slot 0)", elbow)
+	}
+	if !strings.Contains(elbow, "Triaging") {
+		t.Errorf("elbow = %q, want it to carry the raw status text", elbow)
+	}
+
+	t.Run("empty status falls back to unknown", func(t *testing.T) {
+		_, elbow, _ := strings.Cut(stripANSI(renderLifecycleStepperUnmapped("")), "\n")
+		if !strings.Contains(elbow, "(unknown)") {
+			t.Errorf("elbow = %q, want it to contain %q", elbow, "(unknown)")
+		}
+	})
+}
