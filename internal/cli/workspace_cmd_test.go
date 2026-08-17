@@ -119,6 +119,7 @@ func TestWorkspaceReposAdd(t *testing.T) {
 	})
 }
 
+
 // TestWorkspaceDelete exercises `workspace delete`: the whole
 // workspace goes — worktree, branch, and the workspace directory.
 func TestWorkspaceDelete(t *testing.T) {

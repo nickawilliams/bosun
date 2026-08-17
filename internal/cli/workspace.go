@@ -107,7 +107,7 @@ func pickWorkspaceReposDiff(ctx context.Context, mgr *workspace.Manager, name st
 
 	if !isInteractive() {
 		return reposDiff{}, fmt.Errorf(
-			"no repositories specified (pass repository names or run interactively)",
+			"workspace repos requires a TTY; use `workspace repos add` or `workspace repos rm` for non-interactive use",
 		)
 	}
 
@@ -321,6 +321,7 @@ func newWorkspaceReposCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repos",
 		Short: "Manage repositories in a workspace",
+		Args:  cobra.NoArgs,
 		Annotations: map[string]string{
 			headerAnnotationTitle: "workspace repos",
 		},
