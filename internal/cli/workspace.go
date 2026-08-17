@@ -10,6 +10,7 @@ import (
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/ui"
+	git "github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -271,6 +272,101 @@ func argsToWorkspaceRepositories(names []string) ([]workspace.Repository, error)
 	return cliRepositoriesToWorkspaceRepositories(repositories), nil
 }
 
+// emitWorkspaceRemovalReadiness checks each repository status for
+// uncommitted or unpushed changes before a destructive plan is shown.
+// In interactive mode it renders a RunGroup card; in non-interactive
+// mode it collects issues and returns an error. When issues are found
+// and force is true a Dialog soft-confirms; when force is false the
+// function hard-blocks with an error.
+func emitWorkspaceRemovalReadiness(ctx context.Context, statuses []workspace.RepositoryStatus, force bool) error {
+	g := git.New()
+	if len(statuses) == 0 {
+		return nil
+	}
+
+	type result struct {
+		name    string
+		caveats []string
+	}
+	check := func(s workspace.RepositoryStatus) result {
+		r := result{name: s.Name}
+		if s.Dirty {
+			r.caveats = append(r.caveats, "uncommitted changes")
+		}
+		// Mirrors workspace.RemoveRepositories' gate exactly: only the
+		// remote-tracking case counts. Without a remote counterpart
+		// Ahead measures against the default branch, which reads
+		// nonzero for every squash-merged branch. Diverging from the
+		// manager here would let this card clear a removal the manager
+		// then rejects after the plan was already approved.
+		if s.Branch != "" && s.Branch != "(unknown)" {
+			sync, err := g.GetBranchSync(ctx, s.Path, s.Branch)
+			if err == nil && sync.HasRemote && sync.Ahead > 0 {
+				r.caveats = append(r.caveats, fmt.Sprintf("%d unpushed commit(s)", sync.Ahead))
+			}
+		}
+		return r
+	}
+
+	if !isInteractive() {
+		var issues []string
+		for _, s := range statuses {
+			r := check(s)
+			if len(r.caveats) > 0 {
+				issues = append(issues, fmt.Sprintf("%s (%s)", r.name, strings.Join(r.caveats, ", ")))
+			}
+		}
+		if len(issues) > 0 && !force {
+			return fmt.Errorf(
+				"repositories have uncommitted or unpushed changes: %s (use --force to override)",
+				strings.Join(issues, "; "),
+			)
+		}
+		return nil
+	}
+
+	results := make([]result, len(statuses))
+	ui.RunGroup("removal readiness", func(grp ui.Reporter) {
+		for i, s := range statuses {
+			_ = grp.Spinner(ui.PreserveCase(s.Name), func() error {
+				results[i] = check(s)
+				return nil
+			})
+			if len(results[i].caveats) > 0 {
+				grp.FailValue(ui.PreserveCase(s.Name), strings.Join(results[i].caveats, ", "))
+			} else {
+				grp.Complete(ui.PreserveCase(s.Name))
+			}
+		}
+	})
+
+	var anyIssue bool
+	for _, r := range results {
+		if len(r.caveats) > 0 {
+			anyIssue = true
+			break
+		}
+	}
+	if !anyIssue {
+		return nil
+	}
+	if !force {
+		return fmt.Errorf(
+			"repositories have uncommitted or unpushed changes; re-run with --force to override",
+		)
+	}
+	confirmed, err := NewDialog("Warning").
+		Description("Repositories have uncommitted or unpushed changes, remove anyway?").
+		Affirmative("Continue").
+		Negative("Cancel").
+		Default(false).
+		Show()
+	if err != nil || !confirmed {
+		return ErrCancelled
+	}
+	return nil
+}
+
 func newWorkspaceCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <name> <repositories...>",
@@ -374,6 +470,21 @@ func newWorkspaceReposCmd() *cobra.Command {
 				for _, s := range statuses {
 					branchOf[s.Name] = s.Branch
 				}
+
+				rmSet := make(map[string]bool, len(diff.toRm))
+				for _, n := range diff.toRm {
+					rmSet[n] = true
+				}
+				var targets []workspace.RepositoryStatus
+				for _, s := range statuses {
+					if rmSet[s.Name] {
+						targets = append(targets, s)
+					}
+				}
+				if err := emitWorkspaceRemovalReadiness(ctx, targets, force); err != nil {
+					return err
+				}
+
 				for _, r := range resolved {
 					plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
 					if b := branchOf[r.Name]; b != "" && b != "(unknown)" {
@@ -563,6 +674,20 @@ func newWorkspaceReposRmCmd() *cobra.Command {
 				branchOf[s.Name] = s.Branch
 			}
 
+			targetSet := make(map[string]bool, len(repositoryNames))
+			for _, n := range repositoryNames {
+				targetSet[n] = true
+			}
+			var targets []workspace.RepositoryStatus
+			for _, s := range statuses {
+				if targetSet[s.Name] {
+					targets = append(targets, s)
+				}
+			}
+			if err := emitWorkspaceRemovalReadiness(ctx, targets, force); err != nil {
+				return err
+			}
+
 			plan := ui.NewPlan()
 			for _, r := range repositories {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", r.Name, name)
@@ -660,6 +785,11 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			if err := emitWorkspaceRemovalReadiness(cmd.Context(), statuses, force); err != nil {
+				return err
+			}
+
 			plan := ui.NewPlan()
 			for _, s := range statuses {
 				plan.Add(ui.PlanDestroy, "worktree", "repo", s.Name, name)

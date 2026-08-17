@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -142,6 +143,117 @@ func TestWorkspaceRepos(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "unknown command") {
 			t.Errorf("err = %q, want unknown command error", err)
+		}
+	})
+}
+
+// dirty makes the worktree at path report as modified by dropping an
+// untracked file into it — `git status --porcelain` is non-empty, which
+// is what workspace.Status reads for RepositoryStatus.Dirty.
+func dirty(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(path, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatalf("dirtying %s: %v", path, err)
+	}
+}
+
+// TestWorkspaceRemovalReadiness locks the pre-plan safety gate shared by
+// the three destructive commands: a repo with uncommitted changes stops
+// the run BEFORE the plan card is shown, so --approve alone can't get
+// past it. The gate is what makes the plan trustworthy — the plan is
+// only ever displayed for a removal that's already been vetted.
+func TestWorkspaceRemovalReadiness(t *testing.T) {
+	t.Run("repos rm blocks on a dirty repo", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-h", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-h", "api")
+		dirty(t, wt)
+
+		err := h.Run("workspace", "repos", "rm", "api", "--workspace", "ws-h", "--approve")
+		if err == nil {
+			t.Fatal("expected the readiness gate to block, got nil")
+		}
+		if !strings.Contains(err.Error(), "--force") {
+			t.Errorf("err = %q, want the --force override called out", err)
+		}
+		// The gate fired before anything was destroyed.
+		if !api.WorktreeExists(wt) {
+			t.Errorf("worktree destroyed despite the readiness block")
+		}
+		if !api.HasBranch("ws-h") {
+			t.Errorf("branch destroyed despite the readiness block")
+		}
+	})
+
+	t.Run("delete blocks on a dirty repo", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-i", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-i", "api")
+		dirty(t, wt)
+
+		err := h.Run("workspace", "delete", "ws-i", "--approve")
+		if err == nil {
+			t.Fatal("expected the readiness gate to block, got nil")
+		}
+		if !strings.Contains(err.Error(), "--force") {
+			t.Errorf("err = %q, want the --force override called out", err)
+		}
+		if !api.WorktreeExists(wt) {
+			t.Errorf("worktree destroyed despite the readiness block")
+		}
+	})
+
+	t.Run("--force soft-confirms and cancelling preserves the workspace", func(t *testing.T) {
+		// With --force the gate downgrades to a Dialog rather than a
+		// hard block. Answering "n" cancels — --force buys a prompt,
+		// not an unconditional removal.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-j", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-j", "api")
+		dirty(t, wt)
+		h.Type("n")
+
+		err := h.Run("workspace", "delete", "ws-j", "--force", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("err = %v, want cancellation", err)
+		}
+		if !api.WorktreeExists(wt) {
+			t.Errorf("worktree destroyed despite the declined confirmation")
+		}
+	})
+
+	t.Run("--force with confirmation removes the dirty repo", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-k", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-k", "api")
+		dirty(t, wt)
+		h.Type("y")
+
+		if err := h.Run("workspace", "delete", "ws-k", "--force", "--approve"); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if api.WorktreeExists(wt) {
+			t.Errorf("worktree survived the confirmed force delete")
 		}
 	})
 }
