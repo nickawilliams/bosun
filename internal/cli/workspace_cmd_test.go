@@ -120,14 +120,153 @@ func TestWorkspaceReposAdd(t *testing.T) {
 	})
 }
 
-// TestWorkspaceRepos exercises the `workspace repos` parent command
-// (interactive path). The form-driven add/remove flow is untestable
-// via the harness (Interactive() always returns true for the injected
-// reader, so the form blocks — see ui.Interactive). The test here
-// covers the pre-form guard: unknown subcommand names (including bare
-// repo names passed by mistake) are rejected by Cobra before the RunE
-// runs, since the parent only accepts the registered subcommands.
+// multiSelect encodes a run of keystrokes for a huh multi-select: each
+// step is a raw key ("\x1b[B" = down, " " = toggle) and the run is
+// terminated with enter. The whole run is one Type chunk because a
+// multi-select is a single form field — splitting it would race huh's
+// field transition (see Harness.Type).
+func multiSelect(keys ...string) string {
+	return strings.Join(keys, "") + "\r"
+}
+
+const (
+	keyDown   = "\x1b[B"
+	keyToggle = " "
+)
+
+// TestWorkspaceRepos exercises the `workspace repos` parent command,
+// including the interactive multi-select that drives the combined
+// add+remove pass. The form is driven with raw keystrokes the same way
+// the confirmation prompts are.
 func TestWorkspaceRepos(t *testing.T) {
+	t.Run("selecting a new repo adds it", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-l", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		// api is pre-checked; move to web and check it.
+		h.Type(multiSelect(keyDown, keyToggle))
+		h.Type("y")
+
+		if err := h.Run("workspace", "repos", "--workspace", "ws-l"); err != nil {
+			t.Fatalf("repos: %v", err)
+		}
+		if !web.WorktreeExists(h.WorktreePath("ws-l", "web")) {
+			t.Errorf("web worktree not created after selecting it")
+		}
+	})
+
+	t.Run("deselecting a member removes it and its branch", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-m", "api", "web"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		// Both pre-checked; move to web and uncheck it.
+		h.Type(multiSelect(keyDown, keyToggle))
+		h.Type("y")
+
+		if err := h.Run("workspace", "repos", "--workspace", "ws-m"); err != nil {
+			t.Fatalf("repos: %v", err)
+		}
+		if web.WorktreeExists(h.WorktreePath("ws-m", "web")) {
+			t.Errorf("web worktree survived deselection")
+		}
+		if web.HasBranch("ws-m") {
+			t.Errorf("web branch survived deselection")
+		}
+		// The repo left checked is untouched.
+		if !api.WorktreeExists(h.WorktreePath("ws-m", "api")) {
+			t.Errorf("api worktree removed despite staying selected")
+		}
+	})
+
+	t.Run("one pass both adds and removes", func(t *testing.T) {
+		// The whole point of the unified picker: a single confirmation
+		// covers an add and a remove computed from one selection delta.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-n", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		// Uncheck api, move down, check web.
+		h.Type(multiSelect(keyToggle, keyDown, keyToggle))
+		h.Type("y")
+
+		if err := h.Run("workspace", "repos", "--workspace", "ws-n"); err != nil {
+			t.Fatalf("repos: %v", err)
+		}
+		if api.WorktreeExists(h.WorktreePath("ws-n", "api")) {
+			t.Errorf("api worktree survived deselection")
+		}
+		if !web.WorktreeExists(h.WorktreePath("ws-n", "web")) {
+			t.Errorf("web worktree not created after selection")
+		}
+	})
+
+	t.Run("an unchanged selection makes no plan", func(t *testing.T) {
+		// Accepting the pre-checked set is a no-op: the command returns
+		// before building a plan, so no confirmation is ever requested.
+		// Feeding no confirmation answer proves it — a plan card here
+		// would starve for input and fail the run.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+		h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-o", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		h.Type(multiSelect())
+
+		if err := h.Run("workspace", "repos", "--workspace", "ws-o"); err != nil {
+			t.Fatalf("repos: %v", err)
+		}
+		if !api.WorktreeExists(h.WorktreePath("ws-o", "api")) {
+			t.Errorf("api worktree removed by a no-op selection")
+		}
+	})
+
+	t.Run("deselecting a dirty repo hits the readiness gate", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		web := h.Workspace.AddRepo("web")
+		h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-q", "api", "web"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-q", "web")
+		dirty(t, wt)
+
+		h.Type(multiSelect(keyDown, keyToggle))
+
+		err := h.Run("workspace", "repos", "--workspace", "ws-q")
+		if err == nil {
+			t.Fatal("expected the readiness gate to block, got nil")
+		}
+		if !strings.Contains(err.Error(), "--force") {
+			t.Errorf("err = %q, want the --force override called out", err)
+		}
+		if !web.WorktreeExists(wt) {
+			t.Errorf("worktree destroyed despite the readiness block")
+		}
+	})
+
 	t.Run("rejects unknown subcommands", func(t *testing.T) {
 		h := testharness.New(t)
 		h.Workspace.WriteConfig(workspaceConfig)
@@ -210,6 +349,60 @@ func TestWorkspaceRemovalReadiness(t *testing.T) {
 		}
 		if !api.WorktreeExists(wt) {
 			t.Errorf("worktree destroyed despite the readiness block")
+		}
+	})
+
+	t.Run("blocks on a pushed branch with local commits ahead", func(t *testing.T) {
+		// The other half of the gate: a clean tree can still hold work
+		// that only exists locally. Because removal force-deletes the
+		// branch, unpushed commits are as unrecoverable as a dirty tree.
+		// Only the remote-tracking case counts — see the comment on
+		// emitWorkspaceRemovalReadiness.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-r", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-r", "api")
+
+		// Push the branch so it has a remote counterpart, then commit
+		// locally so it sits ahead of that counterpart.
+		testharness.Git(t, wt, "push", "-u", "origin", "ws-r")
+		testharness.Git(t, wt, "commit", "--allow-empty", "-m", "local only")
+
+		err := h.Run("workspace", "repos", "rm", "api", "--workspace", "ws-r", "--approve")
+		if err == nil {
+			t.Fatal("expected the readiness gate to block, got nil")
+		}
+		if !strings.Contains(err.Error(), "--force") {
+			t.Errorf("err = %q, want the --force override called out", err)
+		}
+		if !api.WorktreeExists(wt) {
+			t.Errorf("worktree destroyed despite unpushed commits")
+		}
+	})
+
+	t.Run("a fully pushed branch passes the gate", func(t *testing.T) {
+		// The negative control for the case above: same remote-tracking
+		// setup, nothing left behind, so removal proceeds untouched.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+
+		if err := h.Run("workspace", "create", "ws-s", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		wt := h.WorktreePath("ws-s", "api")
+		testharness.Git(t, wt, "commit", "--allow-empty", "-m", "work")
+		testharness.Git(t, wt, "push", "-u", "origin", "ws-s")
+
+		if err := h.Run("workspace", "repos", "rm", "api", "--workspace", "ws-s", "--approve"); err != nil {
+			t.Fatalf("rm: %v", err)
+		}
+		if api.WorktreeExists(wt) {
+			t.Errorf("worktree survived removal of a fully pushed branch")
 		}
 	})
 
