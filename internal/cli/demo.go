@@ -151,11 +151,47 @@ func demoPalette() {
 		swatch("LogoTop", ui.Palette.LogoTop),
 		swatch("LogoBottom", ui.Palette.LogoBottom),
 	)...)
-	body = append(body, "", header.Render("Symbols"))
-	body = append(body, strings.Join([]string{
-		ui.Palette.Check, ui.Palette.Cross, ui.Palette.Arrow,
-		ui.Palette.Bullet, ui.Palette.Dot,
-	}, "  "))
+	// Symbols are named rather than bare so the card doubles as the
+	// lookup table for "which field renders which glyph" — the state
+	// row is paired with the color each shape normally carries (see
+	// state_grammar.go), the text row is uncolored punctuation.
+	symbol := func(name, glyph string, col color.Color) string {
+		return fmt.Sprintf("%s %-11s",
+			lipgloss.NewStyle().Foreground(col).Render(glyph), name)
+	}
+	body = append(body, "", header.Render("Symbols — State"))
+	body = append(body, rows(
+		symbol("Check", ui.Palette.Check, ui.Palette.Success),
+		symbol("Cross", ui.Palette.Cross, ui.Palette.Error),
+		symbol("Active", ui.Palette.Active, ui.Palette.Primary),
+		symbol("Attention", ui.Palette.Attention, ui.Palette.Warning),
+		symbol("Waiting", ui.Palette.Waiting, ui.Palette.Info),
+		symbol("Unknown", ui.Palette.Unknown, ui.Palette.Accent),
+		symbol("Pending", ui.Palette.Pending, ui.Palette.Muted),
+		symbol("Inactive", ui.Palette.Inactive, ui.Palette.Muted),
+	)...)
+	body = append(body, "", header.Render("Symbols — Text"))
+	body = append(body, rows(
+		symbol("Arrow", ui.Palette.Arrow, ui.Palette.NormalFg),
+		symbol("Bullet", ui.Palette.Bullet, ui.Palette.NormalFg),
+		symbol("Dot", ui.Palette.Dot, ui.Palette.NormalFg),
+	)...)
+
+	// Box-drawing chrome is fixed, not themeable (see ui/glyphs.go) —
+	// shown here because the palette card is the glyph reference
+	// surface, and a reader looking for ├ shouldn't conclude it's
+	// missing.
+	body = append(body, "", header.Render("Box Drawing — fixed, not themeable"))
+	body = append(body, rows(
+		symbol("Vertical", ui.BoxVertical, ui.Palette.Recessed),
+		symbol("Horizontal", ui.BoxHorizontal, ui.Palette.Recessed),
+		symbol("CornerTL", ui.BoxCornerTL, ui.Palette.Recessed),
+		symbol("CornerTR", ui.BoxCornerTR, ui.Palette.Recessed),
+		symbol("CornerBL", ui.BoxCornerBL, ui.Palette.Recessed),
+		symbol("CornerBR", ui.BoxCornerBR, ui.Palette.Recessed),
+		symbol("Tee", ui.BoxTee, ui.Palette.Recessed),
+		symbol("Elbow", ui.BoxElbow, ui.Palette.Recessed),
+	)...)
 
 	ui.NewCard(ui.CardInfo, "palette").Raw(body...).Print()
 }
