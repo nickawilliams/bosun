@@ -21,11 +21,6 @@ type TreeNode struct {
 	Children   []*TreeNode // non-empty for group/branch nodes
 }
 
-const (
-	// TreeGlyphGroup is the default glyph for group/branch nodes.
-	TreeGlyphGroup = "○"
-)
-
 // Leaf creates a leaf node with a glyph, color, key, and value.
 func Leaf(glyph string, glyphColor color.Color, key, value string) *TreeNode {
 	return &TreeNode{
@@ -40,7 +35,7 @@ func Leaf(glyph string, glyphColor color.Color, key, value string) *TreeNode {
 // and optional children.
 func Group(key string, children ...*TreeNode) *TreeNode {
 	return &TreeNode{
-		Glyph:      TreeGlyphGroup,
+		Glyph:      Palette.Inactive,
 		GlyphColor: Palette.Muted,
 		Key:        key,
 		Children:   children,
@@ -119,16 +114,6 @@ func (t *Tree) Render() string {
 func (t *Tree) Print() {
 	fmt.Print(spacerPrefix() + t.Render())
 }
-
-const (
-	treeBranch = "├── "
-	treeLast   = "└── "
-	treeDown   = "│   "
-	treeBlank  = "    "
-
-	// Each nesting level adds this many visual columns of indentation.
-	treeIndentWidth = 4
-)
 
 // maxEffectiveKeyWidth walks the tree to find the widest
 // (depth * indentWidth + keyLen) among all leaf nodes.

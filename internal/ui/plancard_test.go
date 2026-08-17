@@ -174,13 +174,13 @@ func TestPlanCard_Glyph(t *testing.T) {
 		state    PlanCardState
 		wantRune string // the raw glyph character embedded in styled output
 	}{
-		{PlanProposed, cardGlyphInput},
-		{PlanVerified, cardGlyphSuccess},
-		{PlanApplying, cardGlyphPending},
-		{PlanSuccess, cardGlyphSuccess},
-		{PlanPartial, cardGlyphSkipped},
-		{PlanFailure, cardGlyphFailed},
-		{PlanCancelled, cardGlyphSkipped},
+		{PlanProposed, Palette.Unknown},
+		{PlanVerified, Palette.Check},
+		{PlanApplying, Palette.Pending},
+		{PlanSuccess, Palette.Check},
+		{PlanPartial, Palette.Attention},
+		{PlanFailure, Palette.Cross},
+		{PlanCancelled, Palette.Attention},
 	}
 
 	for _, tt := range tests {
@@ -350,8 +350,8 @@ func TestPlan_SkippedRowRendering(t *testing.T) {
 	if !strings.Contains(after, "(skipped)") {
 		t.Errorf("marked row = %q, want it to say it was skipped", after)
 	}
-	if !strings.Contains(after, cardGlyphSkipped) {
-		t.Errorf("marked row = %q, want the skipped glyph %q", after, cardGlyphSkipped)
+	if !strings.Contains(after, Palette.Attention) {
+		t.Errorf("marked row = %q, want the skipped glyph %q", after, Palette.Attention)
 	}
 	if strings.Contains(after, "~") {
 		t.Errorf("marked row = %q, still shows the modify symbol it never applied", after)
