@@ -143,12 +143,19 @@ func ClearSpacer() {
 // BeginTimeline prints a leading blank line to separate the
 // timeline from the shell prompt above.
 func BeginTimeline() {
+	DiscardOpenCard()
 	fmt.Println()
 }
 
 // EndTimeline prints a trailing blank line to close the visual
 // timeline with clean whitespace.
+//
+// Deliberately does NOT rewrite the open card: leaving the last card
+// spineless is what terminates the timeline visually. It only forgets
+// the record, so a later run can't reach back over the blank line
+// into output that is no longer the tail.
 func EndTimeline() {
+	DiscardOpenCard()
 	fmt.Println()
 }
 
@@ -178,7 +185,17 @@ func Divider() {
 // pending, then re-arms the flag so the next consumer gets one too.
 // Returns "" on the first call (before any output has set the flag).
 // Tight cards call ClearSpacer() to suppress the next spacer.
+//
+// It also closes the timeline's open card, writing the rewrite to
+// stdout before returning. Every path that appends to the timeline
+// calls this immediately before printing, which makes it the one
+// choke point where "something is about to follow the last card" is
+// known — hooking the swap here means a new emitter can't forget it.
+// The write lands ahead of the returned prefix because callers print
+// what they get back; a caller that holds the prefix and prints other
+// output first must call FinalizeOpenCard itself instead.
 func spacerPrefix() string {
+	closeOpenCard()
 	if !needsSpacer {
 		needsSpacer = true // arm for next time
 		return ""
