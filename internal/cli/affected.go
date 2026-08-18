@@ -894,6 +894,11 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		}
 		ui.ClearSpacer()
 		buildServicesCard(sources, detFails, withPRs).Print()
+	} else {
+		// Nothing took the region over, so the card the final frame
+		// painted is the timeline's tail. Record it or its rows keep a
+		// blank gutter while the spine resumes on the cards below.
+		ui.RecordOpenCard(buildServicesCard(sources, detFails, withPRs))
 	}
 
 	if len(overrides) == 0 {

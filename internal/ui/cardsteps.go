@@ -85,11 +85,13 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 		rendered := prefix + final.Render()
 		fmt.Print(rendered)
 		lines := strings.Count(rendered, "\n")
+		rec := recordCard(final)
 		return func() {
 			if lines > 0 {
 				fmt.Printf("\x1b[%dF\x1b[J", lines)
 			}
 			needsSpacer = prevSpacer
+			discardRecord(rec)
 		}, nil
 	}
 
@@ -125,6 +127,8 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	close(quit)
 
 	if stepErr != nil {
+		// The failed step's card is the program's final frame.
+		recordCard(steps[failedStepIndex(steps)].Card)
 		return nil, stepErr
 	}
 
@@ -137,12 +141,29 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	// the rewind from the same render.
 	rendered := successor()
 	totalLines := strings.Count(prefix+rendered.Render(), "\n")
+	rec := recordCard(rendered)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
+		discardRecord(rec)
 	}, nil
+}
+
+// failedStepIndex returns the index of the step left on screen after a
+// halted run: the first card the model flipped out of CardRunning. The
+// model owns that transition, so reading the states back is how the
+// caller finds the same card without threading the index out of
+// BubbleTea (both exit paths — the interactive model and the
+// non-interactive fallback — set exactly one).
+func failedStepIndex(steps []CardStep) int {
+	for i, s := range steps {
+		if s.Card.state != CardRunning {
+			return i
+		}
+	}
+	return len(steps) - 1
 }
 
 // RunCardStepsInto is RunCardSteps with a raw final frame: on success

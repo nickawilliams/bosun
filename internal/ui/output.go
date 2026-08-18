@@ -127,8 +127,11 @@ func SuccessLine(content string) {
 	fmt.Printf(" %s  %s\n", glyph, content)
 }
 
-// Bold prints bold text.
+// Bold prints bold text. Not a card and not on the timeline grid, so
+// it finalizes the open card first: without that, the next card's
+// rewrite would reach back over this line and erase it.
 func Bold(msg string, args ...any) {
+	FinalizeOpenCard()
 	text := fmt.Sprintf(msg, args...)
 	fmt.Println(boldStyle.Render(text))
 }

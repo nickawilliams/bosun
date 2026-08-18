@@ -92,9 +92,16 @@ func (pc *PlanCard) SetResults(succeeded, failed, skipped int) {
 	pc.skipped = skipped
 }
 
-// Render returns the card as a styled string.
+// Render returns the card as a styled string in open form (no spine
+// on its rows) — see timeline.go.
 func (pc *PlanCard) Render() string {
 	return pc.renderWithGlyph(pc.glyph())
+}
+
+// renderContinuing returns the card with the timeline spine restored,
+// the form the timeline rewrites it into once a successor prints.
+func (pc *PlanCard) renderContinuing() string {
+	return pc.renderFormWithGlyph(pc.glyph(), formContinuing)
 }
 
 // Print writes the card to stdout. Suppressed in raw mode.
@@ -102,32 +109,43 @@ func (pc *PlanCard) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(spacerPrefix() + pc.Render())
+	rendered := pc.Render()
+	fmt.Print(spacerPrefix() + rendered)
+	recordOpenCard(rendered, pc.renderContinuing())
 }
 
 // PrintRewindable writes the card to stdout and returns a function that
 // erases it via ANSI cursor movement.
 func (pc *PlanCard) PrintRewindable() func() {
 	prev := needsSpacer
-	rendered := spacerPrefix() + pc.Render()
+	card := pc.Render()
+	rendered := spacerPrefix() + card
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
+	rec := recordOpenCard(card, pc.renderContinuing())
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
 		needsSpacer = prev
+		discardRecord(rec)
 	}
 }
 
 // renderWithGlyph renders the card with a custom glyph string (used
-// by the BubbleTea spinner model to inject animated frames). Builds
-// a Card with one Item per plan row so PlanCard renders through the
-// same primitive as status repo cards and Plan.Render().
+// by the BubbleTea spinner model to inject animated frames) in open
+// form — an animating card is always the timeline's tail.
 func (pc *PlanCard) renderWithGlyph(glyph string) string {
+	return pc.renderFormWithGlyph(glyph, formOpen)
+}
+
+// renderFormWithGlyph builds a Card with one Item per plan row so
+// PlanCard renders through the same primitive as status repo cards
+// and Plan.Render().
+func (pc *PlanCard) renderFormWithGlyph(glyph string, form timelineForm) string {
 	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
 	pc.plan.AppendItemsToCard(card)
-	return card.renderWithGlyph(glyph)
+	return card.renderStyled(glyph, strings.Repeat(" ", GlyphGap), form)
 }
 
 // titleWord returns the title word for the current state. The
@@ -309,6 +327,7 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 	// BubbleTea's final View() already rendered the finalized plan
 	// card in place (state set in Update's planApplyDoneMsg handler).
 	m := model.(planCardSpinnerModel)
+	recordOpenCard(pc.Render(), pc.renderContinuing())
 	return m.err
 }
 

@@ -144,15 +144,26 @@ func (p *Plan) HasFailures() bool {
 }
 
 // Render returns the plan as a styled string for display in the
-// timeline. Builds a Card internally so plan rows render at the
-// same depth as Card.Item rows in other cards (status, etc.).
+// timeline, in open form. Builds a Card internally so plan rows
+// render at the same depth as Card.Item rows in other cards (status,
+// etc.).
 func (p *Plan) Render() string {
+	return p.renderForm(formOpen)
+}
+
+// renderContinuing returns the plan with the timeline spine restored
+// — the form the timeline rewrites it into once a successor prints.
+func (p *Plan) renderContinuing() string {
+	return p.renderForm(formContinuing)
+}
+
+func (p *Plan) renderForm(form timelineForm) string {
 	if len(p.items) == 0 {
 		return ""
 	}
 	card := NewCard(CardInfo, "Plan").Value(p.Summary())
 	p.AppendItemsToCard(card)
-	return card.Render()
+	return card.renderForm(form)
 }
 
 // AppendItemsToCard adds one Card.Item row per plan item to the
@@ -171,21 +182,26 @@ func (p *Plan) AppendItemsToCard(c *Card) *Card {
 
 // Print writes the plan to stdout.
 func (p *Plan) Print() {
-	fmt.Print(spacerPrefix() + p.Render())
+	rendered := p.Render()
+	fmt.Print(spacerPrefix() + rendered)
+	recordOpenCard(rendered, p.renderContinuing())
 }
 
 // PrintRewindable writes the plan to stdout and returns a function that
 // erases it (same pattern as Card.PrintRewindable).
 func (p *Plan) PrintRewindable() func() {
 	prev := needsSpacer
-	rendered := spacerPrefix() + p.Render()
+	plan := p.Render()
+	rendered := spacerPrefix() + plan
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
+	rec := recordOpenCard(plan, p.renderContinuing())
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
 		needsSpacer = prev
+		discardRecord(rec)
 	}
 }
 
