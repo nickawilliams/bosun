@@ -10,6 +10,10 @@ import (
 )
 
 func printCaptainArt() {
+	// Raw rows, not cards — so the timeline's open/continuing swap
+	// doesn't fire on its own. Restore the spine on whatever is above
+	// before painting over the rows below it.
+	ui.FinalizeOpenCard()
 	conn := lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render(ui.BoxVertical)
 	style := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	for _, line := range captainArt {

@@ -261,8 +261,15 @@ func buildForm(fields []huh.Field) *huh.Form {
 // for any wrapping rewind.
 func emitFormPrologue(fields []huh.Field) int {
 	if len(fields) > 1 {
+		// This branch writes to stdout without going through the
+		// spacer prefix, so the timeline's open-card swap doesn't fire
+		// on its own. Do it explicitly: the form is about to paint
+		// below the card, and a later rewrite would reach back over
+		// live form content. (The single-field branch gets this from
+		// FlushSpacer.)
+		ui.FinalizeOpenCard()
 		ui.ClearSpacer()
-		_, _ = fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│"))
+		_, _ = fmt.Fprintln(ui.Output(), " "+lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render(ui.BoxVertical))
 		ui.RequestSpacer()
 		return 1
 	}
