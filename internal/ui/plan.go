@@ -184,7 +184,7 @@ func (p *Plan) AppendItemsToCard(c *Card) *Card {
 func (p *Plan) Print() {
 	rendered := p.Render()
 	fmt.Print(spacerPrefix() + rendered)
-	recordOpenCard(rendered, p.renderContinuing)
+	recordOpenCard(rendered, p.renderContinuing())
 }
 
 // PrintRewindable writes the plan to stdout and returns a function that
@@ -195,13 +195,13 @@ func (p *Plan) PrintRewindable() func() {
 	rendered := spacerPrefix() + plan
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
-	recordOpenCard(plan, p.renderContinuing)
+	rec := recordOpenCard(plan, p.renderContinuing())
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
 		needsSpacer = prev
-		DiscardOpenCard()
+		discardRecord(rec)
 	}
 }
 

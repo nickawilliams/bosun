@@ -111,7 +111,7 @@ func (pc *PlanCard) Print() {
 	}
 	rendered := pc.Render()
 	fmt.Print(spacerPrefix() + rendered)
-	recordOpenCard(rendered, pc.renderContinuing)
+	recordOpenCard(rendered, pc.renderContinuing())
 }
 
 // PrintRewindable writes the card to stdout and returns a function that
@@ -122,13 +122,13 @@ func (pc *PlanCard) PrintRewindable() func() {
 	rendered := spacerPrefix() + card
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
-	recordOpenCard(card, pc.renderContinuing)
+	rec := recordOpenCard(card, pc.renderContinuing())
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
 		needsSpacer = prev
-		DiscardOpenCard()
+		discardRecord(rec)
 	}
 }
 
@@ -327,7 +327,7 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 	// BubbleTea's final View() already rendered the finalized plan
 	// card in place (state set in Update's planApplyDoneMsg handler).
 	m := model.(planCardSpinnerModel)
-	recordOpenCard(pc.Render(), pc.renderContinuing)
+	recordOpenCard(pc.Render(), pc.renderContinuing())
 	return m.err
 }
 

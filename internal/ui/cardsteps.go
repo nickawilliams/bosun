@@ -85,13 +85,13 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 		rendered := prefix + final.Render()
 		fmt.Print(rendered)
 		lines := strings.Count(rendered, "\n")
-		recordCard(final)
+		rec := recordCard(final)
 		return func() {
 			if lines > 0 {
 				fmt.Printf("\x1b[%dF\x1b[J", lines)
 			}
 			needsSpacer = prevSpacer
-			DiscardOpenCard()
+			discardRecord(rec)
 		}, nil
 	}
 
@@ -141,13 +141,13 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	// the rewind from the same render.
 	rendered := successor()
 	totalLines := strings.Count(prefix+rendered.Render(), "\n")
-	recordCard(rendered)
+	rec := recordCard(rendered)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
-		DiscardOpenCard()
+		discardRecord(rec)
 	}, nil
 }
 

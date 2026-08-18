@@ -190,7 +190,9 @@ func Divider() {
 // stdout before returning. Every path that appends to the timeline
 // calls this immediately before printing, which makes it the one
 // choke point where "something is about to follow the last card" is
-// known — hooking the swap here means a new emitter can't forget it.
+// known — hooking the swap here means a new emitter can't forget to
+// restore the previous card's spine. It does NOT record the emitter's
+// own output; that stays each caller's job (see recordOpenCard).
 // The write lands ahead of the returned prefix because callers print
 // what they get back; a caller that holds the prefix and prints other
 // output first must call FinalizeOpenCard itself instead.

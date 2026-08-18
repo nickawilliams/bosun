@@ -432,7 +432,7 @@ func (c *Card) Print() {
 	if c.tight {
 		ClearSpacer()
 	}
-	recordOpenCard(rendered, c.renderContinuing)
+	recordOpenCard(rendered, c.renderContinuing())
 }
 
 // EmitToReporter routes the card's completion state through the
@@ -496,7 +496,7 @@ func (c *Card) PrintRewindable() func() {
 	if c.tight {
 		ClearSpacer()
 	}
-	recordOpenCard(card, c.renderContinuing)
+	rec := recordOpenCard(card, c.renderContinuing())
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
@@ -504,7 +504,7 @@ func (c *Card) PrintRewindable() func() {
 		needsSpacer = prev
 		// The block this record pointed at no longer exists; rewriting
 		// it would move the cursor over live content above.
-		DiscardOpenCard()
+		discardRecord(rec)
 	}
 }
 
@@ -513,8 +513,8 @@ func (c *Card) PrintRewindable() func() {
 // some route other than Print — most often as a BubbleTea program's
 // final frame, which paints the card but leaves the timeline none the
 // wiser.
-func recordCard(c *Card) {
-	recordOpenCard(c.Render(), c.renderContinuing)
+func recordCard(c *Card) *openCardRecord {
+	return recordOpenCard(c.Render(), c.renderContinuing())
 }
 
 // GlyphSlot is a placeholder for a body-item glyph that should track
@@ -1116,6 +1116,10 @@ func RunCard(title string, fn func() error) error {
 //
 // On failure, behaves like RunCard — the running card is finalized
 // with the failure glyph and the error becomes its subtitle.
+//
+// successCard MUST be pure with respect to repeated calls: it is
+// evaluated once to paint the final frame and once more to record
+// what the timeline is showing. See finalFrameCard.
 func RunCardThen(title string, fn func() error, successCard func() *Card) error {
 	return runCardWithFinalizer(NewCard(CardRunning, title).PreserveCase(), fn, successCard)
 }
@@ -1184,6 +1188,13 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 // finalFrameCard answers "which card did the spinner program leave on
 // screen?" — the mirror of cardSpinnerModel.View's done branch, so the
 // card the timeline records is the card the terminal is showing.
+//
+// This is a SECOND call to successCard: View already made the first
+// to paint the frame. successCard must therefore be pure with respect
+// to repeated calls (the same contract RunCardSteps documents for its
+// successor) — one that rendered differently between the two would
+// have the timeline rewrite a block that doesn't match what's on
+// screen.
 func finalFrameCard(card *Card, successCard func() *Card, err error) *Card {
 	if err == nil && successCard != nil {
 		return successCard()
@@ -1194,6 +1205,10 @@ func finalFrameCard(card *Card, successCard func() *Card, err error) *Card {
 // RunCardReplace works like RunCard but on success, prints a replacement
 // card (returned by successCard) instead of the original card in success
 // state. On failure, prints the original card in failed state as usual.
+//
+// successCard MUST be pure with respect to repeated calls: it is
+// evaluated once to paint the final frame and once more to record
+// what the timeline is showing. See finalFrameCard.
 func RunCardReplace(title string, fn func() error, successCard func() *Card) error {
 	if IsRaw() {
 		return fn()
@@ -1313,13 +1328,13 @@ func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
 
 	rendered := finalCard.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
-	recordCard(finalCard)
+	rec := recordCard(finalCard)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
-		DiscardOpenCard()
+		discardRecord(rec)
 	}, nil
 }
 
@@ -1374,13 +1389,13 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 	// card BubbleTea rendered) so the rewind function can erase it.
 	rendered := card.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
-	recordCard(card)
+	rec := recordCard(card)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
-		DiscardOpenCard()
+		discardRecord(rec)
 	}, nil
 }
 
