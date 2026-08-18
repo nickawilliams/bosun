@@ -10,7 +10,6 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/spf13/cobra"
@@ -487,7 +486,7 @@ func anyPathMatches(changed []string, prefixes []string) bool {
 // emitDeploymentSources moves between its phases.
 type sourceRepo struct {
 	res      AffectedResult
-	identity gh.RepositoryIdentity
+	identity code.RepositoryIdentity
 	pr       code.PullRequest
 	prErr    error
 }
@@ -539,7 +538,7 @@ func resolveDeploymentSource(ctx context.Context, g vcs.VCS, host code.Host, rep
 	}
 	sr.res = res
 	if withPRs {
-		sr.identity, sr.prErr = gh.ParseRemote(ctx, repo.Path)
+		sr.identity, sr.prErr = host.ParseRemote(ctx, repo.Path)
 		if sr.prErr == nil {
 			sr.pr, sr.prErr = host.GetPRForBranch(ctx, sr.identity.Owner, sr.identity.Name, sr.res.Branch)
 		}

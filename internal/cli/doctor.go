@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -459,21 +462,21 @@ func checkStatusMappings(_ context.Context) (string, error) {
 }
 
 func checkIssueTracker(ctx context.Context) (string, error) {
-	provider := viper.GetString("issue_tracker.provider")
-	if provider == "" {
+	name := viper.GetString(issue.ConfigGroup + ".provider")
+	if name == "" {
 		return "", errNotConfigured
 	}
+	if !services.HasProvider(issue.ConfigGroup, name) {
+		return "", fmt.Errorf("unsupported: %q", name)
+	}
 
-	// Validate config completeness.
-	switch provider {
-	case "jira":
-		if group, ok := lookupGroup("issue_tracker"); ok {
-			if missing := checkGroupCompleteness("issue_tracker", group); len(missing) > 0 {
-				return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
-			}
+	// Validate config completeness. The group's keys include whatever the
+	// configured provider contributes, so this covers a provider's own
+	// required values without naming any of them.
+	if group, ok := lookupGroup(issue.ConfigGroup); ok {
+		if missing := checkGroupCompleteness(issue.ConfigGroup, group); len(missing) > 0 {
+			return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
 		}
-	default:
-		return "", fmt.Errorf("unsupported: %q", provider)
 	}
 
 	// Test connectivity. Construction stays on the run context —
@@ -488,25 +491,10 @@ func checkIssueTracker(ctx context.Context) (string, error) {
 	probeCtx, cancel := probeContext(ctx)
 	defer cancel()
 
-	_, err = tracker.GetIssue(probeCtx, "BOSUN-0")
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
-			return "", fmt.Errorf("auth failed (check token and email)")
-		}
-		if strings.Contains(errStr, "404") {
-			// 404 means we authenticated but the issue doesn't exist — that's fine.
-			baseURL := viper.GetString("issue_tracker.base_url")
-			email := viper.GetString("issue_tracker.email")
-			host := strings.TrimPrefix(baseURL, "https://")
-			host = strings.TrimPrefix(host, "http://")
-			host = strings.TrimRight(host, "/")
-			return fmt.Sprintf("%s → %s (%s)", provider, host, email), nil
-		}
-		return "", fmt.Errorf("connection failed: %w", err)
-	}
-
-	return provider + " · authenticated", nil
+	// The adapter owns both the probe and the identity it reports:
+	// which endpoint proves auth, and what "authenticated to what" even
+	// means, differ per tracker.
+	return tracker.AuthTest(probeCtx)
 }
 
 func checkCodeHost(ctx context.Context) (string, error) {
@@ -596,31 +584,23 @@ func cicdChecks() []healthCheck {
 }
 
 func checkCICD(ctx context.Context) (string, error) {
-	provider := viper.GetString("cicd.provider")
-	if provider == "" {
+	if viper.GetString(cicd.ConfigGroup+".provider") == "" {
 		return "", errNotConfigured
 	}
-	if _, err := newCICD(); err != nil {
-		return "", fmt.Errorf("cannot initialize: %w", err)
-	}
-	// TODO(arch #28): provider-specific leak. The GitHub Actions
-	// adapter shares the code host's token, so cli verifies CI/CD
-	// auth by reaching into the code host — and the result string
-	// hardcodes "github actions" regardless of which CI/CD provider
-	// is configured. cicd.CICD should expose AuthTest returning a
-	// display string so the provider owns its auth verification and
-	// its identity in the result.
-	host, err := newCodeHost()
+	pipeline, err := newCICD()
 	if err != nil {
-		return "", fmt.Errorf("cannot verify token: %w", err)
+		return "", fmt.Errorf("cannot initialize: %w", err)
 	}
 
 	probeCtx, cancel := probeContext(ctx)
 	defer cancel()
 
-	username, err := host.GetAuthenticatedUser(probeCtx)
+	// The pipeline verifies its own credentials and names itself — a
+	// provider that borrows the code host's token (GitHub Actions) and
+	// one that authenticates independently both answer here.
+	result, err := pipeline.AuthTest(probeCtx)
 	if err != nil {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
-	return fmt.Sprintf("github actions → %s", username), nil
+	return result, nil
 }

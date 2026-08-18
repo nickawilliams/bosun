@@ -106,6 +106,9 @@ func (f *fakeTracker) BoardColumns(context.Context, string) ([]issue.BoardColumn
 func (f *fakeTracker) ListBoards(context.Context, string) ([]issue.Board, error) {
 	return nil, nil
 }
+func (f *fakeTracker) AuthTest(context.Context) (string, error) {
+	return "", nil
+}
 
 // fakePipeline records workflow dispatches and returns a configured error.
 type fakePipeline struct {
@@ -119,6 +122,9 @@ func (f *fakePipeline) TriggerWorkflow(_ context.Context, req cicd.TriggerReques
 	f.triggers = append(f.triggers, req)
 	return f.err
 }
+
+// AuthTest is unused by the adapter — stubbed to satisfy cicd.CICD.
+func (f *fakePipeline) AuthTest(context.Context) (string, error) { return "", nil }
 
 // --- Helper ---
 

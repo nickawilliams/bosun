@@ -41,7 +41,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nickawilliams/bosun/internal/cli"
-	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
@@ -74,11 +73,16 @@ cicd:
   provider: "github_actions"
 `
 
-// doctorProbeIssue is the issue key doctor fetches to verify tracker
-// connectivity. Seeding it is what makes the tracker probe succeed;
-// a tracker that returns 404 for it is also healthy (see the
-// tracker_probe scenarios), which is why the real key is arbitrary.
-const doctorProbeIssue = "BOSUN-0"
+// trackerAuthResult / cicdAuthResult are what the fakes report from
+// AuthTest — the strings the configured providers (Jira, GitHub Actions)
+// would produce for this project's config. The adapters own their auth
+// probe and the identity it reports, so what doctor is on the hook for
+// is rendering that answer faithfully; the probe semantics themselves
+// (which endpoint, how a 404 reads) are the adapters' own tests.
+const (
+	trackerAuthResult = "jira → acme.atlassian.net (dev@acme.test)"
+	cicdAuthResult    = "github actions → testuser"
+)
 
 // Check names, as doctor labels its rows.
 const (
@@ -113,19 +117,18 @@ func withoutConfig(t *testing.T, snippet string) string {
 }
 
 // newDoctorProject sets up the project every scenario shares: a
-// fully-configured project with one repo, the CI/CD fake installed,
-// and the tracker's connectivity probe issue seeded. It deliberately
-// stops short of the global config, which is the one Required check a
-// fixture can break.
+// fully-configured project with one repo, the CI/CD fake installed, and
+// the two provider-owned auth results seeded. It deliberately stops
+// short of the global config, which is the one Required check a fixture
+// can break.
 func newDoctorProject(t *testing.T) *testharness.Harness {
 	t.Helper()
 	h := testharness.New(t)
 	h.Workspace.WriteConfig(doctorConfig)
 	h.Workspace.AddRepo("api")
 	h.InstallCICD()
-	h.Tracker.SeedIssue(issue.Issue{
-		Key: doctorProbeIssue, Title: "connectivity probe", Type: "Task",
-	})
+	h.Tracker.AuthResult = trackerAuthResult
+	h.CICD.AuthResult = cicdAuthResult
 	return h
 }
 
@@ -305,12 +308,15 @@ func TestDoctor(t *testing.T) {
 
 		runDoctor(t, h)
 
-		// Every integration reports ✓ with the identity it resolved —
-		// the provider name plus whatever the auth probe returned.
-		assertPassed(t, h, rowTracker, "jira")
+		// Every integration reports ✓ with the identity it resolved. The
+		// tracker and pipeline rows are the provider's own display string
+		// verbatim; the code-host and notification rows are composed by
+		// doctor from the configured provider name plus the login the
+		// probe returned.
+		assertPassed(t, h, rowTracker, trackerAuthResult)
 		assertPassed(t, h, rowCodeHost, "github → testuser")
 		assertPassed(t, h, rowNotification, "slack → bosun-test")
-		assertPassed(t, h, rowCICD, "github actions → testuser")
+		assertPassed(t, h, rowCICD, cicdAuthResult)
 	})
 
 	t.Run("all_configured/groups_checks_by_kind", func(t *testing.T) {
@@ -446,27 +452,30 @@ issue_tracker:
 		assertHealthyExcept(t, h, rowTracker)
 	})
 
-	t.Run("tracker_failing/auth_rejection_is_reported_as_auth", func(t *testing.T) {
-		// A 401/403 from the probe fetch is an auth problem, and the
-		// row says so instead of leaking the raw transport error.
+	t.Run("tracker_failing/probe_error_is_reported_verbatim", func(t *testing.T) {
+		// The adapter owns the diagnosis — it knows a 401 from a timeout,
+		// and phrases the fix in its own terms. doctor's job is to
+		// surface that sentence without paraphrasing it.
 		h := newDoctorHarness(t)
-		h.Tracker.GetErr = errors.New("jira: 401 Unauthorized")
+		h.Tracker.AuthErr = errors.New("auth failed (check token and email)")
 
 		runDoctor(t, h)
 
 		assertWarned(t, h, rowTracker, "auth failed (check token and email)")
+		assertHealthyExcept(t, h, rowTracker)
 	})
 
-	t.Run("tracker_failing/probe_404_counts_as_healthy", func(t *testing.T) {
-		// 404 means we authenticated and the probe issue simply
-		// doesn't exist — the healthy outcome against a real tracker.
-		// The row shows the endpoint identity it authenticated to.
+	t.Run("tracker_healthy/probe_identity_is_reported_verbatim", func(t *testing.T) {
+		// Same contract on the success side: the row shows the endpoint
+		// identity the adapter reported, uncomposed. What counts as a
+		// healthy probe (a 404 for a key no project uses does) is the
+		// adapter's call, covered by its own tests.
 		h := newDoctorHarness(t)
-		h.Tracker.GetErr = errors.New("jira: 404 Not Found")
+		h.Tracker.AuthResult = "jira → other.atlassian.net (someone@acme.test)"
 
 		runDoctor(t, h)
 
-		assertPassed(t, h, rowTracker, "jira → acme.atlassian.net (dev@acme.test)")
+		assertPassed(t, h, rowTracker, "jira → other.atlassian.net (someone@acme.test)")
 		assertHealthyExcept(t, h)
 	})
 
@@ -475,10 +484,10 @@ issue_tracker:
 		// constructing. A constructor failure is how "no token
 		// configured" surfaces, and it reads as not configured.
 		//
-		// CI/CD is dropped from the config here so the check
-		// short-circuits before it reaches the code host; with it
-		// configured, a broken host takes the CI/CD row down too (see
-		// the cicd_shares_the_code_host_token scenario).
+		// CI/CD is dropped from the config here so its row reads as
+		// not-configured rather than probing — the two capabilities are
+		// independent in doctor now (see
+		// cicd_verifies_its_own_credentials).
 		h := newDoctorHarness(t)
 		h.Workspace.WriteConfig(withoutConfig(t, "cicd:\n  provider: \"github_actions\"\n"))
 		h.Host.NewErr = errors.New("no github token configured")
@@ -490,18 +499,21 @@ issue_tracker:
 		assertNotConfigured(t, h, rowCICD)
 	})
 
-	t.Run("code_host_unconfigured/cicd_shares_the_code_host_token", func(t *testing.T) {
-		// TODO(arch #28): the GitHub Actions adapter verifies its auth
-		// through the code host, so a broken host fails the CI/CD row
-		// as well. Pinned deliberately — when cicd.CICD grows its own
-		// AuthTest, this expectation changes with it.
+	t.Run("code_host_unconfigured/cicd_verifies_its_own_credentials", func(t *testing.T) {
+		// A broken code host no longer takes the CI/CD row down with it:
+		// the pipeline verifies its own credentials through
+		// cicd.CICD.AuthTest. Which credentials those are stays the
+		// provider's business — GitHub Actions still borrows the code
+		// host's token when it builds — but a failure there surfaces as
+		// the CI/CD row's own "cannot initialize", not as a code-host
+		// error wearing a CI/CD label.
 		h := newDoctorHarness(t)
 		h.Host.NewErr = errors.New("no github token configured")
 
 		runDoctor(t, h)
 
 		assertNotConfigured(t, h, rowCodeHost)
-		assertWarned(t, h, rowCICD, "cannot verify token: no github token configured")
+		assertPassed(t, h, rowCICD, cicdAuthResult)
 	})
 
 	t.Run("code_host_failing/reports_auth_failure", func(t *testing.T) {
@@ -619,13 +631,14 @@ issue_tracker:
 		assertWarned(t, h, rowTracker, "configured but failing — invalid api token")
 		assertWarned(t, h, rowCodeHost, "auth failed: 401 Bad credentials")
 		assertWarned(t, h, rowNotification, "auth failed: invalid_auth")
-		// The CI/CD check borrows the code host's token, so it fails
-		// with the host's error rather than one of its own.
-		assertWarned(t, h, rowCICD, "auth failed: 401 Bad credentials")
+		// CI/CD is untouched by any of the three: it probes its own
+		// credentials, so a broken code host doesn't manufacture a fourth
+		// failure out of the same root cause.
+		assertPassed(t, h, rowCICD, cicdAuthResult)
 
 		passed, warned, failed := doctorSummary(t, h)
-		if passed != 6 || warned != 4 || failed != 0 {
-			t.Errorf("summary = %d passed, %d warned, %d failed; want 6/4/0\n%s",
+		if passed != 7 || warned != 3 || failed != 0 {
+			t.Errorf("summary = %d passed, %d warned, %d failed; want 7/3/0\n%s",
 				passed, warned, failed, h.Reporter.Dump())
 		}
 	})

@@ -11,15 +11,10 @@ import (
 
 	"text/template"
 
-	"github.com/nickawilliams/bosun/internal/cicd"
-	"github.com/nickawilliams/bosun/internal/cicd/githubactions"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
-	"github.com/nickawilliams/bosun/internal/issue/jira"
 	"github.com/nickawilliams/bosun/internal/notify"
-	"github.com/nickawilliams/bosun/internal/notify/slack"
 	"github.com/nickawilliams/bosun/internal/preview"
 	previewcicd "github.com/nickawilliams/bosun/internal/preview/cicd"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -328,27 +323,6 @@ func repositoryNames(repositories []Repository) string {
 	return strings.Join(names, ", ")
 }
 
-// newIssueTrackerImpl is the production factory for issue.Tracker.
-// Reachable via the newIssueTracker wrapper in services_factory.go,
-// which dispatches through the swappable Services struct.
-func newIssueTrackerImpl() (issue.Tracker, error) {
-	if err := requireConfig("issue_tracker"); err != nil {
-		return nil, err
-	}
-
-	provider := viper.GetString("issue_tracker.provider")
-	switch provider {
-	case "jira":
-		return jira.New(
-			viper.GetString("issue_tracker.base_url"),
-			viper.GetString("issue_tracker.email"),
-			viper.GetString("issue_tracker.token"),
-		), nil
-	default:
-		return nil, fmt.Errorf("unsupported issue tracker: %q", provider)
-	}
-}
-
 // resolveStatus maps a bosun lifecycle status key (e.g., "in_progress") to
 // the provider-specific status name from config (e.g., "In Progress").
 // Falls back to schema defaults if not set in config.
@@ -412,36 +386,6 @@ func lifecycleKeyForStatus(status string) string {
 	return ""
 }
 
-// newCodeHost creates a code.Host from current config. Resolution order:
-// 1. code_host.token from viper (config file or GITHUB_TOKEN env)
-// 2. gh auth token (GitHub CLI)
-// 3. GITHUB_TOKEN env var
-// 4. JIT prompt (saves to config)
-func newCodeHostImpl() (code.Host, error) {
-	// Check viper first (config file or env var via AutomaticEnv).
-	if token := viper.GetString("code_host.token"); token != "" {
-		return gh.New(token), nil
-	}
-
-	// Try automatic resolution (gh CLI, GITHUB_TOKEN env).
-	if token := gh.ResolveToken(); token != "" {
-		return gh.New(token), nil
-	}
-
-	// Fall back to config-prompted token.
-	if err := requireConfig("code_host"); err != nil {
-		return nil, err
-	}
-
-	provider := viper.GetString("code_host.provider")
-	switch provider {
-	case "github":
-		return gh.New(viper.GetString("code_host.token")), nil
-	default:
-		return nil, fmt.Errorf("unsupported code host: %q", provider)
-	}
-}
-
 // prTemplateData holds the fields available to PR title and body templates.
 type prTemplateData struct {
 	IssueKey   string
@@ -492,17 +436,47 @@ func buildPRBody(data prTemplateData) string {
 	return result
 }
 
+// repoIdentity resolves a repository's host identity, routing through
+// the code host when one is configured.
+//
+// The fallback exists because a clone's identity is knowable without
+// credentials, and the lifecycle commands' pre-flight passes resolve
+// identities even when the host is unreachable — review and prerelease
+// list their repos and explain what they can't do, rather than
+// collapsing the whole section. Callers that already know they hold a
+// host should call the method directly.
+func repoIdentity(ctx context.Context, host code.Host, repositoryPath string) (code.RepositoryIdentity, error) {
+	if host != nil {
+		return host.ParseRemote(ctx, repositoryPath)
+	}
+	return code.ParseRemote(ctx, repositoryPath)
+}
+
 // cardIconPixels is the source resolution requested for raster card icons
-// that accept a pixel size (GitHub avatars). Card icons render at a fixed
+// that accept a pixel size (code-host avatars). Card icons render at a fixed
 // display size in Slack, so this governs source crispness, not on-screen
-// dimensions. The Slack adapter requests a matching size from Jira icons so
-// the two sources sit at the same scale on a card.
+// dimensions. The Slack adapter requests a matching size from tracker icons
+// so the two sources sit at the same scale on a card.
 const cardIconPixels = 48
 
-// githubAvatarURL builds the avatar image URL for a GitHub login at the
-// shared card-icon size.
-func githubAvatarURL(user string) string {
-	return fmt.Sprintf("https://github.com/%s.png?size=%d", user, cardIconPixels)
+// avatarURL builds the avatar image URL for a host login at the shared
+// card-icon size. Returns "" for a nil host or empty login, which the
+// card renderers already treat as "fall back to a glyph".
+func avatarURL(host code.Host, login string) string {
+	if host == nil || login == "" {
+		return ""
+	}
+	return host.AvatarURL(login, cardIconPixels)
+}
+
+// branchURL builds the web link for a repository branch, or "" when no
+// host is configured — notification items render the label without a
+// branch link in that case rather than failing the send.
+func branchURL(host code.Host, owner, repository, branch string) string {
+	if host == nil {
+		return ""
+	}
+	return host.BranchURL(code.RepositoryIdentity{Owner: owner, Name: repository}, branch)
 }
 
 // notifyTemplateData holds the fields available to notification templates.
@@ -512,7 +486,7 @@ type notifyTemplateData struct {
 	IssueType        string // e.g., "Story", "Bug".
 	IssueURL         string
 	IssueDescription string        // Issue body text, plain. Empty when tracker has none.
-	IssueIconURL     string        // Issue-type icon URL for the Jira card. Empty falls back to a glyph.
+	IssueIconURL     string        // Issue-type icon URL for the tracker card. Empty falls back to a glyph.
 	IconURL          string        // Avatar or icon URL for card blocks.
 	Items            []notify.Item // Per-repository items (PRs, releases, etc.).
 	PreviewName      string        // Ephemeral environment name (e.g., "brave-falcon").
@@ -620,65 +594,6 @@ func renderTemplate(pattern string, data notifyTemplateData) string {
 	}
 
 	return buf.String()
-}
-
-// newNotifier creates a notify.Notifier from current config. Returns an error
-// if the notification provider is not configured — callers treat this as a
-// skip, not a fatal error. Does not prompt for missing values (opt-in only).
-func newNotifierImpl() (notify.Notifier, error) {
-	provider := viper.GetString("notification.provider")
-	if provider == "" {
-		return nil, fmt.Errorf("notification provider not configured")
-	}
-
-	switch provider {
-	case "slack":
-		auth := viper.GetString("notification.auth")
-		if auth == "local" {
-			workspace := viper.GetString("notification.workspace")
-			if workspace == "" {
-				return nil, fmt.Errorf("notification.workspace required for local auth")
-			}
-			token, cookie, err := slack.ResolveLocalToken(workspace)
-			if err != nil {
-				return nil, fmt.Errorf("resolving local Slack token: %w", err)
-			}
-			return slack.NewWithCookie(token, cookie), nil
-		}
-
-		// Token-based auth.
-		if err := requireConfig("notification"); err != nil {
-			return nil, err
-		}
-		return slack.New(viper.GetString("notification.token")), nil
-	default:
-		return nil, fmt.Errorf("unsupported notification provider: %q", provider)
-	}
-}
-
-// newCICD creates a cicd.CICD from current config. Token resolution mirrors
-// newCodeHost: viper → gh CLI → env → JIT prompt.
-func newCICDImpl() (cicd.CICD, error) {
-	// Reuse the same GitHub token used for code hosting.
-	if token := viper.GetString("code_host.token"); token != "" {
-		return githubactions.New(token), nil
-	}
-	if token := gh.ResolveToken(); token != "" {
-		return githubactions.New(token), nil
-	}
-
-	// Fall back to config-prompted flow.
-	if err := requireConfig("code_host"); err != nil {
-		return nil, err
-	}
-
-	provider := viper.GetString("cicd.provider")
-	switch provider {
-	case "github_actions":
-		return githubactions.New(viper.GetString("code_host.token")), nil
-	default:
-		return nil, fmt.Errorf("unsupported CI/CD provider: %q", provider)
-	}
 }
 
 // newPreviewProviderImpl creates a preview.Provider for the given
@@ -819,7 +734,7 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, stage string)
 		for _, p := range paths {
 			// Resolve relative paths to absolute.
 			if strings.HasPrefix(p, ".github/") {
-				identity, err := gh.ParseRemote(ctx, repo.Path)
+				identity, err := code.ParseRemote(ctx, repo.Path)
 				if err != nil {
 					continue
 				}
@@ -974,7 +889,7 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 // resolving relative paths through the repo's git remote.
 func resolveWorkflowFilename(ctx context.Context, repo Repository, path string) (WorkflowTarget, error) {
 	if strings.HasPrefix(path, ".github/") {
-		identity, err := gh.ParseRemote(ctx, repo.Path)
+		identity, err := code.ParseRemote(ctx, repo.Path)
 		if err != nil {
 			return WorkflowTarget{}, err
 		}

@@ -12,7 +12,6 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
@@ -444,7 +443,7 @@ func newPrereleaseCmd() *cobra.Command {
 					continue
 				}
 				rt := releaseTarget{repo: rr.repo, branch: rr.branch}
-				if identity, err := gh.ParseRemote(ctx, rr.repo.Path); err != nil {
+				if identity, err := repoIdentity(ctx, host, rr.repo.Path); err != nil {
 					rt.tagErr = err
 				} else {
 					rt.owner = identity.Owner

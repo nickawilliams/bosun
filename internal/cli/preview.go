@@ -114,6 +114,11 @@ func newPreviewCmd() *cobra.Command {
 						return ActionNeeded, "update review notification", nil
 					},
 					Apply: func(ctx context.Context) error {
+						// The host supplies both the branch links and the
+						// author avatar; without one the notification
+						// still goes out, just plainer.
+						host, _ := newCodeHost()
+
 						// Build notification items from PR data.
 						items := make([]notify.Item, len(prData))
 						for i, rp := range prData {
@@ -122,14 +127,14 @@ func newPreviewCmd() *cobra.Command {
 								URL:       rp.PR.URL,
 								Detail:    fmt.Sprintf("#%d", rp.PR.Number),
 								Body:      rp.PR.Body,
-								BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", rp.Owner, rp.Repo, rp.Branch),
+								BranchURL: branchURL(host, rp.Owner, rp.Repo, rp.Branch),
 							}
 						}
-						// Resolve GitHub avatar for card icons.
+						// Resolve the author's avatar for card icons.
 						var iconURL string
-						if host, err := newCodeHost(); err == nil {
+						if host != nil {
 							if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-								iconURL = githubAvatarURL(user)
+								iconURL = avatarURL(host, user)
 							}
 						}
 
