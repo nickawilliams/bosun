@@ -346,7 +346,7 @@ func (BosunTheme) Theme(isDark bool) *huh.Styles {
 	// padding trailing whitespace into the next field's margin.
 	// The bar is recolored to the recessed timeline gray by
 	// NewTimelineLayout — see form_layout.go for the rationale.
-	t.FieldSeparator = lipgloss.NewStyle().SetString("\n │\n")
+	t.FieldSeparator = lipgloss.NewStyle().SetString("\n " + BoxVertical + "\n")
 
 	// Align huh's focused form with the card grid (see layout.go).
 	// The form is a card at level 0: 1 space of left margin, then a

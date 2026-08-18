@@ -500,6 +500,14 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 
 // secretMask is what renders in place of Secret-typed values anywhere
 // output isn't an explicit request for the real value.
+//
+// Deliberately a literal, not ui.Palette.Bullet repeated: ui's
+// styledValue detects a masked value by testing for the "••" prefix,
+// so the mask is a data sentinel that two packages must agree on, not
+// a themeable glyph. Pointing either side at the palette would let a
+// glyph swap desynchronize them, and the failure is quiet — the
+// prefix check misses and the secret renders in value-green instead
+// of muted.
 const secretMask = "••••••••"
 
 // maskSecrets replaces every Secret-typed schema key's value in

@@ -46,6 +46,11 @@ const (
 	CardData    // structured state snapshot, no status glyph
 	CardReady   // ● — terminal good pending a user action
 	CardWaiting // ⧗ — in progress, not on the user
+
+	// cardStateCount is the sentinel that bounds the enum. Keep it
+	// last: tests iterate up to it to prove every state resolves to a
+	// glyph, so a state appended after it would escape that check.
+	cardStateCount
 )
 
 // cardConnector is the vertical spine drawn down the left gutter

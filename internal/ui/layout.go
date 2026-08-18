@@ -36,7 +36,8 @@ package ui
 // own the horizontal "reach" to a node, so the glyph→label gap is 1
 // space (not GlyphGap's 2). That tighter gap is a signal — it marks
 // the boundary where the reader leaves the card stack for
-// hierarchical data. See tree.go.
+// hierarchical data. The connectors themselves are in glyphs.go;
+// the renderer that stacks them is in tree.go.
 const (
 	LeftPad    = 1
 	IndentUnit = 4
