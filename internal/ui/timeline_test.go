@@ -619,6 +619,75 @@ func TestFinalFrameCardMirrorsTheLastView(t *testing.T) {
 	}
 }
 
+// TestRunCardStepsWithNoStepsRecordsItsSuccessor covers the one
+// RunCardSteps exit that never starts a BubbleTea program: with an
+// empty step list it prints the successor directly, so the record and
+// its rewind are ordinary code rather than something only a live
+// terminal can reach.
+func TestRunCardStepsWithNoStepsRecordsItsSuccessor(t *testing.T) {
+	resetTimeline(t)
+
+	successor := NewCard(CardSuccess, "resolved").Muted("row one", "row two")
+
+	var rewind func()
+	out := captureStdout(t, func() {
+		var err error
+		rewind, err = RunCardSteps(nil, func() *Card { return successor })
+		if err != nil {
+			t.Fatalf("RunCardSteps: %v", err)
+		}
+		if openCard == nil {
+			t.Error("the successor should be the timeline's open card")
+		}
+	})
+	if !strings.Contains(out, successor.Render()) {
+		t.Errorf("successor was not printed in open form:\n%q", out)
+	}
+
+	// Its rewind erases the block, so the record has to go with it.
+	captureStdout(t, rewind)
+	if openCard != nil {
+		t.Error("rewind left a record pointing at erased rows")
+	}
+
+	// A nil successor paints nothing and records nothing.
+	resetTimeline(t)
+	if out := captureStdout(t, func() {
+		if _, err := RunCardSteps(nil, nil); err != nil {
+			t.Fatalf("RunCardSteps: %v", err)
+		}
+	}); out != "" {
+		t.Errorf("a nil successor printed %q, want nothing", out)
+	}
+	if openCard != nil {
+		t.Error("a nil successor should not become the open card")
+	}
+}
+
+// TestBeginTimelineDiscardsWithoutRewriting: opening a timeline drops
+// any record left over from earlier output. It must not rewrite —
+// whatever that record pointed at is above a blank line now, and the
+// cursor can't be trusted to still be below it.
+func TestBeginTimelineDiscardsWithoutRewriting(t *testing.T) {
+	resetTimeline(t)
+
+	card := NewCard(CardSuccess, "leftover").Muted("body line")
+	out := captureStdout(t, func() {
+		card.Print()
+		BeginTimeline()
+	})
+
+	if rewritePattern.MatchString(out) {
+		t.Errorf("BeginTimeline should not rewrite:\n%q", out)
+	}
+	if openCard != nil {
+		t.Error("BeginTimeline left an open-card record behind")
+	}
+	if want := card.Render() + "\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}
+
 // TestFailedStepIndexFindsTheHaltedStep: RunCardSteps records whatever
 // its program left on screen, which after a halt is the card the model
 // flipped out of CardRunning.
