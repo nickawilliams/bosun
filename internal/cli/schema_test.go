@@ -122,6 +122,109 @@ func TestSchemaGroupsResolvesEveryGroup(t *testing.T) {
 	}
 }
 
+// TestIsKnownConfigGroup covers `config show <group>`'s validation. The
+// schema arm exists for groups that are entirely optional — every key
+// example-only — which inject nothing and so appear in no settings map
+// until the user sets something; rejecting those would report a real
+// group as unknown. Sub-groups are excluded because the filter is matched
+// against top-level tree keys, so accepting one would render nothing and
+// call it success.
+func TestIsKnownConfigGroup(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"workspace", true},               // schema-known, injects nothing
+		{"issue_tracker", true},           // schema-known
+		{"display", true},                 // schema-known, has defaults
+		{"issue_tracker.statuses", false}, // a sub-group, not top-level
+		{"nonsense_group", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isKnownConfigGroup(tt.name); got != tt.want {
+				t.Errorf("isKnownConfigGroup(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSecretKeysAreProviderIndependent is the regression guard for a
+// leak the splice would otherwise open: provider keys are spliced in per
+// the CONFIGURED provider, so a provider value the registry doesn't know
+// drops that provider's token key from the effective schema — and every
+// "is this secret?" lookup answers no for a token sitting in the config.
+// Masking has to fail closed, so it reads the union of every registered
+// provider's keys instead.
+func TestSecretKeysAreProviderIndependent(t *testing.T) {
+	t.Cleanup(viper.Reset)
+
+	tokens := []string{
+		issue.ConfigGroup + ".token",
+		code.ConfigGroup + ".token",
+		notify.ConfigGroup + ".token",
+	}
+
+	// A typo'd provider, a provider from a newer bosun, and no provider
+	// at all: none of them may unmask a token.
+	for _, name := range []string{"jira", "Jira", "linear", ""} {
+		t.Run("provider="+name, func(t *testing.T) {
+			viper.Reset()
+			if name != "" {
+				for _, group := range []string{issue.ConfigGroup, code.ConfigGroup, notify.ConfigGroup} {
+					viper.Set(group+".provider", name)
+				}
+			}
+			for _, key := range tokens {
+				if !isSecretKey(key) {
+					t.Errorf("isSecretKey(%q) = false — the token would print in cleartext", key)
+				}
+			}
+		})
+	}
+
+	t.Run("non-secret keys stay unmasked", func(t *testing.T) {
+		viper.Reset()
+		for _, key := range []string{
+			issue.ConfigGroup + ".project",
+			issue.ConfigGroup + ".base_url",
+			notify.ConfigGroup + ".channel_review",
+			"workspace.root",
+		} {
+			if isSecretKey(key) {
+				t.Errorf("isSecretKey(%q) = true — masking a value that isn't a secret", key)
+			}
+		}
+	})
+}
+
+// TestResolveSchemaGroupPreservesSources pins that the splice carries a
+// key's registered Source through. Sources are attached by init() to the
+// stored schema, and resolveSchemaGroup rebuilds the key slice on every
+// lookup — dropping the field would silently turn the board picker into
+// a free-text prompt, which reads as working.
+func TestResolveSchemaGroupPreservesSources(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	viper.Set(issue.ConfigGroup+".provider", "jira")
+
+	group, _ := lookupGroup(issue.ConfigGroup)
+	for _, ck := range group.Keys {
+		if ck.Key == "board_id" {
+			if ck.Source == nil {
+				t.Error("board_id lost its registered Source through the splice")
+			}
+			return
+		}
+	}
+	t.Error("board_id is missing from the resolved group")
+}
+
 // TestProviderHint pins the generated config template's provider comment:
 // it comes from the registry, so a newly registered provider is documented
 // without a template edit.

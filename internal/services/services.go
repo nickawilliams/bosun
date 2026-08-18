@@ -24,6 +24,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/cicd/githubactions"
@@ -248,10 +249,19 @@ func newRegistry[T any](label, group string, entries ...entry[T]) *registry[T] {
 }
 
 // build constructs the named provider, or reports it as unsupported.
+//
+// An empty name means the caller's fallback had nothing to fall back on
+// — several providers registered and config silent about which — and
+// says so, rather than reporting `unsupported: ""` at a user who never
+// named anything.
 func (r *registry[T]) build(cfg provider.Config, name string) (T, error) {
 	e, ok := r.entries[name]
 	if !ok {
 		var zero T
+		if name == "" {
+			return zero, fmt.Errorf("%s not configured: set %s to one of %s",
+				r.label, r.providerKey, strings.Join(r.order, ", "))
+		}
 		return zero, fmt.Errorf("unsupported %s: %q", r.label, name)
 	}
 	return e.new(cfg)

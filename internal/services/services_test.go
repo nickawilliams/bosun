@@ -112,15 +112,15 @@ func TestParseIssueIdentifier(t *testing.T) {
 
 	t.Run("unset provider falls back to the sole registered one", func(t *testing.T) {
 		// The fallback is what keeps an unconfigured project's breadcrumb
-		// working. With more than one tracker registered there is nothing
-		// to fall back to and this yields "" instead.
-		c := cfg(nil)
-		want := "EX-42"
-		if SoleProvider(issue.ConfigGroup) == "" {
-			want = ""
+		// working. Guarded on the registry actually having one tracker
+		// rather than derived from SoleProvider, so that a broken
+		// SoleProvider can't quietly satisfy both sides of the assertion.
+		if n := len(ProviderNames(issue.ConfigGroup)); n != 1 {
+			t.Skipf("fallback only applies with one registered tracker; have %d", n)
 		}
-		if got := ParseIssueIdentifier(c, "feature/EX-42_thing"); got != want {
-			t.Errorf("= %q, want %q", got, want)
+		c := cfg(nil)
+		if got := ParseIssueIdentifier(c, "feature/EX-42_thing"); got != "EX-42" {
+			t.Errorf("= %q, want EX-42", got)
 		}
 	})
 
@@ -299,6 +299,78 @@ func TestNotifier(t *testing.T) {
 			t.Errorf("error = %v, want it to name the capability and the value", err)
 		}
 	})
+}
+
+// TestSoleProviderWithSeveralRegistered covers the branch the whole
+// unset-provider story turns on, and which no shipped registry exercises
+// today: with more than one provider registered there is no sole one, so
+// every fallback that leans on it (the schema's provider-key splice,
+// ParseIssueIdentifier, CodeHost, CICD) has to stop guessing.
+//
+// Built from a local registry rather than the package's, because the
+// point is what happens at a size the real ones don't have yet.
+func TestSoleProviderWithSeveralRegistered(t *testing.T) {
+	one := newRegistry("test capability", "test",
+		entry[string]{name: "alpha"},
+	)
+	if got := one.sole(); got != "alpha" {
+		t.Errorf("sole() with one registered = %q, want alpha", got)
+	}
+
+	several := newRegistry("test capability", "test",
+		entry[string]{name: "alpha"},
+		entry[string]{name: "beta"},
+	)
+	if got := several.sole(); got != "" {
+		t.Errorf("sole() with two registered = %q, want empty", got)
+	}
+
+	none := newRegistry[string]("test capability", "test")
+	if got := none.sole(); got != "" {
+		t.Errorf("sole() with none registered = %q, want empty", got)
+	}
+
+	// configured() reads config first and only then falls back, so a
+	// named provider still resolves when there's no sole one.
+	c := cfg(map[string]string{"test.provider": "beta"})
+	if got := several.configured(c); got != "beta" {
+		t.Errorf("configured() = %q, want beta", got)
+	}
+	if got := several.configured(cfg(nil)); got != "" {
+		t.Errorf("configured() with nothing set = %q, want empty", got)
+	}
+
+	// And the error a caller gets from that state names the choice it
+	// needs, rather than reporting `unsupported: ""` at a user who never
+	// named a provider.
+	_, err := several.build(cfg(nil), "")
+	if err == nil {
+		t.Fatal("build succeeded with no provider named")
+	}
+	for _, want := range []string{"not configured", "test.provider", "alpha, beta"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// TestEveryTrackerDescribesItsKeyGrammar guards the split between the
+// registry (which answers HasProvider) and trackerDescriptors (which
+// answers ParseIssueIdentifier): a descriptor with a nil ParseIdentifier
+// is a registered provider that silently parses nothing, and the symptom
+// — no issue key in the breadcrumb — points nowhere near the cause.
+func TestEveryTrackerDescribesItsKeyGrammar(t *testing.T) {
+	for _, d := range trackerDescriptors {
+		if d.Name == "" {
+			t.Error("a tracker descriptor has no Name")
+		}
+		if d.ParseIdentifier == nil {
+			t.Errorf("tracker %q has no ParseIdentifier", d.Name)
+		}
+		if d.New == nil {
+			t.Errorf("tracker %q has no constructor", d.Name)
+		}
+	}
 }
 
 // TestCatalogsCoverEveryRegistry guards the one thing the type system
