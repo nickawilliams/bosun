@@ -564,10 +564,10 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 
 	switch {
 	case st.err != nil:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross),
 			on(st.target.Label, st.err.Error())
 	case st.state == deployGo && selected:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check),
 			on(st.target.Label, st.reason)
 	case st.state == deployGo:
 		// Deployable but deselected in the form. Pure status — the
@@ -578,9 +578,9 @@ func deployStateRow(st *releaseServiceTarget, selected bool) (glyph, content str
 		if note == "" {
 			note = "(none)"
 		}
-		return muted.Render("○"), off(st.target.Label, note)
+		return muted.Render(ui.Palette.Inactive), off(st.target.Label, note)
 	default: // deploySkip / deployBlock
-		return muted.Render("○"), off(st.target.Label, st.reason)
+		return muted.Render(ui.Palette.Inactive), off(st.target.Label, st.reason)
 	}
 }
 

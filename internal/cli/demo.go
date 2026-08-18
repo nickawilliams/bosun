@@ -326,10 +326,10 @@ func demoGroupsStatic() {
 // group demo and the plan demo so the three card families can be
 // compared side-by-side for layout alignment.
 func demoItemCard() {
-	success := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	success := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
 	info := lipgloss.NewStyle().Foreground(ui.Palette.Info).Render("↑")
 	warning := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("↓")
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("◦")
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render(ui.Palette.Pending)
 
 	ui.NewCard(ui.CardData, "card with items").
 		Item(success, "first row · all good").
@@ -344,7 +344,7 @@ func demoTree() {
 	ui.NewTree().Add(
 		ui.Group("jira",
 			ui.Leaf("◼︎", ui.Palette.Primary, "base_url", "https://jira.example.com"),
-			ui.Leaf("▲", ui.Palette.Warning, "token", "••••••••"),
+			ui.Leaf(ui.Palette.Attention, ui.Palette.Warning, "token", "••••••••"),
 			ui.Leaf("◆", ui.Palette.Success, "project", "ABC"),
 		),
 		ui.Group("code_host",

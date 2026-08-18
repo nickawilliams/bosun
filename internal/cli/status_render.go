@@ -196,7 +196,7 @@ func statusBranchGlyph(sync vcs.BranchSync) (string, color.Color) {
 	}
 	switch {
 	case sync.Ahead == 0 && sync.Behind == 0:
-		return "●  ", ui.Palette.RoleOpen
+		return ui.Palette.Active + "  ", ui.Palette.RoleOpen
 	case sync.Ahead > 0 && sync.Behind > 0:
 		// Sum of ahead + behind — magnitude of divergence, not its
 		// split. The glyph says "two-way", the number says "this
@@ -403,13 +403,13 @@ func statusChecksRow(rollup code.CheckRollup, checksURL string) (string, string)
 func statusChecksGlyph(state string) (string, color.Color) {
 	switch state {
 	case "passing":
-		return "●  ", ui.Palette.RoleOpen
+		return ui.Palette.Active + "  ", ui.Palette.RoleOpen
 	case "failing":
-		return "●  ", ui.Palette.RoleAttention
+		return ui.Palette.Active + "  ", ui.Palette.RoleAttention
 	case "running":
-		return "●  ", ui.Palette.RoleInFlight
+		return ui.Palette.Active + "  ", ui.Palette.RoleInFlight
 	default: // "none" or unknown
-		return "●  ", ui.Palette.RoleNeutral
+		return ui.Palette.Active + "  ", ui.Palette.RoleNeutral
 	}
 }
 
@@ -500,7 +500,7 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		if env.Name == "" {
 			return "", ""
 		}
-		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
+		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -515,7 +515,7 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 
 	switch {
 	case env.Probed && env.Alive:
-		glyph := statusStyledGlyph("●  ", ui.Palette.RoleOpen)
+		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleOpen)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -525,7 +525,7 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		// Bound but probed dead (definitive 404) — torn down, or a
 		// just-triggered deploy still in flight. Surface the binding so
 		// it isn't lost, marked unreachable.
-		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
+		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -536,7 +536,7 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		// Unprobable (no URL template): show the name in neutral so
 		// the reader can see what's bound without implying it's
 		// verified.
-		glyph := statusStyledGlyph("●  ", ui.Palette.RoleNeutral)
+		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleNeutral)
 		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
 		if env.URL != "" {
 			v = osc8Link(env.URL, v)
@@ -559,17 +559,17 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 func statusStateGlyph(state ui.CardState) (string, color.Color) {
 	switch state {
 	case ui.CardSuccess:
-		return "✓  ", ui.Palette.RoleDone
+		return ui.Palette.Check + "  ", ui.Palette.RoleDone
 	case ui.CardReady:
-		return "●  ", ui.Palette.RoleOpen
+		return ui.Palette.Active + "  ", ui.Palette.RoleOpen
 	case ui.CardSkipped:
-		return "●  ", ui.Palette.RoleAttention
+		return ui.Palette.Active + "  ", ui.Palette.RoleAttention
 	case ui.CardWaiting:
-		return "●  ", ui.Palette.RoleInFlight
+		return ui.Palette.Active + "  ", ui.Palette.RoleInFlight
 	case ui.CardFailed:
-		return "✗  ", ui.Palette.RoleClosed
+		return ui.Palette.Cross + "  ", ui.Palette.RoleClosed
 	}
-	return "●  ", ui.Palette.RoleNeutral
+	return ui.Palette.Active + "  ", ui.Palette.RoleNeutral
 }
 
 // lifecycleKeyGlyph maps a bosun lifecycle key (one of the keys in
@@ -587,13 +587,13 @@ func statusStateGlyph(state ui.CardState) (string, color.Color) {
 func lifecycleKeyGlyph(key string) (string, color.Color) {
 	switch key {
 	case "done":
-		return "✓  ", ui.Palette.RoleDone
+		return ui.Palette.Check + "  ", ui.Palette.RoleDone
 	case "ready_for_release":
-		return "●  ", ui.Palette.RoleOpen
+		return ui.Palette.Active + "  ", ui.Palette.RoleOpen
 	case "blocked":
-		return "●  ", ui.Palette.RoleAttention
+		return ui.Palette.Active + "  ", ui.Palette.RoleAttention
 	}
-	return "●  ", ui.Palette.RoleInFlight
+	return ui.Palette.Active + "  ", ui.Palette.RoleInFlight
 }
 
 // statusUpdatedGlyph buckets a workspace's age-in-days into a
@@ -606,11 +606,11 @@ func lifecycleKeyGlyph(key string) (string, color.Color) {
 func statusUpdatedGlyph(days int) (string, color.Color) {
 	switch {
 	case days >= 30:
-		return "●  ", ui.Palette.RoleClosed
+		return ui.Palette.Active + "  ", ui.Palette.RoleClosed
 	case days >= 7:
-		return "●  ", ui.Palette.RoleAttention
+		return ui.Palette.Active + "  ", ui.Palette.RoleAttention
 	default:
-		return "●  ", ui.Palette.RoleOpen
+		return ui.Palette.Active + "  ", ui.Palette.RoleOpen
 	}
 }
 

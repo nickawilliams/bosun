@@ -1177,18 +1177,18 @@ func releaseTargetRow(rt *releaseTarget, on bool) (glyph, content string) {
 	name := rt.repo.Name
 	switch {
 	case rt.tagErr != nil:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross),
 			sel(name, rt.tagErr.Error())
 	case rt.containingRelease != nil:
 		// Sweep-up: another release already contains our work.
 		// Render as a skipped row with "in <tag>" + author so the
 		// user sees who shipped it.
-		return muted.Render("○"), unsel(name, rt.infoRowNote())
+		return muted.Render(ui.Palette.Inactive), unsel(name, rt.infoRowNote())
 	case rt.versionEligible() && rt.gate != gateAllow:
 		// Blocked or skipped by the release gate (work not on the
 		// default branch, or nothing of ours to release). Skipped
 		// row carrying the gate reason.
-		return muted.Render("○"), unsel(name, rt.gateReason)
+		return muted.Render(ui.Palette.Inactive), unsel(name, rt.gateReason)
 	case on:
 		// Append the user-selected subjects in parens when partial;
 		// full-coverage selections render as just the version.
@@ -1200,10 +1200,10 @@ func releaseTargetRow(rt *releaseTarget, on bool) (glyph, content string) {
 		if subj := formatSubjects(rt.repo.Name, rt.services, rt.subjects, ", "); subj != rt.repo.Name {
 			note += " (" + subj + ")"
 		}
-		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check),
 			sel(name, note)
 	default:
-		return muted.Render("○"), unsel(name, rt.versionNote())
+		return muted.Render(ui.Palette.Inactive), unsel(name, rt.versionNote())
 	}
 }
 

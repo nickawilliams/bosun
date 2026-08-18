@@ -311,7 +311,7 @@ func multiSelectOver(options []string, sel *[]string, title, promote string) *hu
 func buildCustomizeCard(resolved []repoContext, picked []int) *ui.Card {
 	primary := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	check := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
+	check := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
 
 	card := ui.NewCard(ui.CardSuccess, "customize")
 	for _, i := range picked {
