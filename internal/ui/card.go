@@ -366,9 +366,28 @@ func (c *Card) Stderr(lines ...string) *Card {
 	return c
 }
 
-// Render returns the card as a styled multi-line string ending in a newline.
+// Render returns the card as a styled multi-line string ending in a
+// newline, in OPEN form: no timeline spine on its body lines. A card
+// is rendered at the moment it becomes the tail of the timeline, and
+// a spine there would promise content that doesn't exist yet. Once a
+// successor prints, the timeline rewrites the card via
+// renderContinuing — see timeline.go.
 func (c *Card) Render() string {
-	return c.renderWithGlyph(c.glyph())
+	return c.renderForm(formOpen)
+}
+
+// renderContinuing returns the card in CONTINUING form: body lines
+// carry the timeline spine, because something is printed below it.
+// This is the shape every card had before the open/continuing swap
+// existed, and the shape every card ends up in except the last.
+func (c *Card) renderContinuing() string {
+	return c.renderForm(formContinuing)
+}
+
+// renderForm renders the card in the given form with its state glyph.
+func (c *Card) renderForm(form timelineForm) string {
+	glyph, gap := c.glyphFor(form)
+	return c.renderStyled(glyph, gap, form)
 }
 
 // renderBreadcrumbRow delegates to the breadcrumb component. Lazy-
@@ -400,15 +419,20 @@ func (c *Card) renderBreadcrumbRow() string {
 	return bc.RenderRow(boxInner, commandTail)
 }
 
-// Print writes the card to stdout. Suppressed in raw mode.
+// Print writes the card to stdout in open form and becomes the
+// timeline's new tail: spacerPrefix rewrites whatever card was open
+// before into continuing form, then this one takes its place.
+// Suppressed in raw mode.
 func (c *Card) Print() {
 	if IsRaw() {
 		return
 	}
-	fmt.Print(spacerPrefix() + c.Render())
+	rendered := c.Render()
+	fmt.Print(spacerPrefix() + rendered)
 	if c.tight {
 		ClearSpacer()
 	}
+	recordOpenCard(rendered, c.renderContinuing)
 }
 
 // EmitToReporter routes the card's completion state through the
@@ -465,18 +489,32 @@ func (c *Card) PrintRewindable() func() {
 		return func() {}
 	}
 	prev := needsSpacer
-	rendered := spacerPrefix() + c.Render()
+	card := c.Render()
+	rendered := spacerPrefix() + card
 	fmt.Print(rendered)
 	lines := strings.Count(rendered, "\n")
 	if c.tight {
 		ClearSpacer()
 	}
+	recordOpenCard(card, c.renderContinuing)
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)
 		}
 		needsSpacer = prev
+		// The block this record pointed at no longer exists; rewriting
+		// it would move the cursor over live content above.
+		DiscardOpenCard()
 	}
+}
+
+// recordCard marks c as the timeline's open card, re-deriving what it
+// painted from its own render. Use after a card reached the screen by
+// some route other than Print — most often as a BubbleTea program's
+// final frame, which paints the card but leaves the timeline none the
+// wiser.
+func recordCard(c *Card) {
+	recordOpenCard(c.Render(), c.renderContinuing)
 }
 
 // GlyphSlot is a placeholder for a body-item glyph that should track
@@ -489,8 +527,23 @@ const GlyphSlot = "\uE000"
 
 // renderWithGlyph renders the card with a custom leading glyph.
 // Used by the spinner to animate the state indicator in place.
+// Always open form: an animating card is by definition the tail of
+// the timeline, and so is the final frame the program leaves behind.
 func (c *Card) renderWithGlyph(glyph string) string {
-	out := c.renderInner(glyph)
+	return c.renderStyled(glyph, strings.Repeat(" ", GlyphGap), formOpen)
+}
+
+// renderStyled is the shared render path: glyph and gap already
+// resolved, form deciding the body-line gutter.
+func (c *Card) renderStyled(glyph, gap string, form timelineForm) string {
+	// v1 boundary (issue #27): only top-level cards participate in
+	// the open/continuing swap. A nested card's body sits inside its
+	// parent's spine, so dropping its own connector would punch a hole
+	// in the middle of a group rather than terminate anything.
+	if c.indent > 0 {
+		form = formContinuing
+	}
+	out := c.renderInner(glyph, gap, form)
 	if strings.Contains(out, GlyphSlot) {
 		out = strings.ReplaceAll(out, GlyphSlot, glyph)
 	}
@@ -515,9 +568,9 @@ func (c *Card) renderWithGlyph(glyph string) string {
 }
 
 // renderInner is the indent-agnostic render path.
-func (c *Card) renderInner(glyph string) string {
+func (c *Card) renderInner(glyph, gap string, form timelineForm) string {
 	const pad = " "
-	conn := pad + c.renderConnector() + "  "
+	conn := c.bodyPrefix(form)
 
 	// CardRoot has its own rendering path (logo box / compact header).
 	if c.state == CardRoot {
@@ -607,7 +660,6 @@ func (c *Card) renderInner(glyph string) string {
 
 	// Render: first line next to glyph, rest with connector prefix.
 	var b strings.Builder
-	gap := "  "
 	if len(lines) == 0 {
 		fmt.Fprintf(&b, "%s%s\n", pad, glyph)
 	} else {
@@ -701,6 +753,46 @@ func (c *Card) glyph() string {
 		fg = c.glyphColor
 	}
 	return lipgloss.NewStyle().Foreground(fg).Render(ch)
+}
+
+// glyphFor returns the card's gutter glyph and the gap that separates
+// it from the content it heads.
+//
+// Cards whose state carries no glyph of its own absorb into the
+// timeline instead of leaving a hole in it: the spine character
+// becomes the card's left-margin marker — ├─ while a successor exists
+// below, ╰─ while the card is the timeline's tail. Those markers are
+// two cells wide where a state glyph is one, so the gap narrows by a
+// column and content still lands at ContentCol(0).
+//
+// Spinner frames come in through renderWithGlyph, which supplies its
+// own glyph and the standard gap — an animating card always has a
+// shape in the gutter, so it can't be glyphless.
+func (c *Card) glyphFor(form timelineForm) (glyph, gap string) {
+	if _, _, ok := stateGlyph(c.state); ok {
+		return c.glyph(), strings.Repeat(" ", GlyphGap)
+	}
+	shape := BoxCornerBL + BoxHorizontal
+	if form == formContinuing {
+		shape = BoxTee + BoxHorizontal
+	}
+	fg := Palette.Recessed
+	if c.glyphColor != nil {
+		fg = c.glyphColor
+	}
+	return lipgloss.NewStyle().Foreground(fg).Render(shape), strings.Repeat(" ", GlyphGap-1)
+}
+
+// bodyPrefix returns the left-gutter prefix for this card's
+// continuation lines: the spine in continuing form, blank columns in
+// open form. Both are ContentCol(0)-1 columns wide, so the content
+// margin is identical either way and a form swap can never change a
+// card's height.
+func (c *Card) bodyPrefix(form timelineForm) string {
+	if form == formOpen {
+		return strings.Repeat(" ", ContentCol(0)-1)
+	}
+	return " " + c.renderConnector() + "  "
 }
 
 // renderConnector returns the styled left-gutter connector for this
@@ -1082,10 +1174,21 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 
 	// BubbleTea's final View() already rendered the finalized card
 	// in place (state set in Update's taskDoneMsg handler), so the
-	// output is on screen. No reprint needed — just propagate the
-	// comfy break state and return.
+	// output is on screen. No reprint needed — just record what landed
+	// as the timeline's open card and return.
 	m := result.(cardSpinnerModel)
+	recordCard(finalFrameCard(card, successCard, m.err))
 	return m.err
+}
+
+// finalFrameCard answers "which card did the spinner program leave on
+// screen?" — the mirror of cardSpinnerModel.View's done branch, so the
+// card the timeline records is the card the terminal is showing.
+func finalFrameCard(card *Card, successCard func() *Card, err error) *Card {
+	if err == nil && successCard != nil {
+		return successCard()
+	}
+	return card
 }
 
 // RunCardReplace works like RunCard but on success, prints a replacement
@@ -1127,6 +1230,7 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	// BubbleTea's final View() already rendered the finalized card
 	// (or replacement card on success) in place.
 	m := model.(cardSpinnerModel)
+	recordCard(finalFrameCard(card, successCard, m.err))
 	return m.err
 }
 
@@ -1194,6 +1298,8 @@ func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
 	}
 
 	if taskErr != nil {
+		// The failed spinCard is what stayed on screen.
+		recordCard(spinCard)
 		return nil, taskErr
 	}
 
@@ -1207,11 +1313,13 @@ func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
 
 	rendered := finalCard.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
+	recordCard(finalCard)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
+		DiscardOpenCard()
 	}, nil
 }
 
@@ -1257,6 +1365,7 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 
 	if taskErr != nil {
 		// BubbleTea's final View() already rendered the failed card.
+		recordCard(card)
 		return nil, taskErr
 	}
 
@@ -1265,11 +1374,13 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 	// card BubbleTea rendered) so the rewind function can erase it.
 	rendered := card.Render()
 	totalLines := strings.Count(prefix+rendered, "\n")
+	recordCard(card)
 	return func() {
 		if totalLines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
 		}
 		needsSpacer = prevSpacer
+		DiscardOpenCard()
 	}, nil
 }
 
