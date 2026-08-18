@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -333,10 +334,170 @@ func TestRawModeSkipsRewrites(t *testing.T) {
 func TestRecordOpenCardIgnoresEmptyBlocks(t *testing.T) {
 	resetTimeline(t)
 	recordCard(NewCard(CardSuccess, "real").Muted("body"))
-	recordOpenCard("", func() string { return "" })
+	recordOpenCard("", "")
 	if openCard != nil {
 		t.Error("a zero-line block should clear the record, not replace it")
 	}
+}
+
+// TestRewriteFitsGuardsTheViewport covers the cursor-math limit that
+// makes tall cards unrewritable: cursor-previous-line clamps at row 1
+// of the screen and cannot reach into scrollback, so a block at least
+// as tall as the viewport would be re-entered from the middle and
+// duplicated below the stranded rows.
+func TestRewriteFitsGuardsTheViewport(t *testing.T) {
+	cases := []struct {
+		block, viewport int
+		want            bool
+	}{
+		{block: 3, viewport: 24, want: true},   // ordinary card
+		{block: 23, viewport: 24, want: true},  // exactly fits above the cursor
+		{block: 24, viewport: 24, want: false}, // top row has scrolled off
+		{block: 40, viewport: 24, want: false}, // captured subprocess output
+		{block: 0, viewport: 24, want: false},  // nothing painted
+	}
+	for _, tc := range cases {
+		if got := rewriteFits(tc.block, tc.viewport); got != tc.want {
+			t.Errorf("rewriteFits(%d, %d) = %v, want %v",
+				tc.block, tc.viewport, got, tc.want)
+		}
+	}
+}
+
+// TestTallCardIsLeftOpenRatherThanDuplicated is the guard end to end.
+// Redirecting the output stream to a non-File makes TermHeight report
+// its 24-row default, so the card below is deliberately taller than
+// the viewport. Before the guard this emitted a cursor-up the terminal
+// could not honour, stranding the top of the card and printing the
+// rest of it a second time.
+func TestTallCardIsLeftOpenRatherThanDuplicated(t *testing.T) {
+	resetTimeline(t)
+	SetStreams(nil, &bytes.Buffer{}, nil)
+	t.Cleanup(ResetStreams)
+
+	body := make([]string, TermHeight()+5)
+	for i := range body {
+		body[i] = fmt.Sprintf("body line %d", i)
+	}
+	tall := NewCard(CardSuccess, "captured output").Muted(body...)
+
+	out := captureStdout(t, func() {
+		tall.Print()
+		NewCard(CardSuccess, "after").Print()
+	})
+
+	if rewritePattern.MatchString(out) {
+		t.Errorf("a card taller than the viewport must not be rewritten:\n%q", out)
+	}
+	if strings.Count(out, "body line 0") != 1 {
+		t.Errorf("card body was duplicated:\n%q", out)
+	}
+
+	// A card that does fit still swaps, so the guard is not simply
+	// disabling the feature whenever streams are redirected.
+	resetTimeline(t)
+	short := NewCard(CardSuccess, "short").Muted("body line")
+	out = captureStdout(t, func() {
+		short.Print()
+		NewCard(CardSuccess, "after").Print()
+	})
+	if !rewritePattern.MatchString(out) {
+		t.Errorf("a card that fits should still be rewritten:\n%q", out)
+	}
+}
+
+// TestRecordSnapshotsBothFormsAtPrintTime: the record holds rendered
+// bytes, not a pointer back into a live card. PlanCard walks
+// Applying → Success in place between its two Prints, and re-deriving
+// the continuing form at rewrite time would paint the FINAL state into
+// the Applying card's rows — then print the final card again below it.
+func TestRecordSnapshotsBothFormsAtPrintTime(t *testing.T) {
+	resetTimeline(t)
+
+	pc := NewPlanCard(NewPlan().Add(PlanCreate, "branch", "repo", "api", "feature/x"))
+	pc.SetState(PlanApplying)
+	applying := pc.renderContinuing()
+
+	out := captureStdout(t, func() {
+		pc.Print()
+		// The card mutates while it is the recorded open card — the
+		// non-interactive RunApply fallback does exactly this.
+		pc.SetResults(1, 0, 0)
+		pc.SetState(PlanSuccess)
+		pc.Print()
+	})
+
+	if !strings.Contains(out, applying) {
+		t.Errorf("rewrite should have repainted the Applying state it recorded:\n%q", out)
+	}
+	if n := strings.Count(ansi.Strip(out), "Success"); n != 1 {
+		t.Errorf("final state rendered %d times, want 1:\n%q", n, ansi.Strip(out))
+	}
+}
+
+// TestRecordOpenCardAdoptsAnExternallyPaintedCard: RunCardStepsInto
+// paints a card as a raw final frame and hands the region over. When
+// the hand-off doesn't happen the caller owns a card the timeline has
+// never seen, and RecordOpenCard is how it says so — without it those
+// rows keep a blank gutter while the spine resumes below them.
+func TestRecordOpenCardAdoptsAnExternallyPaintedCard(t *testing.T) {
+	resetTimeline(t)
+
+	painted := NewCard(CardSuccess, "pull requests").Muted("api · ready", "web · ready")
+	out := captureStdout(t, func() {
+		fmt.Print(painted.Render()) // stands in for the raw final frame
+		RecordOpenCard(painted)
+		NewCard(CardSuccess, "base branch").Print()
+	})
+
+	if !strings.Contains(out, painted.renderContinuing()) {
+		t.Errorf("an adopted card should be rewritten once a successor prints:\n%q", out)
+	}
+}
+
+// TestBoldFinalizesTheOpenCard: Bold is not a card and not on the
+// timeline grid, so without the finalize the next card's rewrite would
+// reach back over its line and erase it.
+func TestBoldFinalizesTheOpenCard(t *testing.T) {
+	resetTimeline(t)
+
+	card := NewCard(CardSuccess, "header").Muted("body line")
+	out := captureStdout(t, func() {
+		card.Print()
+		Bold("standalone")
+	})
+
+	if !strings.Contains(out, card.renderContinuing()) {
+		t.Errorf("Bold should restore the spine before printing:\n%q", out)
+	}
+	if !strings.HasSuffix(ansi.Strip(out), "standalone\n") {
+		t.Errorf("Bold's line should survive as the last output:\n%q", ansi.Strip(out))
+	}
+	if openCard != nil {
+		t.Error("Bold left an open-card record behind")
+	}
+}
+
+// TestRewindOnlyDiscardsItsOwnRecord: if something printed between a
+// rewindable block and its rewind, the record now belongs to that
+// successor. Clearing it blindly would leave the successor spineless
+// forever.
+func TestRewindOnlyDiscardsItsOwnRecord(t *testing.T) {
+	resetTimeline(t)
+
+	captureStdout(t, func() {
+		rewind := NewCard(CardInput, "transient").Muted("body line").PrintRewindable()
+		successor := NewCard(CardSuccess, "successor").Muted("body line")
+		successor.Print()
+		rewind()
+
+		if openCard == nil {
+			t.Fatal("rewind discarded the successor's record")
+		}
+		if openCard.continuing != successor.renderContinuing() {
+			t.Error("the open card should still be the successor")
+		}
+	})
 }
 
 // TestUnchangedFormsSkipTheRewrite: a card with no body renders the

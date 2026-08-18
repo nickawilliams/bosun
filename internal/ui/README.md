@@ -120,12 +120,24 @@ open is what says "this is the end."
   `ui.FinalizeOpenCard()` first, so the spine is restored before the
   region is borrowed. `ui.DiscardOpenCard()` forgets the card without
   rewriting, for blocks about to be erased.
+- **`spacerPrefix()` guarantees the close, not the record.** Every
+  emitter gets the *rewrite* of the previous card for free, because
+  they all call it. Putting a card on screen some other way — a
+  BubbleTea final frame, `RunCardStepsInto`'s raw hand-off — still
+  needs an explicit `ui.RecordOpenCard(card)`, or that card never gets
+  its spine back.
 - **No-op swaps are skipped.** A card with no body renders the same
-  either way, so it is never repainted — that covers most cards and
-  the whole logo box.
-- **Nested cards don't participate** (v1). An indented card's body
-  sits inside its parent's spine; dropping its connector would punch
-  a hole mid-group rather than terminate anything.
+  either way, so it is never recorded or repainted — that covers most
+  cards and the whole logo box.
+- **Blocks as tall as the viewport are skipped.** Cursor-previous-line
+  clamps at row 1 of the screen and can't reach into scrollback, so a
+  card taller than the terminal would be rewritten from the middle and
+  duplicated. Leaving it spineless is the better failure.
+- **Nested cards don't participate** (v1), and a group is nested
+  cards. An indented card's body sits inside its parent's spine, so
+  dropping its connector would punch a hole mid-group rather than
+  terminate anything — which also means a command whose output *ends*
+  on a group still ends on a spine. Groups are the remaining gap.
 - **Raw mode** records and rewrites nothing — the escapes would
   corrupt a piped stream.
 
