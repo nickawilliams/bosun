@@ -9,6 +9,24 @@ import (
 	"github.com/nickawilliams/bosun/internal/vcs"
 )
 
+// findRowContaining returns the single rendered line carrying want,
+// failing if there is not exactly one. Isolating the row is what lets
+// a glyph assertion distinguish the row's own glyph from the card's
+// leading state glyph.
+func findRowContaining(t *testing.T, lines []string, want string) string {
+	t.Helper()
+	var found []string
+	for _, l := range lines {
+		if strings.Contains(l, want) {
+			found = append(found, l)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("found %d rows containing %q, want exactly 1: %q", len(found), want, lines)
+	}
+	return found[0]
+}
+
 // The readiness card is the only consumer of three severity glyphs,
 // and severity→glyph is the mapping a reader scans first. Assert each
 // tier renders its own shape, and that the worst finding drives the
@@ -34,12 +52,29 @@ func TestBuildCleanupReadinessCardGlyphs(t *testing.T) {
 				}},
 				nil,
 			)
-			out := stripANSI(card.Render())
-			if !strings.Contains(out, tc.wantGlyph) {
-				t.Errorf("card = %q, want the %s glyph %q", out, tc.name, tc.wantGlyph)
+			lines := strings.Split(strings.TrimRight(stripANSI(card.Render()), "\n"), "\n")
+
+			// Assert on the row itself, not the card. Checking the
+			// whole render is satisfied by the leading state glyph
+			// alone, which would pass even if glyphFor mapped the
+			// severities backwards.
+			row := findRowContaining(t, lines, "api")
+			if !strings.Contains(row, tc.wantGlyph) {
+				t.Errorf("row = %q, want the %s glyph %q", row, tc.name, tc.wantGlyph)
 			}
-			if !strings.HasPrefix(strings.TrimLeft(out, " "), tc.wantState) {
-				t.Errorf("card leads with %q, want the state glyph %q", out, tc.wantState)
+			for _, other := range []string{ui.Palette.Check, ui.Palette.Cross, ui.Palette.Attention} {
+				if other == tc.wantGlyph {
+					continue
+				}
+				if strings.Contains(row, other) {
+					t.Errorf("row = %q, want only the %s glyph, but it also carries %q", row, tc.name, other)
+				}
+			}
+
+			// The card's own state still aggregates to the worst
+			// finding, which for a single finding is this severity.
+			if !strings.HasPrefix(strings.TrimLeft(lines[0], " "), tc.wantState) {
+				t.Errorf("card leads with %q, want the state glyph %q", lines[0], tc.wantState)
 			}
 		})
 	}

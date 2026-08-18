@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -537,8 +538,10 @@ func isAlpha(c byte) bool {
 // constant, the label silently stops lining up under its dot. Assert
 // the two agree rather than trusting the comment on the constant.
 func TestStepperSlotWidthMatchesConnector(t *testing.T) {
-	// One dot plus the connector that follows it.
-	if got := len([]rune(stepperConnector)) + 1; got != stepperSlotWidth {
+	// One dot plus the connector that follows it. Measured in display
+	// cells, not runes — the invariant is about columns, so a
+	// double-width substitute has to fail here.
+	if got := lipgloss.Width(stepperConnector) + 1; got != stepperSlotWidth {
 		t.Errorf("dot + connector spans %d cells, but stepperSlotWidth is %d", got, stepperSlotWidth)
 	}
 }

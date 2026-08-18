@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -66,13 +67,17 @@ func TestStateGlyphCoversEveryCardState(t *testing.T) {
 		CardWaiting: "CardWaiting",
 	}
 
-	// CardWaiting is the highest declared state; anything at or below
-	// it must be in the map above, or the enum grew without this test
-	// (and stateGlyph) being updated.
-	for s := CardPending; s <= CardWaiting; s++ {
+	// Bound the sweep with the sentinel rather than the last real
+	// state, so a state *appended* to the enum is caught too — this
+	// enum has grown by appending before (CardData, CardReady and
+	// CardWaiting all sit after CardRoot).
+	for s := CardPending; s < cardStateCount; s++ {
 		if _, named := states[s]; !named {
 			t.Fatalf("CardState(%d) is declared but missing from this test — add it and check stateGlyph handles it", s)
 		}
+	}
+	if len(states) != int(cardStateCount) {
+		t.Fatalf("test names %d states but the enum declares %d", len(states), cardStateCount)
 	}
 
 	for state, name := range states {
@@ -90,6 +95,47 @@ func TestStateGlyphCoversEveryCardState(t *testing.T) {
 		if w := lipgloss.Width(glyph); w != 1 {
 			t.Errorf("%s: glyph %q is %d cells wide, want 1 — the gutter is one column", name, glyph, w)
 		}
+	}
+}
+
+// The mapping itself, pinned. Coverage of "every state has *a*
+// glyph" does not catch a state repointed to the wrong one — and a
+// mechanical sweep that rewrote this switch is exactly the change
+// that could do that silently. Assert the pairs.
+func TestStateGlyphMapping(t *testing.T) {
+	p := defaultPalette()
+	for _, tc := range []struct {
+		name      string
+		state     CardState
+		wantGlyph string
+		wantColor color.Color
+	}{
+		{"CardPending", CardPending, p.Pending, p.Muted},
+		{"CardRunning", CardRunning, p.Pending, p.Primary},
+		{"CardSuccess", CardSuccess, p.Check, p.Success},
+		{"CardSkipped", CardSkipped, p.Attention, p.Warning},
+		{"CardFailed", CardFailed, p.Cross, p.Error},
+		{"CardInfo", CardInfo, p.Active, p.Primary},
+		{"CardInput", CardInput, p.Unknown, p.Accent},
+		{"CardRoot", CardRoot, BoxCornerTL, p.Recessed},
+		{"CardData", CardData, p.Active, p.Primary},
+		// Ready is ● not ✓: the work is good but not finished, so it
+		// keeps the active shape and borrows the success color.
+		{"CardReady", CardReady, p.Active, p.Success},
+		{"CardWaiting", CardWaiting, p.Waiting, p.Info},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			glyph, fg, ok := stateGlyph(tc.state)
+			if !ok {
+				t.Fatalf("stateGlyph reported no glyph")
+			}
+			if glyph != tc.wantGlyph {
+				t.Errorf("glyph = %q, want %q", glyph, tc.wantGlyph)
+			}
+			if fg != tc.wantColor {
+				t.Errorf("color = %v, want %v", fg, tc.wantColor)
+			}
+		})
 	}
 }
 
