@@ -482,6 +482,10 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 	}
 	if !formGate() {
 		applyDefaults() // no-op when the closure already ran
+		// Nothing takes the region over, so the targets card the final
+		// frame painted is the timeline's tail — record it or its rows
+		// keep a blank gutter while the spine resumes below.
+		ui.RecordOpenCard(buildDeployTargetsCard(states))
 		return states, nil
 	}
 

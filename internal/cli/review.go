@@ -265,6 +265,11 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		// interactive mode, and finalView()'s side effects (applyDefaults)
 		// already ran in raw/plain mode. Re-call to be safe: idempotent.
 		applyDefaults()
+		// Nothing takes the region over after all, so the targets card
+		// the final frame painted is the timeline's tail. Tell the
+		// timeline, or its rows keep a blank gutter while the spine
+		// resumes on the cards printed below.
+		ui.RecordOpenCard(buildReviewTargetsCard(resolved))
 		return nil
 	}
 
