@@ -1,29 +1,23 @@
 package cli
 
-// SourceOption represents a single option returned by a ConfigKey Source.
-type SourceOption struct {
-	Label string // Display text (e.g., "My Board (scrum, id: 42)").
-	Value string // Stored value (e.g., "42").
-}
+import (
+	"github.com/nickawilliams/bosun/internal/cicd"
+	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/provider"
+	"github.com/nickawilliams/bosun/internal/services"
+	"github.com/spf13/viper"
+)
 
-// ConfigKey describes a single configuration value.
-type ConfigKey struct {
-	Key      string                         // Config key (relative to group, e.g. "base_url").
-	Label    string                         // Human-readable label for prompts.
-	Example  string                         // Example value shown as placeholder.
-	Default  string                         // Default value if not set.
-	Options  []string                       // Valid values (renders as select if non-empty).
-	EnvVar   string                         // Environment variable name (if value comes from env).
-	Secret   bool                           // Mask input (for tokens/passwords).
-	Required bool                           // Must have a value for the group to be valid.
-	Source   func() ([]SourceOption, error) // Dynamic value source for interactive picker.
-}
-
-// ConfigGroup describes a related set of config values (e.g., "issue_tracker").
-type ConfigGroup struct {
-	Label string      // Human-readable label (e.g., "Jira").
-	Keys  []ConfigKey // The config keys in this group.
-}
+// The config-schema vocabulary is shared with the provider adapters,
+// which contribute keys of their own (see provider.ConfigKey). Aliased
+// so cli code — and the tests around it — keep reading `ConfigKey`.
+type (
+	SourceOption = provider.SourceOption
+	ConfigKey    = provider.ConfigKey
+	ConfigGroup  = provider.ConfigGroup
+)
 
 // lifecycleStatusKeys defines the canonical ordering of lifecycle
 // stages. This sequence drives status sort order in the issue picker.
@@ -37,26 +31,39 @@ var lifecycleStatusKeys = []string{
 	"acceptance",
 }
 
-// configSchema is the central registry of all known config keys.
+// providerKeysMarker is a placeholder ConfigKey naming the position in a
+// group where the configured provider's own keys are spliced in (see
+// schemaGroups). It never reaches a prompt or a config file — the splice
+// replaces it, and a group whose provider can't be determined drops it.
+//
+// The marker exists so key ORDER stays visible and authoritative here:
+// prompts, the init form, and `config check` all walk a group's keys in
+// order, and appending provider keys at the end would silently reshuffle
+// every one of those surfaces.
+const providerKeysMarker = "__provider_keys__"
+
+// providerKeys is the marker entry, written out at each splice point.
+var providerKeys = ConfigKey{Key: providerKeysMarker}
+
+// configSchema is the central registry of config keys bosun itself
+// owns. Read it through schemaGroups()/lookupGroup(), never directly:
+// provider-specific keys (Jira's base URL, Slack's auth mode) belong to
+// the provider packages and are spliced in at the providerKeys marker.
 //
 // Keys are resolved via fullKey(groupName, ck) → "groupName.ck.Key".
-// Provider-specific keys live directly under their category group
-// (e.g., Jira keys under "issue_tracker", not a separate "jira" group).
 // Status mappings live under "issue_tracker.statuses" as a sub-group.
 var configSchema = map[string]ConfigGroup{
-	"issue_tracker": {
+	issue.ConfigGroup: {
 		Label: "issue tracker",
 
 		Keys: []ConfigKey{
-			{Key: "provider", Label: "provider", Options: []string{"jira"}, Required: true},
-			{Key: "base_url", Label: "base URL", Example: "https://mycompany.atlassian.net", Required: true},
-			{Key: "email", Label: "email", Required: true},
-			{Key: "token", Label: "API token", EnvVar: "BOSUN_JIRA_TOKEN", Secret: true, Required: true},
+			{Key: "provider", Label: "provider", Required: true},
+			providerKeys,
 			{Key: "project", Label: "project key", Example: "PROJ"},
 			{Key: "board_id", Label: "board ID", Example: "123"},
 		},
 	},
-	"issue_tracker.statuses": {
+	issue.ConfigGroup + ".statuses": {
 		Label: "status mappings",
 
 		Keys: []ConfigKey{
@@ -85,15 +92,19 @@ var configSchema = map[string]ConfigGroup{
 
 		Keys: []ConfigKey{
 			{Key: "root", Label: "workspace root", Example: ".workspaces"},
-			{Key: "issue_pattern", Label: "issue pattern", Default: `([A-Z][A-Z0-9]+-\d+)`, Example: `([A-Z][A-Z0-9]+-\d+)`},
+			// No Default: unset means "use the configured tracker's own
+			// key grammar" (issue.TrackerDescriptor.ParseIdentifier).
+			// Setting it overrides that grammar — the escape hatch for a
+			// key shape the provider doesn't recognize.
+			{Key: "issue_pattern", Label: "issue pattern", Example: `([A-Z][A-Z0-9]+-\d+)`},
 		},
 	},
-	"code_host": {
+	code.ConfigGroup: {
 		Label: "code host",
 
 		Keys: []ConfigKey{
-			{Key: "provider", Label: "provider", Options: []string{"github"}, Required: true},
-			{Key: "token", Label: "personal access token", EnvVar: "GITHUB_TOKEN", Secret: true, Required: true},
+			{Key: "provider", Label: "provider", Required: true},
+			providerKeys,
 			{Key: "merge_method", Label: "PR merge method", Options: []string{"squash", "merge", "rebase"}, Default: "squash"},
 		},
 	},
@@ -108,29 +119,28 @@ var configSchema = map[string]ConfigGroup{
 			{Key: "base", Label: "base branch", Example: "main"},
 			{Key: "title_template", Label: "PR title template", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
 			{Key: "body_template", Label: "PR body template"},
-			{Key: "reviewers", Label: "reviewers (GitHub usernames)"},
-			{Key: "team_reviewers", Label: "team reviewers (GitHub team slugs)"},
-			{Key: "assignees", Label: "assignees (GitHub usernames)"},
+			{Key: "reviewers", Label: "reviewers (host usernames)"},
+			{Key: "team_reviewers", Label: "team reviewers (host team slugs)"},
+			{Key: "assignees", Label: "assignees (host usernames)"},
 			{Key: "self_assign", Label: "auto-assign PR author", Default: "true"},
 		},
 	},
-	"notification": {
+	notify.ConfigGroup: {
 		Label: "notification",
 
 		Keys: []ConfigKey{
-			{Key: "provider", Label: "provider", Options: []string{"slack"}},
-			{Key: "auth", Label: "auth method", Options: []string{"token", "local"}, Default: "token"},
-			{Key: "token", Label: "API token", EnvVar: "BOSUN_SLACK_TOKEN", Secret: true},
-			{Key: "workspace", Label: "workspace name", Example: "mycompany"},
+			{Key: "provider", Label: "provider"},
+			providerKeys,
 			{Key: "channel_review", Label: "review channel", Example: "bb-prs"},
 			{Key: "channel_prerelease", Label: "prerelease channel", Example: "release_coordination"},
 		},
 	},
-	"cicd": {
+	cicd.ConfigGroup: {
 		Label: "CI/CD",
 
 		Keys: []ConfigKey{
-			{Key: "provider", Label: "provider", Options: []string{"github_actions"}},
+			{Key: "provider", Label: "provider"},
+			providerKeys,
 			{Key: "workflows.preview.url_template", Label: "preview URL template", Example: "https://host-ui-{{.Name}}.example.dev"},
 			{Key: "workflows.preview.up.target", Label: "preview up workflow", Example: "org/repo/.github/workflows/deploy-preview.yml"},
 			{Key: "workflows.preview.up.inputs.services", Label: "preview up services input", Default: "services-to-deploy"},
@@ -163,10 +173,67 @@ func registerSource(group, key string, source func() ([]SourceOption, error)) {
 	configSchema[group] = g
 }
 
-// lookupGroup returns the config group for a given name.
+// schemaGroups returns the effective config schema: bosun's own keys
+// with each group's provider-contributed keys spliced in, and the
+// "provider" key's selectable Options filled from the provider registry.
+//
+// Resolved per call rather than baked in at init because it depends on
+// configuration — which provider a group is set to — and config isn't
+// loaded when package vars initialize.
+func schemaGroups() map[string]ConfigGroup {
+	out := make(map[string]ConfigGroup, len(configSchema))
+	for name, group := range configSchema {
+		out[name] = resolveSchemaGroup(name, group)
+	}
+	return out
+}
+
+// resolveSchemaGroup expands one group: provider Options from the
+// registry, provider keys spliced in at the marker.
+func resolveSchemaGroup(name string, group ConfigGroup) ConfigGroup {
+	names := services.ProviderNames(name)
+	if names == nil {
+		return group
+	}
+
+	keys := services.ProviderKeys(name, schemaProvider(name))
+
+	out := group
+	out.Keys = make([]ConfigKey, 0, len(group.Keys)+len(keys))
+	for _, ck := range group.Keys {
+		switch ck.Key {
+		case providerKeysMarker:
+			out.Keys = append(out.Keys, keys...)
+		case "provider":
+			ck.Options = names
+			out.Keys = append(out.Keys, ck)
+		default:
+			out.Keys = append(out.Keys, ck)
+		}
+	}
+	return out
+}
+
+// schemaProvider returns the provider whose keys a group should show:
+// the configured one, or — when config hasn't said yet — the sole
+// registered provider, since with one choice there is nothing to pick
+// and hiding its keys would leave `bosun init` and `doctor` with nothing
+// to ask for. With several registered and none chosen, no provider keys
+// appear until the user picks one.
+func schemaProvider(group string) string {
+	if name := viper.GetString(group + ".provider"); name != "" {
+		return name
+	}
+	return services.SoleProvider(group)
+}
+
+// lookupGroup returns the effective config group for a given name.
 func lookupGroup(name string) (ConfigGroup, bool) {
 	g, ok := configSchema[name]
-	return g, ok
+	if !ok {
+		return ConfigGroup{}, false
+	}
+	return resolveSchemaGroup(name, g), true
 }
 
 // fullKey returns the fully-qualified viper key for a group key.

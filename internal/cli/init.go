@@ -7,7 +7,12 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/nickawilliams/bosun/internal/cicd"
+	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/config"
+	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -312,6 +317,15 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 	providerFK := fullKey(ig.Group, providerKey)
 	viper.Set(providerFK, provider)
 
+	// Re-resolve the group now that the pick is staged: which keys a
+	// group even has depends on the provider (one tracker asks for a
+	// site and an account, another for something else), so the form
+	// below has to be built from the chosen provider's schema rather
+	// than whatever was current before the gate.
+	if refreshed, ok := lookupGroup(ig.Group); ok {
+		group = refreshed
+	}
+
 	configPath, err := configPathForScope(false)
 	if err != nil {
 		return err
@@ -445,10 +459,10 @@ type initGroup struct {
 // serviceInitGroups defines the ordered list of optional service groups
 // presented during interactive init.
 var serviceInitGroups = []initGroup{
-	{Label: "issue tracker", Group: "issue_tracker"},
-	{Label: "code host", Group: "code_host"},
-	{Label: "notifications", Group: "notification"},
-	{Label: "CI/CD", Group: "cicd", ProviderOnly: true},
+	{Label: "issue tracker", Group: issue.ConfigGroup},
+	{Label: "code host", Group: code.ConfigGroup},
+	{Label: "notifications", Group: notify.ConfigGroup},
+	{Label: "CI/CD", Group: cicd.ConfigGroup, ProviderOnly: true},
 }
 
 // detectRepositories scans a directory for git repositories: the directory
@@ -529,14 +543,24 @@ func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 	}
 
 	b.WriteString("\n# Uncomment and configure as needed:\n")
-	b.WriteString("# issue_tracker:\n")
-	b.WriteString("#   provider: jira\n")
+	fmt.Fprintf(&b, "# issue_tracker:\n#   provider: %s\n", providerHint(issue.ConfigGroup))
 	b.WriteString("#   project: PROJ\n")
 	b.WriteString("#\n")
-	b.WriteString("# notification:\n")
-	b.WriteString("#   provider: slack\n")
+	fmt.Fprintf(&b, "# notification:\n#   provider: %s\n", providerHint(notify.ConfigGroup))
 	b.WriteString("#   channel_review: code-review\n")
 	b.WriteString("#   channel_prerelease: releases\n")
 
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// providerHint renders a config group's registered providers for the
+// commented-out template: the single name when there's one, otherwise
+// "a|b|c". Drawn from the registry so a newly supported provider is
+// documented the moment it's registered, with no template edit.
+func providerHint(group string) string {
+	names := services.ProviderNames(group)
+	if len(names) == 0 {
+		return "…"
+	}
+	return strings.Join(names, "|")
 }

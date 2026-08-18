@@ -12,25 +12,25 @@ import (
 	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
 	"github.com/spf13/viper"
 )
 
-// defaultIssuePattern matches common issue tracker IDs like PROJ-123, CS-42, etc.
-const defaultIssuePattern = `[A-Z][A-Z0-9]+-\d+`
-
-// issuePattern returns the compiled regex for extracting issue keys.
-// It reads the configured workspace.issue_pattern, falling back to
-// the default pattern if not set or invalid.
+// issuePattern returns the compiled workspace.issue_pattern override,
+// or nil when none is configured (or it doesn't compile). The override
+// is the user's escape hatch for a key shape their tracker's own
+// grammar doesn't cover; absent one, extraction goes through the
+// tracker.
 func issuePattern() *regexp.Regexp {
 	if pat := viper.GetString("workspace.issue_pattern"); pat != "" {
 		if re, err := regexp.Compile(pat); err == nil {
 			return re
 		}
 	}
-	return regexp.MustCompile(defaultIssuePattern)
+	return nil
 }
 
 // issueFromWorkspacePath attempts to extract an issue ID from the current
@@ -154,7 +154,7 @@ func pickAssignedIssue() (string, error) {
 	sortIssues(issues, columns)
 
 	// Build a status ID → column name map so the picker can show
-	// the board column name instead of the raw Jira status name.
+	// the board column name instead of the raw tracker status name.
 	colNames := buildColumnNameIndex(columns)
 
 	// Compute column widths for aligned display.
@@ -300,9 +300,19 @@ func displayStatus(iss issuepkg.Issue, colNames map[string]string) string {
 	return iss.Status
 }
 
-// extractIssue finds an issue tracker ID (e.g., PROJ-123) within a string.
-// Works with branch names like "feature/PROJ-123_add-widget" or workspace
-// paths like "feature/PROJ-123_add-widget".
+// extractIssue finds an issue key (e.g., PROJ-123) within a string.
+// Works with branch names like "feature/PROJ-123_add-widget" or
+// workspace paths like "feature/PROJ-123_add-widget".
+//
+// Resolution order: the configured workspace.issue_pattern override
+// first, then the tracker's own grammar (issue.Tracker.ParseIdentifier)
+// — key shape is the tracker's to define, and bosun holds no default of
+// its own. With neither an override nor a configured tracker there is
+// nothing to match against, so extraction yields "" and the callers'
+// other resolution paths (--issue, config) carry the load.
 func extractIssue(s string) string {
-	return issuePattern().FindString(s)
+	if re := issuePattern(); re != nil {
+		return re.FindString(s)
+	}
+	return services.ParseIssueIdentifier(providerConfig{}, s)
 }
