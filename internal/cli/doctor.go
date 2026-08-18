@@ -12,6 +12,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/cicd"
+	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -514,7 +515,13 @@ func checkCodeHost(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
 
-	return fmt.Sprintf("github → %s", username), nil
+	// The provider names itself, the way the notification row does. The
+	// host has no AuthTest of its own because GetAuthenticatedUser
+	// already is one — a login is a login on any host, unlike a tracker's
+	// site-and-account identity — so the row is composed here from the
+	// configured provider (falling back to the sole registered host, the
+	// same rule that governs which host was built).
+	return fmt.Sprintf("%s → %s", schemaProvider(code.ConfigGroup), username), nil
 }
 
 // checkNotification verifies the notification provider end-to-end:

@@ -286,7 +286,7 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []
 		if value == "" {
 			continue
 		}
-		if ck, _, ok := findConfigKey(fk); ok && ck.Secret {
+		if isSecretKey(fk) {
 			value = secretMask
 		}
 		glyph, glyphColor := sourceGlyph(source)
@@ -302,7 +302,7 @@ func buildLeafNode(cs *configSources, key string) *ui.TreeNode {
 		return nil
 	}
 	// Mask secrets.
-	if ck, _, ok := findConfigKey(key); ok && ck.Secret {
+	if isSecretKey(key) {
 		value = secretMask
 	}
 	glyph, glyphColor := sourceGlyph(source)
@@ -531,30 +531,25 @@ const secretMask = "••••••••"
 // print verbatim. An exact-key `config get` in raw format remains the
 // deliberate escape hatch for scripts that need the real value.
 func maskSecrets(settings map[string]any) {
-	for groupName, group := range schemaGroups() {
-		for _, ck := range group.Keys {
-			if !ck.Secret {
-				continue
+	for key := range secretKeys() {
+		parts := strings.Split(key, ".")
+		m := settings
+		walked := true
+		for _, part := range parts[:len(parts)-1] {
+			next, isMap := m[part].(map[string]any)
+			if !isMap {
+				walked = false
+				break
 			}
-			parts := strings.Split(fullKey(groupName, ck), ".")
-			m := settings
-			walked := true
-			for _, part := range parts[:len(parts)-1] {
-				next, isMap := m[part].(map[string]any)
-				if !isMap {
-					walked = false
-					break
-				}
-				m = next
-			}
-			if !walked {
-				continue
-			}
-			leaf := parts[len(parts)-1]
-			if v, exists := m[leaf]; exists {
-				if s, isStr := v.(string); !isStr || s != "" {
-					m[leaf] = secretMask
-				}
+			m = next
+		}
+		if !walked {
+			continue
+		}
+		leaf := parts[len(parts)-1]
+		if v, exists := m[leaf]; exists {
+			if s, isStr := v.(string); !isStr || s != "" {
+				m[leaf] = secretMask
 			}
 		}
 	}

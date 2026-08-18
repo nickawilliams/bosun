@@ -163,6 +163,19 @@ var configSchema = map[string]ConfigGroup{
 
 // registerSource sets a Source function on a ConfigKey within a group.
 // Called from init() to avoid package-level initialization cycles.
+//
+// This is the one write to configSchema, and therefore the one place
+// that touches it directly rather than reading through schemaGroups —
+// the resolved groups are rebuilt per call, so a Source set on one would
+// evaporate. It follows that only keys bosun itself declares can carry a
+// Source: a provider-contributed key named here would match nothing and
+// silently no-op, leaving a picker as a free-text prompt. No provider
+// declares one today; give provider.ConfigKey.Source a real home in the
+// descriptor if one ever needs to.
+//
+// Safe without synchronization because every caller is an init()
+// function, which runs before any goroutine exists. Every later access
+// is a read.
 func registerSource(group, key string, source func() ([]SourceOption, error)) {
 	g := configSchema[group]
 	for i := range g.Keys {
@@ -226,6 +239,44 @@ func schemaProvider(group string) string {
 	}
 	return services.SoleProvider(group)
 }
+
+// secretKeys returns every fully-qualified config key that must never
+// render in cleartext: bosun's own Secret keys plus those of EVERY
+// registered provider, not only the configured one.
+//
+// Masking is the one schema read that has to fail closed, so it is the
+// one read that doesn't go through schemaGroups. A group's provider keys
+// are spliced in per the *configured* provider, so a provider value the
+// registry doesn't recognize — a typo like "Jira", a provider name from
+// a newer bosun, or any group left unset once a second provider is
+// registered — drops that provider's token key out of the effective
+// schema. Every "is this secret?" lookup would then answer no for a
+// token sitting right there in the settings map, and `bosun config show`
+// would print it. Taking the union costs one pass and removes the class.
+func secretKeys() map[string]bool {
+	out := make(map[string]bool)
+	record := func(groupName string, ck ConfigKey) {
+		if ck.Secret {
+			out[fullKey(groupName, ck)] = true
+		}
+	}
+	for groupName, group := range configSchema {
+		for _, ck := range group.Keys {
+			record(groupName, ck)
+		}
+		for _, name := range services.ProviderNames(groupName) {
+			for _, ck := range services.ProviderKeys(groupName, name) {
+				record(groupName, ck)
+			}
+		}
+	}
+	return out
+}
+
+// isSecretKey reports whether a fully-qualified config key holds a
+// secret. Use it rather than a schema lookup's Secret field wherever the
+// answer decides whether a value is printed — see secretKeys.
+func isSecretKey(key string) bool { return secretKeys()[key] }
 
 // lookupGroup returns the effective config group for a given name.
 func lookupGroup(name string) (ConfigGroup, bool) {

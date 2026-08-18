@@ -312,7 +312,8 @@ func TestDoctor(t *testing.T) {
 		// tracker and pipeline rows are the provider's own display string
 		// verbatim; the code-host and notification rows are composed by
 		// doctor from the configured provider name plus the login the
-		// probe returned.
+		// probe returned. No row names a provider that isn't in the
+		// project's config.
 		assertPassed(t, h, rowTracker, trackerAuthResult)
 		assertPassed(t, h, rowCodeHost, "github → testuser")
 		assertPassed(t, h, rowNotification, "slack → bosun-test")
@@ -514,6 +515,21 @@ issue_tracker:
 
 		assertNotConfigured(t, h, rowCodeHost)
 		assertPassed(t, h, rowCICD, cicdAuthResult)
+	})
+
+	t.Run("code_host_configured/row_names_the_configured_provider", func(t *testing.T) {
+		// The row's provider name comes from config, not a literal. The
+		// fake host stands in for whatever provider is configured —
+		// doctor has no provider gate on the code host (it probes by
+		// constructing) — so what this pins is that renaming the provider
+		// renames the row.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(strings.Replace(
+			doctorConfig, "provider: \"github\"", "provider: \"gitlab\"", 1))
+
+		runDoctor(t, h)
+
+		assertPassed(t, h, rowCodeHost, "gitlab → testuser")
 	})
 
 	t.Run("code_host_failing/reports_auth_failure", func(t *testing.T) {
