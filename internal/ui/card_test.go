@@ -210,23 +210,40 @@ func TestWrapForTimeline(t *testing.T) {
 }
 
 // TestMultiLineSubtitleKeepsConnector locks the timeline gutter on
-// multi-line subtitles: every physical line after the card's first
-// must carry the connector prefix (regression: an embedded-newline
-// subtitle came back from wrapForTimeline as one element, so lines
-// 2+ rendered flush at column 0 — every multi-line textarea record,
-// e.g. PR body excerpts, broke the gutter).
+// multi-line subtitles: in continuing form every physical line after
+// the card's first must carry the connector prefix (regression: an
+// embedded-newline subtitle came back from wrapForTimeline as one
+// element, so lines 2+ rendered flush at column 0 — every multi-line
+// textarea record, e.g. PR body excerpts, broke the gutter).
+//
+// Open form drops the connector by design (issue #27) but keeps the
+// same content margin, so both forms are checked together: the gutter
+// characters differ, the columns do not.
 func TestMultiLineSubtitleKeepsConnector(t *testing.T) {
-	out := NewCard(CardSuccess, "Body").
-		Subtitle("line one\nline two\nline three").
-		Render()
+	card := NewCard(CardSuccess, "Body").
+		Subtitle("line one\nline two\nline three")
 
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) < 4 {
-		t.Fatalf("expected 4 rendered lines, got %d:\n%s", len(lines), out)
+	cont := strings.Split(strings.TrimRight(card.renderContinuing(), "\n"), "\n")
+	open := strings.Split(strings.TrimRight(card.Render(), "\n"), "\n")
+
+	if len(cont) < 4 {
+		t.Fatalf("expected 4 rendered lines, got %d:\n%s", len(cont), card.renderContinuing())
 	}
-	for i, line := range lines[1:] {
+	if len(open) != len(cont) {
+		t.Fatalf("open form has %d lines, continuing has %d — a form swap must not change height",
+			len(open), len(cont))
+	}
+	for i, line := range cont[1:] {
 		if !strings.Contains(line, "│") {
-			t.Errorf("continuation line %d missing timeline connector: %q", i+2, line)
+			t.Errorf("continuing line %d missing timeline connector: %q", i+2, line)
+		}
+	}
+	for i, line := range open[1:] {
+		if strings.Contains(line, "│") {
+			t.Errorf("open line %d should have no timeline connector: %q", i+2, line)
+		}
+		if !strings.HasPrefix(ansi.Strip(line), strings.Repeat(" ", ContentCol(0)-1)) {
+			t.Errorf("open line %d lost the content margin: %q", i+2, line)
 		}
 	}
 }

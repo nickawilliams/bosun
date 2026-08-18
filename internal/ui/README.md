@@ -13,6 +13,8 @@ is in the implementation:
 - `glyphs.go` — box-drawing chrome (`│ ─ ╭ ╮ ╯ ╰ ├ └`). Fixed, not
   themeable: it encodes no state and rule widths are computed
   against it.
+- `timeline.go` — the open/continuing form swap that terminates a run
+  of cards (see "Timeline termination" below).
 
 Run `bosun demo` for a static reference of all components, or
 `bosun demo --interactive` for a live walkthrough with spinners,
@@ -94,6 +96,38 @@ A line in a vertical timeline, representing one outcome (`Card`).
 - **Spinner timing floor**: 100ms minimum display duration prevents
   BubbleTea v2 terminal-mode-query escapes from leaking on fast
   operations.
+
+#### Timeline termination
+
+Cards render in one of two forms, and the timeline swaps between them
+as it grows:
+
+- **open** — the card is the last thing in the timeline. Body lines
+  carry no spine, so the run visibly ends.
+- **continuing** — a successor exists below. Body lines carry the
+  spine, joining the card to what follows.
+
+A card always prints open. When the next card prints, the previous one
+is rewritten in place (cursor-up + clear-to-end) into continuing form.
+`EndTimeline` deliberately does *not* rewrite: leaving the last card
+open is what says "this is the end."
+
+- **Glyphless cards** absorb into the timeline rather than leaving a
+  hole in it — the spine becomes their marker: `├─` continuing, `╰─`
+  open, with content still landing at `ContentCol(0)`.
+- **Non-card output** that paints below a card without going through
+  the spacer prefix (huh forms, raw hand-offs) must call
+  `ui.FinalizeOpenCard()` first, so the spine is restored before the
+  region is borrowed. `ui.DiscardOpenCard()` forgets the card without
+  rewriting, for blocks about to be erased.
+- **No-op swaps are skipped.** A card with no body renders the same
+  either way, so it is never repainted — that covers most cards and
+  the whole logo box.
+- **Nested cards don't participate** (v1). An indented card's body
+  sits inside its parent's spine; dropping its connector would punch
+  a hole mid-group rather than terminate anything.
+- **Raw mode** records and rewrites nothing — the escapes would
+  corrupt a piped stream.
 
 ### Plan Card
 
