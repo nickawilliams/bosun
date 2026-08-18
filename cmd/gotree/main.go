@@ -347,7 +347,7 @@ func renderEmptyPackage(name string, pkg *node) {
 	// reported status: uncovered packages are something the developer
 	// might want to act on, and the louder signal makes them easier
 	// to scan for than the muted dash a "skip" status would produce.
-	glyphStyled := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+	glyphStyled := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
 	nameStyled := lipgloss.NewStyle().Bold(true).Foreground(ui.Palette.Primary).Render(name)
 	mutedStyled := lipgloss.NewStyle().Foreground(ui.Palette.Muted).Render("no tests")
 	// Default to "0.0%" only when not using a coverage profile —

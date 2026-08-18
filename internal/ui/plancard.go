@@ -182,19 +182,19 @@ func (pc *PlanCard) summary() string {
 func (pc *PlanCard) glyph() string {
 	switch pc.state {
 	case PlanProposed:
-		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(cardGlyphInput)
+		return lipgloss.NewStyle().Foreground(Palette.Accent).Render(Palette.Unknown)
 	case PlanVerified:
-		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
+		return lipgloss.NewStyle().Foreground(Palette.Success).Render(Palette.Check)
 	case PlanApplying:
-		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(cardGlyphPending)
+		return lipgloss.NewStyle().Foreground(Palette.Primary).Render(Palette.Pending)
 	case PlanSuccess:
-		return lipgloss.NewStyle().Foreground(Palette.Success).Render(cardGlyphSuccess)
+		return lipgloss.NewStyle().Foreground(Palette.Success).Render(Palette.Check)
 	case PlanPartial:
-		return lipgloss.NewStyle().Foreground(Palette.Warning).Render(cardGlyphSkipped)
+		return lipgloss.NewStyle().Foreground(Palette.Warning).Render(Palette.Attention)
 	case PlanFailure:
-		return lipgloss.NewStyle().Foreground(Palette.Error).Render(cardGlyphFailed)
+		return lipgloss.NewStyle().Foreground(Palette.Error).Render(Palette.Cross)
 	case PlanCancelled:
-		return lipgloss.NewStyle().Foreground(Palette.Warning).Render(cardGlyphSkipped)
+		return lipgloss.NewStyle().Foreground(Palette.Warning).Render(Palette.Attention)
 	}
 	return " "
 }

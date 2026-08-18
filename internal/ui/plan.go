@@ -427,5 +427,5 @@ func planSymbol(op PlanOp) (string, lipgloss.Style) {
 // than a diff symbol, because nothing was diffed: the row is a
 // statement about the run, not about the resource.
 func planSkippedSymbol() (string, lipgloss.Style) {
-	return cardGlyphSkipped, lipgloss.NewStyle().Foreground(Palette.Warning)
+	return Palette.Attention, lipgloss.NewStyle().Foreground(Palette.Warning)
 }

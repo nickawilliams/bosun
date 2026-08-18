@@ -4,7 +4,15 @@ The terminal output vocabulary for bosun. Each component exists
 because a concrete command needs it. Components are described by
 their semantic shape — what they contain, what states they have,
 what they're for. Visual representation (borders, glyphs, colors)
-is in the implementation.
+is in the implementation:
+
+- `theme.go` — the palette: colors and the themeable symbol set
+  (`✓ ✗ ● ▲ ⧗ ? ◦ ○` plus `→ • ·`). Read these fields rather than
+  writing the literal.
+- `state_grammar.go` — which glyph and color pair with which state.
+- `glyphs.go` — box-drawing chrome (`│ ─ ╭ ╮ ╯ ╰ ├ └`). Fixed, not
+  themeable: it encodes no state and rule widths are computed
+  against it.
 
 Run `bosun demo` for a static reference of all components, or
 `bosun demo --interactive` for a live walkthrough with spinners,

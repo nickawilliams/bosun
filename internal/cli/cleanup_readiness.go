@@ -581,9 +581,9 @@ func classifyAll(probes []repoCleanupProbe, ws workspaceCleanupProbe) ([]repoCle
 func buildCleanupReadinessCard(repos []repoCleanup, wsFindings []cleanupFinding) *ui.Card {
 	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
-	glyphBlock := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	glyphBlock := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
 
 	glyphFor := func(s findingSeverity) string {
 		switch s {

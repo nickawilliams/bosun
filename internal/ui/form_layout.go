@@ -39,7 +39,10 @@ type timelineLayout struct {
 // trailing-space run is what makes this impossible to match with
 // strings.Replace — its length depends on the widest line in the
 // rendered form, which varies per frame.
-var separatorRowPattern = regexp.MustCompile(`\n │( *)\n`)
+// Built from BoxVertical rather than spelled out so it cannot drift
+// from the separator theme.go actually emits. The character is not a
+// regexp metacharacter, so it needs no quoting.
+var separatorRowPattern = regexp.MustCompile("\n " + BoxVertical + `( *)\n`)
 
 // NewTimelineLayout returns a huh.Layout that wraps LayoutDefault
 // and recolors the field separator bars. Pair with
@@ -50,7 +53,7 @@ func NewTimelineLayout() huh.Layout {
 
 func (l timelineLayout) View(f *huh.Form) string {
 	raw := l.inner.View(f)
-	styled := lipgloss.NewStyle().Foreground(Palette.Recessed).Render("│")
+	styled := lipgloss.NewStyle().Foreground(Palette.Recessed).Render(BoxVertical)
 	return separatorRowPattern.ReplaceAllString(raw, "\n "+styled+"${1}\n")
 }
 

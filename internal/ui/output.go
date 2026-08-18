@@ -109,7 +109,7 @@ func EmptyState(msg string, args ...any) {
 	subtle := lipgloss.NewStyle().Foreground(Palette.Subtle)
 	fmt.Print(spacerPrefix())
 	fmt.Printf(" %s %s %s\n",
-		chrome.Render("└──"),
+		chrome.Render(BoxElbow+BoxHorizontal+BoxHorizontal),
 		glyph.Render(Palette.Cross),
 		subtle.Render(text),
 	)

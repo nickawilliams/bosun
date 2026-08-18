@@ -46,24 +46,54 @@ const (
 	CardData    // structured state snapshot, no status glyph
 	CardReady   // ● — terminal good pending a user action
 	CardWaiting // ⧗ — in progress, not on the user
+
+	// cardStateCount is the sentinel that bounds the enum. Keep it
+	// last: tests iterate up to it to prove every state resolves to a
+	// glyph, so a state appended after it would escape that check.
+	cardStateCount
 )
 
-const (
-	cardConnector    = "│"
-	cardGlyphPending = "◦"
-	cardGlyphSuccess = "✓"
-	cardGlyphSkipped = "▲" // !▲
-	cardGlyphFailed  = "✗"
-	cardGlyphInfo    = "●"
-	cardGlyphInput   = "?"
-	cardGlyphReady   = "●" // *●◆
-	cardGlyphWaiting = "⧗" // ~⧗●◆
-	// CardRoot uses the top-left rounded corner box-drawing
-	// character in the connector color so the root visually
-	// anchors the timeline: the corner turns into the vertical
-	// spine that runs through every card below.
-	cardGlyphRoot = "╭"
-)
+// cardConnector is the vertical spine drawn down the left gutter
+// between a card's glyph row and its continuation lines.
+const cardConnector = BoxVertical
+
+// stateGlyph returns the unstyled glyph and its natural color for a
+// card state. Shapes come from the palette's symbol vocabulary so a
+// glyph mode swaps every card at once; the pairings follow the event
+// grammar in state_grammar.go.
+//
+// The third return reports whether the state renders a glyph at all —
+// unrecognized states fall through to a blank gutter.
+func stateGlyph(s CardState) (glyph string, fg color.Color, ok bool) {
+	switch s {
+	case CardPending:
+		return Palette.Pending, Palette.Muted, true
+	case CardRunning:
+		return Palette.Pending, Palette.Primary, true
+	case CardSuccess:
+		return Palette.Check, Palette.Success, true
+	case CardSkipped:
+		return Palette.Attention, Palette.Warning, true
+	case CardFailed:
+		return Palette.Cross, Palette.Error, true
+	case CardInfo, CardData:
+		return Palette.Active, Palette.Primary, true
+	case CardInput:
+		return Palette.Unknown, Palette.Accent, true
+	case CardRoot:
+		// The top-left rounded corner anchors the timeline: the
+		// corner turns into the vertical spine that runs through
+		// every card below.
+		return BoxCornerTL, Palette.Recessed, true
+	case CardReady:
+		// ● not ✓ — the work is good but not finished, so it keeps
+		// the active shape and borrows the success color.
+		return Palette.Active, Palette.Success, true
+	case CardWaiting:
+		return Palette.Waiting, Palette.Info, true
+	}
+	return "", nil, false
+}
 
 // AppVersion is the application version displayed in the upper-right
 // corner of the root card box. Set from main via ldflags.
@@ -474,7 +504,7 @@ func (c *Card) renderWithGlyph(glyph string) string {
 	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	var prefix string
 	for range c.indent {
-		prefix += " " + connStyle.Render("│") + "  "
+		prefix += " " + connStyle.Render(cardConnector) + "  "
 	}
 	trimmed := strings.TrimSuffix(out, "\n")
 	lines := strings.Split(trimmed, "\n")
@@ -604,7 +634,7 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 		}
 
 		fmt.Fprintf(&b, "%s%s%s \n", pad, glyph,
-			ruleStyle.Render(strings.Repeat("─", boxInner)+"╮"))
+			ruleStyle.Render(strings.Repeat(BoxHorizontal, boxInner)+BoxCornerTR))
 
 		versionStyle := lipgloss.NewStyle().Foreground(Palette.Muted)
 		versionStr := versionStyle.Render(AppVersion)
@@ -622,21 +652,21 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 					rightPad = 1
 				}
 				fmt.Fprintf(&b, "%s%s  %s%s%s  %s \n", pad,
-					ruleStyle.Render("│"),
+					ruleStyle.Render(BoxVertical),
 					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
 					versionStr,
-					ruleStyle.Render("│"))
+					ruleStyle.Render(BoxVertical))
 			} else {
 				rightPad := boxInner - 2 - artWidth
 				if rightPad < 1 {
 					rightPad = 1
 				}
 				fmt.Fprintf(&b, "%s%s  %s%s%s \n", pad,
-					ruleStyle.Render("│"),
+					ruleStyle.Render(BoxVertical),
 					lineStyle.Render(line),
 					strings.Repeat(" ", rightPad),
-					ruleStyle.Render("│"))
+					ruleStyle.Render(BoxVertical))
 			}
 		}
 
@@ -663,32 +693,8 @@ func (c *Card) renderRoot(glyph, pad, conn string) string {
 // Card.GlyphColor has been set, it overrides the state's natural
 // color while preserving the glyph shape.
 func (c *Card) glyph() string {
-	var ch string
-	var fg color.Color
-	switch c.state {
-	case CardPending:
-		ch, fg = cardGlyphPending, Palette.Muted
-	case CardRunning:
-		ch, fg = cardGlyphPending, Palette.Primary
-	case CardSuccess:
-		ch, fg = cardGlyphSuccess, Palette.Success
-	case CardSkipped:
-		ch, fg = cardGlyphSkipped, Palette.Warning
-	case CardFailed:
-		ch, fg = cardGlyphFailed, Palette.Error
-	case CardInfo:
-		ch, fg = cardGlyphInfo, Palette.Primary
-	case CardInput:
-		ch, fg = cardGlyphInput, Palette.Accent
-	case CardRoot:
-		ch, fg = cardGlyphRoot, Palette.Recessed
-	case CardData:
-		ch, fg = cardGlyphInfo, Palette.Primary
-	case CardReady:
-		ch, fg = cardGlyphReady, Palette.Success
-	case CardWaiting:
-		ch, fg = cardGlyphWaiting, Palette.Info
-	default:
+	ch, fg, ok := stateGlyph(c.state)
+	if !ok {
 		return " "
 	}
 	if c.glyphColor != nil {

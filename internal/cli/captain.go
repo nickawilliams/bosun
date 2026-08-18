@@ -10,7 +10,7 @@ import (
 )
 
 func printCaptainArt() {
-	conn := lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render("│")
+	conn := lipgloss.NewStyle().Foreground(ui.Palette.Recessed).Render(ui.BoxVertical)
 	style := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
 	for _, line := range captainArt {
 		fmt.Printf(" %s  %s\n", conn, style.Render(line))

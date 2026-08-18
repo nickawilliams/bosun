@@ -305,8 +305,8 @@ func readinessCaveats(rr repoReadiness) []string {
 func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 	repoStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
 
 	sorted := append([]repoReadiness{}, readiness...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].repo.Name < sorted[j].repo.Name })
@@ -949,7 +949,7 @@ func svcOff(label, note string) string {
 // error as the row's note.
 func detFailRow(f detFail) serviceRow {
 	return serviceRow{
-		glyph:   lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+		glyph:   lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross),
 		content: svcOn(f.repo, f.err.Error()),
 		sev:     rowFail,
 	}
@@ -971,10 +971,10 @@ func detFailRow(f detFail) serviceRow {
 // can't (no PR for the branch); ✗ for actual failures.
 func sourceRows(sr sourceRepo, withPRs bool) []serviceRow {
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓")
-	glyphOff := muted.Render("○")
-	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render("▲")
-	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗")
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphOff := muted.Render(ui.Palette.Inactive)
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	glyphFail := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
 
 	r := sr.res
 	var rows []serviceRow

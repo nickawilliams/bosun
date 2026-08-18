@@ -408,13 +408,13 @@ func reviewTargetRow(rc *repoContext, on bool) (glyph, content string) {
 	name := rc.repo.Name
 	switch {
 	case rc.prErr != nil:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render("✗"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross),
 			sel(name, rc.prErr.Error())
 	case on:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render("✓"),
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check),
 			sel(name, rc.statusNote())
 	default:
-		return muted.Render("○"), unsel(name, rc.statusNote())
+		return muted.Render(ui.Palette.Inactive), unsel(name, rc.statusNote())
 	}
 }
 

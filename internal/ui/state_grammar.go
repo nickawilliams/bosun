@@ -4,6 +4,13 @@
 // state is this thing in" visually. Every glyph-and-color choice in
 // the timeline should follow these rules; deviations are bugs.
 //
+// The glyphs below are palette fields, not literals — ✓ is
+// Palette.Check, ● is Palette.Active, and so on (see theme.go).
+// Write the field, never the character: a literal ✓ at a call site
+// is a duplicate that a future glyph mode would silently fail to
+// swap. Box-drawing chrome is the deliberate exception; it lives in
+// glyphs.go and is fixed.
+//
 // The grammar splits into two CONTEXTS. Pick the context first, then
 // the row. Most rows are unambiguous; if you can't decide, the
 // fallback is "state context" (the larger category).

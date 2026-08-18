@@ -56,8 +56,8 @@ func (b *breadcrumb) RenderRow(boxInner int, commandTail []string) string {
 
 	if len(b.segments) == 0 && len(commandTail) == 0 {
 		return fmt.Sprintf("%s%s  %s \n", pad,
-			rule.Render("│"),
-			rule.Render(strings.Repeat("─", boxInner-3)+"╯"))
+			rule.Render(BoxVertical),
+			rule.Render(strings.Repeat(BoxHorizontal, boxInner-3)+BoxCornerBR))
 	}
 
 	dataStyle := dataSegmentStyle()
@@ -91,11 +91,11 @@ func (b *breadcrumb) RenderRow(boxInner int, commandTail []string) string {
 		ruleLen = 1
 	}
 	return fmt.Sprintf("%s%s  %s%s%s%s \n", pad,
-		rule.Render("│"),
+		rule.Render(BoxVertical),
 		prefix,
 		full,
 		postfix,
-		rule.Render(strings.Repeat("─", ruleLen)+"╯"))
+		rule.Render(strings.Repeat(BoxHorizontal, ruleLen)+BoxCornerBR))
 }
 
 // RenderCompactRow assembles a single-line compact header.
@@ -147,8 +147,8 @@ func (b *breadcrumb) RenderCompactRow(termWidth int, commandPath []string) strin
 	}
 
 	return fmt.Sprintf("%s%s %s %s %s \n", pad,
-		rule.Render("╭─"),
+		rule.Render(BoxCornerTL+BoxHorizontal),
 		crumb,
-		rule.Render(strings.Repeat("─", ruleLen)),
+		rule.Render(strings.Repeat(BoxHorizontal, ruleLen)),
 		version)
 }
