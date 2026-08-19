@@ -76,6 +76,13 @@ func (f *seamHost) PRsInRange(_ context.Context, _, _, _, _ string, exclude []in
 	return f.rangePRs, f.rangeErr
 }
 
+// ParseRemote reads the repo's own remote, exactly as a real host does —
+// these seams are pointed at scratch directories, and whether a path
+// resolves to a repository identity is part of what they exercise.
+func (f *seamHost) ParseRemote(ctx context.Context, repositoryPath string) (code.RepositoryIdentity, error) {
+	return code.ParseRemote(ctx, repositoryPath)
+}
+
 // --- resolveMultiUserContext: the sweep-up walk ---
 
 func multiUserTarget() *releaseTarget {

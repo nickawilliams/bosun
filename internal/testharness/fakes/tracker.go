@@ -39,6 +39,14 @@ type Tracker struct {
 	GetErr       error
 	SetStatusErr error
 
+	// AuthResult and AuthErr drive AuthTest. A real adapter derives its
+	// display string from its own configuration and probe response —
+	// knowledge the fake has no business reimplementing — so tests that
+	// care about the row state it produces say what it should be.
+	// Zero values report the healthy default.
+	AuthResult string
+	AuthErr    error
+
 	// NewErr makes the harness's IssueTracker factory return this
 	// error instead of the fake, simulating a provider that failed to
 	// construct — bad credentials, incomplete config. It's a knob on
@@ -313,6 +321,23 @@ func (t *Tracker) DeleteProperty(_ context.Context, key string) error {
 	t.recordCall("DeleteProperty")
 	delete(t.properties, key)
 	return nil
+}
+
+// defaultTrackerAuth is what AuthTest reports when a test hasn't said
+// otherwise — the shape a real adapter returns for a healthy probe.
+const defaultTrackerAuth = "tracker · authenticated"
+
+func (t *Tracker) AuthTest(_ context.Context) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recordCall("AuthTest")
+	if t.AuthErr != nil {
+		return "", t.AuthErr
+	}
+	if t.AuthResult != "" {
+		return t.AuthResult, nil
+	}
+	return defaultTrackerAuth, nil
 }
 
 // Verify Tracker satisfies issue.Tracker at compile time.

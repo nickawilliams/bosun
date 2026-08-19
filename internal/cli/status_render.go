@@ -225,7 +225,7 @@ func countToken(n int) string {
 
 // statusBranchRow returns the (glyph, value) pair for a repo card's
 // branch row. Glyph color carries the sync state; value is the
-// branch name (linked via OSC 8 to its GitHub URL when known) with
+// branch name (linked via OSC 8 to its host URL when known) with
 // a muted `*` suffix when the working tree is dirty.
 func statusBranchRow(branch, branchURL string, sync vcs.BranchSync, dirty bool) (string, string) {
 	glyph, c := statusBranchGlyph(sync)
@@ -377,7 +377,7 @@ func statusPRGlyph(state, mergeableState, reviewState string, checks code.CheckR
 
 // statusChecksRow returns the (glyph, value) pair for a repo card's
 // Checks row. Value is the human readout (e.g., "12 passing",
-// "10 passing, 2 failing") linked to the appropriate GitHub checks
+// "10 passing, 2 failing") linked to the appropriate host checks
 // page when available.
 func statusChecksRow(rollup code.CheckRollup, checksURL string) (string, string) {
 	glyph := statusStyledGlyph(statusChecksGlyph(rollup.State))
@@ -825,7 +825,7 @@ func statusUpdatedValue(t time.Time) string {
 // projectRepoEntry is one repo in the project's Repos KV value.
 type projectRepoEntry struct {
 	name string
-	url  string // optional GitHub repo URL for click-through
+	url  string // optional host repo URL for click-through
 }
 
 // projectRepoColumns lays out repo names into columns that fit

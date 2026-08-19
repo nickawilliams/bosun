@@ -11,7 +11,6 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
@@ -581,7 +580,7 @@ func newReviewCmd() *cobra.Command {
 					ui.SkipValue(ui.PreserveCase(rr.repo.Name), "not pushed — no remote branch to review")
 					continue
 				}
-				identity, err := gh.ParseRemote(ctx, rr.repo.Path)
+				identity, err := repoIdentity(ctx, host, rr.repo.Path)
 				if err != nil {
 					ui.Fail(fmt.Sprintf("%s: %v", rr.repo.Name, err))
 					continue
@@ -1015,13 +1014,10 @@ func newReviewCmd() *cobra.Command {
 				defer notifier.Close()
 			}
 
-			// Resolve GitHub avatar for card icons — from the login the
-			// reviewer-exclusion pass already fetched (best-effort; an
+			// Resolve the author's avatar for card icons — from the login
+			// the reviewer-exclusion pass already fetched (best-effort; an
 			// empty selfUser just means no avatar).
-			var avatarURL string
-			if selfUser != "" {
-				avatarURL = githubAvatarURL(selfUser)
-			}
+			authorAvatar := avatarURL(host, selfUser)
 
 			// notifyItems renders every open PR in the workspace (existing
 			// or freshly created) as a notification row, sorted by repo so
@@ -1038,7 +1034,7 @@ func newReviewCmd() *cobra.Command {
 						URL:       r.pr.URL,
 						Detail:    fmt.Sprintf("#%d", r.pr.Number),
 						Body:      r.pr.Body,
-						BranchURL: fmt.Sprintf("https://github.com/%s/%s/tree/%s", r.owner, r.repoName, r.branch),
+						BranchURL: branchURL(host, r.owner, r.repoName, r.branch),
 					}
 				}
 				return items
@@ -1090,7 +1086,7 @@ func newReviewCmd() *cobra.Command {
 							IssueURL:         detail.URL,
 							IssueDescription: detail.Description,
 							IssueIconURL:     detail.TypeIconURL,
-							IconURL:          avatarURL,
+							IconURL:          authorAvatar,
 							Items:            notifyItems(),
 						})
 						hash := notify.ContentHash(content)
@@ -1119,7 +1115,7 @@ func newReviewCmd() *cobra.Command {
 								IssueURL:         detail.URL,
 								IssueDescription: detail.Description,
 								IssueIconURL:     detail.TypeIconURL,
-								IconURL:          avatarURL,
+								IconURL:          authorAvatar,
 								Items:            items,
 							}),
 						})

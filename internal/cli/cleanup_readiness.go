@@ -11,7 +11,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -486,7 +485,7 @@ func gatherRepoProbe(ctx context.Context, g vcs.VCS, host code.Host, r Repositor
 		if host == nil {
 			return
 		}
-		identity, err := gh.ParseRemote(ctx, r.Path)
+		identity, err := host.ParseRemote(ctx, r.Path)
 		if err != nil {
 			p.hostErr = err
 			return

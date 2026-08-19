@@ -24,6 +24,13 @@ type CICD struct {
 	// out this fake — see the NewErr knob on the other fakes.
 	NewErr error
 
+	// AuthResult and AuthErr drive AuthTest. A real adapter builds its
+	// display string from its own credentials and identity, so tests that
+	// care about the row it produces say what it should be. Zero values
+	// report the healthy default.
+	AuthResult string
+	AuthErr    error
+
 	// calls records the method names invoked, in order.
 	calls []string
 }
@@ -64,6 +71,23 @@ func (c *CICD) TriggerWorkflow(_ context.Context, req cicd.TriggerRequest) error
 	}
 	c.triggers = append(c.triggers, req)
 	return nil
+}
+
+// defaultCICDAuth is what AuthTest reports when a test hasn't said
+// otherwise — the shape a real adapter returns for a healthy probe.
+const defaultCICDAuth = "pipeline → testuser"
+
+func (c *CICD) AuthTest(_ context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recordCall("AuthTest")
+	if c.AuthErr != nil {
+		return "", c.AuthErr
+	}
+	if c.AuthResult != "" {
+		return c.AuthResult, nil
+	}
+	return defaultCICDAuth, nil
 }
 
 // Verify CICD satisfies cicd.CICD at compile time.

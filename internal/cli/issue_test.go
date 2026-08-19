@@ -352,8 +352,13 @@ func TestExtractIssue(t *testing.T) {
 	}
 }
 
+// TestExtractIssueCustomPattern covers the two-step resolution:
+// workspace.issue_pattern when set, the configured tracker provider's own
+// grammar otherwise. bosun holds no key-shape default of its own — the
+// "falls back" cases below land on the provider's grammar, which for the
+// configured Jira tracker is the PROJ-123 shape.
 func TestExtractIssueCustomPattern(t *testing.T) {
-	t.Run("custom pattern overrides default", func(t *testing.T) {
+	t.Run("custom pattern overrides the provider grammar", func(t *testing.T) {
 		viper.Reset()
 		viper.Set("workspace.issue_pattern", `(#\d+)`)
 		t.Cleanup(func() { viper.Reset() })
@@ -363,14 +368,26 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 			t.Errorf("extractIssue() = %q, want %q", got, "#42")
 		}
 
-		// Default pattern should not match with custom set.
+		// The provider's grammar must not also apply once overridden.
 		got = extractIssue("PROJ-123")
 		if got != "" {
 			t.Errorf("extractIssue() = %q, want %q", got, "")
 		}
 	})
 
-	t.Run("invalid pattern falls back to default", func(t *testing.T) {
+	t.Run("unregistered provider parses nothing", func(t *testing.T) {
+		// No override and no grammar to fall back on: extraction yields
+		// nothing rather than guessing a key shape.
+		viper.Reset()
+		viper.Set("issue_tracker.provider", "linear")
+		t.Cleanup(func() { viper.Reset() })
+
+		if got := extractIssue("feature/PROJ-123_x"); got != "" {
+			t.Errorf("extractIssue() = %q, want empty", got)
+		}
+	})
+
+	t.Run("invalid pattern falls back to the provider grammar", func(t *testing.T) {
 		viper.Reset()
 		viper.Set("workspace.issue_pattern", `([invalid`)
 		t.Cleanup(func() { viper.Reset() })
@@ -381,7 +398,7 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 		}
 	})
 
-	t.Run("empty pattern uses default", func(t *testing.T) {
+	t.Run("no pattern uses the provider grammar", func(t *testing.T) {
 		viper.Reset()
 		t.Cleanup(func() { viper.Reset() })
 

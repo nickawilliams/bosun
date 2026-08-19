@@ -104,15 +104,28 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// isKnownConfigGroup reports whether name is a top-level group that
-// the config tree would actually render — either a key present in
-// the effective viper settings or a schema-known group with default/
-// env-derived values injected by injectSchemaDefaults. Mirrors what
-// buildConfigTree iterates so validation and rendering agree.
+// isKnownConfigGroup reports whether name is a top-level group `config
+// show` will accept: a key present in the effective viper settings
+// (including the defaults and env values injectSchemaDefaults folds in),
+// or a top-level group the schema declares.
+//
+// The schema arm matters for groups that are entirely optional — every
+// key example-only, no defaults — which inject nothing and so appear in
+// no settings map until the user sets something. Those are known groups
+// with nothing to show, which the caller renders as an explicit empty
+// state; rejecting them as unknown would tell the user a real group
+// doesn't exist. Dotted schema names (issue_tracker.statuses) are
+// sub-groups, not top-level, so they don't qualify.
 func isKnownConfigGroup(name string) bool {
 	settings := viper.AllSettings()
 	injectSchemaDefaults(settings)
-	_, ok := settings[name]
+	if _, ok := settings[name]; ok {
+		return true
+	}
+	if strings.Contains(name, ".") {
+		return false
+	}
+	_, ok := configSchema[name]
 	return ok
 }
 
@@ -169,7 +182,7 @@ func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui
 // they aren't already present but have an effective value (a default
 // or a set env var), so the tree reflects the full effective config.
 func injectSchemaDefaults(settings map[string]any) {
-	for groupName, group := range configSchema {
+	for groupName, group := range schemaGroups() {
 		for _, ck := range group.Keys {
 			// Determine the effective value for missing keys.
 			val := ck.Default
@@ -273,7 +286,7 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []
 		if value == "" {
 			continue
 		}
-		if ck, _, ok := findConfigKey(fk); ok && ck.Secret {
+		if isSecretKey(fk) {
 			value = secretMask
 		}
 		glyph, glyphColor := sourceGlyph(source)
@@ -289,7 +302,7 @@ func buildLeafNode(cs *configSources, key string) *ui.TreeNode {
 		return nil
 	}
 	// Mask secrets.
-	if ck, _, ok := findConfigKey(key); ok && ck.Secret {
+	if isSecretKey(key) {
 		value = secretMask
 	}
 	glyph, glyphColor := sourceGlyph(source)
@@ -391,7 +404,7 @@ func countEnvSources(cs *configSources) int {
 	}
 
 	// Count schema-specific env vars (e.g., GITHUB_TOKEN).
-	for _, group := range configSchema {
+	for _, group := range schemaGroups() {
 		for _, ck := range group.Keys {
 			if ck.EnvVar != "" && !strings.HasPrefix(ck.EnvVar, "BOSUN_") {
 				if os.Getenv(ck.EnvVar) != "" {
@@ -518,30 +531,25 @@ const secretMask = "••••••••"
 // print verbatim. An exact-key `config get` in raw format remains the
 // deliberate escape hatch for scripts that need the real value.
 func maskSecrets(settings map[string]any) {
-	for groupName, group := range configSchema {
-		for _, ck := range group.Keys {
-			if !ck.Secret {
-				continue
+	for key := range secretKeys() {
+		parts := strings.Split(key, ".")
+		m := settings
+		walked := true
+		for _, part := range parts[:len(parts)-1] {
+			next, isMap := m[part].(map[string]any)
+			if !isMap {
+				walked = false
+				break
 			}
-			parts := strings.Split(fullKey(groupName, ck), ".")
-			m := settings
-			walked := true
-			for _, part := range parts[:len(parts)-1] {
-				next, isMap := m[part].(map[string]any)
-				if !isMap {
-					walked = false
-					break
-				}
-				m = next
-			}
-			if !walked {
-				continue
-			}
-			leaf := parts[len(parts)-1]
-			if v, exists := m[leaf]; exists {
-				if s, isStr := v.(string); !isStr || s != "" {
-					m[leaf] = secretMask
-				}
+			m = next
+		}
+		if !walked {
+			continue
+		}
+		leaf := parts[len(parts)-1]
+		if v, exists := m[leaf]; exists {
+			if s, isStr := v.(string); !isStr || s != "" {
+				m[leaf] = secretMask
 			}
 		}
 	}
@@ -720,10 +728,11 @@ func runConfigCheck(args []string) error {
 		groupFilter = args[0]
 	}
 
-	// Stable iteration so the output is reproducible — configSchema
-	// is a map, so we collect and sort the keys to lock in order.
-	names := make([]string, 0, len(configSchema))
-	for name := range configSchema {
+	// Stable iteration so the output is reproducible — the schema is a
+	// map, so we collect and sort the keys to lock in order.
+	groups := schemaGroups()
+	names := make([]string, 0, len(groups))
+	for name := range groups {
 		if groupFilter != "" && name != groupFilter {
 			continue
 		}
@@ -735,7 +744,7 @@ func runConfigCheck(args []string) error {
 	passed, warned, failed := 0, 0, 0
 
 	for _, name := range names {
-		group := configSchema[name]
+		group := groups[name]
 		issues := validateGroup(name, group)
 
 		if len(issues) == 0 {

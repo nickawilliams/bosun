@@ -5,7 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+
+	"github.com/nickawilliams/bosun/internal/provider"
 )
+
+// ConfigGroup is the config group that holds notification settings.
+const ConfigGroup = "notification"
 
 // Message represents a notification to be sent to a channel.
 type Message struct {
@@ -112,6 +117,23 @@ type Notifier interface {
 	// Close persists any cached state. Should be called when the notifier
 	// is no longer needed.
 	Close()
+}
+
+// NotifierDescriptor is what a notification provider package
+// contributes to bosun: the config value that selects it, the
+// configuration it needs, and how to build it. See
+// issue.TrackerDescriptor for the shape's rationale.
+type NotifierDescriptor struct {
+	// Name is the value that selects this provider in config
+	// (notification.provider), e.g. "slack".
+	Name string
+
+	// Keys are the provider-specific config keys under the
+	// "notification" group, relative to it (e.g. "token").
+	Keys []provider.ConfigKey
+
+	// New constructs the notifier from configuration.
+	New func(provider.Config) (Notifier, error)
 }
 
 // ContentHash computes a short hash of the notification content for

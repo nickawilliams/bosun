@@ -383,7 +383,7 @@ func resolveConfigKey(groupName string, ck ConfigKey, silent bool) error {
 // "issue_tracker.base_url") and returns the ConfigKey, its group name, and whether
 // it was found.
 func findConfigKey(key string) (ConfigKey, string, bool) {
-	for groupName, group := range configSchema {
+	for groupName, group := range schemaGroups() {
 		for _, ck := range group.Keys {
 			if fullKey(groupName, ck) == key {
 				return ck, groupName, true

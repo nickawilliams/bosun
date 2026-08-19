@@ -11,7 +11,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
-	gh "github.com/nickawilliams/bosun/internal/code/github"
 	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/preview"
@@ -189,14 +188,16 @@ func runStatusProject(ctx context.Context) error {
 		return nil
 	}
 
-	repos := projectRepos()
+	// Host first: the project's repo links come off it, and it is
+	// needed for the per-workspace fetch below regardless.
+	tracker, _ := newIssueTracker()
+	host, _ := newCodeHost()
+	repos := projectRepos(host)
 
 	// Parallel fetch of all workspaces during a single overall
 	// spinner. Empty success-card title means no new breadcrumb
 	// segment; success-card body carries the project's Repos KV.
 	results := make([]workspaceState, len(wsNames))
-	tracker, _ := newIssueTracker()
-	host, _ := newCodeHost()
 	g := git.New()
 	if len(wsNames) > 0 {
 		_ = ui.RunCardReplace("", func() error {
@@ -496,9 +497,11 @@ func renderProjectSummary(states []workspaceState) {
 	)
 }
 
-// projectRepos returns the project's configured repositories with
-// GitHub URLs derived from each repo's origin remote when known.
-func projectRepos() []projectRepoEntry {
+// projectRepos returns the project's configured repositories with host
+// URLs derived from each repo's origin remote when known. A nil host
+// (none configured) yields bare names — the same degradation
+// fetchRepoState applies to its per-repo links.
+func projectRepos(host code.Host) []projectRepoEntry {
 	configured, err := resolveRepositories(nil)
 	if err != nil {
 		return nil
@@ -506,8 +509,10 @@ func projectRepos() []projectRepoEntry {
 	out := make([]projectRepoEntry, 0, len(configured))
 	for _, r := range configured {
 		entry := projectRepoEntry{name: r.Name}
-		if identity, err := gh.ParseRemote(context.Background(), r.Path); err == nil {
-			entry.url = fmt.Sprintf("https://github.com/%s/%s", identity.Owner, identity.Name)
+		if host != nil {
+			if identity, err := host.ParseRemote(context.Background(), r.Path); err == nil {
+				entry.url = host.RepositoryURL(identity)
+			}
 		}
 		out = append(out, entry)
 	}
@@ -616,8 +621,8 @@ type repoState struct {
 	// repo's branch. Zero value when the lookup failed.
 	lastCommit time.Time
 
-	// branchURL / checksURL are the GitHub web URLs the row values
-	// link to. Empty when the repo's GitHub identity isn't known.
+	// branchURL / checksURL are the host web URLs the row values
+	// link to. Empty when the repo's host identity isn't known.
 	branchURL string
 	checksURL string
 }
@@ -639,12 +644,12 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 	if host == nil {
 		return rs
 	}
-	identity, err := gh.ParseRemote(ctx, s.Path)
+	identity, err := host.ParseRemote(ctx, s.Path)
 	if err != nil {
 		return rs
 	}
 
-	rs.branchURL = fmt.Sprintf("https://github.com/%s/%s/tree/%s", identity.Owner, identity.Name, s.Branch)
+	rs.branchURL = host.BranchURL(identity, s.Branch)
 
 	pr, err := host.GetPRForBranch(ctx, identity.Owner, identity.Name, s.Branch)
 	if err == nil {
@@ -666,7 +671,7 @@ func fetchRepoState(ctx context.Context, g vcs.VCS, host code.Host, s workspace.
 	if rs.pr.Number > 0 {
 		rs.checksURL = pr.URL + "/checks"
 	} else if ref != "" {
-		rs.checksURL = fmt.Sprintf("https://github.com/%s/%s/commit/%s/checks", identity.Owner, identity.Name, ref)
+		rs.checksURL = host.ChecksURL(identity, ref)
 	}
 
 	return rs

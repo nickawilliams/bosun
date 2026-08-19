@@ -4,7 +4,20 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/nickawilliams/bosun/internal/provider"
 )
+
+// ConfigGroup is the config group that holds code-host settings.
+const ConfigGroup = "code_host"
+
+// RepositoryIdentity is a repository as the code host names it: the
+// owner (org or user) and the repository name, as parsed from a local
+// clone's remote.
+type RepositoryIdentity struct {
+	Owner string
+	Name  string
+}
 
 // ErrNotFound is returned by Get-style methods when the requested
 // resource doesn't exist on the host (e.g. GetReleaseByTag for a tag
@@ -237,4 +250,43 @@ type Host interface {
 	// a mergeable state — branch protection, conflicts, or failing
 	// required checks (the host enforces this, not bosun).
 	MergePR(ctx context.Context, owner, repository string, number int, method string) (string, error)
+
+	// ParseRemote resolves the host identity of a local clone from its
+	// origin remote. Returns an error when the path has no origin or the
+	// remote URL doesn't name a repository on this host.
+	ParseRemote(ctx context.Context, repositoryPath string) (RepositoryIdentity, error)
+
+	// RepositoryURL returns the repository's web page.
+	RepositoryURL(repo RepositoryIdentity) string
+
+	// BranchURL returns the web page showing a branch's tree.
+	BranchURL(repo RepositoryIdentity, branch string) string
+
+	// ChecksURL returns the web page showing the CI checks for a commit
+	// ref. Callers that have a pull request should prefer linking off
+	// the PR itself; this is the no-PR fallback.
+	ChecksURL(repo RepositoryIdentity, ref string) string
+
+	// AvatarURL returns the avatar image for a user login, requested at
+	// size pixels square. Callers pick the size (it's a display
+	// decision); the host owns the URL shape. Returns "" when the host
+	// serves no avatars.
+	AvatarURL(login string, size int) string
+}
+
+// HostDescriptor is what a code-host provider package contributes to
+// bosun: the config value that selects it, the configuration it needs,
+// and how to build it. See issue.TrackerDescriptor for the shape's
+// rationale.
+type HostDescriptor struct {
+	// Name is the value that selects this provider in config
+	// (code_host.provider), e.g. "github".
+	Name string
+
+	// Keys are the provider-specific config keys under the "code_host"
+	// group, relative to it (e.g. "token").
+	Keys []provider.ConfigKey
+
+	// New constructs the host from configuration.
+	New func(provider.Config) (Host, error)
 }

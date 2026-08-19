@@ -707,5 +707,40 @@ func semverParts(tag string) [3]int {
 	return out
 }
 
+// --- Remote and web-URL surface ---
+//
+// The harness wires each repo's origin to a GitHub-shaped
+// git@github.com:acme/<name>.git (see testharness.Workspace.AddRepo), so
+// the fake reads remotes with the shared implementation and mints
+// github.com web URLs. Commands that link to a repository therefore
+// produce exactly the strings a real GitHub host would, which is what
+// makes output assertions on those links meaningful.
+//
+// None of these record a call. Tests read Calls() to police what a
+// command costs — network round-trips and mutations — and none of this
+// is either: ParseRemote shells out to local git, and the URL builders
+// are pure string formatting. Logging them would force every
+// call-allowlist in the suite to name methods that can't misbehave.
+
+func (h *Host) ParseRemote(ctx context.Context, repositoryPath string) (code.RepositoryIdentity, error) {
+	return code.ParseRemote(ctx, repositoryPath)
+}
+
+func (h *Host) RepositoryURL(repo code.RepositoryIdentity) string {
+	return fmt.Sprintf("https://github.com/%s/%s", repo.Owner, repo.Name)
+}
+
+func (h *Host) BranchURL(repo code.RepositoryIdentity, branch string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/tree/%s", repo.Owner, repo.Name, branch)
+}
+
+func (h *Host) ChecksURL(repo code.RepositoryIdentity, ref string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/commit/%s/checks", repo.Owner, repo.Name, ref)
+}
+
+func (h *Host) AvatarURL(login string, size int) string {
+	return fmt.Sprintf("https://github.com/%s.png?size=%d", login, size)
+}
+
 // Verify Host satisfies code.Host at compile time.
 var _ code.Host = (*Host)(nil)
