@@ -173,6 +173,8 @@ func newPreviewCmd() *cobra.Command {
 		},
 	}
 
+	cmd.AddCommand(newPreviewListCmd())
+
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	addIssueFlag(cmd)
