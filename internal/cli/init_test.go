@@ -38,9 +38,10 @@ import (
 //
 // Second, the harness counts as interactive (ui.Interactive is true
 // for any injected reader), so the optional-service wizard runs on
-// every non-quick path — four provider gates that each need a
-// keystroke even when the scenario is about something else. Skipping
-// a gate is a bare "\r" on its select.
+// every non-quick path — one provider gate per integration group, each
+// needing a keystroke even when the scenario is about something else.
+// Skipping a gate is a bare "\r" on its select; see
+// integrationGateCount.
 //
 // Third, assertions parse the written YAML rather than matching
 // substrings: a fresh config carries a commented-out `# provider:
@@ -367,7 +368,7 @@ func TestInit(t *testing.T) {
 		// Declining a gate must write nothing for that group — not
 		// even the provider it was defaulting to.
 		cfg := readInitConfig(t, h)
-		for _, group := range []string{"issue_tracker", "code_host", "notification", "cicd"} {
+		for _, group := range []string{"issue_tracker", "code_host", "notification", "cicd", "preview"} {
 			if _, ok := cfg[group]; ok {
 				t.Errorf("%s configured despite skipping its gate: %v", group, cfg[group])
 			}
@@ -384,6 +385,7 @@ func TestInit(t *testing.T) {
 		h.Type("\x1b[B\r") // merge method — one past the "squash" default
 		h.Type("\r")       // notification gate — skip
 		h.Type("\r")       // ci/cd gate — skip
+		h.Type("\r")       // preview gate — skip
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -407,10 +409,59 @@ func TestInit(t *testing.T) {
 			t.Errorf("code_host.merge_method = %q, want %q", got, "merge")
 		}
 		// Configuring one group leaves its siblings alone.
-		for _, group := range []string{"issue_tracker", "notification", "cicd"} {
+		for _, group := range []string{"issue_tracker", "notification", "cicd", "preview"} {
 			if _, ok := cfg[group]; ok {
 				t.Errorf("%s configured despite skipping its gate: %v", group, cfg[group])
 			}
+		}
+	})
+
+	// The teeth the scenario above asks for. Preview is the first group
+	// with two providers, so picking the second one distinguishes "the
+	// gate's pick was honoured" from "the schema's only option was
+	// written" — every other group collapses those two into the same
+	// string.
+	t.Run("integration_groups/honours_a_pick_among_several_providers", func(t *testing.T) {
+		h := newInitHarness(t)
+
+		h.Type("src/*\r")
+		h.Type("worktrees\r")
+		h.Type("\r") // issue tracker gate — skip
+		h.Type("\r") // code host gate — skip
+		h.Type("\r") // notification gate — skip
+		h.Type("\r") // ci/cd gate — skip
+		// Two past "- skip -": cicd is the default this key falls back
+		// to, so landing on it would also be what a discarded selection
+		// produced.
+		h.Type("\x1b[B\x1b[B\r")
+		h.Type("\x15https://ephemeral.test\r") // api base URL — example cleared, replaced
+		h.Type("\r")                           // api auth mode — the sole option
+		tripwire(h)
+
+		if err := h.Run("init"); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+
+		cfg := readInitConfig(t, h)
+		if got := configString(t, cfg, "preview", "provider"); got != "ephemeral" {
+			t.Errorf("preview.provider = %q, want ephemeral", got)
+		}
+		// The adapter's own keys reached the form from its descriptor,
+		// which is the whole point of registering it: nothing in the
+		// schema names them.
+		preview, ok := cfg["preview"].(map[string]any)
+		if !ok {
+			t.Fatalf("preview = %#v, want a map", cfg["preview"])
+		}
+		api, ok := preview["api"].(map[string]any)
+		if !ok {
+			t.Fatalf("preview.api = %#v, want a map", preview["api"])
+		}
+		if got := api["base_url"]; got != "https://ephemeral.test" {
+			t.Errorf("preview.api.base_url = %v, want https://ephemeral.test", got)
+		}
+		if got := api["auth"]; got != "gh-cli" {
+			t.Errorf("preview.api.auth = %v, want gh-cli", got)
 		}
 	})
 
@@ -425,7 +476,8 @@ func TestInit(t *testing.T) {
 		h.Type("\x1b[B\r") // ci/cd gate — github_actions
 		// No per-field form follows: cicd is a ProviderOnly group, so
 		// its workflow keys stay unasked. A form here would consume
-		// the tripwire and abort the run.
+		// the preview gate's keystroke and abort the run.
+		h.Type("\r") // preview gate — skip
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -469,6 +521,7 @@ func TestInit(t *testing.T) {
 		h.Type("\r")                      // code host gate — skip
 		h.Type("\r")                      // notification gate — skip
 		h.Type("\r")                      // ci/cd gate — skip
+		h.Type("\r")                      // preview gate — skip
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -917,7 +970,7 @@ func TestInit(t *testing.T) {
 		// assertion in this scenario would still hold, masking exactly
 		// the bug it was added for. The sentinel has to let the run
 		// SUCCEED to be discriminating.
-		for range 3 { // code host, notifications, CI/CD gates
+		for range integrationGateCount - 1 { // every gate after the cancelled one
 			h.Type("\r")
 		}
 		tripwire(h)
@@ -1120,11 +1173,22 @@ func newInitHarness(t *testing.T) *testharness.Harness {
 // interactive, and the harness always is. It closes with a tripwire,
 // so it is also the last input a scenario using it queues.
 func skipIntegrationGates(h *testharness.Harness) {
-	for range 4 { // issue tracker, code host, notifications, CI/CD
+	for range integrationGateCount {
 		h.Type("\r") // "- skip -" is the default-focused option
 	}
 	tripwire(h)
 }
+
+// integrationGateCount is how many provider gates the wizard offers —
+// one per entry in serviceInitGroups (init.go): issue tracker, code
+// host, notifications, CI/CD, preview.
+//
+// Restated here rather than read off that slice because these scenarios
+// are an external test package. Adding a group without bumping this
+// leaves every scenario one keystroke short, and the symptom is
+// "init: cancelled" from the tripwire — which names the scenario, not
+// the group that was added, so start here when that appears.
+const integrationGateCount = 5
 
 // tripwire queues a ctrl+c as a scenario's final input. Nothing
 // should read it: it is there so a regression that reaches a prompt
