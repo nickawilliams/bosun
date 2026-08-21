@@ -338,6 +338,76 @@ func TestPreview(t *testing.T) {
 		}
 	})
 
+	t.Run("claim/name_prompted_when_unset", func(t *testing.T) {
+		// Nothing bound and no --name: Row 1 of the resolution matrix
+		// prompts, with a generated name as the placeholder. Every
+		// other scenario supplies a name or has one bound, so this is
+		// the only one that goes through the prompt — and the only one
+		// that reaches the validation behind it.
+		//
+		// The first name typed is invalid (uppercase is not a legal
+		// Kubernetes subdomain label), so the prompt has to refuse it
+		// and ask again rather than carrying it into a dispatch the
+		// workflow would reject.
+		f := setupPreview(t, "api")
+
+		f.h.Type("Brave-Falcon\r") // refused
+		f.h.Type("brave-falcon\r") // accepted
+
+		if err := f.run("--approve"); err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+
+		var refused bool
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureFail) {
+			if strings.Contains(ev.Label, "Brave-Falcon") {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Errorf("the invalid name was not reported as refused\n%s", f.h.Reporter.Dump())
+		}
+
+		deploys := f.deploys()
+		if len(deploys) != 1 {
+			t.Fatalf("deploy dispatches = %d, want 1", len(deploys))
+		}
+		// The retyped name is what deployed, and the refused one never
+		// reached a dispatch.
+		if got := deploys[0].Inputs["env-name"]; got != "brave-falcon" {
+			t.Errorf("env-name input = %q, want the accepted name", got)
+		}
+		if got := f.boundName(t, "EX-1"); got != "brave-falcon" {
+			t.Errorf("env bound to EX-1 = %q, want brave-falcon", got)
+		}
+	})
+
+	t.Run("errors/malformed_workflow_target_surfaces", func(t *testing.T) {
+		// A workflow target that isn't owner/repo/path can't be
+		// dispatched to. The resolver reports it, and the report has to
+		// travel: swallowing it would leave an empty target set, which
+		// reads as "no workflow configured" and skips the deploy
+		// quietly — the same outcome as a repo that genuinely has none.
+		f := setupPreview(t, "api")
+		f.h.Workspace.WriteConfig(strings.Replace(
+			fmt.Sprintf(previewConfigf, f.env.URL),
+			`target: "acme/devops/.github/workflows/deploy-preview.yml"`,
+			`target: "deploy-preview.yml"`,
+			1,
+		))
+
+		err := f.run("--name", "brave-falcon", "--approve")
+		if err == nil {
+			t.Fatal("preview succeeded with a malformed up-workflow target")
+		}
+		if !strings.Contains(err.Error(), "deploy-preview.yml") {
+			t.Errorf("err = %v, want it to name the offending target", err)
+		}
+		if got := f.deploys(); len(got) != 0 {
+			t.Errorf("dispatched %d workflows despite the bad target", len(got))
+		}
+	})
+
 	t.Run("claim/services_filter", func(t *testing.T) {
 		// Both repos changed, so detection would deploy both services.
 		// --service narrows the deploy set to the one named, and the

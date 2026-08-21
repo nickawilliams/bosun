@@ -510,6 +510,13 @@ func translateStatus(s string) (preview.Status, bool) {
 // encodeOverrides renders the per-service tag pins as the JSON string
 // the API forwards to the workflow. An empty map yields "", which the
 // API reads as "every service runs the default branch".
+//
+// The error return is unreachable: marshalling a map[string]string has
+// no unsupported type, no cycle, and no custom marshaller to go wrong.
+// It stays because the alternatives are worse — dropping it means
+// either ignoring the error (encoding "" and silently deploying every
+// service at the default branch) or panicking on a condition that
+// cannot arise. Two uncovered lines is the cheapest of the three.
 func encodeOverrides(overrides map[string]string) (string, error) {
 	if len(overrides) == 0 {
 		return "", nil

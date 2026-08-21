@@ -272,6 +272,16 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		case isInteractive():
 			// Force-notice variant: header was rewound so the notices
 			// could print; fall back to the self-contained prompt.
+			//
+			// Unreachable through either shipped provider, and kept as
+			// insurance rather than by oversight. Getting here needs
+			// Row 1 (no --name, no bound name) together with a
+			// force-fallback notice — and a notice only prints when Get
+			// returned a ProbeError, which the Provider contract says
+			// arrives alongside the bound Name. Both adapters honor
+			// that, so a nameless env and a notice can't co-occur. One
+			// that didn't would land here, and silently generating a
+			// name for it would deploy over whatever was bound.
 			resolved, perr := promptDefault("preview", name)
 			if perr != nil {
 				return previewResolution{}, perr
