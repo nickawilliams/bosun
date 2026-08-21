@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/notify"
@@ -180,6 +181,7 @@ func newPreviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("service", nil, "service to deploy (can be repeated; overrides auto-detection)")
 	cmd.Flags().String("name", "", "ephemeral environment name (e.g., brave-falcon; auto-generated if not set)")
+	cmd.Flags().String("default-branch", "", "branch every unpinned service runs (provider default if not set)")
 	cmd.Flags().Bool("force", false, "replace existing or create missing without asking; proceed past failed probes (plan confirmation still applies — see --approve)")
 	return cmd
 }
@@ -250,6 +252,13 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 		return Action{}, nil, err
 	}
 
+	// Empty means "the provider's own default" — the deployment API
+	// falls back to main, and the workflow-dispatch adapter has no
+	// notion of the concept at all. Only set it when the user asked for
+	// something else.
+	defaultBranch, _ := cmd.Flags().GetString("default-branch")
+	defaultBranch = strings.TrimSpace(defaultBranch)
+
 	// Nothing selected to deploy (full deselection in the form, or no
 	// deployable services at all) — render an honest no-op row rather
 	// than a "+ deploy env" that would claim an environment with zero
@@ -281,10 +290,11 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 		},
 		Apply: func(ctx context.Context) error {
 			_, err := provider.Create(ctx, preview.Claim{
-				IssueKey:  issueKey,
-				Name:      resolution.deployName,
-				Services:  services,
-				Overrides: overrides,
+				IssueKey:      issueKey,
+				Name:          resolution.deployName,
+				Services:      services,
+				Overrides:     overrides,
+				DefaultBranch: defaultBranch,
 			})
 			return err
 		},
