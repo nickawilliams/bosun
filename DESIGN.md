@@ -242,11 +242,18 @@ existed keeps working.
   all.
 - **`ephemeral`** delegates to an HTTP service that fronts the same
   environments. Because it asks rather than probes, it distinguishes
-  `creating`, `active`, `degraded` (naming the services that failed),
-  `deleting`, and gone — and it can list the fleet, which is what
+  `active`, `degraded` (naming the services that failed), `deleting`,
+  and gone — and it can list the fleet, which is what
   `bosun preview list` reads. It authenticates with the token from
   `gh auth token`; an expired one is reported as a re-auth prompt rather
   than retried.
+
+`creating` is in the taxonomy but not yet reachable by name: the API
+reports in-flight provisions with a null name, because the name is
+recovered from the setup job's logs and those aren't written yet. So a
+provision in flight still reads as absent, the same answer the probe
+gives. Attributing one to a name needs a per-run
+`GET /api/workflow-status/:runId`.
 
 Both adapters store the env-to-issue binding under the same issue property,
 so switching providers doesn't orphan a running environment. `url_template`

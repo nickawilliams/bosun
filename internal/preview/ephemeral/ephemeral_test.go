@@ -279,6 +279,11 @@ func TestGet_TranslatesEveryStatus(t *testing.T) {
 		// live env as torn down.
 		{"teleporting", preview.StatusUnknown, false},
 	}
+	// "creating" is exercised here as a value of the API's taxonomy, not
+	// as a shape a by-name lookup can currently receive: every creating
+	// row the server emits has a null name (see translateStatus). The
+	// mapping is still worth pinning — it is what the workflow-status
+	// extension would feed, and what a server change would surface.
 	for _, tc := range cases {
 		t.Run(tc.api, func(t *testing.T) {
 			p, _ := newBuilder().
@@ -419,17 +424,29 @@ func TestGet_UnreachableHostIsAnIndeterminateProbe(t *testing.T) {
 	}
 }
 
-func TestGet_MalformedResponseIsIndeterminate(t *testing.T) {
-	p, _ := newBuilder().
+// TestGet_MalformedResponseIsDefinitive pins that a 200 carrying the
+// wrong shape is not retried. The two ways to get one are a base URL
+// pointing at something else — the service's own SPA fallback answers
+// 200 with HTML — and a server-side schema change. Neither improves on
+// a second attempt, and reporting it as "couldn't verify" points the
+// user at the network instead of at the config.
+func TestGet_MalformedResponseIsDefinitive(t *testing.T) {
+	p, rec := newBuilder().
 		store_(bound("brave-falcon")).
 		handle(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`not json`))
+			_, _ = w.Write([]byte(`<!doctype html><title>ephemeral-ui</title>`))
 		}).build(t)
 
 	_, err := p.Get(context.Background(), "PROJ-1")
+	if err == nil {
+		t.Fatal("Get succeeded against an undecodable body")
+	}
 	var pe *preview.ProbeError
-	if !errors.As(err, &pe) {
-		t.Fatalf("err = %v, want *preview.ProbeError", err)
+	if errors.As(err, &pe) {
+		t.Errorf("err = %v, want a definitive failure, not an indeterminate probe", err)
+	}
+	if rec.calls() != 1 {
+		t.Errorf("made %d attempts, want 1 — a schema mismatch was retried", rec.calls())
 	}
 }
 
@@ -532,6 +549,54 @@ func TestInspect_FallsBackToTheAPIURL(t *testing.T) {
 	}
 	if want := "https://api-said-brave-falcon.example.dev"; env.URL != want {
 		t.Errorf("URL = %q, want the API's %q", env.URL, want)
+	}
+}
+
+// TestLookup_TakesTheNewestRowForAName covers the shape the
+// Actions-backed listing actually returns: one row per provision run
+// from the last week, so a name redeployed after a teardown appears
+// more than once. Reading the wrong row reports a live env as gone,
+// which is what plans a fresh create over a running environment.
+func TestLookup_TakesTheNewestRowForAName(t *testing.T) {
+	// Deliberately in the wrong order — the server sorts newest-first,
+	// and depending on that would make this pass for the wrong reason.
+	fleet := []string{
+		entry("brave-falcon", "cleaned_up", `"createdAt":"2026-08-01T10:00:00Z"`),
+		entry("brave-falcon", "active", `"createdAt":"2026-08-19T10:00:00Z"`),
+		entry("brave-falcon", "cleaned_up", `"createdAt":"2026-08-10T10:00:00Z"`),
+	}
+	p, _ := newBuilder().
+		store_(bound("brave-falcon")).
+		handle(func(w http.ResponseWriter, _ *http.Request) { writeDeployments(w, fleet...) }).
+		build(t)
+
+	env, err := p.Get(context.Background(), "PROJ-1")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if env.Status != preview.StatusActive {
+		t.Errorf("Status = %v, want active — an older cleaned_up run shadowed the live env", env.Status)
+	}
+}
+
+func TestLookup_UnparseableTimestampsFallBackToListOrder(t *testing.T) {
+	// Nothing to compare on, so the server's own order stands rather
+	// than the match becoming arbitrary.
+	p, _ := newBuilder().
+		store_(bound("brave-falcon")).
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			writeDeployments(w,
+				entry("brave-falcon", "active", `"createdAt":"whenever"`),
+				entry("brave-falcon", "cleaned_up", `"createdAt":"also whenever"`),
+			)
+		}).build(t)
+
+	env, err := p.Get(context.Background(), "PROJ-1")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if env.Status != preview.StatusActive {
+		t.Errorf("Status = %v, want active (the first row)", env.Status)
 	}
 }
 
@@ -746,22 +811,50 @@ func TestDestroy_RefusesBlankName(t *testing.T) {
 	}
 }
 
+// TestDestroy_IsIdempotent pins where idempotence actually lives: on
+// the server. POST /api/delete-deployment dispatches the cleanup
+// workflow unconditionally and answers 200 whether or not the env
+// exists, so tearing down a env that is already gone is an ordinary
+// success here — there is no "already gone" arm to take.
 func TestDestroy_IsIdempotent(t *testing.T) {
 	store := bound("brave-falcon")
 	p, _ := newBuilder().
 		store_(store).
 		handle(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			_, _ = w.Write([]byte(`{"success":true}`))
 		}).build(t)
 
-	// Tearing down an env that is already gone is success, and the
-	// binding still needs clearing.
-	if err := p.Destroy(context.Background(), "PROJ-1", "brave-falcon"); err != nil {
-		t.Fatalf("Destroy on a missing env returned %v, want nil", err)
+	for range 2 {
+		if err := p.Destroy(context.Background(), "PROJ-1", "brave-falcon"); err != nil {
+			t.Fatalf("Destroy returned %v, want nil", err)
+		}
 	}
-	if store.deleteCalls != 1 {
-		t.Errorf("DeleteProperty called %d times, want 1", store.deleteCalls)
+	if store.deleteCalls != 2 {
+		t.Errorf("DeleteProperty called %d times, want 2", store.deleteCalls)
+	}
+}
+
+// TestDestroy_MissingRouteIsNotSuccess pins the 404 this path can
+// actually produce. The delete route never 404s for a missing env, so a
+// 404 means the base URL points somewhere without the route — a wrong
+// host, or a server predating it. Treating that as "already gone" would
+// report a teardown that never ran and then clear the binding, leaving
+// the env running with nothing pointing at it.
+func TestDestroy_MissingRouteIsNotSuccess(t *testing.T) {
+	store := bound("brave-falcon")
+	p, _ := newBuilder().
+		store_(store).
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("Cannot POST /api/delete-deployment"))
+		}).build(t)
+
+	err := p.Destroy(context.Background(), "PROJ-1", "brave-falcon")
+	if err == nil {
+		t.Fatal("Destroy succeeded against a host with no delete route")
+	}
+	if store.deleteCalls != 0 {
+		t.Errorf("cleared the binding after a teardown that never dispatched (%d calls)", store.deleteCalls)
 	}
 }
 
@@ -820,6 +913,48 @@ func TestList_ReturnsTheFleet(t *testing.T) {
 	// one; the caller correlates.
 	if envs[0].IssueKey != "" {
 		t.Errorf("IssueKey = %q, want empty", envs[0].IssueKey)
+	}
+}
+
+// TestList_IsADiscoveryListing pins the two filters. The raw listing
+// carries a row per provision run and keeps cleaned-up runs for a week,
+// so an unfiltered render shows a name three times and pads the result
+// with environments that no longer exist — in front of the names a
+// reader is scanning for something to adopt.
+func TestList_IsADiscoveryListing(t *testing.T) {
+	p, _ := newBuilder().
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			writeDeployments(w,
+				entry("brave-falcon", "cleaned_up", `"createdAt":"2026-08-01T10:00:00Z"`),
+				entry("brave-falcon", "active", `"createdAt":"2026-08-19T10:00:00Z"`),
+				entry("wobbly-turtle", "cleaned_up", `"createdAt":"2026-08-15T10:00:00Z"`),
+				entry("clever-fox", "degraded", `"createdAt":"2026-08-18T10:00:00Z"`),
+			)
+		}).build(t)
+
+	envs, err := p.(preview.Lister).List(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	got := make(map[string]preview.Status, len(envs))
+	for _, env := range envs {
+		if _, dup := got[env.Name]; dup {
+			t.Errorf("%s listed more than once", env.Name)
+		}
+		got[env.Name] = env.Status
+	}
+	if len(got) != 2 {
+		t.Fatalf("listed %v, want brave-falcon and clever-fox", got)
+	}
+	if got["brave-falcon"] != preview.StatusActive {
+		t.Errorf("brave-falcon = %v, want active — the stale cleaned_up row won", got["brave-falcon"])
+	}
+	if _, ok := got["wobbly-turtle"]; ok {
+		t.Error("a cleaned-up environment is listed; it is neither adoptable nor an environment")
+	}
+	// Degraded is still serving, so it stays.
+	if got["clever-fox"] != preview.StatusDegraded {
+		t.Errorf("clever-fox = %v, want degraded", got["clever-fox"])
 	}
 }
 
@@ -889,8 +1024,9 @@ func TestValidateName(t *testing.T) {
 
 func TestToken_ResolvedOncePerProvider(t *testing.T) {
 	var calls int
-	p, _ := newBuilder().
-		store_(bound("brave-falcon")).
+	store := bound("brave-falcon")
+	p, rec := newBuilder().
+		store_(store).
 		withToken(func(context.Context) (string, error) {
 			calls++
 			return "test-token", nil
@@ -899,18 +1035,93 @@ func TestToken_ResolvedOncePerProvider(t *testing.T) {
 			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 				t.Errorf("Authorization = %q, want a bearer token", got)
 			}
-			writeDeployments(w, entry("brave-falcon", "active"))
+			_, _ = w.Write([]byte(`{"success":true}`))
 		}).build(t)
 
+	// Teardowns rather than reads: the listing is cached, so three Gets
+	// would issue one request and the assertion below would hold
+	// whether or not the token was memoized.
 	for range 3 {
-		if _, err := p.Get(context.Background(), "PROJ-1"); err != nil {
+		if err := p.Destroy(context.Background(), "PROJ-1", "brave-falcon"); err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
+	}
+	if rec.calls() != 3 {
+		t.Fatalf("made %d requests, want 3", rec.calls())
 	}
 	// Each resolution shells out to the GitHub CLI, and the token does
 	// not change mid-command.
 	if calls != 1 {
 		t.Errorf("token source called %d times, want 1", calls)
+	}
+}
+
+// TestListing_ServesOneCommandsReadsFromOneResponse pins the cache.
+// Resolution reads the fleet twice moments apart; two round-trips is
+// the visible cost, but the real hazard is the two arms disagreeing
+// about an env that changed in between.
+func TestListing_ServesOneCommandsReadsFromOneResponse(t *testing.T) {
+	var served int
+	p, rec := newBuilder().
+		store_(bound("brave-falcon")).
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			served++
+			// A fleet that changes between requests: without the cache
+			// the second read sees a different world.
+			if served == 1 {
+				writeDeployments(w, entry("brave-falcon", "active"))
+				return
+			}
+			writeDeployments(w)
+		}).build(t)
+
+	first, err := p.Get(context.Background(), "PROJ-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	second, err := p.Inspect(context.Background(), "brave-falcon")
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	if rec.calls() != 1 {
+		t.Errorf("made %d listing requests for one command, want 1", rec.calls())
+	}
+	if first.Status != second.Status {
+		t.Errorf("Get saw %v and Inspect saw %v; the two arms disagree", first.Status, second.Status)
+	}
+	if first.Status != preview.StatusActive {
+		t.Errorf("Status = %v, want active", first.Status)
+	}
+}
+
+// TestListing_FailuresAreNotCached pins that a failed fetch leaves the
+// next caller free to try again rather than inheriting the error for
+// the rest of the command.
+func TestListing_FailuresAreNotCached(t *testing.T) {
+	var served int
+	p, _ := newBuilder().
+		store_(bound("brave-falcon")).
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			served++
+			// Both attempts of the first lookup's retry fail; the third
+			// request — a fresh lookup — succeeds.
+			if served <= 2 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			writeDeployments(w, entry("brave-falcon", "active"))
+		}).build(t)
+
+	if _, err := p.Get(context.Background(), "PROJ-1"); err == nil {
+		t.Fatal("Get succeeded despite two failed attempts")
+	}
+	env, err := p.Get(context.Background(), "PROJ-1")
+	if err != nil {
+		t.Fatalf("second Get inherited the first failure: %v", err)
+	}
+	if env.Status != preview.StatusActive {
+		t.Errorf("Status = %v, want active", env.Status)
 	}
 }
 
@@ -996,6 +1207,51 @@ func TestBaseURL_UnsetIsNotConfigured(t *testing.T) {
 	_, err := p.Get(context.Background(), "PROJ-1")
 	if !errors.Is(err, preview.ErrNotConfigured) {
 		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+}
+
+// TestBaseURL_NeedsASchemeAndHost pins a config mistake as a config
+// error. Left to the transport these surface as a retried "couldn't
+// verify https://…", which sends the reader to check the network for a
+// value they typed wrong.
+func TestBaseURL_NeedsASchemeAndHost(t *testing.T) {
+	for _, base := range []string{"ephemeral.example.dev", "/api", "ephemeral.example.dev:3001"} {
+		p := New(Options{
+			BaseURL: base,
+			Token:   func(context.Context) (string, error) { return "t", nil },
+			Tracker: bound("brave-falcon"),
+		})
+		_, err := p.Get(context.Background(), "PROJ-1")
+		if !errors.Is(err, preview.ErrNotConfigured) {
+			t.Errorf("base_url %q: err = %v, want ErrNotConfigured", base, err)
+		}
+		var pe *preview.ProbeError
+		if errors.As(err, &pe) {
+			t.Errorf("base_url %q reported as an indeterminate probe", base)
+		}
+	}
+}
+
+// TestBaseURL_QuerySurvives pins that the base is concatenated rather
+// than round-tripped through url.URL, which would relocate a query to
+// the wrong side of the path.
+func TestBaseURL_QuerySurvives(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.String()
+		writeDeployments(w)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := New(Options{
+		BaseURL: srv.URL + "?tenant=acme",
+		Token:   func(context.Context) (string, error) { return "t", nil },
+	})
+	if _, err := p.(preview.Lister).List(context.Background()); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(got, "tenant=acme") {
+		t.Errorf("requested %q, want the base URL's query preserved", got)
 	}
 }
 

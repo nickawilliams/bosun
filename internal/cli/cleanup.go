@@ -108,8 +108,18 @@ func newCleanupCmd() *cobra.Command {
 			// Preview env teardown — first action so the env goes
 			// down before any of the local destruction. Idempotent
 			// when no env is bound.
-			provider, _ := newPreviewProvider(workspace)
-			if provider != nil && cc.Issue != "" {
+			//
+			// A provider that won't build is reported, not skipped
+			// silently. The workflow-dispatch provider declares no
+			// required config so this never failed; one that needs a
+			// base URL fails routinely when it isn't set, and cleanup
+			// would then destroy the worktrees and leave the env
+			// running with nothing said about it.
+			provider, providerErr := newPreviewProvider(workspace)
+			switch {
+			case providerErr != nil:
+				ui.Skip(fmt.Sprintf("preview teardown: %v", providerErr))
+			case provider != nil && cc.Issue != "":
 				actions = append(actions, cleanupPreviewAction(ctx, provider, cc.Issue))
 			}
 

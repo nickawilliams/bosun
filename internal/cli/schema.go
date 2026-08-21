@@ -246,16 +246,22 @@ func resolveSchemaGroup(name string, group ConfigGroup) ConfigGroup {
 }
 
 // schemaProvider returns the provider whose keys a group should show:
-// the configured one, or — when config hasn't said yet — the sole
-// registered provider, since with one choice there is nothing to pick
-// and hiding its keys would leave `bosun init` and `doctor` with nothing
-// to ask for. With several registered and none chosen, no provider keys
-// appear until the user picks one.
+// the configured one, or — when config hasn't said yet — whichever one
+// an unset key resolves to, since hiding its keys would leave `bosun
+// init` and `doctor` with nothing to ask for. With several registered,
+// none chosen, and no declared default, no provider keys appear until
+// the user picks one.
+//
+// This deliberately asks the same question the construction path asks
+// (services.DefaultProvider, which covers both the sole-provider and
+// declared-default cases). Falling back to the sole provider here while
+// the registry falls back to a declared default would show one
+// provider's keys and then build a different provider.
 func schemaProvider(group string) string {
 	if name := viper.GetString(group + ".provider"); name != "" {
 		return name
 	}
-	return services.SoleProvider(group)
+	return services.DefaultProvider(group)
 }
 
 // secretKeys returns every fully-qualified config key that must never

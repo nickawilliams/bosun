@@ -106,6 +106,38 @@ func TestIndeterminate(t *testing.T) {
 	}
 }
 
+// TestDo_TruncatedBodyIsReported covers a 2xx whose body doesn't
+// finish arriving — the read error arm, which is reachable and easy to
+// mistake for a decode failure. An inflated Content-Length with the
+// connection dropped mid-body is how a proxy timing out looks.
+func TestDo_TruncatedBodyIsReported(t *testing.T) {
+	p, _ := newBuilder().
+		store_(bound("brave-falcon")).
+		handle(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "4096")
+			_, _ = w.Write([]byte(`{"deployments":[`))
+			// Hijack and close so the client sees a short read rather
+			// than a well-formed short body.
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}
+		}).build(t)
+
+	_, err := p.Get(context.Background(), "PROJ-1")
+	if err == nil {
+		t.Fatal("Get succeeded against a truncated response")
+	}
+	// Indeterminate, unlike a schema mismatch: the request may well
+	// succeed on a retry.
+	var pe *preview.ProbeError
+	if !errors.As(err, &pe) {
+		t.Errorf("err = %v, want *preview.ProbeError", err)
+	}
+}
+
 // TestDeployments_CancelledContextSkipsTheRetry pins the guard on the
 // retry loop. A caller whose deadline is already gone gets its answer
 // now; a second attempt would fail identically and only delay the

@@ -121,7 +121,9 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	}
 
 	// Run resolution work inside one spinner so the user always gets
-	// feedback during the HTTP probes (up to ~6s combined). Probes run
+	// feedback during the two lookups the provider makes — bounded by
+	// the adapter, at roughly six seconds combined for the probing
+	// provider and ten per lookup for the API-backed one. They run
 	// sequentially; force-fallback notices print after the spinner
 	// closes to avoid interleaving with the spinner's TUI output. The
 	// spinner shows even when both names are empty (Row 1) — the work is

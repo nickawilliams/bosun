@@ -160,7 +160,24 @@ func TestTargetResolverErrorsPropagate(t *testing.T) {
 func TestNotConfiguredSentinelsAreRecognizableThroughTheInterface(t *testing.T) {
 	for name, err := range map[string]error{"ErrNoPipeline": ErrNoPipeline, "ErrNoWorkflow": ErrNoWorkflow} {
 		if !errors.Is(err, preview.ErrNotConfigured) {
-			t.Errorf("%s does not wrap preview.ErrNotConfigured", name)
+			t.Errorf("%s does not match preview.ErrNotConfigured", name)
 		}
+	}
+	// And they keep their own wording. These strings are what the
+	// preview and cleanup commands print, and a %w wrap would prefix
+	// each with "preview: provider not configured", turning a one-line
+	// skip notice into a doubled sentence.
+	if got, want := ErrNoPipeline.Error(), "preview: no CI/CD pipeline configured"; got != want {
+		t.Errorf("ErrNoPipeline.Error() = %q, want %q", got, want)
+	}
+	if got, want := ErrNoWorkflow.Error(), "preview: no workflow configured for stage"; got != want {
+		t.Errorf("ErrNoWorkflow.Error() = %q, want %q", got, want)
+	}
+	// Distinct sentinels, not one aliased to the other.
+	if errors.Is(ErrNoPipeline, ErrNoWorkflow) {
+		t.Error("ErrNoPipeline matches ErrNoWorkflow; the two are not distinguishable")
+	}
+	if errors.Is(ErrNoPipeline, preview.ErrNoEnvironment) {
+		t.Error("ErrNoPipeline matches ErrNoEnvironment")
 	}
 }

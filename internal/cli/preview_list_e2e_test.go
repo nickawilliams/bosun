@@ -109,6 +109,32 @@ func TestPreviewList_AuthFailureNamesTheFix(t *testing.T) {
 	}
 }
 
+// TestPreviewList_NetworkFailureAborts is the sibling of the auth case:
+// anything that isn't a credential problem stops the command with the
+// underlying reason rather than being rewritten as a re-auth hint.
+func TestPreviewList_NetworkFailureAborts(t *testing.T) {
+	h := testharness.New(t)
+	fake := h.InstallPreview()
+	fake.ListErr = &preview.ProbeError{
+		URL: "https://ephemeral.test/api/deployments",
+		Err: errors.New("dial tcp: connection refused"),
+	}
+
+	err := h.Run("preview", "list")
+	if err == nil {
+		t.Fatal("preview list succeeded despite an unreachable API")
+	}
+	if strings.Contains(err.Error(), "gh auth login") {
+		t.Errorf("err = %v, want the transport failure, not a re-auth hint", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("err = %v, want it to carry the underlying reason", err)
+	}
+	if got := h.Reporter.OfKind(ui.CaptureDetails); len(got) != 0 {
+		t.Errorf("rendered a listing after a failed fetch: %+v", got)
+	}
+}
+
 // TestPreviewList_ProviderCannotList pins the degraded path. An adapter
 // whose only view of an env is an HTTP probe against a known URL has no
 // way to enumerate; printing an empty list there would read as "the

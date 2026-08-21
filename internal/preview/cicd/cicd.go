@@ -42,15 +42,28 @@ type Options struct {
 // pipeline is configured. Callers should treat this like the
 // existing "skip" path in the preview command rather than a fatal error.
 //
-// It wraps preview.ErrNotConfigured so a caller holding only the
+// It matches preview.ErrNotConfigured so a caller holding only the
 // interface can recognize "this provider has no backend" without
 // importing the adapter to name its sentinel.
-var ErrNoPipeline = fmt.Errorf("%w: no CI/CD pipeline configured", preview.ErrNotConfigured)
+var ErrNoPipeline = notConfigured("preview: no CI/CD pipeline configured")
 
 // ErrNoWorkflow is returned when the requested sub-stage has no
-// workflow targets configured. Wraps preview.ErrNotConfigured for the
+// workflow targets configured. Matches preview.ErrNotConfigured for the
 // same reason as ErrNoPipeline.
-var ErrNoWorkflow = fmt.Errorf("%w: no workflow configured for stage", preview.ErrNotConfigured)
+var ErrNoWorkflow = notConfigured("preview: no workflow configured for stage")
+
+// notConfigured is an error that answers to preview.ErrNotConfigured
+// while keeping its own message.
+//
+// A `fmt.Errorf("%w: …", preview.ErrNotConfigured)` wrap would prefix
+// every one of these with "preview: provider not configured", turning
+// a one-line skip notice into a doubled sentence — and these strings
+// are what the preview and cleanup commands print.
+type notConfigured string
+
+func (e notConfigured) Error() string { return string(e) }
+
+func (e notConfigured) Is(target error) bool { return target == preview.ErrNotConfigured }
 
 // New returns a Provider that dispatches workflows via the configured
 // cicd.CICD and persists the env-to-issue binding on the tracker.

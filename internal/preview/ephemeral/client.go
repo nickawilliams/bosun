@@ -150,21 +150,42 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("decoding %s response: %w", path, err)
+		return fmt.Errorf("%w: decoding %s response: %w", errUndecodable, path, err)
 	}
 	return nil
 }
 
+// errUndecodable marks a 2xx whose body isn't the shape this adapter
+// expects. Definitive, not transient: the two ways to get one are a
+// base URL pointing at something else (the service's own SPA fallback
+// answers 200 with HTML) and a server-side schema change. Retrying
+// either costs a request and reports the wrong diagnosis.
+var errUndecodable = errors.New("unexpected response body")
+
 // resolve joins path onto the configured base URL.
+//
+// Both failure arms report preview.ErrNotConfigured rather than letting
+// the request go out and fail: a base URL with no scheme, or one that
+// isn't a URL at all, is a config mistake, and surfacing it as a
+// retried "couldn't verify" sends the user looking at the network.
+//
+// The base is concatenated, not reparsed and re-serialized: round-tripping
+// through url.URL would quietly relocate a query or fragment to the wrong
+// side of the path.
 func (c *client) resolve(path string) (string, error) {
 	if c.baseURL == "" {
 		return "", fmt.Errorf("%w: set %s.api.base_url", preview.ErrNotConfigured, preview.ConfigGroup)
 	}
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid %s.api.base_url %q: %w", preview.ConfigGroup, c.baseURL, err)
+		return "", fmt.Errorf("%w: invalid %s.api.base_url %q: %w",
+			preview.ErrNotConfigured, preview.ConfigGroup, c.baseURL, err)
 	}
-	return strings.TrimRight(base.String(), "/") + path, nil
+	if base.Scheme == "" || base.Host == "" {
+		return "", fmt.Errorf("%w: %s.api.base_url %q needs a scheme and host (e.g. https://host)",
+			preview.ErrNotConfigured, preview.ConfigGroup, c.baseURL)
+	}
+	return c.baseURL + path, nil
 }
 
 // token resolves the bearer token, caching it for the client's lifetime.
@@ -199,12 +220,13 @@ func describe(raw []byte, status string) string {
 // probeError wraps err as the indeterminate-probe result the provider
 // contract expects, tagged with the endpoint that failed so callers can
 // name it in a --force notice.
+//
+// The endpoint is built rather than re-resolved: every caller reaches
+// here having already made a request, so the base URL is known good —
+// resolve's failures are config errors, and those are reported as
+// ErrNotConfigured long before anything is called indeterminate.
 func (c *client) probeError(path string, err error) error {
-	endpoint, resolveErr := c.resolve(path)
-	if resolveErr != nil {
-		endpoint = c.baseURL + path
-	}
-	return &preview.ProbeError{URL: endpoint, Err: err}
+	return &preview.ProbeError{URL: c.baseURL + path, Err: err}
 }
 
 // indeterminate reports whether err means "couldn't get an answer"
@@ -212,7 +234,10 @@ func (c *client) probeError(path string, err error) error {
 // an authentication rejection does not — it is definitive, and callers
 // must see preview.ErrAuth rather than a retry suggestion.
 func indeterminate(err error) bool {
-	if err == nil || errors.Is(err, preview.ErrAuth) || errors.Is(err, preview.ErrNotConfigured) {
+	if err == nil ||
+		errors.Is(err, preview.ErrAuth) ||
+		errors.Is(err, preview.ErrNotConfigured) ||
+		errors.Is(err, errUndecodable) {
 		return false
 	}
 	var se *statusError

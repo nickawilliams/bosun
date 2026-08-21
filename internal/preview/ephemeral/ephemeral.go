@@ -48,14 +48,38 @@ const (
 // pointed at something that streams, not to police normal payloads.
 const maxResponseBytes = 8 << 20
 
-// defaultTimeout bounds a single API call.
-//
-// It is this large because POST /api/deploy is synchronous past the
-// workflow dispatch: the server polls GitHub for up to ten seconds
-// looking for the run it just created before it answers. A timeout
-// under that would abandon a deploy that had already been triggered,
-// leaving an env running with no binding recorded for it.
-const defaultTimeout = 30 * time.Second
+// Deadlines. Every call is bounded by one of these, derived from the
+// caller's context so a shorter caller deadline still wins.
+const (
+	// dispatchTimeout bounds a deploy or teardown. It is this large
+	// because POST /api/deploy is synchronous past the workflow
+	// dispatch: the server polls GitHub for up to ten seconds looking
+	// for the run it just created before it answers. A timeout under
+	// that would abandon a deploy that had already been triggered,
+	// leaving an env running with no binding recorded for it.
+	dispatchTimeout = 30 * time.Second
+
+	// listBudget bounds a whole listing lookup — both attempts of the
+	// retry, not each. The read paths sit inside `bosun preview`'s
+	// resolution spinner and `bosun status`'s render, which run twice
+	// per invocation, so a per-attempt deadline this size would put a
+	// two-minute worst case in front of a user waiting on a prompt.
+	listBudget = 10 * time.Second
+
+	// listingTTL is how long one fetched listing serves later reads on
+	// the same provider.
+	//
+	// Resolution reads the fleet twice moments apart — once for the
+	// issue's binding, once for a --name — and cleanup reads it before
+	// a teardown. Serving those from one response halves the wait, and
+	// makes the two arms agree: two listings taken seconds apart can
+	// disagree about an env that was torn down in between, and
+	// resolution would then plan against a fleet that never existed.
+	//
+	// Short because a bosun invocation is short. This collapses the
+	// reads of one command; it is not a session cache.
+	listingTTL = 5 * time.Second
+)
 
 // Options configures the adapter. BaseURL is required; everything else
 // has a working default or is optional.
@@ -67,8 +91,10 @@ type Options struct {
 	// GitHubCLIToken).
 	Token func(ctx context.Context) (string, error)
 
-	// HTTPClient issues the requests. Nil uses a client with
-	// defaultTimeout.
+	// HTTPClient issues the requests. Nil uses a client with no timeout
+	// of its own — every call sets its own deadline (see the constants
+	// above), and a client-level timeout would cap them all at whichever
+	// value the longest path needs.
 	HTTPClient *http.Client
 
 	// Tracker stores the env-to-issue binding. Nil means bindings aren't
@@ -89,7 +115,7 @@ func New(opts Options) preview.Provider {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = &http.Client{}
 	}
 	return &adapter{
 		client: client{
@@ -118,6 +144,12 @@ type adapter struct {
 	client
 	binding     preview.Binding
 	urlTemplate *template.Template
+
+	// listing caches the deployments response for the life of a
+	// command. See listingTTL.
+	listingMu sync.Mutex
+	listing   []deployment
+	listingAt time.Time
 }
 
 // urlData is the template context passed to URLTemplate. It matches the
@@ -195,7 +227,9 @@ func (p *adapter) Create(ctx context.Context, claim preview.Claim) (preview.Envi
 	}
 	body.ImageOverrides = overrides
 
-	if err := p.do(ctx, http.MethodPost, pathDeploy, body, nil); err != nil {
+	dctx, cancel := context.WithTimeout(ctx, dispatchTimeout)
+	defer cancel()
+	if err := p.do(dctx, http.MethodPost, pathDeploy, body, nil); err != nil {
 		return preview.Environment{}, fmt.Errorf("triggering deploy: %w", err)
 	}
 
@@ -225,8 +259,19 @@ func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 		return errors.New("preview: refusing to destroy without an env name")
 	}
 
-	err := p.do(ctx, http.MethodPost, pathDelete, deleteRequest{EphemeralName: name}, nil)
-	if err != nil && !alreadyGone(err) {
+	ctx, cancel := context.WithTimeout(ctx, dispatchTimeout)
+	defer cancel()
+
+	// No "already gone is success" arm, deliberately. Idempotence lives
+	// on the server: POST /api/delete-deployment dispatches the cleanup
+	// workflow unconditionally and answers 200 whether or not the env
+	// exists, so a missing env never surfaces as an error here. The only
+	// realistic 404 on this path is a base URL pointing somewhere
+	// without the route — a wrong host, or a server predating it — and
+	// swallowing that would report a teardown that never happened and
+	// then clear the binding, leaving the env running with nothing
+	// pointing at it.
+	if err := p.do(ctx, http.MethodPost, pathDelete, deleteRequest{EphemeralName: name}, nil); err != nil {
 		return fmt.Errorf("triggering teardown: %w", err)
 	}
 
@@ -241,21 +286,48 @@ func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 // so this includes other people's. IssueKey is left empty: the binding
 // registry is keyed by issue, not by name, so an env's owning issue
 // can't be recovered without walking every issue.
+//
+// Two filters, both about what a discovery listing is for. One row per
+// name, the newest — the raw listing carries a row per provision run,
+// so a name redeployed three times this week appears three times. And
+// nothing that no longer exists: a cleaned_up run is neither adoptable
+// nor an environment, and listing it as "gone" is noise in front of the
+// names that are actually there.
+//
+// A provision still in flight is absent for a different reason: the API
+// reports those rows with a null name (it is recovered from the setup
+// job's logs, which haven't been written yet), so there is nothing to
+// address one by. Recovering it needs GET /api/workflow-status/:runId
+// per row, which the issue scoped as an optional extension.
 func (p *adapter) List(ctx context.Context) ([]preview.Environment, error) {
 	entries, err := p.deployments(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]preview.Environment, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
 	for _, d := range entries {
 		if d.Name == nil || *d.Name == "" {
-			// A provision run whose name hasn't been recovered from the
-			// job logs yet. There is nothing to address it by, so it
-			// can't be adopted, torn down, or matched to an issue.
 			continue
 		}
-		env := preview.Environment{Name: *d.Name, URL: p.renderURL(*d.Name)}
-		out = append(out, p.merge(env, d))
+		key := strings.ToLower(*d.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		// Resolved through the same helper the by-name lookups use, so
+		// a listed env's reported state and its Inspect state can't
+		// disagree.
+		current := newestNamed(entries, *d.Name)
+		env := p.merge(preview.Environment{
+			Name: *current.Name,
+			URL:  p.renderURL(*current.Name),
+		}, *current)
+		if env.Probed && env.Status == preview.StatusGone {
+			continue
+		}
+		out = append(out, env)
 	}
 	return out, nil
 }
@@ -279,22 +351,48 @@ func (p *adapter) ValidateName(name string) error {
 	return nil
 }
 
-// lookup finds the deployment named name, or nil when the API lists no
-// such env. Errors are already mapped onto the provider contract.
+// lookup finds the current deployment named name, or nil when the API
+// lists no such env. Errors are already mapped onto the provider
+// contract.
 func (p *adapter) lookup(ctx context.Context, name string) (*deployment, error) {
 	entries, err := p.deployments(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Names are case-insensitive to the backend — it lowercases them for
-	// its pending-deletion bookkeeping — so match the same way rather
-	// than reporting a differently-cased env as absent.
-	for _, d := range entries {
-		if d.Name != nil && strings.EqualFold(*d.Name, name) {
-			return &d, nil
+	return newestNamed(entries, name), nil
+}
+
+// newestNamed returns the most recently created entry named name, or nil
+// when none is.
+//
+// The listing carries more than one row per name: on the
+// Actions-backed path the server emits one per provision run from the
+// last week, including runs whose env has since been cleaned up. It
+// sorts newest-first, but reading the first match would make a correct
+// answer depend on an ordering the API doesn't promise — and picking a
+// stale cleaned_up row for a live env is exactly what routes the
+// preview command to a fresh create over a running environment.
+//
+// Matching is case-insensitive: the backend lowercases names for its
+// pending-deletion bookkeeping, so a differently-cased name is the same
+// env, not an absent one.
+func newestNamed(entries []deployment, name string) *deployment {
+	var best *deployment
+	var bestAt time.Time
+	for i := range entries {
+		d := &entries[i]
+		if d.Name == nil || !strings.EqualFold(*d.Name, name) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, d.CreatedAt)
+		// An unparseable timestamp can't beat anything; with every
+		// timestamp unparseable the first match wins, which is the
+		// server's order and the best guess available.
+		if best == nil || (err == nil && at.After(bestAt)) {
+			best, bestAt = d, at
 		}
 	}
-	return nil, nil
+	return best
 }
 
 // deployments fetches the listing, retrying once on an indeterminate
@@ -303,12 +401,32 @@ func (p *adapter) lookup(ctx context.Context, name string) (*deployment, error) 
 // prompt, anything else indeterminate becomes a *preview.ProbeError
 // naming the endpoint.
 func (p *adapter) deployments(ctx context.Context) ([]deployment, error) {
+	// Held across the fetch on purpose: a second caller arriving
+	// mid-request waits and takes the first one's answer rather than
+	// issuing a duplicate. Entries are treated as read-only by every
+	// caller, so one slice can serve them all.
+	p.listingMu.Lock()
+	defer p.listingMu.Unlock()
+	if p.listing != nil && time.Since(p.listingAt) < listingTTL {
+		return p.listing, nil
+	}
+
+	// One budget across both attempts rather than a deadline per
+	// attempt: this runs twice per `bosun preview` and once per
+	// workspace in `bosun status`, so the number a user waits on is the
+	// total, not the slice.
+	ctx, cancel := context.WithTimeout(ctx, listBudget)
+	defer cancel()
+
 	var lastErr error
 	for range 2 {
 		var resp deploymentsResponse
 		err := p.do(ctx, http.MethodGet, pathDeployments, nil, &resp)
 		if err == nil {
-			return resp.Deployments, nil
+			// Only successes are cached; a failure leaves the next
+			// caller free to try again rather than inheriting it.
+			p.listing, p.listingAt = resp.Deployments, time.Now()
+			return p.listing, nil
 		}
 		lastErr = err
 		if !indeterminate(err) {
@@ -363,6 +481,15 @@ func (p *adapter) renderURL(name string) string {
 
 // translateStatus maps an API status onto the domain enum, reporting
 // whether the value was recognized.
+//
+// One caveat on "creating": the API only ever reports it on rows whose
+// name is null, because the name is recovered from the setup job's logs
+// and those aren't written yet. So a lookup by name never sees this
+// status today — a provision in flight reads as absent, the same answer
+// a URL probe gives. Attributing an in-flight run to a name needs
+// GET /api/workflow-status/:runId, which the issue scoped as an
+// optional extension. The mapping is here because the taxonomy is the
+// API's, not because this arm is currently reachable by name.
 func translateStatus(s string) (preview.Status, bool) {
 	switch s {
 	case "creating":
@@ -392,14 +519,6 @@ func encodeOverrides(overrides map[string]string) (string, error) {
 		return "", fmt.Errorf("encoding image overrides: %w", err)
 	}
 	return string(encoded), nil
-}
-
-// alreadyGone reports whether a teardown failure means the env was not
-// there to begin with, which Destroy treats as success — it is
-// documented idempotent.
-func alreadyGone(err error) bool {
-	var se *statusError
-	return errors.As(err, &se) && se.Code == http.StatusNotFound
 }
 
 // Verify the provider satisfies the interfaces it claims at compile time.
