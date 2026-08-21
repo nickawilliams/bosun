@@ -467,13 +467,43 @@ func statusPreviewValue(env preview.Environment, err error) string {
 	if env.URL != "" {
 		v = osc8Link(env.URL, v)
 	}
-	if env.Probed && !env.Alive {
-		// Bound but the probe got a definitive 404 — torn down, or a
-		// just-triggered deploy still in flight. Surface the binding so
-		// it isn't lost, marked so the reader knows it isn't reachable.
-		v += " " + muted.Render("(unreachable)")
+	if note := previewStateNote(env); note != "" {
+		v += " " + muted.Render(note)
 	}
 	return v
+}
+
+// previewStateNote returns the parenthetical that qualifies a bound
+// env's name, or "" when the env is serving and needs none.
+//
+// The distinctions come from the provider's status taxonomy. A
+// reachability probe can only say active or gone, so it lands on
+// "(unreachable)" — accurate but ambiguous, since a deploy triggered
+// seconds ago and an env torn down last week both look identical to it.
+// A provider that reads a deployment API separates them, and this is
+// where that shows up.
+func previewStateNote(env preview.Environment) string {
+	if !env.Probed {
+		return ""
+	}
+	switch env.Status {
+	case preview.StatusCreating:
+		return "(deploying)"
+	case preview.StatusDeleting:
+		return "(tearing down)"
+	case preview.StatusDegraded:
+		if n := len(env.FailedServices); n > 0 {
+			return fmt.Sprintf("(degraded: %s)", strings.Join(env.FailedServices, ", "))
+		}
+		return "(degraded)"
+	case preview.StatusGone:
+		// Torn down, or a just-triggered deploy the provider can't see
+		// yet. Surface the binding so it isn't lost, marked so the
+		// reader knows it isn't reachable.
+		return "(unreachable)"
+	default:
+		return ""
+	}
 }
 
 // statusPreviewRow returns the (glyph, value) pair for a workspace
@@ -481,11 +511,17 @@ func statusPreviewValue(env preview.Environment, err error) string {
 // decides whether to skip vs render "(none)" based on scope).
 //
 // Render shapes:
-//   - alive (probed + alive)        → ● RoleOpen, name (linked to URL)
+//   - active                        → ● RoleOpen, name (linked to URL)
+//   - degraded                      → ● RoleOpen, name (linked) + (degraded: svc, …) suffix
 //   - indeterminate (ProbeError)    → ● RoleNeutral, name (linked) + (unverified) suffix
-//   - bound but probed dead (404)   → ● RoleNeutral, name (linked) + (unreachable) suffix
+//   - creating / deleting           → ● RoleNeutral, name (linked) + transition suffix
+//   - gone (probed dead)            → ● RoleNeutral, name (linked) + (unreachable) suffix
 //   - unprobable (no URL template)  → ● RoleNeutral, name (no link)
 //   - no env bound (ErrNoEnvironment or any other error) → ("", "") signaling skip
+//
+// Degraded reads as RoleOpen because the env is serving: it is a
+// qualified success, not a neutral unknown, and the suffix carries which
+// services didn't make it.
 func statusPreviewRow(env preview.Environment, err error) (string, string) {
 	if errors.Is(err, preview.ErrNoEnvironment) {
 		return "", ""
@@ -513,36 +549,22 @@ func statusPreviewRow(env preview.Environment, err error) (string, string) {
 		return "", ""
 	}
 
-	switch {
-	case env.Probed && env.Alive:
-		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleOpen)
-		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
-		if env.URL != "" {
-			v = osc8Link(env.URL, v)
-		}
-		return glyph, v
-	case env.Probed && !env.Alive:
-		// Bound but probed dead (definitive 404) — torn down, or a
-		// just-triggered deploy still in flight. Surface the binding so
-		// it isn't lost, marked unreachable.
-		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleNeutral)
-		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
-		if env.URL != "" {
-			v = osc8Link(env.URL, v)
-		}
-		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render("(unreachable)")
-		return glyph, v
-	default:
-		// Unprobable (no URL template): show the name in neutral so
-		// the reader can see what's bound without implying it's
-		// verified.
-		glyph := statusStyledGlyph(ui.Palette.Active+"  ", ui.Palette.RoleNeutral)
-		v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
-		if env.URL != "" {
-			v = osc8Link(env.URL, v)
-		}
-		return glyph, v
+	role := ui.Palette.RoleNeutral
+	if env.Alive() {
+		role = ui.Palette.RoleOpen
 	}
+	glyph := statusStyledGlyph(ui.Palette.Active+"  ", role)
+	v := lipgloss.NewStyle().Foreground(ui.Palette.NormalFg).Render(env.Name)
+	if env.URL != "" {
+		v = osc8Link(env.URL, v)
+	}
+	// An unprobed env (no URL template, or an unrecognized status) gets
+	// no suffix: the name is what's known, and any qualifier would imply
+	// a verification that never happened.
+	if note := previewStateNote(env); note != "" {
+		v += " " + lipgloss.NewStyle().Foreground(ui.Palette.RoleNeutral).Render(note)
+	}
+	return glyph, v
 }
 
 // statusStateGlyph returns the 3-cell glyph token for a card-state,

@@ -60,7 +60,7 @@ func newFakeTracker() *fakeTracker { return &fakeTracker{} }
 
 // withName seeds the tracker with a stored preview_name property.
 func (f *fakeTracker) withName(name string) *fakeTracker {
-	b, _ := json.Marshal(registryEntry{PreviewName: name})
+	b, _ := json.Marshal(map[string]string{"preview_name": name})
 	f.prop = b
 	return f
 }
@@ -233,8 +233,8 @@ func TestGet_Alive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !env.Probed || !env.Alive {
-		t.Errorf("Probed=%v, Alive=%v, want both true", env.Probed, env.Alive)
+	if !env.Probed || env.Status != preview.StatusActive {
+		t.Errorf("Probed=%v, Status=%v, want true, active", env.Probed, env.Status)
 	}
 	if env.Name != "brave-falcon" || env.IssueKey != "PROJ-1" {
 		t.Errorf("env = %+v", env)
@@ -264,8 +264,8 @@ func TestGet_DeadKeepsBinding(t *testing.T) {
 	if env.Name != "brave-falcon" || env.IssueKey != "PROJ-1" {
 		t.Errorf("env = %+v", env)
 	}
-	if !env.Probed || env.Alive {
-		t.Errorf("Probed=%v, Alive=%v, want Probed=true, Alive=false", env.Probed, env.Alive)
+	if !env.Probed || env.Status != preview.StatusGone {
+		t.Errorf("Probed=%v, Status=%v, want true, gone", env.Probed, env.Status)
 	}
 	if tracker.deleteCalls != 0 {
 		t.Errorf("DeleteProperty called %d times, want 0 (read must not mutate)", tracker.deleteCalls)
@@ -298,8 +298,8 @@ func TestGet_Indeterminate(t *testing.T) {
 	if env.URL == "" {
 		t.Error("URL should be populated even on probe error")
 	}
-	if env.Probed || env.Alive {
-		t.Errorf("Probed=%v Alive=%v, want both false on indeterminate", env.Probed, env.Alive)
+	if env.Probed || env.Status != preview.StatusUnknown {
+		t.Errorf("Probed=%v Status=%v, want false, unknown on indeterminate", env.Probed, env.Status)
 	}
 	if tracker.deleteCalls != 0 {
 		t.Error("indeterminate probe should not trigger cleanup")
@@ -341,8 +341,8 @@ func TestInspect_Alive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !env.Probed || !env.Alive {
-		t.Errorf("Probed=%v Alive=%v, want both true", env.Probed, env.Alive)
+	if !env.Probed || env.Status != preview.StatusActive {
+		t.Errorf("Probed=%v Status=%v, want true, active", env.Probed, env.Status)
 	}
 	if env.IssueKey != "" {
 		t.Errorf("IssueKey = %q, want empty (Inspect is not issue-scoped)", env.IssueKey)
@@ -387,8 +387,8 @@ func TestInspect_DeadDoesNotAutoClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !env.Probed || env.Alive {
-		t.Errorf("Probed=%v Alive=%v, want Probed=true Alive=false", env.Probed, env.Alive)
+	if !env.Probed || env.Status != preview.StatusGone {
+		t.Errorf("Probed=%v Status=%v, want true, gone", env.Probed, env.Status)
 	}
 	if tracker.deleteCalls != 0 {
 		t.Error("Inspect must not touch the tracker")
@@ -535,7 +535,9 @@ func TestAdopt_WritesProperty(t *testing.T) {
 	if tracker.setCalls != 1 {
 		t.Errorf("SetProperty called %d times, want 1", tracker.setCalls)
 	}
-	var got registryEntry
+	var got struct {
+		PreviewName string `json:"preview_name"`
+	}
 	_ = json.Unmarshal(tracker.prop, &got)
 	if got.PreviewName != "brave-falcon" {
 		t.Errorf("stored property = %+v, want PreviewName=brave-falcon", got)

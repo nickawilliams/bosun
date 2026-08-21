@@ -149,7 +149,7 @@ func TestBuildProjectWorkspaceCard(t *testing.T) {
 
 	t.Run("bound preview env adds the preview row", func(t *testing.T) {
 		ws := base
-		ws.previewEnv = preview.Environment{Name: "brave-falcon", Probed: true, Alive: true}
+		ws.previewEnv = preview.Environment{Name: "brave-falcon", Probed: true, Status: preview.StatusActive}
 		rowReads(t, ansi.Strip(buildProjectWorkspaceCard(ws).Render()), "Preview", "brave-falcon")
 	})
 

@@ -61,10 +61,10 @@ func resolveWith(t *testing.T, p preview.Provider, flagName string, force bool) 
 
 // alive/dead/unprobed build the three probe outcomes.
 func alive(name string) preview.Environment {
-	return preview.Environment{Name: name, Probed: true, Alive: true}
+	return preview.Environment{Name: name, Probed: true, Status: preview.StatusActive}
 }
 func dead(name string) preview.Environment {
-	return preview.Environment{Name: name, Probed: true, Alive: false}
+	return preview.Environment{Name: name, Probed: true, Status: preview.StatusGone}
 }
 func unprobed(name string) preview.Environment {
 	return preview.Environment{Name: name}
@@ -226,4 +226,83 @@ func TestResolvePreviewMatrix(t *testing.T) {
 			t.Error("expected the indeterminate probe to surface as an error without --force")
 		}
 	})
+}
+
+// TestResolvePreviewPendingEnv covers the states a provider with a real
+// status taxonomy adds. A pending env is not reachable, yet it is not
+// gone either — and the two want opposite plans.
+func TestResolvePreviewPendingEnv(t *testing.T) {
+	for _, status := range []preview.Status{preview.StatusCreating, preview.StatusDeleting} {
+		t.Run(string(status), func(t *testing.T) {
+			p := &fakePreviewProvider{
+				getEnv: preview.Environment{Name: "bound", Probed: true, Status: status},
+			}
+			res, err := resolveWith(t, p, "", false)
+			if err != nil {
+				t.Fatalf("resolvePreview: %v", err)
+			}
+			// Redeploy under the stored name. Treating a pending env as
+			// dead would land on the plain-create arm, which is
+			// harmless here, but treating it as alive would land on
+			// isCurrent and skip the deploy entirely — for a teardown
+			// in flight that leaves the issue bound to nothing.
+			if res.deployName != "bound" {
+				t.Errorf("deployName = %q, want the stored name", res.deployName)
+			}
+			if !res.isRedeploy {
+				t.Errorf("res = %+v, want a redeploy against the in-flight env", res)
+			}
+			if res.isCurrent {
+				t.Errorf("res = %+v, want the deploy to run, not be declared current", res)
+			}
+		})
+	}
+
+	t.Run("degraded counts as alive", func(t *testing.T) {
+		// A degraded env is serving, just incomplete. Without --force
+		// there is nothing to claim, so resolution reports it current
+		// exactly as it would a fully-healthy one.
+		p := &fakePreviewProvider{
+			getEnv: preview.Environment{
+				Name: "bound", Probed: true, Status: preview.StatusDegraded,
+				FailedServices: []string{"worker"},
+			},
+		}
+		res, err := resolveWith(t, p, "", false)
+		if err != nil {
+			t.Fatalf("resolvePreview: %v", err)
+		}
+		if !res.isCurrent || res.deployName != "" {
+			t.Errorf("res = %+v, want the degraded env reported current", res)
+		}
+	})
+}
+
+// TestEnforceValidNameUsesTheProvidersGrammar pins the hook that keeps a
+// name the backend would reject from reaching a dispatch.
+func TestEnforceValidNameUsesTheProvidersGrammar(t *testing.T) {
+	loose := &fakePreviewProvider{}
+	if _, err := enforceValidName(loose, "falcon"); err != nil {
+		t.Errorf("enforceValidName = %v, want nil against the shared floor", err)
+	}
+
+	// The same name against a provider that demands two segments.
+	strict := &strictNamePreviewProvider{fakePreviewProvider{}}
+	if _, err := enforceValidName(strict, "falcon"); err == nil {
+		t.Error("enforceValidName accepted a name the provider's grammar rejects")
+	}
+	if _, err := enforceValidName(strict, "brave-falcon"); err != nil {
+		t.Errorf("enforceValidName = %v, want nil for a name the provider accepts", err)
+	}
+}
+
+// strictNamePreviewProvider stands in for an adapter whose backend has
+// its own name grammar.
+type strictNamePreviewProvider struct{ fakePreviewProvider }
+
+func (strictNamePreviewProvider) ValidateName(name string) error {
+	if !strings.Contains(name, "-") {
+		return errors.New("name must have two or more hyphenated parts")
+	}
+	return nil
 }

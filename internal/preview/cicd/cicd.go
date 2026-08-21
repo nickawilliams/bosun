@@ -41,20 +41,26 @@ type Options struct {
 // ErrNoPipeline is returned by Create and Destroy when no CI/CD
 // pipeline is configured. Callers should treat this like the
 // existing "skip" path in the preview command rather than a fatal error.
-var ErrNoPipeline = errors.New("preview: no CI/CD pipeline configured")
+//
+// It wraps preview.ErrNotConfigured so a caller holding only the
+// interface can recognize "this provider has no backend" without
+// importing the adapter to name its sentinel.
+var ErrNoPipeline = fmt.Errorf("%w: no CI/CD pipeline configured", preview.ErrNotConfigured)
 
 // ErrNoWorkflow is returned when the requested sub-stage has no
-// workflow targets configured.
-var ErrNoWorkflow = errors.New("preview: no workflow configured for stage")
+// workflow targets configured. Wraps preview.ErrNotConfigured for the
+// same reason as ErrNoPipeline.
+var ErrNoWorkflow = fmt.Errorf("%w: no workflow configured for stage", preview.ErrNotConfigured)
 
 // New returns a Provider that dispatches workflows via the configured
 // cicd.CICD and persists the env-to-issue binding on the tracker.
 func New(opts Options) preview.Provider {
-	return &provider{opts: opts}
+	return &adapter{opts: opts, binding: preview.Binding{Store: opts.Tracker}}
 }
 
-type provider struct {
-	opts Options
+type adapter struct {
+	opts    Options
+	binding preview.Binding
 }
 
 // stageURLData is the template context passed to URLTemplate.
@@ -62,15 +68,20 @@ type stageURLData struct {
 	Name string
 }
 
-// registryEntry is the JSON shape stored at the issue's preview_name
-// property: {"preview_name": "brave-falcon"}.
-type registryEntry struct {
-	PreviewName string `json:"preview_name"`
+// probeStatus maps a reachability probe onto the status enum. A probe
+// only ever answers "serving" or "not there" — it cannot see a
+// provision in flight or a partial deploy — so this adapter reports
+// exactly two of the five states.
+func probeStatus(alive bool) preview.Status {
+	if alive {
+		return preview.StatusActive
+	}
+	return preview.StatusGone
 }
 
-func (p *provider) Get(ctx context.Context, issueKey string) (preview.Environment, error) {
-	name, err := p.readName(ctx, issueKey)
-	if err != nil || name == "" {
+func (p *adapter) Get(ctx context.Context, issueKey string) (preview.Environment, error) {
+	name := p.binding.Name(ctx, issueKey)
+	if name == "" {
 		return preview.Environment{}, preview.ErrNoEnvironment
 	}
 
@@ -101,11 +112,11 @@ func (p *provider) Get(ctx context.Context, issueKey string) (preview.Environmen
 	// resolvePreview recreates under the stored name and Create
 	// overwrites the binding on the next deploy.
 	env.Probed = true
-	env.Alive = alive
+	env.Status = probeStatus(alive)
 	return env, nil
 }
 
-func (p *provider) Inspect(ctx context.Context, name string) (preview.Environment, error) {
+func (p *adapter) Inspect(ctx context.Context, name string) (preview.Environment, error) {
 	if name == "" {
 		return preview.Environment{}, preview.ErrNoEnvironment
 	}
@@ -125,11 +136,11 @@ func (p *provider) Inspect(ctx context.Context, name string) (preview.Environmen
 		return env, &preview.ProbeError{URL: env.URL, Err: perr}
 	}
 	env.Probed = true
-	env.Alive = alive
+	env.Status = probeStatus(alive)
 	return env, nil
 }
 
-func (p *provider) Create(ctx context.Context, claim preview.Claim) (preview.Environment, error) {
+func (p *adapter) Create(ctx context.Context, claim preview.Claim) (preview.Environment, error) {
 	if claim.Name == "" {
 		return preview.Environment{}, errors.New("preview: claim name is empty")
 	}
@@ -160,9 +171,7 @@ func (p *provider) Create(ctx context.Context, claim preview.Claim) (preview.Env
 		}
 	}
 
-	if p.opts.Tracker != nil {
-		_ = p.writeName(ctx, claim.IssueKey, claim.Name)
-	}
+	_ = p.binding.Bind(ctx, claim.IssueKey, claim.Name)
 
 	return preview.Environment{
 		Name:     claim.Name,
@@ -171,17 +180,14 @@ func (p *provider) Create(ctx context.Context, claim preview.Claim) (preview.Env
 	}, nil
 }
 
-func (p *provider) Adopt(ctx context.Context, issueKey, name string) error {
+func (p *adapter) Adopt(ctx context.Context, issueKey, name string) error {
 	if name == "" {
 		return errors.New("preview: adopt name is empty")
 	}
-	if p.opts.Tracker == nil {
-		return nil
-	}
-	return p.writeName(ctx, issueKey, name)
+	return p.binding.Bind(ctx, issueKey, name)
 }
 
-func (p *provider) Destroy(ctx context.Context, issueKey, name string) error {
+func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("preview: refusing to destroy without an env name")
 	}
@@ -224,13 +230,11 @@ func (p *provider) Destroy(ctx context.Context, issueKey, name string) error {
 		}
 	}
 
-	if p.opts.Tracker != nil {
-		_ = p.opts.Tracker.DeleteProperty(ctx, issueKey)
-	}
+	_ = p.binding.Unbind(ctx, issueKey)
 	return nil
 }
 
-func (p *provider) buildDeployInputs(subStage string, claim preview.Claim) map[string]string {
+func (p *adapter) buildDeployInputs(subStage string, claim preview.Claim) map[string]string {
 	inputs := make(map[string]string)
 	if k := p.opts.InputName(subStage, "name"); k != "" {
 		inputs[k] = claim.Name
@@ -249,30 +253,7 @@ func (p *provider) buildDeployInputs(subStage string, claim preview.Claim) map[s
 	return inputs
 }
 
-// readName reads the preview_name property from the tracker. Returns
-// empty string for any non-success path: missing property, nil tracker,
-// unexpected JSON shape, or tracker error. Matches the legacy
-// fetchExistingPreviewName behavior.
-func (p *provider) readName(ctx context.Context, issueKey string) (string, error) {
-	if p.opts.Tracker == nil {
-		return "", nil
-	}
-	raw, err := p.opts.Tracker.GetProperty(ctx, issueKey)
-	if err != nil || raw == nil {
-		return "", nil
-	}
-	var entry registryEntry
-	if err := json.Unmarshal(raw, &entry); err != nil {
-		return "", nil
-	}
-	return entry.PreviewName, nil
-}
-
-func (p *provider) writeName(ctx context.Context, issueKey, name string) error {
-	return p.opts.Tracker.SetProperty(ctx, issueKey, registryEntry{PreviewName: name})
-}
-
-func (p *provider) renderURL(name string) string {
+func (p *adapter) renderURL(name string) string {
 	if p.opts.URLTemplate == nil || name == "" {
 		return ""
 	}
