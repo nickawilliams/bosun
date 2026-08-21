@@ -9,6 +9,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
 )
 
 // stubConfig is a provider.Config over a map. requireErr stands in for
@@ -379,10 +380,11 @@ func TestEveryTrackerDescribesItsKeyGrammar(t *testing.T) {
 // config layer — a group whose provider key renders with no options.
 func TestCatalogsCoverEveryRegistry(t *testing.T) {
 	want := map[string]int{
-		issue.ConfigGroup:  len(trackerDescriptors),
-		code.ConfigGroup:   len(hostDescriptors),
-		notify.ConfigGroup: len(notifierDescriptors),
-		cicd.ConfigGroup:   len(pipelineDescriptors),
+		issue.ConfigGroup:   len(trackerDescriptors),
+		code.ConfigGroup:    len(hostDescriptors),
+		notify.ConfigGroup:  len(notifierDescriptors),
+		cicd.ConfigGroup:    len(pipelineDescriptors),
+		preview.ConfigGroup: len(previewDescriptors),
 	}
 
 	if len(catalogs) != len(want) {

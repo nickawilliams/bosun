@@ -32,6 +32,7 @@ var capabilityRoots = []string{
 	"internal/code",
 	"internal/notify",
 	"internal/cicd",
+	"internal/preview",
 }
 
 // adapterImportExceptions are adapter imports that are deliberate,
