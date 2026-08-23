@@ -26,8 +26,15 @@ type Preview struct {
 	// destroyed records every Destroy call as "issueKey|name", in order.
 	destroyed []string
 
-	// GetErr, CreateErr, DestroyErr override default behavior to force
-	// error paths. nil means use the default success behavior.
+	// listed are the environments List returns, standing in for the
+	// shared fleet. Separate from envs because the fleet includes envs
+	// bound to other issues and other people — the distinction is the
+	// point of the List verb — so seeding a binding must not
+	// silently make an env listable and vice versa.
+	listed []preview.Environment
+
+	// ListErr, GetErr, CreateErr, DestroyErr override default behavior
+	// to force error paths. nil means use the default success behavior.
 	//
 	// GetErr stands in for an indeterminate probe, and Get returns it
 	// the way the real contract specifies: alongside the seeded
@@ -41,6 +48,7 @@ type Preview struct {
 	GetErr     error
 	CreateErr  error
 	DestroyErr error
+	ListErr    error
 
 	// calls records the method names invoked, in order.
 	calls []string
@@ -63,6 +71,17 @@ func (p *Preview) SeedEnv(issueKey string, env preview.Environment) *Preview {
 	defer p.mu.Unlock()
 	env.IssueKey = issueKey
 	p.envs[issueKey] = env
+	return p
+}
+
+// SeedFleet sets the environments List returns, replacing any prior
+// set. Deliberately independent of SeedEnv: an env can be listed
+// without being bound (someone else's, awaiting adoption) and bound
+// without being listed (torn down out from under the binding).
+func (p *Preview) SeedFleet(envs ...preview.Environment) *Preview {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.listed = envs
 	return p
 }
 
@@ -177,5 +196,23 @@ func (p *Preview) Destroy(_ context.Context, issueKey, name string) error {
 	return nil
 }
 
-// Verify Preview satisfies preview.Provider at compile time.
-var _ preview.Provider = (*Preview)(nil)
+// List returns the seeded fleet. Implemented so the fake exercises the
+// Lister half of the contract; commands type-assert for it, so a fake
+// that omitted it would send every test down the degraded path.
+func (p *Preview) List(_ context.Context) ([]preview.Environment, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recordCall("List")
+	if p.ListErr != nil {
+		return nil, p.ListErr
+	}
+	out := make([]preview.Environment, len(p.listed))
+	copy(out, p.listed)
+	return out, nil
+}
+
+// Verify Preview satisfies the provider contract at compile time.
+var (
+	_ preview.Provider = (*Preview)(nil)
+	_ preview.Lister   = (*Preview)(nil)
+)

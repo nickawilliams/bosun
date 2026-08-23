@@ -229,10 +229,22 @@ func TestStatusPreviewRow(t *testing.T) {
 	}{
 		{name: "no env bound → skip", err: preview.ErrNoEnvironment, wantEmpty: true},
 		{name: "other error with no name → skip", err: errors.New("boom"), wantEmpty: true},
-		{name: "alive → ● + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
-		{name: "probed dead → ● + unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: false}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unreachable)"},
+		{name: "alive → ● + name", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusActive}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
+		{name: "probed dead → ● + unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusGone}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unreachable)"},
 		{name: "indeterminate with name → ●", env: preview.Environment{Name: "brave-falcon", URL: "https://x"}, err: &preview.ProbeError{URL: "https://x"}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(unverified)"},
 		{name: "unprobable (no URL template) → ●", env: preview.Environment{Name: "brave-falcon"}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
+		// The states only a provider with a real status taxonomy can
+		// report. A probe collapses all four into alive-or-not, so
+		// before the HTTP adapter a pending deploy and a torn-down env
+		// rendered identically.
+		{name: "creating → deploying", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusCreating}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(deploying)"},
+		{name: "deleting → tearing down", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusDeleting}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(tearing down)"},
+		{name: "degraded names the casualties", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusDegraded, FailedServices: []string{"api", "worker"}}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(degraded: api, worker)"},
+		{name: "degraded without detail", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusDegraded}, wantGlyph: "●  ", wantInVal: "brave-falcon", wantSuffix: "(degraded)"},
+		// An unrecognized status is reported unprobed by the adapters,
+		// but the renderer must not qualify one either way: any suffix
+		// would claim a verification that never happened.
+		{name: "unrecognized status carries no suffix", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.Status("teleporting")}, wantGlyph: "●  ", wantInVal: "brave-falcon"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,9 +279,12 @@ func TestStatusPreviewValue(t *testing.T) {
 		{name: "other error", err: errors.New("boom"), want: "(unavailable)"},
 		{name: "indeterminate with name", env: preview.Environment{Name: "brave-falcon"}, err: &preview.ProbeError{URL: "https://x"}, want: "(unverified)"},
 		{name: "indeterminate empty name → none", err: &preview.ProbeError{URL: "https://x"}, want: "(none)"},
-		{name: "alive", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: true}, want: "brave-falcon"},
-		{name: "probed dead → unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Alive: false}, want: "(unreachable)"},
+		{name: "alive", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusActive}, want: "brave-falcon"},
+		{name: "probed dead → unreachable", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusGone}, want: "(unreachable)"},
 		{name: "unprobable", env: preview.Environment{Name: "brave-falcon"}, want: "brave-falcon"},
+		{name: "creating → deploying", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusCreating}, want: "(deploying)"},
+		{name: "deleting → tearing down", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusDeleting}, want: "(tearing down)"},
+		{name: "degraded names the casualties", env: preview.Environment{Name: "brave-falcon", URL: "https://x", Probed: true, Status: preview.StatusDegraded, FailedServices: []string{"api"}}, want: "(degraded: api)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

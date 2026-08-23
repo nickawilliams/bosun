@@ -34,6 +34,9 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue/jira"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/notify/slack"
+	"github.com/nickawilliams/bosun/internal/preview"
+	previewcicd "github.com/nickawilliams/bosun/internal/preview/cicd"
+	"github.com/nickawilliams/bosun/internal/preview/ephemeral"
 	"github.com/nickawilliams/bosun/internal/provider"
 )
 
@@ -58,6 +61,11 @@ var pipelineDescriptors = []cicd.Descriptor{
 	githubactions.Descriptor(),
 }
 
+var previewDescriptors = []preview.ProviderDescriptor{
+	previewcicd.Descriptor(),
+	ephemeral.Descriptor(),
+}
+
 var trackers = newRegistry("issue tracker", issue.ConfigGroup,
 	entries(trackerDescriptors, func(d issue.TrackerDescriptor) entry[issue.Tracker] {
 		return entry[issue.Tracker]{name: d.Name, keys: d.Keys, new: d.New}
@@ -78,14 +86,43 @@ var pipelines = newRegistry("CI/CD provider", cicd.ConfigGroup,
 		return entry[cicd.CICD]{name: d.Name, keys: d.Keys, new: d.New}
 	})...)
 
+// previewRegistry indexes the preview providers, bound to the
+// dependencies the CLI resolved.
+//
+// Unlike the other four this one is a function rather than a package
+// var, because a preview provider is constructed from configuration
+// *and* runtime wiring: the tracker that holds env-to-issue bindings and
+// (for the workflow-dispatch adapter) the workflow targets, which are
+// resolved by intersecting config with the active workspace's
+// repositories. That is the CLI's knowledge, so it arrives as an
+// argument rather than being read here. Everything except construction
+// — names, keys, defaults — is deps-independent, which is why the
+// catalog below can use a zero-Deps registry.
+func previewRegistry(deps preview.Deps) *registry[preview.Provider] {
+	return newRegistry("preview provider", preview.ConfigGroup,
+		entries(previewDescriptors, func(d preview.ProviderDescriptor) entry[preview.Provider] {
+			return entry[preview.Provider]{
+				name: d.Name,
+				keys: d.Keys,
+				dflt: d.Default,
+				new: func(cfg provider.Config) (preview.Provider, error) {
+					return d.New(cfg, deps)
+				},
+			}
+		})...)
+}
+
+var previews = previewRegistry(preview.Deps{})
+
 // catalogs indexes every registry by its config group so the config
 // layer can ask about a group's providers without knowing the
 // capability's type. Keep in sync with the registries above.
 var catalogs = map[string]catalog{
-	issue.ConfigGroup:  trackers,
-	code.ConfigGroup:   hosts,
-	notify.ConfigGroup: notifiers,
-	cicd.ConfigGroup:   pipelines,
+	issue.ConfigGroup:   trackers,
+	code.ConfigGroup:    hosts,
+	notify.ConfigGroup:  notifiers,
+	cicd.ConfigGroup:    pipelines,
+	preview.ConfigGroup: previews,
 }
 
 // --- Construction ---
@@ -118,6 +155,17 @@ func CodeHost(cfg provider.Config) (code.Host, error) {
 // code host's credentials and needs no prompting of its own.
 func CICD(cfg provider.Config) (cicd.CICD, error) {
 	return pipelines.build(cfg, pipelines.configured(cfg))
+}
+
+// PreviewProvider builds the configured preview provider over deps.
+//
+// An unset provider falls back to the descriptor marked default rather
+// than prompting: preview gained a second provider after the first had
+// shipped, so every config written before now omits the key and must
+// keep selecting the adapter it was written against.
+func PreviewProvider(cfg provider.Config, deps preview.Deps) (preview.Provider, error) {
+	r := previewRegistry(deps)
+	return r.build(cfg, r.configured(cfg))
 }
 
 // Notifier builds the configured notification provider. Unlike the other
@@ -188,6 +236,19 @@ func HasProvider(group, name string) bool {
 	return c.has(name)
 }
 
+// DefaultProvider returns the provider a group falls back to when its
+// "provider" key is unset: the descriptor-declared default, or the sole
+// registered provider. Returns "" for an unknown group, or one with
+// several providers and no declared default — there the key is a real
+// choice with no answer to prefill.
+func DefaultProvider(group string) string {
+	c, ok := catalogs[group]
+	if !ok {
+		return ""
+	}
+	return c.defaultName()
+}
+
 // SoleProvider returns the only provider registered for a group, or ""
 // when the group has none or more than one. The config layer uses it to
 // decide which provider's keys to show before the user has picked one:
@@ -208,6 +269,10 @@ func SoleProvider(group string) string {
 type entry[T any] struct {
 	name string
 	keys []provider.ConfigKey
+	// dflt marks the provider an unset config key selects. Only
+	// capabilities that gained a second provider after shipping need one
+	// — with a single provider the sole() fallback already answers.
+	dflt bool
 	new  func(provider.Config) (T, error)
 }
 
@@ -230,6 +295,9 @@ type registry[T any] struct {
 	// providerKey is the config key that selects a provider
 	// ("issue_tracker.provider").
 	providerKey string
+	// dflt is the provider an unset providerKey selects, or "" when the
+	// capability declares none.
+	dflt string
 
 	order   []string
 	entries map[string]entry[T]
@@ -244,6 +312,9 @@ func newRegistry[T any](label, group string, entries ...entry[T]) *registry[T] {
 	for _, e := range entries {
 		r.order = append(r.order, e.name)
 		r.entries[e.name] = e
+		if e.dflt {
+			r.dflt = e.name
+		}
 	}
 	return r
 }
@@ -268,10 +339,25 @@ func (r *registry[T]) build(cfg provider.Config, name string) (T, error) {
 }
 
 // configured returns the provider named in config, falling back to the
-// sole registered provider when config is silent.
+// capability's declared default and then to the sole registered
+// provider when config is silent.
 func (r *registry[T]) configured(cfg provider.Config) string {
 	if name := cfg.Get(r.providerKey); name != "" {
 		return name
+	}
+	if r.dflt != "" {
+		return r.dflt
+	}
+	return r.sole()
+}
+
+// defaultName returns the provider an unset providerKey selects — the
+// declared default, or the sole provider when there is only one. The
+// config layer renders it as the provider key's Default so `config
+// check` and `bosun init` show what an unset key resolves to.
+func (r *registry[T]) defaultName() string {
+	if r.dflt != "" {
+		return r.dflt
 	}
 	return r.sole()
 }
@@ -308,4 +394,5 @@ type catalog interface {
 	keys(name string) []provider.ConfigKey
 	has(name string) bool
 	sole() string
+	defaultName() string
 }

@@ -114,14 +114,16 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	// Validate flag if provided. Loop on invalid names in interactive mode.
 	if flagName != "" {
 		var err error
-		flagName, err = enforceValidName(flagName)
+		flagName, err = enforceValidName(provider, flagName)
 		if err != nil {
 			return previewResolution{}, err
 		}
 	}
 
 	// Run resolution work inside one spinner so the user always gets
-	// feedback during the HTTP probes (up to ~6s combined). Probes run
+	// feedback during the two lookups the provider makes — bounded by
+	// the adapter, at roughly six seconds combined for the probing
+	// provider and ten per lookup for the API-backed one. They run
 	// sequentially; force-fallback notices print after the spinner
 	// closes to avoid interleaving with the spinner's TUI output. The
 	// spinner shows even when both names are empty (Row 1) — the work is
@@ -203,9 +205,20 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 	}
 
 	metaName := metaEnv.Name
-	metaAlive := metaEnv.Probed && metaEnv.Alive
+	metaAlive := metaEnv.Alive()
 	metaUnprobable := metaName != "" && !metaEnv.Probed
-	flagAlive := flagEnv.Probed && flagEnv.Alive
+	flagAlive := flagEnv.Alive()
+
+	// A pending env — provisioning or tearing down — is not reachable
+	// yet is not gone either, and only a provider with a real status
+	// taxonomy can tell the difference. Treating it as unprobable routes
+	// it to the redeploy-under-the-stored-name arms rather than the
+	// recreate-from-scratch ones, which is the right answer for both
+	// transitions: a second dispatch against an in-flight env is
+	// idempotent, while generating a fresh name would orphan it.
+	if metaEnv.Status.Pending() {
+		metaUnprobable = metaName != ""
+	}
 
 	// The morphed "? Preview" header stays on screen only for the
 	// Row-1 interactive prompt, where huh's form renders directly
@@ -251,7 +264,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 				return previewResolution{}, err
 			}
 			rewind()
-			validated, verr := enforceValidName(strings.TrimSpace(field.Resolved()))
+			validated, verr := enforceValidName(provider, strings.TrimSpace(field.Resolved()))
 			if verr != nil {
 				return previewResolution{}, verr
 			}
@@ -259,6 +272,16 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 		case isInteractive():
 			// Force-notice variant: header was rewound so the notices
 			// could print; fall back to the self-contained prompt.
+			//
+			// Unreachable through either shipped provider, and kept as
+			// insurance rather than by oversight. Getting here needs
+			// Row 1 (no --name, no bound name) together with a
+			// force-fallback notice — and a notice only prints when Get
+			// returned a ProbeError, which the Provider contract says
+			// arrives alongside the bound Name. Both adapters honor
+			// that, so a nameless env and a notice can't co-occur. One
+			// that didn't would land here, and silently generating a
+			// name for it would deploy over whatever was bound.
 			resolved, perr := promptDefault("preview", name)
 			if perr != nil {
 				return previewResolution{}, perr
@@ -267,7 +290,7 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 			if resolved == "" {
 				resolved = name
 			}
-			validated, verr := enforceValidName(resolved)
+			validated, verr := enforceValidName(provider, resolved)
 			if verr != nil {
 				return previewResolution{}, verr
 			}
@@ -393,9 +416,15 @@ func resolvePreview(cmd *cobra.Command, ctx context.Context, provider preview.Pr
 // enforceValidName loops until the user provides a valid name (interactive)
 // or returns the validation error (non-interactive). Empty input from the
 // prompt cancels.
-func enforceValidName(name string) (string, error) {
+//
+// Validation goes through the provider so a backend with a stricter
+// grammar is the one the user is held to — the HTTP adapter rejects
+// single-word names its API would answer with a 400, and catching that
+// here means the user retypes at the prompt instead of watching a
+// dispatch fail.
+func enforceValidName(p preview.Provider, name string) (string, error) {
 	for {
-		if err := preview.ValidateName(name); err == nil {
+		if err := preview.ProviderValidateName(p, name); err == nil {
 			return name, nil
 		} else {
 			ui.Fail(err.Error())

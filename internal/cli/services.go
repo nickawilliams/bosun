@@ -16,7 +16,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/preview"
-	previewcicd "github.com/nickawilliams/bosun/internal/preview/cicd"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
 	"github.com/nickawilliams/bosun/internal/workspace"
@@ -597,7 +597,14 @@ func renderTemplate(pattern string, data notifyTemplateData) string {
 }
 
 // newPreviewProviderImpl creates a preview.Provider for the given
-// workspace.
+// workspace, resolving which adapter to build through the services
+// registry (preview.provider in config).
+//
+// Everything the CLI knows and an adapter can't read out of config
+// travels in preview.Deps: the tracker that holds the env-to-issue
+// binding, the URL template, and the workflow targets — which are the
+// configured workflows intersected with the active workspace's
+// repositories, so they need the workspace this function was handed.
 //
 // The pipeline and tracker are optional — if either is unavailable,
 // the returned provider still supports the read paths (Get, Inspect)
@@ -617,29 +624,31 @@ func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 		urlTmpl = parsed
 	}
 
-	return previewcicd.New(previewcicd.Options{
-		Pipeline:    pipeline,
+	return services.PreviewProvider(providerConfig{}, preview.Deps{
 		Tracker:     tracker,
-		Stage:       stage,
 		URLTemplate: urlTmpl,
-		Targets: func(ctx context.Context, subStage string) ([]previewcicd.Target, error) {
-			raw, err := resolveWorkflowTargets(ctx, workspace, subStage)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]previewcicd.Target, len(raw))
-			for i, t := range raw {
-				out[i] = previewcicd.Target{
-					Owner:    t.Owner,
-					Repo:     t.Repo,
-					Workflow: t.Workflow,
-					Label:    t.Label,
+		Workflow: preview.WorkflowDeps{
+			Pipeline: pipeline,
+			Stage:    stage,
+			Targets: func(ctx context.Context, subStage string) ([]preview.Target, error) {
+				raw, err := resolveWorkflowTargets(ctx, workspace, subStage)
+				if err != nil {
+					return nil, err
 				}
-			}
-			return out, nil
+				out := make([]preview.Target, len(raw))
+				for i, t := range raw {
+					out[i] = preview.Target{
+						Owner:    t.Owner,
+						Repo:     t.Repo,
+						Workflow: t.Workflow,
+						Label:    t.Label,
+					}
+				}
+				return out, nil
+			},
+			InputName: stageInputName,
 		},
-		InputName: stageInputName,
-	}), nil
+	})
 }
 
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.

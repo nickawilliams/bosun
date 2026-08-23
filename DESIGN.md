@@ -221,6 +221,45 @@ to probe whether an environment is already running before redeploying. The
 `down` block is optional — when configured, `bosun preview` schedules a
 teardown of the prior environment if you supply a different `--name`.
 
+**Preview provider** (project config, optional):
+
+```yaml
+preview:
+  provider: cicd            # or 'ephemeral'
+  api:
+    base_url: https://ephemeral-ui.example.dev   # ephemeral only
+    auth: gh-cli
+```
+
+Two adapters implement the preview capability, selected by
+`preview.provider`. Unset means `cicd`, so a config written before this key
+existed keeps working.
+
+- **`cicd`** dispatches the workflows configured above, then probes
+  `url_template` over HTTP to decide whether an env is up. A probe answers
+  only "reachable" or "not", so a provision still in flight and an env torn
+  down last week look identical, and it cannot enumerate environments at
+  all.
+- **`ephemeral`** delegates to an HTTP service that fronts the same
+  environments. Because it asks rather than probes, it distinguishes
+  `active`, `degraded` (naming the services that failed), `deleting`,
+  and gone — and it can list the fleet, which is what
+  `bosun preview list` reads. It authenticates with the token from
+  `gh auth token`; an expired one is reported as a re-auth prompt rather
+  than retried.
+
+`creating` is in the taxonomy but not yet reachable by name: the API
+reports in-flight provisions with a null name, because the name is
+recovered from the setup job's logs and those aren't written yet. So a
+provision in flight still reads as absent, the same answer the probe
+gives. Attributing one to a name needs a per-run
+`GET /api/workflow-status/:runId`.
+
+Both adapters store the env-to-issue binding under the same issue property,
+so switching providers doesn't orphan a running environment. `url_template`
+stays under the CI/CD group for both: rendering the URL locally is what lets
+`bosun preview` show it before the deploy has landed.
+
 ### Project Structure
 
 ```
@@ -262,6 +301,15 @@ bosun/
 │   │   ├── cicd.go                  # Interface + domain types
 │   │   └── githubactions/           # GitHub Actions adapter
 │   │       └── githubactions.go
+│   ├── preview/                     # Preview environment capability
+│   │   ├── preview.go               # Interface + domain types
+│   │   ├── binding.go               # Shared env-to-issue registry
+│   │   ├── cicd/                    # Workflow-dispatch adapter
+│   │   │   └── cicd.go
+│   │   └── ephemeral/               # HTTP deployment-API adapter
+│   │       └── ephemeral.go
+│   ├── services/                    # Provider construction + registries
+│   │   └── services.go
 │   ├── workspace/                   # Worktree/workspace management
 │   │   └── workspace.go
 │   └── ui/                          # Charmbracelet UI components
@@ -346,12 +394,18 @@ Transition: `Review` -> `In Preview Env`
 
 ```
 bosun preview [--issue <issue>]
+bosun preview list [--user <account>]
 ```
 
 Actions:
 
 1. CI/CD: Trigger ephemeral environment deployment
 2. Notification: Reply to review notification with preview URL
+
+`bosun preview list` reads the shared fleet — everyone's environments, with
+who deployed each — so an untracked env can be found and adopted. It needs a
+provider that can enumerate; the `cicd` adapter reports that it cannot
+rather than printing an empty list.
 
 ### 4. Prerelease
 

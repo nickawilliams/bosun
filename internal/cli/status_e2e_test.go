@@ -370,7 +370,7 @@ func TestStatus(t *testing.T) {
 		branch := startStatusWorkspace(t, h, "EX-4", "Preview me", "preview")
 		h.Preview.SeedEnv("EX-4", preview.Environment{
 			Name: "brave-falcon", URL: "https://brave-falcon.preview.test",
-			Probed: true, Alive: true,
+			Probed: true, Status: preview.StatusActive,
 		})
 		p := markStatus(h, previews)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -463,6 +464,10 @@ var serviceInitGroups = []initGroup{
 	{Label: "code host", Group: code.ConfigGroup},
 	{Label: "notifications", Group: notify.ConfigGroup},
 	{Label: "CI/CD", Group: cicd.ConfigGroup, ProviderOnly: true},
+	// After CI/CD: the workflow-dispatch preview provider reads that
+	// group's workflow keys, so picking it before CI/CD exists asks
+	// about a deploy path that has nothing behind it yet.
+	{Label: "preview environments", Group: preview.ConfigGroup},
 }
 
 // detectRepositories scans a directory for git repositories: the directory

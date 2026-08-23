@@ -8,16 +8,19 @@ package cli_test
 // destruction that follows.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/cli"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/testharness"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 // cleanupConfig is the minimum project config for `bosun cleanup`:
@@ -341,6 +344,43 @@ func TestCleanup(t *testing.T) {
 		if slices.Contains(h.Preview.Calls(), "Destroy") {
 			t.Errorf("Destroy called with no env bound; calls=%v", h.Preview.Calls())
 		}
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("preview/unbuildable_provider_is_reported", func(t *testing.T) {
+		// A provider whose config is incomplete used not to happen: the
+		// workflow-dispatch adapter declares no required keys, so
+		// construction always succeeded. One that needs an API base URL
+		// fails whenever that isn't set — and cleanup destroying the
+		// worktrees while silently leaving the environment running is
+		// the worst possible shape for that.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		prev := cli.GetServices()
+		next := *prev
+		next.PreviewProvider = func(string) (preview.Provider, error) {
+			return nil, errors.New("preview.api.base_url not configured")
+		}
+		cli.SetServices(&next)
+		t.Cleanup(func() { cli.SetServices(prev) })
+
+		if err := runCleanup(h, "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "preview.api.base_url") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("no skip named the unbuildable provider\n%s", h.Reporter.Dump())
+		}
+		// The local destruction still happens — an unreachable provider
+		// is a reason to say something, not to refuse the command.
 		assertWorkspaceGone(t, h, api)
 	})
 
