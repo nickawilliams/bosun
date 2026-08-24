@@ -1,5 +1,47 @@
 # Changelog
 
+## [v1.3.0](https://github.com/nickawilliams/bosun/compare/6fbbcc6e99448343d31a276aaf42560b39957a33...v1.3.0) - 2026-08-24
+
+### New Features
+
+- **UI**
+  - Add the timeline's open/continuing card forms - ([8b34b2a](https://github.com/nickawilliams/bosun/commit/8b34b2a0f8380350f2f0459ebf5699d58708bec1))
+  - Render cards open and rewrite them on succession - ([59be1ec](https://github.com/nickawilliams/bosun/commit/59be1ecd3f1e0edb64902752c7a0a79fb3e0b7ea))
+- **Demo:** Show the full glyph vocabulary in the palette card - ([5258622](https://github.com/nickawilliams/bosun/commit/5258622aaa3fae857240ddc9de9f09143e0710f1))
+- **Preview**
+  - Add an HTTP adapter for the ephemeral-env API - ([c3d27b6](https://github.com/nickawilliams/bosun/commit/c3d27b660a16c9415b5f356d12fe72a252d6049c))
+  - List the shared environment fleet - ([d78acac](https://github.com/nickawilliams/bosun/commit/d78acacd50e4255a35c057063018c1fbaee2dd80))
+  - Let --default-branch reach the deploy - ([c360596](https://github.com/nickawilliams/bosun/commit/c36059676256bfc82c7e0bc43f62dca9c3064714))
+- **Workspace**
+  - Introduce `workspace repos` command - ([6fbbcc6](https://github.com/nickawilliams/bosun/commit/6fbbcc6e99448343d31a276aaf42560b39957a33))
+  - Gate destructive removals on a pre-plan readiness check - ([2c3d813](https://github.com/nickawilliams/bosun/commit/2c3d8134dbca46470e1282d0700b6965f07dc7d5))
+
+### Improvements
+
+- **CLI**
+  - Replace glyph literals with palette symbols - ([fd59736](https://github.com/nickawilliams/bosun/commit/fd59736fa74370470d44e93e7b6ce9c23bdca950))
+  - Source the config schema from the provider registry - ([02fbe87](https://github.com/nickawilliams/bosun/commit/02fbe8738090e00a11bc57e1483f0f7bb89c7e04))
+- **UI**
+  - Give the palette a full symbol vocabulary - ([3aed5c7](https://github.com/nickawilliams/bosun/commit/3aed5c75953341815af99987caf96da6379a18f0))
+  - Point package glyph constants at the palette - ([7ef89b3](https://github.com/nickawilliams/bosun/commit/7ef89b3fdc111731ee02ddfa886053680d2d1f6c))
+- **Preview:** Model environment state as a status enum - ([8e0f4a5](https://github.com/nickawilliams/bosun/commit/8e0f4a5a6dbb3edd769ba7224b4f3d4f33edb8e6))
+- **Providers:** Own formats, URLs, and auth probes in the providers - ([bf3dc96](https://github.com/nickawilliams/bosun/commit/bf3dc962911b931c9907ab99a8027d5281179156))
+
+### Fixes
+
+- Always confirm in workspace repos interactive parent - ([13f9131](https://github.com/nickawilliams/bosun/commit/13f9131057cff8fd92d5ddf8fd6fb9f15c176586))
+- **CLI:** Finalize the open card before borrowing the screen - ([4d8ab7b](https://github.com/nickawilliams/bosun/commit/4d8ab7b5dd8b3ffbc8ff0fcc138b515e48965edf))
+- **UI:** Show selected repositories card after interactive repos picker - ([dbfbb9e](https://github.com/nickawilliams/bosun/commit/dbfbb9ee2185c487424e312d3ceb5f677a1436ad))
+- **Preview:** Correct teardown, lookup and failure classification - ([38a0eb6](https://github.com/nickawilliams/bosun/commit/38a0eb636c6d7154c9ca717a20bcbb30b6cce84a))
+- **Review**
+  - Address workspace repos review findings - ([5f1493e](https://github.com/nickawilliams/bosun/commit/5f1493eeedd3c8fcb0fe5c2e72d9541477454827))
+  - Complete the glyph sweep across the remaining call sites - ([8e9a706](https://github.com/nickawilliams/bosun/commit/8e9a706d2d9ba12ff440405c8b1390d45d50e046))
+  - Finish the form separator and document glyph couplings - ([4f096a7](https://github.com/nickawilliams/bosun/commit/4f096a7e781d18dc67225b3391a18c83da868e8b))
+  - Don't rewrite cards the cursor can't reach - ([ac61487](https://github.com/nickawilliams/bosun/commit/ac61487d648485732df637162f94cddb90f9ceb9))
+  - Record the gather cards nothing takes over - ([a12c96b](https://github.com/nickawilliams/bosun/commit/a12c96bb8f9cf658792d8ddcc97f79a496e277a2))
+  - Mask secrets independently of the configured provider - ([c0974c6](https://github.com/nickawilliams/bosun/commit/c0974c60e84e27b63ad48b1cecc5a15ab604298a))
+  - Detect stale exceptions and harden the boundary rules - ([d0ee9f2](https://github.com/nickawilliams/bosun/commit/d0ee9f2d3c9703f0eb473255bc5e3d463d02f3f6))
+
 ## [v1.2.0](https://github.com/nickawilliams/bosun/compare/250872585fb3151c44c6c629b04238e70e18ffde...v1.2.0) - 2026-08-17
 
 ### New Features
