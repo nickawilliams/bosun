@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/viper"
 )
@@ -124,5 +125,60 @@ func TestNoPromptKeysAreDeclared(t *testing.T) {
 	viper.Set(issue.ConfigGroup+".issue_pattern", `(EX-\d+)`)
 	if got := unknownConfigKeys(""); len(got) != 0 {
 		t.Errorf("a set NoPrompt key was reported as unknown: %v", got)
+	}
+}
+
+// TestResolveRepositoriesUnconfigured pins the error a project gets
+// when nothing tells bosun where its repositories are. The message
+// names the key, which is the only thing standing between the user and
+// a guess — and the key moved in this branch, so a stale message would
+// send them to `repositories:` at root, where it no longer has any
+// effect.
+func TestResolveRepositoriesUnconfigured(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	_, err := resolveRepositories(nil)
+	if err == nil {
+		t.Fatal("resolveRepositories succeeded with no patterns configured")
+	}
+	if !strings.Contains(err.Error(), "workspace.repositories") {
+		t.Errorf("err = %v, want it to name workspace.repositories", err)
+	}
+}
+
+// TestWithSubGroupKeysUnknownSubGroup pins that a sub-group name the
+// schema doesn't have is skipped rather than fatal. serviceInitGroups
+// names sub-groups as plain strings, so a typo or a renamed sub-group
+// is a compile-clean mistake; degrading to "that sub-group contributes
+// no fields" keeps `bosun init` usable while the wizard is one section
+// short, which is the failure the user can actually see and report.
+func TestWithSubGroupKeysUnknownSubGroup(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	group, ok := lookupGroup(notify.ConfigGroup)
+	if !ok {
+		t.Fatal("notification group missing from the schema")
+	}
+	before := len(group.Keys)
+
+	ig := initGroup{
+		Label:     "notifications",
+		Group:     notify.ConfigGroup,
+		SubGroups: []string{"nonexistent_subgroup"},
+	}
+	got := withSubGroupKeys(ig, group)
+	if len(got.Keys) != before {
+		t.Errorf("keys = %d, want the original %d — an unknown sub-group contributed fields",
+			len(got.Keys), before)
+	}
+
+	// And the real one still does contribute, so the skip above isn't
+	// passing by way of a walk that never resolves anything.
+	ig.SubGroups = []string{"channels"}
+	if got := withSubGroupKeys(ig, group); len(got.Keys) <= before {
+		t.Errorf("keys = %d, want more than %d — channels contributed nothing",
+			len(got.Keys), before)
 	}
 }

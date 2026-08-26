@@ -810,6 +810,41 @@ func TestPreview(t *testing.T) {
 		}
 	})
 
+	t.Run("notification/skipped_when_channel_unconfigured", func(t *testing.T) {
+		// The notifier builds (the harness always installs one) but no
+		// channel is configured — a partial config, not an opt-out. The
+		// announcement is skipped and the skip names the key, so the user
+		// finds out from the run rather than from the silence.
+		//
+		// The thread is seeded so this can only be failing for the reason
+		// it says: without one, the run skips the announcement anyway (see
+		// the scenario below) and the assertion would pass vacuously.
+		f := setupPreview(t, "api")
+		f.h.Notifier.SeedThread("prs", "EX-1", notify.ThreadRef{
+			Channel: "prs", Timestamp: "1700000000.000100",
+		})
+		f.h.Workspace.WriteConfig(strings.Replace(
+			fmt.Sprintf(previewConfigf, f.env.URL),
+			"notification:\n  channels:\n    review: \"prs\"\n",
+			"",
+			1,
+		))
+
+		if err := f.run("--name", "brave-falcon", "--approve"); err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+
+		if n := len(f.h.Notifier.Messages()); n != 0 {
+			t.Errorf("sent %d notification(s) with no channel configured", n)
+		}
+		wantReported(t, f.h, ui.CaptureSkip, "notification.channels.review")
+		// The run still did its work — a missing channel is not a reason
+		// to leave the environment unclaimed.
+		if got := f.boundName(t, "EX-1"); got != "brave-falcon" {
+			t.Errorf("env bound to EX-1 = %q, want the claim to have landed", got)
+		}
+	})
+
 	t.Run("notification/skipped_without_existing_thread", func(t *testing.T) {
 		// No thread for the issue means review hasn't announced it yet.
 		// preview has nothing to update and stays silent — it must not

@@ -18,6 +18,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/testharness"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 // prereleaseConfig is the minimum project config for `bosun
@@ -282,6 +283,28 @@ func TestPrerelease(t *testing.T) {
 		if got := msgs[0].Items[0].Body; got != releases[0].Body {
 			t.Errorf("notification body = %q, want release notes %q", got, releases[0].Body)
 		}
+	})
+
+	t.Run("notification/skipped_when_channel_unconfigured", func(t *testing.T) {
+		// The notifier builds but no channel is configured — a partial
+		// config, not an opt-out. The announcement is skipped and the skip
+		// names the key rather than dropping it silently.
+		h, _ := startPrereleaseWorkspace(t)
+		h.Workspace.WriteConfig(strings.Replace(
+			prereleaseConfig,
+			"notification:\n  channels:\n    prerelease: \"releases\"\n",
+			"",
+			1,
+		))
+
+		if err := runPrerelease(h, "--approve"); err != nil {
+			t.Fatalf("prerelease: %v", err)
+		}
+
+		if n := len(h.Notifier.Messages()); n != 0 {
+			t.Errorf("sent %d notification(s) with no channel configured", n)
+		}
+		wantReported(t, h, ui.CaptureSkip, "notification.channels.prerelease")
 	})
 
 	t.Run("notification/release_announcement_sent", func(t *testing.T) {

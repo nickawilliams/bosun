@@ -82,12 +82,13 @@ func schemaKeySurface() (declared, mapPrefixes map[string]bool) {
 		if group.MapKey != "" {
 			mapPrefixes[groupName] = true
 		}
+		// No providerKeysMarker guard: schemaGroups resolves the marker
+		// away, and TestSchemaGroupsResolvesEveryGroup fails if one ever
+		// survives into a group anyone walks. Guarding here as well
+		// would put the invariant in two places and leave the weaker
+		// copy — a marker admitted into `declared` names no real key
+		// and hides nothing — permanently unexercised.
 		for _, ck := range group.Keys {
-			if ck.Key == providerKeysMarker {
-				// A group whose capability has no registered provider
-				// keeps the unspliced marker. It names no config key.
-				continue
-			}
 			declared[fullKey(groupName, ck)] = true
 		}
 	}
