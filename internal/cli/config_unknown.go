@@ -166,17 +166,28 @@ func schemaScopeSurface() (keyScope, mapScope map[string]Scope) {
 //
 // Resolution mirrors unknownConfigKeys' notion of "accounted for": an
 // exact declaration governs its own path, and otherwise the LONGEST
-// declared ancestor governs — a map-shaped group winning a tie against a
-// key of the same path.
+// declared ancestor governs. When a map-shaped group and a key declare
+// the SAME path, the subtree beneath it takes the UNION of their
+// scopes.
 //
-// That tie is not hypothetical, and `services` is why. It is declared
-// both ways at once: as a map-shaped group (the central
-// `services.<repo>` form, central-only) and as a plain key of the same
-// name (the descriptor form, repo-only). Anything BENEATH the path is
-// the central map and must answer central; the path ITSELF is the
-// descriptor key and must answer repo. Exact-match-first plus
-// map-wins-ties is exactly that split, and getting it backwards would
-// report every project's `services.<repo>` block as misplaced.
+// The union is not a shrug, it is the only sound answer, and `services`
+// is why. It is declared both ways at once: a map-shaped group for the
+// central `services.<repo>` form, and a plain key of the same name for
+// the descriptor form. Beneath the path the two shapes are
+// indistinguishable — `services.billing` is a repo name centrally and a
+// service name in a descriptor, and nothing in the text says which. So
+// "is this key in a layer allowed to hold it?" has no decidable answer
+// below the path, and answering it anyway means false-positiving on one
+// of the two legitimate spellings. The union declines to guess.
+//
+// What survives is the half that IS decidable: the path ITSELF. A bare
+// `services` written centrally names no repository and configures
+// nothing, and an exact match still reports it.
+//
+// Nothing is lost on the read side. repoKeyed reads the bare key from a
+// descriptor and never the nested one, so a descriptor spelling the
+// central form is inert rather than dangerous — it cannot reach another
+// repository's configuration whether or not this walk mentions it.
 func scopeForKey(key string, keyScope, mapScope map[string]Scope) (Scope, bool) {
 	if s, ok := keyScope[key]; ok {
 		return s.Effective(), true
@@ -184,23 +195,26 @@ func scopeForKey(key string, keyScope, mapScope map[string]Scope) (Scope, bool) 
 
 	best := -1
 	var found Scope
-	var foundIsMap bool
 
-	consider := func(prefix string, s Scope, isMap bool) {
+	consider := func(prefix string, s Scope) {
 		if !strings.HasPrefix(key, prefix+".") {
 			return
 		}
-		// Longer prefix wins; on equal length the map-shaped group does.
-		if len(prefix) > best || (len(prefix) == best && isMap && !foundIsMap) {
-			best, found, foundIsMap = len(prefix), s, isMap
+		switch {
+		case len(prefix) > best:
+			// More specific: it replaces whatever was found.
+			best, found = len(prefix), s.Effective()
+		case len(prefix) == best:
+			// Same path declared twice — union, per above.
+			found |= s.Effective()
 		}
 	}
 	for p, s := range mapScope {
-		consider(p, s, true)
+		consider(p, s)
 	}
 	for p, s := range keyScope {
-		consider(p, s, false)
+		consider(p, s)
 	}
 
-	return found.Effective(), best >= 0
+	return found, best >= 0
 }

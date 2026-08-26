@@ -35,10 +35,13 @@ func TestScopeForKey(t *testing.T) {
 		{"repo-scoped policy key", "pull_request.base", provider.ScopeAny, true},
 		{"repo-scoped list key", "pull_request.reviewers", provider.ScopeAny, true},
 
-		// services, both halves.
+		// services, both halves. The bare path is decidable — it is the
+		// descriptor's spelling and nothing else. Beneath it the two
+		// forms are indistinguishable, so the subtree takes the union
+		// rather than false-positiving on one of them.
 		{"services bare key is the descriptor form", "services", provider.ScopeRepo, true},
-		{"services.<repo> is the central form", "services.api", provider.ScopeCentral, true},
-		{"deep under the central services map", "services.api.billing", provider.ScopeCentral, true},
+		{"beneath services is undecidable, so both layers", "services.api", provider.ScopeAny, true},
+		{"deeper under services, likewise", "services.api.billing", provider.ScopeAny, true},
 
 		// release.target, which is a KEY whose subtree is its own
 		// business — so the subtree inherits the key's scope.
@@ -127,16 +130,19 @@ func TestMisplacedConfigKeys(t *testing.T) {
 		}
 	})
 
-	// The wrong FORM of a right key: a descriptor already names its
-	// repository, so the central repo-keyed spelling is inert there.
-	// Reporting it is the difference between "your services config does
-	// nothing" and silence.
-	t.Run("a descriptor may not use the central repo-keyed form", func(t *testing.T) {
+	// The map form of `services` in a descriptor, which is the shape
+	// that carries per-service path filtering and the one DESIGN.md
+	// documents. Its keys are service names the user chose, so they
+	// must pass — and they are byte-identical to the central
+	// repo-keyed spelling, which is why nothing here tries to tell the
+	// two apart. See scopeForKey on why that check is not decidable.
+	t.Run("a descriptor may use the services map form", func(t *testing.T) {
 		got := misplacedConfigKeys([]configLayer{
-			layer(provider.ScopeRepo, "api/.bosun.yaml", "services.api"),
+			layer(provider.ScopeRepo, "api/.bosun.yaml",
+				"services.billing", "services.search", "services._shared"),
 		}, "")
-		if !slices.Equal(keysOf(got), []string{"services.api"}) {
-			t.Errorf("misplaced = %v, want services.api reported", keysOf(got))
+		if len(got) != 0 {
+			t.Errorf("misplaced = %v, want none — these are service names, not repo names", keysOf(got))
 		}
 	})
 

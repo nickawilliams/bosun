@@ -117,11 +117,19 @@ func TestRepoConfigRepoKeyedDropsTheRepoLevel(t *testing.T) {
 		}
 	})
 
-	t.Run("a descriptor cannot configure another repo", func(t *testing.T) {
-		// This descriptor belongs to "api" but names "web". repoKeyed
-		// reads the bare key, so the nested form is simply not the key
-		// it looks at — "api" still resolves centrally, and "web" is
-		// untouched.
+	t.Run("a descriptor never reaches another repo's resolution", func(t *testing.T) {
+		// This descriptor belongs to "api" but spells the CENTRAL,
+		// repo-keyed form, naming "web". repoKeyed reads the bare key,
+		// so the nested level is simply not a level it looks at.
+		//
+		// What that does and does not buy is worth being exact about,
+		// because the two forms are textually identical below the path.
+		// Within api this reads as a service NAMED web — a confusing
+		// topology, and one nothing can distinguish from a deliberate
+		// service of that name. What it cannot do is the thing that
+		// would matter: reach web's own resolution. A descriptor's
+		// authority stops at its own repository, which is the property
+		// dropping the repo level exists to guarantee.
 		rc := loadRepoConfig(writeDescriptor(t, "api", "services:\n  web: hijacked\n"))
 		got := rc.repoKeyed("services")
 		m, isMap := got.(map[string]any)

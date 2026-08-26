@@ -565,6 +565,20 @@ issue_tracker:
 		}
 	})
 
+	// The map form, which is the one that carries per-service path
+	// filtering and the one DESIGN.md documents. Its keys are service
+	// names, and they are spelled exactly like the central form's
+	// repository names — so a scope rule that tried to tell the two
+	// apart reported this working, documented config as broken. The
+	// earlier scenarios all used the list form and sailed past it.
+	t.Run("the services map form is not reported", func(t *testing.T) {
+		_, raw := checkWithDescriptor(t, "services:\n  billing: [billing/]\n  _shared: [go.mod]\n")
+		out := ansi.Strip(raw)
+		if strings.Contains(out, "misplaced keys") {
+			t.Errorf("the documented services map form was reported as misplaced:\n%s", out)
+		}
+	})
+
 	t.Run("a committed credential is reported", func(t *testing.T) {
 		_, raw := checkWithDescriptor(t, "code_host:\n  token: ghp_secret\n")
 		out := ansi.Strip(raw)

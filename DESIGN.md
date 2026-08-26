@@ -185,7 +185,19 @@ it is:
 
 Dropping the repository level is not cosmetic. Keeping it would let a
 repository configure a *different* repository by naming it — authority a
-committed file must not have.
+committed file must not have. `repoKeyed` reads the bare key from a
+descriptor and never the nested one, so a descriptor that spells the
+central form is inert: it cannot reach another repository's resolution.
+
+The scope check deliberately stops at the path itself for these two
+keys. Below it, the two forms are textually identical —
+`services.billing` is a repository name centrally and a service name in
+a descriptor, with nothing in the text to tell them apart — so "is this
+in a layer allowed to hold it?" has no decidable answer there, and
+answering anyway would false-positive on the map form that carries
+per-service path filtering. What stays decidable, and is still checked,
+is the bare path: a lone `services` written centrally names no
+repository and configures nothing.
 
 Environment variables name a key as `BOSUN_` + the key path uppercased with
 dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
