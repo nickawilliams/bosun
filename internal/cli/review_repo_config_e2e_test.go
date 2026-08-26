@@ -243,6 +243,94 @@ func TestReviewPerRepoDescriptor(t *testing.T) {
 		}
 	})
 
+	// The two halves of the prompt rule, which is the one place a shared
+	// answer is still allowed to speak for every repository.
+	//
+	// They are tested together because each is the other's control: with
+	// the same descriptor and the same pickers, pressing Enter leaves
+	// every repository on its own list, and making a selection puts one
+	// list on all of them.
+	t.Run("prompts/an_edited_selection_pins_every_repo", func(t *testing.T) {
+		h, repos := startReviewWorkspace(t,
+			reviewConfig+"\ncode_host:\n  pr:\n    self_assign: false\n", "api", "web")
+		owner := repos[0].Owner
+		h.Host.SeedCollaborators(owner, "api", "alice", "bob")
+		h.Host.SeedTeams(owner, "backend", "frontend")
+		writeWorktreeDescriptor(t, h, "web",
+			"pull_request:\n  team_reviewers: [frontend]\n  assignees: [bob]\n")
+
+		h.Type("\r")  // PR-target multi-select: accept both
+		h.Type("\r")  // Base Branch
+		h.Type("\r")  // Title
+		h.Type("\r")  // Body
+		h.Type("\r")  // Reviewers: unchanged
+		h.Type(" \r") // Team Reviewers: TOGGLED → pins
+		h.Type(" \r") // Assignees: TOGGLED → pins
+		h.Type("\r")  // Customize: decline
+		h.Type("y")   // plan gate
+
+		if err := runReview(h, "--interactive"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		// Asserted as "both repos agree, and web no longer has its own"
+		// rather than against a literal list, so the test doesn't depend
+		// on which option the picker happens to render first.
+		apiTeams := h.Host.TeamsRequested(owner, "api")
+		webTeams := h.Host.TeamsRequested(owner, "web")
+		if !slices.Equal(apiTeams, webTeams) {
+			t.Errorf("teams api=%v web=%v, want an edited selection pinned across both", apiTeams, webTeams)
+		}
+		if slices.Equal(webTeams, []string{"frontend"}) {
+			t.Errorf("teams = %v, want the pin to override web's descriptor", webTeams)
+		}
+
+		apiAsns := h.Host.AssigneesAdded(owner, "api")
+		webAsns := h.Host.AssigneesAdded(owner, "web")
+		if !slices.Equal(apiAsns, webAsns) {
+			t.Errorf("assignees api=%v web=%v, want an edited selection pinned across both", apiAsns, webAsns)
+		}
+		if slices.Equal(webAsns, []string{"bob"}) {
+			t.Errorf("assignees = %v, want the pin to override web's descriptor", webAsns)
+		}
+	})
+
+	// The control. Submitting a picker unchanged says nothing about the
+	// repositories the preview didn't come from, so each keeps its own —
+	// the rule --base and the body prompt already follow. Pinning here
+	// would push the representative repo's reviewers onto every sibling,
+	// which is the workspace-wide fan-out this whole change exists to
+	// end, reintroduced through the prompt.
+	t.Run("prompts/an_unchanged_selection_leaves_each_repo_alone", func(t *testing.T) {
+		h, repos := startReviewWorkspace(t,
+			reviewConfig+"\npull_request:\n  team_reviewers: [backend]\n", "api", "web")
+		owner := repos[0].Owner
+		h.Host.SeedCollaborators(owner, "api", "alice")
+		h.Host.SeedTeams(owner, "backend", "frontend")
+		writeWorktreeDescriptor(t, h, "web", "pull_request:\n  team_reviewers: [frontend]\n")
+
+		h.Type("\r") // PR-target multi-select
+		h.Type("\r") // Base Branch
+		h.Type("\r") // Title
+		h.Type("\r") // Body
+		h.Type("\r") // Reviewers: unchanged
+		h.Type("\r") // Team Reviewers: unchanged → must NOT pin
+		h.Type("\r") // Assignees: unchanged
+		h.Type("\r") // Customize: decline
+		h.Type("y")  // plan gate
+
+		if err := runReview(h, "--interactive"); err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if got := h.Host.TeamsRequested(owner, "api"); !slices.Equal(got, []string{"backend"}) {
+			t.Errorf("api teams = %v, want the central list it never overrode", got)
+		}
+		if got := h.Host.TeamsRequested(owner, "web"); !slices.Equal(got, []string{"frontend"}) {
+			t.Errorf("web teams = %v, want its own descriptor to survive the prompt", got)
+		}
+	})
+
 	// One repository's broken file must not abort the fan-out over the
 	// others: it degrades to central config and the run completes.
 	t.Run("descriptor/malformed_degrades_to_central", func(t *testing.T) {

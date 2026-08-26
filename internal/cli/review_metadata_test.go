@@ -177,17 +177,84 @@ func TestRepoContextPrConfigNilReceiver(t *testing.T) {
 	}
 }
 
-// TestNonNilSlice pins the nil-vs-empty distinction the shared prompt
-// pass encodes: nil means unanswered, empty means answered with
-// nothing. Collapsing them would make "deselect every reviewer" fall
-// back to each repo's configured list and silently re-add the names the
-// user had just removed.
-func TestNonNilSlice(t *testing.T) {
-	if got := nonNilSlice(nil); got == nil || len(got) != 0 {
-		t.Errorf("nonNilSlice(nil) = %#v, want a non-nil empty slice", got)
+// TestPinnedSelection covers when a shared multi-select speaks for
+// EVERY repository and when it stays silent. Getting either half wrong
+// is a quiet data-loss bug rather than a visible one: the run completes
+// and opens its PRs, just with the wrong people on them.
+func TestPinnedSelection(t *testing.T) {
+	tests := []struct {
+		name     string
+		selected []string
+		seed     []string
+		want     []string // nil = did not pin
+	}{
+		{
+			// typeaheadMultiSelect returns (nil, nil) when the fetch
+			// yields no options — a token without the scope to list
+			// collaborators, an org with no teams. No form rendered, so
+			// nothing was answered. Pinning here would wipe every
+			// repository's configured reviewers on the strength of a
+			// prompt nobody saw.
+			name: "no form rendered does not pin",
+			seed: []string{"alice"},
+			want: nil,
+		},
+		{
+			// The seed is ONE representative repo's resolution.
+			// Submitting it unchanged says nothing about the others, so
+			// pinning it would push that repo's reviewers onto every
+			// sibling — the fan-out this change exists to end.
+			name:     "an unchanged submission does not pin",
+			selected: []string{"alice"},
+			seed:     []string{"alice"},
+			want:     nil,
+		},
+		{
+			// The seed comes from config order, the form returns fetch
+			// order. A sequence comparison would read this as an edit
+			// and pin on every single interactive run.
+			name:     "reordering is not an edit",
+			selected: []string{"bob", "alice"},
+			seed:     []string{"alice", "bob"},
+			want:     nil,
+		},
+		{
+			name:     "an added name pins",
+			selected: []string{"alice", "carol"},
+			seed:     []string{"alice"},
+			want:     []string{"alice", "carol"},
+		},
+		{
+			// Clearing the list is a real answer, and the only one that
+			// needs empty to survive as distinct from unanswered.
+			name:     "clearing the list pins nothing, deliberately",
+			selected: []string{},
+			seed:     []string{"alice"},
+			want:     []string{},
+		},
+		{
+			name:     "an empty form over an empty seed does not pin",
+			selected: []string{},
+			seed:     nil,
+			want:     nil,
+		},
 	}
-	in := []string{"alice"}
-	if got := nonNilSlice(in); !slices.Equal(got, in) {
-		t.Errorf("nonNilSlice(%v) = %v, want it unchanged", in, got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pinnedSelection(tt.selected, tt.seed)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("pinnedSelection() = %#v, want nil (no pin)", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("pinnedSelection() = nil, want the pin %v", tt.want)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("pinnedSelection() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

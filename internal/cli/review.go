@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -56,19 +57,55 @@ func (rc *repoContext) prConfig() repoConfig {
 	return rc.cfg
 }
 
-// nonNilSlice returns s, or an empty non-nil slice when s is nil.
+// pinnedSelection turns one shared multi-select's outcome into the
+// workspace-wide pin, or nil for "this prompt did not speak for every
+// repo". It is the list-prompt counterpart of the rule --base and the
+// body prompt already follow: only an ANSWER that changes something
+// overrides the per-repo resolution.
 //
-// It exists for one distinction the shared prompt pass depends on: nil
-// means "no prompt has spoken for this list", while empty means "the
-// user was asked and cleared it". Without it, deselecting every
-// reviewer would read as unanswered and each repo would fall back to
-// its configured list — silently re-adding the reviewers the user had
-// just removed.
-func nonNilSlice(s []string) []string {
-	if s == nil {
-		return []string{}
+// Two outcomes must not pin, and they look different from each other:
+//
+//   - selected is nil. typeaheadMultiSelect returns (nil, nil) when the
+//     fetch yields no options — a token without the scope to list
+//     collaborators, an org with no teams — and reports a skip. No form
+//     ever rendered, so reading it as "the user cleared the list" would
+//     wipe every repository's configured reviewers on the strength of a
+//     prompt nobody saw.
+//   - selected matches the seed. The seed is one representative repo's
+//     resolution, so submitting it unchanged says nothing about the
+//     others; pinning it there would push that repo's reviewers onto
+//     every sibling, which is the workspace-wide fan-out this whole
+//     change exists to end.
+//
+// A genuine edit pins, including an edit down to nothing — hence the
+// empty-but-non-nil return, which is what lets "the user deselected
+// everyone" survive as an answer instead of falling back to config.
+//
+// Set comparison, not order: the seed is in config order while the form
+// returns items in fetch order, so a sequence comparison would read
+// every unchanged submission as an edit.
+func pinnedSelection(selected, seed []string) []string {
+	if selected == nil {
+		return nil
 	}
-	return s
+	if sameStringSet(selected, seed) {
+		return nil
+	}
+	return append([]string{}, selected...)
+}
+
+// sameStringSet reports whether a and b hold the same values, ignoring
+// order and duplicates.
+func sameStringSet(a, b []string) bool {
+	set := make(map[string]bool, len(a))
+	for _, v := range a {
+		set[v] = true
+	}
+	other := make(map[string]bool, len(b))
+	for _, v := range b {
+		other[v] = true
+	}
+	return maps.Equal(set, other)
 }
 
 // The repo-scoped PR policy keys. Named once because each is now read
@@ -837,33 +874,36 @@ func newReviewCmd() *cobra.Command {
 			// the pre-selected values belong to a repo this run will
 			// actually write to.
 			if promptForValues(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
-				selected, err := typeaheadMultiSelect("Reviewers", reviewersFor(repRepo), func() ([]string, error) {
+				seed := reviewersFor(repRepo)
+				selected, err := typeaheadMultiSelect("Reviewers", seed, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
 				}, excludeUser(selfUser))
 				if err != nil {
 					return err
 				}
-				pinnedRevs = nonNilSlice(selected)
+				pinnedRevs = pinnedSelection(selected, seed)
 			}
 
 			if promptForValues(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
-				selected, err := typeaheadMultiSelect("Team Reviewers", teamsFor(repRepo), func() ([]string, error) {
+				seed := teamsFor(repRepo)
+				selected, err := typeaheadMultiSelect("Team Reviewers", seed, func() ([]string, error) {
 					return host.ListTeams(ctx, apiOwner)
 				})
 				if err != nil {
 					return err
 				}
-				pinnedTeams = nonNilSlice(selected)
+				pinnedTeams = pinnedSelection(selected, seed)
 			}
 
 			if promptForValues(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
-				selected, err := typeaheadMultiSelect("Assignees", assigneesFor(repRepo), func() ([]string, error) {
+				seed := assigneesFor(repRepo)
+				selected, err := typeaheadMultiSelect("Assignees", seed, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
 				}, promoteUser(selfUser))
 				if err != nil {
 					return err
 				}
-				pinnedAsns = nonNilSlice(selected)
+				pinnedAsns = pinnedSelection(selected, seed)
 			}
 
 			// --- Seed per-repo metadata, then offer the override pass ---
