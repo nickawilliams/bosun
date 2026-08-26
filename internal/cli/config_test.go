@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nickawilliams/bosun/internal/testharness"
 )
 
@@ -11,7 +12,7 @@ const baseConfig = `
 issue_tracker:
   provider: jira
   base_url: https://example.atlassian.net
-display:
+ui:
   compact_header: true
 `
 
@@ -147,7 +148,7 @@ func TestConfigShow(t *testing.T) {
 
 	t.Run("empty result renders explicit empty-state marker", func(t *testing.T) {
 		// `workspace` is a known schema group but the test config sets
-		// only `issue_tracker` and `display`, so the global-only view
+		// only `issue_tracker` and `ui`, so the global-only view
 		// of `workspace` resolves to nothing — must be loud about it,
 		// not silently render an empty tree.
 		out, err := runConfig(t, "show", "workspace", "-g")
@@ -270,11 +271,13 @@ func TestConfigSetUnset(t *testing.T) {
 // the tree to a single branch.
 func TestConfigCheck(t *testing.T) {
 	t.Run("passing group shows N/N keys leaf", func(t *testing.T) {
-		out, err := runConfig(t, "check", "branch")
+		out, err := runConfig(t, "check", "vcs.branch")
 		if err != nil {
 			t.Fatalf("check: %v\nstdout: %s", err, out)
 		}
-		// `branch` group's keys all have schema defaults, so it passes.
+		// The vcs.branch sub-group's keys all have schema defaults, so
+		// it passes. It is also a sub-group, which is what makes it a
+		// check that flattened dotted paths reach the filter at all.
 		if !strings.Contains(out, "branch") || !strings.Contains(out, "/") || !strings.Contains(out, "keys") {
 			t.Errorf("expected 'branch · N/N keys' leaf; got:\n%s", out)
 		}
@@ -298,19 +301,19 @@ func TestConfigCheck(t *testing.T) {
 
 	t.Run("invalid option value shows expected list", func(t *testing.T) {
 		h := testharness.New(t)
-		// baseConfig already declares `display:`; can't append another
+		// baseConfig already declares `ui:`; can't append another
 		// block under the same key (duplicate-key YAML error). Write a
-		// single composite config with `display.color` set to a value
+		// single composite config with `ui.color` set to a value
 		// outside its Options list.
 		h.Workspace.WriteConfig(`
 issue_tracker:
   provider: jira
   base_url: https://example.atlassian.net
-display:
+ui:
   compact_header: true
   color: bogus
 `)
-		if err := h.Run("config", "check", "display"); err != nil {
+		if err := h.Run("config", "check", "ui"); err != nil {
 			t.Fatalf("check: %v", err)
 		}
 		out := h.Stdout()
@@ -361,7 +364,7 @@ code_host:
 	})
 
 	t.Run("group filter narrows the tree", func(t *testing.T) {
-		out, err := runConfig(t, "check", "branch")
+		out, err := runConfig(t, "check", "vcs.branch")
 		if err != nil {
 			t.Fatalf("check: %v", err)
 		}
@@ -443,6 +446,140 @@ issue_tracker:
 		}
 		if got := strings.TrimSpace(out); got != fileSecret {
 			t.Errorf("stdout = %q, want the real token (raw exact-key is the escape hatch)", got)
+		}
+	})
+}
+
+// TestConfigCheckUnknownKeys covers the half of `config check` that
+// walks the config against the schema rather than the schema against
+// the config. It is the only thing that surfaces a key the reshape
+// renamed: the new key merely looks unset, which for an optional key is
+// silent, so a config still carrying `display.color` would otherwise
+// report clean while the setting did nothing.
+func TestConfigCheckUnknownKeys(t *testing.T) {
+	t.Run("a renamed key is reported", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+display:
+  color: ansi
+`)
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, "display.color") || !strings.Contains(out, "not in schema") {
+			t.Errorf("expected a 'display.color · not in schema' row; got:\n%s", out)
+		}
+	})
+
+	t.Run("the new home is not reported", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+  statuses:
+    triage: "Triage"
+ui:
+  color: ansi
+services:
+  api: api-svc
+`)
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		// ui.color is declared, statuses is map-shaped so a state bosun
+		// doesn't model is the user's business, and services is exempt
+		// until it moves to the per-repo descriptor.
+		if out := h.Stdout(); strings.Contains(out, "not in schema") {
+			t.Errorf("a valid config reported unknown keys:\n%s", out)
+		}
+	})
+}
+
+// TestConfigShowNestedGroups covers the tree `config show` renders for a
+// config whose real shape is nested. Sub-groups have to survive as
+// sub-trees, and a list-valued key inside one has to render like a list
+// rather than leaking viper's "[a b]" formatting.
+func TestConfigShowNestedGroups(t *testing.T) {
+	h := testharness.New(t)
+	h.Workspace.WriteConfig(`
+workspace:
+  repositories:
+    - "repos/*"
+    - "vendor/*"
+  root: trees
+notification:
+  channels:
+    review: bb-prs
+`)
+	if err := h.Run("config", "show"); err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	out := ansi.Strip(h.Stdout())
+
+	for _, want := range []string{"channels", "review", "bb-prs", "repositories"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tree is missing %q; got:\n%s", want, out)
+		}
+	}
+	// formatValue's job: the same unwrapping buildLeafNode has always
+	// done for top-level lists, now that a list lives inside a group.
+	if !strings.Contains(out, "repos/*, vendor/*") {
+		t.Errorf("list rendered unformatted; got:\n%s", out)
+	}
+	if strings.Contains(out, "[repos/*") {
+		t.Errorf("viper's raw slice formatting leaked into the tree; got:\n%s", out)
+	}
+}
+
+// TestConfigCheckFilterReachesSubGroups pins that the group filter is a
+// prefix, not an equality test. The schema nests, so `check preview`
+// under equality validated the two keys sitting directly in the block
+// and reported a clean pass while up/down and their inputs went
+// unchecked — and `check vcs`, a block with no keys of its own,
+// answered "0 checks" for a fully configured branch template.
+func TestConfigCheckFilterReachesSubGroups(t *testing.T) {
+	run := func(t *testing.T, group string) string {
+		t.Helper()
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+preview:
+  url_template: "https://{{.Name}}.example.test"
+  up:
+    workflow: acme/infra/.github/workflows/up.yml
+    inputs:
+      name: env-name
+`)
+		if err := h.Run("config", "check", group); err != nil {
+			t.Fatalf("check %s: %v", group, err)
+		}
+		return ansi.Strip(h.Stdout())
+	}
+
+	t.Run("a block reaches its sub-groups", func(t *testing.T) {
+		out := run(t, "preview")
+		for _, want := range []string{"preview.up", "preview.up.inputs"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("check preview missed %q; got:\n%s", want, out)
+			}
+		}
+		// Still scoped: an unrelated block must not appear.
+		if strings.Contains(out, "issue_tracker") {
+			t.Errorf("filtered tree leaked an unrelated group; got:\n%s", out)
+		}
+	})
+
+	t.Run("a keyless block reaches the keys beneath it", func(t *testing.T) {
+		out := run(t, "vcs")
+		if !strings.Contains(out, "vcs.branch") {
+			t.Errorf("check vcs validated nothing; got:\n%s", out)
 		}
 	})
 }

@@ -437,7 +437,6 @@ func TestCreate_DispatchesAllTargets(t *testing.T) {
 	_, err := p.Create(context.Background(), preview.Claim{
 		IssueKey: "PROJ-1",
 		Name:     "brave-falcon",
-		Services: []string{"api", "web"},
 		Overrides: map[string]string{
 			"api": "pr-123",
 			"web": "pr-124",
@@ -459,8 +458,13 @@ func TestCreate_DispatchesAllTargets(t *testing.T) {
 		if tr.Inputs["issue"] != "PROJ-1" {
 			t.Errorf("trigger %d issue input = %q", i, tr.Inputs["issue"])
 		}
-		if tr.Inputs["services"] != "api,web" && tr.Inputs["services"] != "web,api" {
-			t.Errorf("trigger %d services input = %q, want joined api,web", i, tr.Inputs["services"])
+		// No services input, whatever the workflow config names: a
+		// subset deploy leaves the env half-built, so the adapter has
+		// nothing to narrow the deploy with. InputName is wired to
+		// answer for every concept here (see the builder), so this
+		// fails if the branch comes back.
+		if got, ok := tr.Inputs["services"]; ok {
+			t.Errorf("trigger %d carried a services input = %q", i, got)
 		}
 		var got map[string]string
 		if err := json.Unmarshal([]byte(tr.Inputs["image-overrides"]), &got); err != nil {

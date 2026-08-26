@@ -32,7 +32,7 @@ directs the crew and signals state changes.
   being the modularity seam.
 - **Toolchain**: Follow patterns from diffscribe/shedoc — Makefile with
   project.yaml, goreleaser, git-cliff, LDFLAGS version injection.
-- **Repository association**: `repositories:` config is a list of glob
+- **Repository association**: `workspace.repositories` is a list of glob
   patterns resolved to directories containing `.git/`. Replaces both
   `repository_root` and explicit repository names with a single flexible
   mechanism. `--repository` flag on `start` filters which glob-matched
@@ -46,9 +46,9 @@ directs the crew and signals state changes.
 - **Project root**: Identified by the presence of a `.bosun/` directory.
   Discovered by walking up from CWD. Houses project-level config overrides.
   Not required — bosun works with global config alone.
-- **Repository/workspace layout**: `repositories:` globs define where
-  repositories are. `workspace_root` in project config sets where workspaces
-  are created (defaults to project root). Workspaces are always on when
+- **Repository/workspace layout**: `workspace.repositories` globs define
+  where repositories are. `workspace.root` sets where workspaces are created
+  (defaults to project root). Workspaces are always on when
   `.bosun/` exists.
 - **Subcommand structure**: All commands are top-level Cobra subcommands.
   Lifecycle commands (`start`, `review`, `preview`, `cleanup`, etc.) share an
@@ -76,12 +76,13 @@ directs the crew and signals state changes.
   before transitioning. Unexpected status (e.g., running `release` when issue
   is still in "Review") warns and requires confirmation rather than proceeding
   blindly.
-- **Issue resolution**: `--issue` flag bound to Viper. Resolution chain:
-  (1) explicit `--issue` flag, (2) `BOSUN_ISSUE` env var (works with
-  direnv), (3) workspace path derivation (extract issue from
-  `<workspace_root>/<branch>/` using `branch.pattern` in reverse), (4) git
-  branch name derivation (same parser, different input). Error if none
-  resolve.
+- **Issue resolution**: `--issue` is a plain flag, not bound to Viper.
+  Resolution chain: (1) explicit `--issue` flag, (2) `BOSUN_ISSUE` env var
+  (works with direnv), read from the environment directly so a config file
+  can't pin it, (3) workspace path derivation (extract issue from
+  `<workspace.root>/<branch>/` using `vcs.branch.template` in reverse),
+  (4) git branch name derivation (same parser, different input). Error if
+  none resolve.
 
 ---
 
@@ -125,111 +126,128 @@ cicd.CICD                    githubactions.Adapter
 Two-tier Viper-managed config. Global settings at `~/.config/bosun/config.yaml`,
 project-level overrides at `.bosun/config.yaml` (merged on top).
 
-**Global config** (`~/.config/bosun/config.yaml`):
+Environment variables name a key as `BOSUN_` + the key path uppercased with
+dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
+`issue_tracker.token`. **This works for schema-mediated reads, not for every
+key.** Viper is configured with `AutomaticEnv` and no key replacer, so it
+never maps a dotted key to that name on its own; the mapping is bosun's,
+applied by `effectiveEnvValue` — which is what `config check`, `config show`,
+`bosun init` and every provider `Require` go through. A key read with a bare
+`viper.GetString` (`vcs.branch.template`, `ui.color`, `workspace.root`) does
+not see it, and `config show` will report the env value as live even though
+nothing reads it. Treat the env layer as reliable for credentials and provider
+selection, and as not yet universal for the rest.
+
+The schema is organized on one axis: **every top-level block is a
+capability**, and a block earns root level only if that capability exists in
+code, registered or not. That is why `preview` is a root block (an interface
+with two adapters) and `release` is not (there is no `internal/release`, and a
+release deploy is a CI/CD workflow dispatch — so its keys live under `cicd`).
+`bosun config check` validates the merged result against this schema, and
+reports any key the schema doesn't recognize.
+
+Three keys are deliberately absent from the schema and readable **only** from
+the environment: `BOSUN_ISSUE`, `BOSUN_PROJECT`, `BOSUN_WORKSPACE`. They are
+per-invocation alternatives to `--issue` / `--project` / `--workspace`, and a
+config file that pinned one would pin every command in the project to it.
+
+**Global config** (`~/.config/bosun/config.yaml`) — providers, credentials,
+and anything that isn't specific to one project:
 
 ```yaml
-# Provider selection
-issue_tracker: jira
-code_host: github
-notification: slack
-cicd: github_actions
-
-# Provider-specific settings
-jira:
+issue_tracker:
+  provider: jira
   base_url: https://mycompany.atlassian.net
   email: you@company.com
-  # Auth: token from env var BOSUN_JIRA_TOKEN
+  # Auth: token from BOSUN_ISSUE_TRACKER_TOKEN
+  statuses:                     # your workflow -> the tracker's own states
+    ready: "Ready"
+    in_progress: "In Progress"
+    review: "Review"
+    preview: "In Preview Env"
+    ready_for_release: "Ready for Release"
+    done: "Done"
 
-github:
-  # Relies on gh CLI auth or GITHUB_TOKEN
+code_host:
+  provider: github
+  # Auth: gh CLI, or BOSUN_CODE_HOST_TOKEN
+  merge_method: squash
+  pr:
+    title_template: "[{{.IssueKey}}] {{.IssueTitle}}"
 
-slack:
-  # Auth: BOSUN_SLACK_TOKEN
+notification:
+  provider: slack
+  # Auth: BOSUN_NOTIFICATION_TOKEN
 
-# Branch naming
-branch:
-  pattern: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"
-  categories:
-    story: feature
-    bug: fix
-    task: chore
+vcs:
+  branch:
+    template: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"
+    categories:                 # keyed by the tracker's issue types
+      story: feature
+      bug: fix
+      task: chore
 
-# PR defaults
-pull_request:
-  # Optional, and usually best left unset: each repository's PR then
-  # targets that repository's own default branch. Setting it pins one
-  # base for EVERY repository, which fails in any repo that lacks it.
-  # base: main
-  title_pattern: "[{{.IssueNumber}}] {{.IssueTitle}}"
-
-# Issue tracker status mapping (your workflow -> provider states)
-statuses:
-  ready: "Ready"
-  in_progress: "In Progress"
-  review: "Review"
-  preview: "In Preview Env"
-  ready_for_release: "Ready for Release"
-  done: "Done"
+ui:
+  color: truecolor              # truecolor | ansi | none
+  compact_header: false
 ```
 
-**Project config** (`.bosun/config.yaml`):
+The branch template also names the workspace directory — one string, so the
+user-entered slug stays recoverable from the branch on resume.
+
+**Project config** (`.bosun/config.yaml`) — where the repositories are, and
+which tracker project and channels this one uses:
 
 ```yaml
-# Issue tracker project key
-jira:
+workspace:
+  # Globs resolved to directories containing .git/
+  repositories:
+    - ./*
+  # Where workspaces are created (default: project root)
+  root: _workspaces
+
+issue_tracker:
   project: PROJ
 
-# Notification channels
-slack:
-  channel_review: bb-prs
-  channel_prerelease: release_coordination
-
-# Repository patterns (globs resolved to directories containing .git/)
-repositories:
-  - ./*
-
-# Where workspaces are created (default: project root)
-workspace_root: _workspaces
+notification:
+  channels:                     # keyed by notification TYPE, not stage
+    review: bb-prs
+    prerelease: release_coordination
 ```
 
-**CI/CD workflows** (project config, optional — `bosun init` prompts for these):
-
-```yaml
-github_actions:
-  workflows:
-    preview:
-      url_template: "https://{{.Name}}.preview.example.com"
-      up:
-        target: org/repo/.github/workflows/deploy-preview.yml
-        inputs:
-          services: services-to-deploy
-          name: name
-      down:
-        target: org/repo/.github/workflows/teardown-preview.yml
-        inputs:
-          name: name
-    release:
-      target: org/repo/.github/workflows/deploy.yml
-      inputs:
-        services: services-to-deploy
-```
-
-The `preview` stage has paired `up` (deploy) and `down` (teardown) actions
-with their own targets and inputs. `url_template` lives at the stage level
-since it describes the env both actions reference; `bosun preview` uses it
-to probe whether an environment is already running before redeploying. The
-`down` block is optional — when configured, `bosun preview` schedules a
-teardown of the prior environment if you supply a different `--name`.
-
-**Preview provider** (project config, optional):
+**Preview environments** (project config, optional):
 
 ```yaml
 preview:
-  provider: cicd            # or 'ephemeral'
-  api:
-    base_url: https://ephemeral-ui.example.dev   # ephemeral only
-    auth: gh-cli
+  provider: cicd                # or 'ephemeral'
+  url_template: "https://{{.Name}}.preview.example.com"
+
+  # cicd adapter: the workflows to dispatch
+  up:
+    workflow: org/repo/.github/workflows/deploy-preview.yml
+    inputs:
+      name: name
+      issue: issue-key
+  down:
+    workflow: org/repo/.github/workflows/teardown-preview.yml
+    inputs:
+      name: name
+
+  # ephemeral adapter
+  base_url: https://ephemeral-ui.example.dev
+  auth: gh-cli
 ```
+
+`preview` has paired `up` (deploy) and `down` (teardown) sub-stages with their
+own workflow and inputs. `url_template` sits at the block level because it
+describes the env both sub-stages reference; `bosun preview` uses it to probe
+whether an environment is already running before redeploying. The `down` block
+is optional — when configured, `bosun preview` schedules a teardown of the
+prior environment if you supply a different `--name`.
+
+There is no "deploy only these services" input. A subset deploy leaves the
+environment half-built, so bosun always deploys the whole set and pins
+per-service image tags through `image-overrides` instead.
 
 Two adapters implement the preview capability, selected by
 `preview.provider`. Unset means `cicd`, so a config written before this key
@@ -257,8 +275,52 @@ gives. Attributing one to a name needs a per-run
 
 Both adapters store the env-to-issue binding under the same issue property,
 so switching providers doesn't orphan a running environment. `url_template`
-stays under the CI/CD group for both: rendering the URL locally is what lets
-`bosun preview` show it before the deploy has landed.
+is shared by both: rendering the URL locally is what lets `bosun preview` show
+it before the deploy has landed.
+
+**Release workflows** (project config, optional) — under `cicd`, because a
+release deploy is a workflow dispatch:
+
+```yaml
+cicd:
+  provider: github_actions
+  workflows:
+    release:
+      # A workflow path, or a per-repo map. A repo's value may itself be a
+      # per-service map, each entry a workflow path or a
+      # {workflow, environment} pair; environment defaults to
+      # "<service>-production".
+      target:
+        my-service: .github/workflows/deploy.yml
+        my-monorepo:
+          api:
+            workflow: .github/workflows/deploy-api.yml
+            environment: api-prod
+      inputs:
+        version: version
+```
+
+**Repo-scoped policy** (project config for now) — reviewers, assignees, and
+the PR base are per-repository concerns held centrally until each repository
+carries its own `.bosun.yaml`:
+
+```yaml
+pull_request:
+  # Unset means "each repository's own default branch", which is right far
+  # more often than one workspace-wide literal.
+  # base: main
+  reviewers: [alice]
+  team_reviewers: [backend]
+```
+
+**Per-repository services** (project config) — which services a repository
+contributes to the deploy surfaces. Read directly rather than through the
+schema, and also bound for the per-repo descriptor:
+
+```yaml
+services:
+  my-service: my-service           # or a list, or a map of service -> paths
+```
 
 ### Project Structure
 
@@ -479,13 +541,14 @@ the issue lifecycle.
 
 ### Layout
 
-Repositories are discovered via `repositories:` globs. `workspace_root` sets
-where workspaces are created (defaults to project root).
+Repositories are discovered via `workspace.repositories` globs.
+`workspace.root` sets where workspaces are created (defaults to project
+root).
 
 ```
 <project-root>/                         # contains .bosun/
 ├── .bosun/
-│   └── config.yaml                     # repositories: [./*], workspace_root: _workspaces
+│   └── config.yaml                     # workspace: {repositories: [./*], root: _workspaces}
 ├── my-service/                         # repositories matched by glob
 ├── my-frontend/
 └── _workspaces/

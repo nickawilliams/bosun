@@ -353,14 +353,14 @@ func TestExtractIssue(t *testing.T) {
 }
 
 // TestExtractIssueCustomPattern covers the two-step resolution:
-// workspace.issue_pattern when set, the configured tracker provider's own
+// issue_tracker.issue_pattern when set, the configured tracker provider's own
 // grammar otherwise. bosun holds no key-shape default of its own — the
 // "falls back" cases below land on the provider's grammar, which for the
 // configured Jira tracker is the PROJ-123 shape.
 func TestExtractIssueCustomPattern(t *testing.T) {
 	t.Run("custom pattern overrides the provider grammar", func(t *testing.T) {
 		viper.Reset()
-		viper.Set("workspace.issue_pattern", `(#\d+)`)
+		viper.Set("issue_tracker.issue_pattern", `(#\d+)`)
 		t.Cleanup(func() { viper.Reset() })
 
 		got := extractIssue("feature/#42_add-widget")
@@ -389,7 +389,7 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 
 	t.Run("invalid pattern falls back to the provider grammar", func(t *testing.T) {
 		viper.Reset()
-		viper.Set("workspace.issue_pattern", `([invalid`)
+		viper.Set("issue_tracker.issue_pattern", `([invalid`)
 		t.Cleanup(func() { viper.Reset() })
 
 		got := extractIssue("PROJ-123")
@@ -410,7 +410,7 @@ func TestExtractIssueCustomPattern(t *testing.T) {
 
 	t.Run("lowercase pattern", func(t *testing.T) {
 		viper.Reset()
-		viper.Set("workspace.issue_pattern", `(proj-\d+)`)
+		viper.Set("issue_tracker.issue_pattern", `(proj-\d+)`)
 		t.Cleanup(func() { viper.Reset() })
 
 		got := extractIssue("feature/proj-99_stuff")

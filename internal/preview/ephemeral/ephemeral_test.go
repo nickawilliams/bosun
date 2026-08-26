@@ -616,10 +616,6 @@ func TestCreate_DispatchesAndBinds(t *testing.T) {
 		Name:          "brave-falcon",
 		DefaultBranch: "release-2",
 		Overrides:     map[string]string{"api": "pr-7"},
-		// Services is deliberately populated and deliberately unused:
-		// absence from Overrides means "run the default branch", so a
-		// subset would leave the env half-built.
-		Services: []string{"api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)

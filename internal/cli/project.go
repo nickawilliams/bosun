@@ -1,12 +1,12 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // resolveProject returns the active project's display name.
@@ -21,8 +21,11 @@ func resolveProject(cmd *cobra.Command) (string, error) {
 		return filepath.Base(config.ProjectRootOverride), nil
 	}
 
-	// (2) Env / config: BOSUN_PROJECT via viper.
-	if v := strings.TrimSpace(viper.GetString("project")); v != "" {
+	// (2) Env. Read directly rather than through viper — see
+	// resolveIssueSilent: AutomaticEnv would also match a `project:`
+	// key in a config file, which is not where a per-invocation
+	// override belongs.
+	if v := strings.TrimSpace(os.Getenv("BOSUN_PROJECT")); v != "" {
 		return v, nil
 	}
 

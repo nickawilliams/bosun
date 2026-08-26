@@ -428,7 +428,7 @@ func checkRepositories(_ context.Context) (string, error) {
 }
 
 func checkBranchTemplate(_ context.Context) (string, error) {
-	pattern := viper.GetString("branch.template")
+	pattern := viper.GetString("vcs.branch.template")
 	if pattern == "" {
 		return "default", nil
 	}
@@ -562,7 +562,7 @@ func checkNotification(ctx context.Context) (string, error) {
 	lines := []string{fmt.Sprintf("%s → %s", provider, user)}
 
 	var failedCount int
-	for _, key := range []string{"notification.channel_review", "notification.channel_prerelease"} {
+	for _, key := range []string{"notification.channels.review", "notification.channels.prerelease"} {
 		ch := viper.GetString(key)
 		if ch == "" {
 			continue

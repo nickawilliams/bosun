@@ -174,15 +174,15 @@ var errUndecodable = errors.New("unexpected response body")
 // side of the path.
 func (c *client) resolve(path string) (string, error) {
 	if c.baseURL == "" {
-		return "", fmt.Errorf("%w: set %s.api.base_url", preview.ErrNotConfigured, preview.ConfigGroup)
+		return "", fmt.Errorf("%w: set %s.base_url", preview.ErrNotConfigured, preview.ConfigGroup)
 	}
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid %s.api.base_url %q: %w",
+		return "", fmt.Errorf("%w: invalid %s.base_url %q: %w",
 			preview.ErrNotConfigured, preview.ConfigGroup, c.baseURL, err)
 	}
 	if base.Scheme == "" || base.Host == "" {
-		return "", fmt.Errorf("%w: %s.api.base_url %q needs a scheme and host (e.g. https://host)",
+		return "", fmt.Errorf("%w: %s.base_url %q needs a scheme and host (e.g. https://host)",
 			preview.ErrNotConfigured, preview.ConfigGroup, c.baseURL)
 	}
 	return c.baseURL + path, nil

@@ -18,7 +18,7 @@ import (
 )
 
 // ConfigGroup is the config key prefix for preview settings
-// ("preview.provider", "preview.api.base_url", …).
+// ("preview.provider", "preview.url_template", "preview.up.workflow", …).
 const ConfigGroup = "preview"
 
 // Status is the lifecycle state of a preview environment.
@@ -95,13 +95,12 @@ type Claim struct {
 	IssueKey string // Tracker issue to bind the env to.
 	Name     string // Env name; must be non-empty (caller generates a default).
 
-	// Services are the services affected by the deploy. Consumed only by
-	// adapters whose underlying pipeline takes a "deploy only these"
-	// filter; adapters that model absence-from-Overrides as
-	// "run the default branch" ignore it, because under that model
-	// every service always comes up and a subset would leave the env
-	// half-built. See internal/preview/ephemeral.
-	Services []string
+	// There is deliberately no Services field. A "deploy only these"
+	// filter leaves the environment half-built: absence from Overrides
+	// means "run the default branch", so every service always comes up
+	// and a subset is not a coherent request. Per-service information
+	// travels in Overrides, which pins tags without narrowing the
+	// deploy.
 
 	// Overrides pins per-service image tags (e.g. {"api": "pr-123"}).
 	// A service absent from the map runs DefaultBranch.

@@ -14,7 +14,7 @@ const providerName = "slack"
 // Descriptor registers the Slack adapter with the services registry:
 // the config it needs, and how to build it from that config.
 //
-// The channel keys (channel_review, channel_prerelease) are deliberately
+// The channel keys (notification.channels.*) are deliberately
 // absent: routing a notification to a named channel is something any
 // chat provider does, so those stay in bosun's schema. What's here is
 // what only Slack has — its two auth modes and the workspace name the

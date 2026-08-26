@@ -290,7 +290,13 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []
 			value = secretMask
 		}
 		glyph, glyphColor := sourceGlyph(source)
-		children = append(children, ui.Leaf(glyph, glyphColor, childKey, value))
+		// formatValue, same as buildLeafNode: list-valued keys
+		// (workspace.repositories, pull_request.reviewers) resolve to
+		// viper's "[a b c]" rendering, which needs unwrapping wherever
+		// it lands. It only ever landed here for reviewers before
+		// repositories moved under workspace, which is how it went
+		// unnoticed.
+		children = append(children, ui.Leaf(glyph, glyphColor, childKey, formatValue(value)))
 	}
 
 	return children
@@ -607,7 +613,7 @@ func renderSettings(settings map[string]any, format string) {
 func newConfigCheckCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check [group]",
-		Short: "Validate configuration completeness",
+		Short: "Validate configuration against the schema",
 		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			headerAnnotationTitle: "check",
@@ -732,8 +738,23 @@ func runConfigCheck(args []string) error {
 	// map, so we collect and sort the keys to lock in order.
 	groups := schemaGroups()
 	names := make([]string, 0, len(groups))
-	for name := range groups {
-		if groupFilter != "" && name != groupFilter {
+	for name, group := range groups {
+		// Prefix, not equality: the schema nests, so `check preview`
+		// has to reach preview.up and preview.up.inputs or it validates
+		// two keys out of six and reports a clean pass. Equality would
+		// also make `check vcs` — a block with no keys of its own —
+		// answer "0 checks" for a fully configured branch template.
+		// This is the same rule keyInFilter applies to the unknown-key
+		// walk, so both halves of one command agree on what a filter
+		// means.
+		if !keyInFilter(name, groupFilter) {
+			continue
+		}
+		// A group that declares no keys of its own is pure structure —
+		// `vcs` exists to hold `vcs.branch`, `notification.templates` to
+		// name a map-shaped block. There is nothing to validate, and a
+		// "0/0 keys" row would be noise between rows that mean something.
+		if len(group.Keys) == 0 {
 			continue
 		}
 		names = append(names, name)
@@ -782,6 +803,26 @@ func runConfigCheck(args []string) error {
 		groupNode := ui.Group(name, children...)
 		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(worst)
 		tree.Add(groupNode)
+	}
+
+	// Keys the config sets that the schema doesn't recognize. Rendered
+	// as one group rather than folded into the per-group rows because
+	// an unknown key belongs to no group by definition — that is what
+	// makes it unknown. A warning, not a failure: the value is inert,
+	// so the command still works; it just isn't doing what the user
+	// thinks. This is how a renamed key surfaces.
+	if unknown := unknownConfigKeys(groupFilter); len(unknown) > 0 {
+		children := make([]*ui.TreeNode, 0, len(unknown))
+		for _, key := range unknown {
+			g, c := severityGlyph(configWarn)
+			child := ui.Leaf(g, c, key, "not in schema")
+			child.ValueColor = c
+			children = append(children, child)
+		}
+		groupNode := ui.Group("unknown keys", children...)
+		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(configWarn)
+		tree.Add(groupNode)
+		warned++
 	}
 
 	// ContinuesBelow so the tree's last branch is ├── and the spine

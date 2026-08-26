@@ -42,13 +42,57 @@ type ConfigKey struct {
 	Secret   bool     // Mask input (for tokens/passwords).
 	Required bool     // Must have a value for the group to be valid.
 
+	// NoPrompt marks a key whose UNSET state is meaningful, so bosun
+	// must never offer to fill it in. An optional key with no Default
+	// is otherwise a prompt candidate everywhere config is resolved —
+	// including the just-in-time pass a provider adapter triggers by
+	// calling Config.Require on its whole group — and a key that is
+	// correctly unset for almost every user would then be asked about
+	// on almost every command.
+	//
+	// Accepting the offer is the worse half: the prompt prefills the
+	// Example, so pressing Enter writes the example value and pins
+	// exactly the behaviour the unset state was there to avoid. Set
+	// this on escape hatches; `bosun config set` remains the way in.
+	NoPrompt bool
+
 	// Source is a dynamic value source for the interactive picker. Set
 	// by the CLI (which owns the pickers), never by provider adapters.
 	Source func() ([]SourceOption, error)
 }
 
 // ConfigGroup describes a related set of config values (e.g., "issue_tracker").
+//
+// Groups nest, mirroring the YAML they describe: "issue_tracker" holds a
+// "statuses" sub-group, "preview" holds "up" and "down", each of which
+// holds "inputs". Nesting is declared structurally rather than smuggled
+// into dotted Key strings so that every level is addressable — a
+// sub-group can carry its own Label, and MapKey applies to one level
+// rather than to a key-name prefix.
 type ConfigGroup struct {
 	Label string      // Human-readable label (e.g., "issue tracker").
 	Keys  []ConfigKey // The config keys in this group.
+
+	// Name is the group's own segment, relative to its parent
+	// ("statuses", "up", "inputs"). Empty at the top level, where the
+	// registry's map key names the group.
+	Name string
+
+	// Groups are the nested sub-groups, in declaration order. Order is
+	// authoritative for the same reason Keys order is: prompts, the
+	// init form, and `config check` all walk the schema in order.
+	Groups []ConfigGroup
+
+	// MapKey, when non-empty, declares that this group is map-shaped:
+	// beyond the keys named in Keys, the user chooses the key names.
+	// The value is the placeholder for what a key names — "state" for
+	// issue_tracker.statuses.<state>, "type" for
+	// notification.templates.<type>. Keys may still be declared
+	// alongside it, and are then the well-known members of an open set:
+	// bosun ships defaults for the lifecycle statuses it drives, and a
+	// tracker with a state bosun doesn't model can still be mapped.
+	//
+	// It exists for the unknown-key check, which otherwise has no way
+	// to tell a user-chosen key from a typo.
+	MapKey string
 }

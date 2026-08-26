@@ -14,9 +14,9 @@ import (
 // workspaceConfig is the minimum project config for the workspace
 // commands: repository glob + workspace root.
 const workspaceConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 `
 
@@ -485,9 +485,9 @@ func TestWorkspaceDelete(t *testing.T) {
 func TestStartHeterogeneousBranchReuse(t *testing.T) {
 	h := testharness.New(t)
 	h.Workspace.WriteConfig(`
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   statuses:

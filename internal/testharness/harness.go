@@ -316,7 +316,7 @@ func (h *Harness) GlobalConfigPath() string {
 // provider — cleanup, status, review. Those want a cheap, seedable
 // environment, not the adapter's workflow machinery.
 //
-// The adapter probes cicd.workflows.preview.url_template over HTTP to
+// The adapter probes preview.url_template over HTTP to
 // decide whether an env is alive, so a test that cares about liveness
 // must point that template at an httptest server; without a template
 // the adapter reports every bound env as exists-but-unverifiable.

@@ -60,7 +60,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
 			t.Errorf("repositories = %v, want [src/*]", got)
 		}
 		if got := configString(t, cfg, "workspace", "root"); got != "worktrees" {
@@ -70,8 +70,8 @@ func TestInit(t *testing.T) {
 		// integration groups the wizard offered are all declined, and
 		// the template's commented-out examples must not materialize
 		// as real keys.
-		if got := topLevelKeys(cfg); !reflect.DeepEqual(got, []string{"repositories", "workspace"}) {
-			t.Errorf("top-level keys = %v, want [repositories workspace]", got)
+		if got := topLevelKeys(cfg); !reflect.DeepEqual(got, []string{"workspace"}) {
+			t.Errorf("top-level keys = %v, want [workspace]", got)
 		}
 		assertSaved(t, h, "Repository Patterns", "src/*")
 		assertSaved(t, h, "Workspace Root", "worktrees")
@@ -118,7 +118,7 @@ func TestInit(t *testing.T) {
 			t.Errorf("detected = %v, want [api web]", ev.Items)
 		}
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"./*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"./*"}) {
 			t.Errorf("repositories = %v, want [./*]", got)
 		}
 		assertSaved(t, h, "Repository Patterns", "./*")
@@ -148,7 +148,7 @@ func TestInit(t *testing.T) {
 			t.Errorf("detected = %v, want %v", ev.Items, want)
 		}
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"."}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"."}) {
 			t.Errorf("repositories = %v, want [.]", got)
 		}
 	})
@@ -175,7 +175,7 @@ func TestInit(t *testing.T) {
 		// both-shapes default rather than the ./*-only glob the same
 		// fixture produces when scanning is on.
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{".", "./*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{".", "./*"}) {
 			t.Errorf("repositories = %v, want [. ./*]", got)
 		}
 	})
@@ -196,7 +196,7 @@ func TestInit(t *testing.T) {
 
 		cfg := readInitConfig(t, h)
 		want := []string{"src/*", "vendor/**"}
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, want) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, want) {
 			t.Errorf("repositories = %v, want %v", got, want)
 		}
 		// The flag path never prompts, so it never emits the field's
@@ -221,7 +221,7 @@ func TestInit(t *testing.T) {
 
 		cfg := readInitConfig(t, h)
 		want := []string{"src/*", "vendor/**"}
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, want) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, want) {
 			t.Errorf("repositories = %v, want %v", got, want)
 		}
 		assertSaved(t, h, "Repository Patterns", " src/* ,  vendor/** ")
@@ -244,7 +244,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"fallback/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"fallback/*"}) {
 			t.Errorf("repositories = %v, want [fallback/*]", got)
 		}
 		// The first entry was consumed and discarded, not carried
@@ -271,7 +271,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"./*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"./*"}) {
 			t.Errorf("repositories = %v, want [./*]", got)
 		}
 		// The entry really was the unusable one — not the detected
@@ -298,10 +298,11 @@ func TestInit(t *testing.T) {
 		// as an empty placeholder, and the user is told what's missing
 		// and where to add it.
 		cfg := readInitConfig(t, h)
-		if _, ok := cfg["repositories"]; !ok {
-			t.Errorf("repositories key absent from:\n%s", h.Workspace.ReadConfig())
+		ws, _ := cfg["workspace"].(map[string]any)
+		if _, ok := ws["repositories"]; !ok {
+			t.Errorf("workspace.repositories key absent from:\n%s", h.Workspace.ReadConfig())
 		}
-		if got := configStrings(t, cfg, "repositories"); len(got) != 0 {
+		if got := configStrings(t, cfg, "workspace", "repositories"); len(got) != 0 {
 			t.Errorf("repositories = %v, want none", got)
 		}
 		if got := configString(t, cfg, "workspace", "root"); got != "worktrees" {
@@ -434,8 +435,9 @@ func TestInit(t *testing.T) {
 		// to, so landing on it would also be what a discarded selection
 		// produced.
 		h.Type("\x1b[B\x1b[B\r")
-		h.Type("\x15https://ephemeral.test\r") // api base URL — example cleared, replaced
-		h.Type("\r")                           // api auth mode — the sole option
+		h.Type("\x15https://ephemeral.test\r") // API base URL — example cleared, replaced
+		h.Type("\r")                           // API auth mode — the sole option
+		h.Type("\x15\r")                       // preview URL template — cleared, left unset
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -453,15 +455,13 @@ func TestInit(t *testing.T) {
 		if !ok {
 			t.Fatalf("preview = %#v, want a map", cfg["preview"])
 		}
-		api, ok := preview["api"].(map[string]any)
-		if !ok {
-			t.Fatalf("preview.api = %#v, want a map", preview["api"])
+		// A provider's keys sit directly in its capability's block, not
+		// in a sub-namespace of it.
+		if got := preview["base_url"]; got != "https://ephemeral.test" {
+			t.Errorf("preview.base_url = %v, want https://ephemeral.test", got)
 		}
-		if got := api["base_url"]; got != "https://ephemeral.test" {
-			t.Errorf("preview.api.base_url = %v, want https://ephemeral.test", got)
-		}
-		if got := api["auth"]; got != "gh-cli" {
-			t.Errorf("preview.api.auth = %v, want gh-cli", got)
+		if got := preview["auth"]; got != "gh-cli" {
+			t.Errorf("preview.auth = %v, want gh-cli", got)
 		}
 	})
 
@@ -518,10 +518,13 @@ func TestInit(t *testing.T) {
 		h.Type("dev@acme.test\r")         // email — no example, so nothing to clear
 		h.Type("\x15ACME\r")              // project key — cleared, replaced
 		h.Type("\r")                      // board ID — accept the example as-is
-		h.Type("\r")                      // code host gate — skip
-		h.Type("\r")                      // notification gate — skip
-		h.Type("\r")                      // ci/cd gate — skip
-		h.Type("\r")                      // preview gate — skip
+		// No issue-pattern field: it is NoPrompt. If that regresses,
+		// this "\r" feeds it instead of the code-host gate and the run
+		// walks off the end of the queued input into the tripwire.
+		h.Type("\r") // code host gate — skip
+		h.Type("\r") // notification gate — skip
+		h.Type("\r") // ci/cd gate — skip
+		h.Type("\r") // preview gate — skip
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -555,6 +558,13 @@ func TestInit(t *testing.T) {
 		if _, ok := group["token"]; ok {
 			t.Errorf("issue_tracker.token written to config: %v", group)
 		}
+		// issue_pattern is never offered and never written. Unset means
+		// "use the tracker's own key grammar", so an example regex
+		// persisted by a user tabbing through the form would pin one
+		// tracker's shape onto whatever tracker is configured.
+		if _, ok := group["issue_pattern"]; ok {
+			t.Errorf("issue_tracker.issue_pattern written by the init form: %v", group)
+		}
 	})
 
 	t.Run("already_initialized/prompts_to_reconfigure", func(t *testing.T) {
@@ -572,7 +582,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
 			t.Errorf("repositories = %v, want [src/*]", got)
 		}
 		if got := configString(t, cfg, "workspace", "root"); got != "worktrees" {
@@ -612,7 +622,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
 			t.Errorf("repositories = %v, want [repos/*]", got)
 		}
 		if got := configString(t, cfg, "workspace", "root"); got != ".wt" {
@@ -694,7 +704,7 @@ func TestInit(t *testing.T) {
 			t.Fatalf("reinit dialog ran despite --approve:\n%s", h.Reporter.Dump())
 		}
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
 			t.Errorf("repositories = %v, want [src/*]", got)
 		}
 		// --approve suppresses the question, not the reinit itself:
@@ -785,7 +795,7 @@ func TestInit(t *testing.T) {
 		}
 
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"repos/*"}) {
 			t.Errorf("repositories = %v, want [repos/*]", got)
 		}
 		if got := configString(t, cfg, "workspace", "root"); got != ".wt" {
@@ -984,7 +994,7 @@ func TestInit(t *testing.T) {
 		// through leaves a usable — if unfinished — config rather
 		// than nothing.
 		cfg := readInitConfig(t, h)
-		if got := configStrings(t, cfg, "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
+		if got := configStrings(t, cfg, "workspace", "repositories"); !reflect.DeepEqual(got, []string{"src/*"}) {
 			t.Errorf("repositories = %v, want [src/*]", got)
 		}
 		if _, ok := cfg["issue_tracker"]; ok {
@@ -1071,9 +1081,9 @@ func TestInit(t *testing.T) {
 // Completeness matters for the quick-mode scenario specifically:
 // quick resolves each service group's unset keys by prompting, so a
 // gap here becomes an unfed prompt.
-const configuredProject = `repositories:
-  - repos/*
-workspace:
+const configuredProject = `workspace:
+  repositories:
+    - repos/*
   root: .wt
 issue_tracker:
   provider: jira
@@ -1082,6 +1092,7 @@ issue_tracker:
   token: seeded-jira-token
   project: ACME
   board_id: "42"
+  issue_pattern: '(ACME-[0-9]+)'
 code_host:
   provider: github
   token: seeded-gh-token
@@ -1091,58 +1102,59 @@ notification:
   auth: local
   token: seeded-slack-token
   workspace: acme
-  channel_review: reviews
-  channel_prerelease: releases
+  channels:
+    review: reviews
+    prerelease: releases
 cicd:
   provider: github_actions
   workflows:
-    preview:
-      url_template: https://preview-{{.Name}}.acme.test
-      up:
-        target: acme/infra/.github/workflows/up.yml
-        inputs:
-          services: services
-          name: name
-      down:
-        target: acme/infra/.github/workflows/down.yml
-        inputs:
-          name: name
     release:
       target: acme/infra/.github/workflows/release.yml
       inputs:
         version: release_version
+preview:
+  url_template: https://preview-{{.Name}}.acme.test
+  up:
+    workflow: acme/infra/.github/workflows/up.yml
+    inputs:
+      name: name
+  down:
+    workflow: acme/infra/.github/workflows/down.yml
+    inputs:
+      name: name
 `
 
-// configuredWorkflows is configuredProject's cicd.workflows tree in
-// parsed form — the deepest nested structure in the schema, and the
-// one most at risk from reinit's write path. Reinit rewrites the WHOLE
-// file through viper (ReadInConfig, Set, WriteConfigAs) to update two
-// keys, so every untouched branch survives only because viper's
-// round-trip happens to preserve it. Asserting on the tree wholesale
-// rather than on a leaf means a serializer change that flattened,
-// reordered into strings, or dropped a level fails here instead of
-// shipping.
+// configuredWorkflows and configuredPreview are configuredProject's two
+// deepest nested structures in parsed form, and the ones most at risk
+// from reinit's write path. Reinit rewrites the WHOLE file through
+// viper (ReadInConfig, Set, WriteConfigAs) to update two keys, so every
+// untouched branch survives only because viper's round-trip happens to
+// preserve it. Asserting on the trees wholesale rather than on a leaf
+// means a serializer change that flattened, reordered into strings, or
+// dropped a level fails here instead of shipping.
 var configuredWorkflows = map[string]any{
-	"preview": map[string]any{
-		"url_template": "https://preview-{{.Name}}.acme.test",
-		"up": map[string]any{
-			"target": "acme/infra/.github/workflows/up.yml",
-			"inputs": map[string]any{"services": "services", "name": "name"},
-		},
-		"down": map[string]any{
-			"target": "acme/infra/.github/workflows/down.yml",
-			"inputs": map[string]any{"name": "name"},
-		},
-	},
 	"release": map[string]any{
 		"target": "acme/infra/.github/workflows/release.yml",
 		"inputs": map[string]any{"version": "release_version"},
 	},
 }
 
-// assertWorkflowsPreserved checks that the seeded cicd.workflows tree
-// came back byte-for-byte after a reinit. Use it in any scenario that
-// re-runs init over configuredProject without revisiting CI/CD.
+var configuredPreview = map[string]any{
+	"url_template": "https://preview-{{.Name}}.acme.test",
+	"up": map[string]any{
+		"workflow": "acme/infra/.github/workflows/up.yml",
+		"inputs":   map[string]any{"name": "name"},
+	},
+	"down": map[string]any{
+		"workflow": "acme/infra/.github/workflows/down.yml",
+		"inputs":   map[string]any{"name": "name"},
+	},
+}
+
+// assertWorkflowsPreserved checks that the seeded cicd.workflows and
+// preview trees came back byte-for-byte after a reinit. Use it in any
+// scenario that re-runs init over configuredProject without revisiting
+// CI/CD or preview.
 func assertWorkflowsPreserved(t *testing.T, cfg map[string]any) {
 	t.Helper()
 	group, ok := cfg["cicd"].(map[string]any)
@@ -1151,6 +1163,9 @@ func assertWorkflowsPreserved(t *testing.T, cfg map[string]any) {
 	}
 	if got := group["workflows"]; !reflect.DeepEqual(got, configuredWorkflows) {
 		t.Errorf("cicd.workflows = %#v,\nwant %#v", got, configuredWorkflows)
+	}
+	if got := cfg["preview"]; !reflect.DeepEqual(got, configuredPreview) {
+		t.Errorf("preview = %#v,\nwant %#v", got, configuredPreview)
 	}
 }
 
@@ -1266,27 +1281,35 @@ func configString(t *testing.T, cfg map[string]any, path ...string) string {
 	return s
 }
 
-// configStrings reads a top-level list of strings (repositories).
-func configStrings(t *testing.T, cfg map[string]any, key string) []string {
+// configStrings reads a nested list of strings
+// (workspace.repositories).
+func configStrings(t *testing.T, cfg map[string]any, path ...string) []string {
 	t.Helper()
-	raw, ok := cfg[key]
-	if !ok {
-		return nil
+	cur := any(cfg)
+	for _, key := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur, ok = m[key]
+		if !ok {
+			return nil
+		}
 	}
-	if raw == nil {
+	if cur == nil {
 		// `repositories:` with nothing but comments beneath it — the
 		// template init writes when it has no patterns to record.
 		return nil
 	}
-	items, ok := raw.([]any)
+	items, ok := cur.([]any)
 	if !ok {
-		t.Fatalf("%s = %#v, want a list", key, raw)
+		t.Fatalf("%v = %#v, want a list", path, cur)
 	}
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		s, ok := it.(string)
 		if !ok {
-			t.Fatalf("%s contains %#v, want strings", key, it)
+			t.Fatalf("%v contains %#v, want strings", path, it)
 		}
 		out = append(out, s)
 	}
@@ -1326,5 +1349,58 @@ func assertSaved(t *testing.T, h *testharness.Harness, label, value string) {
 	}
 	if ev.Value != value {
 		t.Errorf("%q value = %q, want %q", label, ev.Value, value)
+	}
+}
+
+// TestInitConfiguresNotificationChannels covers the one sub-group the
+// wizard folds into its parent's form. It is a regression guard with a
+// specific bug behind it: the channels used to be keys of the
+// `notification` group, and moving them into a sub-group made them
+// invisible to resolveGroupAsForm, which walks Keys and not Groups. The
+// symptom was silent — init configured a notifier with nowhere to post,
+// and every announcement thereafter reported "set
+// notification.channels.review to announce the review".
+func TestInitConfiguresNotificationChannels(t *testing.T) {
+	h := newInitHarness(t)
+
+	h.Type("src/*\r")
+	h.Type("worktrees\r")
+	h.Type("\r")       // issue tracker gate — skip
+	h.Type("\r")       // code host gate — skip
+	h.Type("\x1b[B\r") // notification gate — slack
+	// The form runs over the group's non-provider, non-secret keys in
+	// schema order, then the named sub-group's. Slack contributes auth
+	// (a select) and workspace; token is secret and filtered out.
+	// The channel fields arrive prefilled with their schema examples,
+	// so \x15 (ctrl+u) clears the line before typing — same as the
+	// prefill scenario above.
+	h.Type("\r")                // auth mode — the default option
+	h.Type("acme\r")            // slack workspace
+	h.Type("\x15code-review\r") // channels.review
+	h.Type("\x15releases\r")    // channels.prerelease
+	h.Type("\r")                // ci/cd gate — skip
+	h.Type("\r")                // preview gate — skip
+	tripwire(h)
+
+	if err := h.Run("init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	cfg := readInitConfig(t, h)
+	if got := configString(t, cfg, "notification", "channels", "review"); got != "code-review" {
+		t.Errorf("notification.channels.review = %q, want code-review", got)
+	}
+	if got := configString(t, cfg, "notification", "channels", "prerelease"); got != "releases" {
+		t.Errorf("notification.channels.prerelease = %q, want releases", got)
+	}
+	// The sub-group's keys land nested, not as a literal
+	// "channels.review" key — the relative path is a form-assembly
+	// detail and must not reach the file.
+	group, ok := cfg["notification"].(map[string]any)
+	if !ok {
+		t.Fatalf("notification = %#v, want a map", cfg["notification"])
+	}
+	if _, flat := group["channels.review"]; flat {
+		t.Errorf("dotted key written to config: %v", group)
 	}
 }

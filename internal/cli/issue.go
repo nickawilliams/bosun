@@ -19,13 +19,13 @@ import (
 	"github.com/spf13/viper"
 )
 
-// issuePattern returns the compiled workspace.issue_pattern override,
+// issuePattern returns the compiled issue_tracker.issue_pattern override,
 // or nil when none is configured (or it doesn't compile). The override
 // is the user's escape hatch for a key shape their tracker's own
 // grammar doesn't cover; absent one, extraction goes through the
 // tracker.
 func issuePattern() *regexp.Regexp {
-	if pat := viper.GetString("workspace.issue_pattern"); pat != "" {
+	if pat := viper.GetString("issue_tracker.issue_pattern"); pat != "" {
 		if re, err := regexp.Compile(pat); err == nil {
 			return re
 		}
@@ -304,7 +304,7 @@ func displayStatus(iss issuepkg.Issue, colNames map[string]string) string {
 // Works with branch names like "feature/PROJ-123_add-widget" or
 // workspace paths like "feature/PROJ-123_add-widget".
 //
-// Resolution order: the configured workspace.issue_pattern override
+// Resolution order: the configured issue_tracker.issue_pattern override
 // first, then the tracker's own grammar (issue.Tracker.ParseIdentifier)
 // — key shape is the tracker's to define, and bosun holds no default of
 // its own. With neither an override nor a configured tracker there is

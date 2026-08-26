@@ -122,7 +122,7 @@ func Bootstrap(cmd *cobra.Command) error {
 	if err := config.Load(); err != nil {
 		return err
 	}
-	ui.ApplyColorMode(viper.GetString("display.color"))
+	ui.ApplyColorMode(viper.GetString("ui.color"))
 
 	// machineReadable is true when structured output was explicitly
 	// requested — either via --output or the command's own annotation.
@@ -142,7 +142,7 @@ func Bootstrap(cmd *cobra.Command) error {
 	case !ui.IsTerminal():
 		ui.SetDefault(ui.NewPlainReporter())
 	default:
-		ui.SetCompactHeader(viper.GetBool("display.compact_header"))
+		ui.SetCompactHeader(viper.GetBool("ui.compact_header"))
 		ui.BeginTimeline()
 	}
 	return nil

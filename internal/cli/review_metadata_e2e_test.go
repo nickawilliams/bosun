@@ -22,9 +22,9 @@ import (
 // through. No notification channel — the announcement is out of scope
 // here and an unset channel just skips it.
 const reviewConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   project: "EX"
@@ -190,7 +190,7 @@ func TestReviewPerRepoMetadata(t *testing.T) {
 		// between repos — so the body must be rendered per repo rather
 		// than once from whichever repo sorted first.
 		h, repos := startReviewWorkspace(t,
-			reviewConfig+"\npull_request:\n  body_template: \"Targets {{.BaseBranch}}\"\n",
+			reviewConfig+"\ncode_host:\n  pr:\n    body_template: \"Targets {{.BaseBranch}}\"\n",
 			"api", "web")
 		h.Host.SeedDefaultBranch(repos[1].Owner, "web", "develop")
 

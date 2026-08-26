@@ -34,9 +34,9 @@ import (
 // assertion at the right directory and pass. A non-default root makes
 // the assertions depend on the config actually being read.
 const cleanupConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "trees"
 issue_tracker:
   project: "EX"
