@@ -752,7 +752,7 @@ func newReviewCmd() *cobra.Command {
 
 			// Resolve self-assign before the interactive prompt so the
 			// current user appears pre-selected in the list.
-			selfAssign := !viper.IsSet("pull_request.self_assign") || viper.GetBool("pull_request.self_assign")
+			selfAssign := !viper.IsSet("code_host.pr.self_assign") || viper.GetBool("code_host.pr.self_assign")
 			if cmd.Flags().Changed("self-assign") {
 				selfAssign, _ = cmd.Flags().GetBool("self-assign")
 			}
@@ -1008,7 +1008,7 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			// Notification action — appears in plan, runs after PR creation.
-			reviewChannel := viper.GetString("notification.channel_review")
+			reviewChannel := viper.GetString("notification.channels.review")
 			notifier, notifierErr := newNotifier()
 			if notifierErr == nil {
 				defer notifier.Close()
@@ -1129,7 +1129,7 @@ func newReviewCmd() *cobra.Command {
 				// announcement silently. Drafts intentionally suppress
 				// notifications, so they stay quiet; so does an unconfigured
 				// provider.
-				ui.Skip("notification: set notification.channel_review to announce the review")
+				ui.Skip("notification: set notification.channels.review to announce the review")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {

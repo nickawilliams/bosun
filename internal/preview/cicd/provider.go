@@ -15,11 +15,10 @@ const providerName = "cicd"
 // registry.
 //
 // It declares no config keys of its own. Everything it reads —
-// cicd.workflows.preview.up.target, the input-name mappings, the URL
-// template — has lived under the CI/CD group since before preview had a
-// second provider, and moving those keys under "preview" would break
-// every existing config for no gain. The CLI resolves them into
-// preview.Deps instead.
+// preview.up.workflow, the input-name mappings, the URL template — is
+// resolved by the CLI into preview.Deps, because resolving a target
+// means intersecting workflow config with the active workspace's
+// repositories, which is the CLI's knowledge rather than an adapter's.
 //
 // Default is set because this is the adapter that shipped first: every
 // config written before the HTTP adapter existed omits

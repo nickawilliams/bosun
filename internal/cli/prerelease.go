@@ -652,7 +652,7 @@ func newPrereleaseCmd() *cobra.Command {
 				}
 			}
 
-			releaseChannel := viper.GetString("notification.channel_prerelease")
+			releaseChannel := viper.GetString("notification.channels.prerelease")
 			releaseNotifier, releaseNotifierErr := newNotifier()
 			if releaseNotifierErr == nil {
 				defer releaseNotifier.Close()
@@ -750,7 +750,7 @@ func newPrereleaseCmd() *cobra.Command {
 				// command has no channel to post to — a partial config, not an
 				// opt-out. Surface it (naming the key) rather than dropping the
 				// announcement silently; an unconfigured provider stays quiet.
-				ui.Skip("notification: set notification.channel_prerelease to announce releases")
+				ui.Skip("notification: set notification.channels.prerelease to announce releases")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {

@@ -44,9 +44,9 @@ import (
 // enumerate worktrees) and the status mappings the lifecycle stepper
 // and project-scope sort key off.
 const statusConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   project: "EX"

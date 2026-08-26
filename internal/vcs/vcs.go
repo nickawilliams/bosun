@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+// ConfigGroup is the config group that holds version-control settings.
+// Callers compose their own keys against it (vcs.branch.template)
+// rather than repeating the literal.
+//
+// There is no vcs.provider key: git is the only implementation and
+// nothing selects between implementations, so a selector would be
+// inert. The group exists because branch naming is version-control
+// vocabulary, not workspace or tracker vocabulary.
+const ConfigGroup = "vcs"
+
 // BranchStatus represents the state of a branch in a repository.
 type BranchStatus struct {
 	Name   string

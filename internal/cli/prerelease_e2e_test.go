@@ -25,9 +25,9 @@ import (
 // command operates on), the status mappings start/prerelease advance
 // through, and the announcement channel.
 const prereleaseConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   project: "EX"
@@ -35,7 +35,8 @@ issue_tracker:
     in_progress: "In Progress"
     ready_for_release: "Ready for Release"
 notification:
-  channel_prerelease: "releases"
+  channels:
+    prerelease: "releases"
 `
 
 const prereleaseBranch = "story/EX-1_feature"

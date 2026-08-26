@@ -25,7 +25,7 @@ var (
 // the issue type (from the tracker), and the issue title. When slug is
 // non-empty it is used directly; otherwise one is derived from the title.
 func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, error) {
-	pattern := viper.GetString("branch.template")
+	pattern := viper.GetString("vcs.branch.template")
 	if pattern == "" {
 		pattern = defaultPattern
 	}
@@ -55,10 +55,10 @@ func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, erro
 }
 
 // resolveCategory maps an issue type name (from the tracker) to a branch
-// category using the branch.categories config. Falls back to lowercase
+// category using the vcs.branch.categories config. Falls back to lowercase
 // issue type if no mapping is found.
 func resolveCategory(issueType string) string {
-	key := "branch.categories." + strings.ToLower(issueType)
+	key := "vcs.branch.categories." + strings.ToLower(issueType)
 	if cat := viper.GetString(key); cat != "" {
 		return cat
 	}

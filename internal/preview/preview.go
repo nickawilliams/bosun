@@ -18,7 +18,7 @@ import (
 )
 
 // ConfigGroup is the config key prefix for preview settings
-// ("preview.provider", "preview.api.base_url", …).
+// ("preview.provider", "preview.url_template", "preview.up.workflow", …).
 const ConfigGroup = "preview"
 
 // Status is the lifecycle state of a preview environment.

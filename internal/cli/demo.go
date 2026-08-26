@@ -352,7 +352,7 @@ func demoTree() {
 			ui.Leaf("◻︎", ui.Palette.Muted, "auto_merge", "true"),
 			ui.Leaf("◻︎", ui.Palette.Muted, "max_retries", "3"),
 		),
-		ui.Group("display",
+		ui.Group("ui",
 			ui.Leaf("◻︎", ui.Palette.Muted, "compact_header", "false"),
 		),
 	).Print()

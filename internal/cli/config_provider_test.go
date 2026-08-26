@@ -35,10 +35,10 @@ func TestProviderConfigRequire(t *testing.T) {
 	viper.Reset()
 
 	cfg := providerConfig{}
-	if err := cfg.Require("display.color"); err != nil {
+	if err := cfg.Require("ui.color"); err != nil {
 		t.Fatalf("Require: %v", err)
 	}
-	if got := cfg.Get("display.color"); got == "" {
+	if got := cfg.Get("ui.color"); got == "" {
 		t.Error("Require returned nil but left the value unset")
 	}
 }

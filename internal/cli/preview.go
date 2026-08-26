@@ -52,7 +52,7 @@ func newPreviewCmd() *cobra.Command {
 				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
 			}
 
-			const stage = "preview"
+			const stage = preview.ConfigGroup
 			force, _ := cmd.Flags().GetBool("force")
 
 			resolution, err := resolvePreview(cmd, ctx, provider, issueKey, stage, force)
@@ -96,7 +96,7 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, sa)
 			}
 
-			channel := viper.GetString("notification.channel_review")
+			channel := viper.GetString("notification.channels.review")
 			previewNotifier, previewNotifierErr := newNotifier()
 			if previewNotifierErr == nil {
 				defer previewNotifier.Close()
@@ -163,7 +163,7 @@ func newPreviewCmd() *cobra.Command {
 				// command has no channel to post to — a partial config, not an
 				// opt-out. Surface it (naming the key) rather than dropping the
 				// announcement silently; an unconfigured provider stays quiet.
-				ui.Skip("notification: set notification.channel_review to announce the preview")
+				ui.Skip("notification: set notification.channels.review to announce the preview")
 			}
 
 			if err := runActions(cmd, ctx, actions); err != nil {

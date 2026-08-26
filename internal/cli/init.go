@@ -81,7 +81,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	var existingRepos []string
 	var existingWSRoot string
 	if reinit {
-		existingRepos = viper.GetStringSlice("repositories")
+		existingRepos = viper.GetStringSlice("workspace.repositories")
 		existingWSRoot = viper.GetString("workspace.root")
 	}
 
@@ -207,7 +207,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	configPath := filepath.Join(bosunDir, "config.yaml")
 	if reinit {
 		if len(repositoryGlobs) > 0 {
-			if err := setConfigListValue(configPath, "repositories", repositoryGlobs); err != nil {
+			if err := setConfigListValue(configPath, "workspace.repositories", repositoryGlobs); err != nil {
 				return fmt.Errorf("updating repositories: %w", err)
 			}
 		}
@@ -526,25 +526,27 @@ func defaultRepositoryGlobs(dir string, detected []string) []string {
 func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 	var b strings.Builder
 
-	b.WriteString("# Repository patterns (globs resolved to directories containing .git/)\n")
-	b.WriteString("repositories:\n")
+	// Repositories and workspace root are both workspace config, so
+	// they share one block — a second `workspace:` key further down
+	// would silently shadow the first when the file is parsed.
+	b.WriteString("workspace:\n")
+	b.WriteString("  # Repository patterns (globs resolved to directories containing .git/)\n")
+	b.WriteString("  repositories:\n")
 	if len(repositoryGlobs) > 0 {
 		for _, g := range repositoryGlobs {
-			fmt.Fprintf(&b, "  - %s\n", g)
+			fmt.Fprintf(&b, "    - %s\n", g)
 		}
 	} else {
-		b.WriteString("  # - .          # this directory is a repository\n")
-		b.WriteString("  # - ./*        # child directories that are repositories\n")
+		b.WriteString("    # - .          # this directory is a repository\n")
+		b.WriteString("    # - ./*        # child directories that are repositories\n")
 	}
 
 	if wsRoot != "" {
-		b.WriteString("\n# Where workspaces are created (relative to project root)\n")
-		b.WriteString("workspace:\n")
+		b.WriteString("\n  # Where workspaces are created (relative to project root)\n")
 		fmt.Fprintf(&b, "  root: %s\n", wsRoot)
 	} else {
-		b.WriteString("\n# Uncomment to enable worktree-based workspaces:\n")
-		b.WriteString("# workspace:\n")
-		b.WriteString("#   root: .workspaces\n")
+		b.WriteString("\n  # Uncomment to enable worktree-based workspaces:\n")
+		b.WriteString("  # root: .workspaces\n")
 	}
 
 	b.WriteString("\n# Uncomment and configure as needed:\n")
@@ -552,8 +554,9 @@ func writeInitConfig(path, wsRoot string, repositoryGlobs []string) error {
 	b.WriteString("#   project: PROJ\n")
 	b.WriteString("#\n")
 	fmt.Fprintf(&b, "# notification:\n#   provider: %s\n", providerHint(notify.ConfigGroup))
-	b.WriteString("#   channel_review: code-review\n")
-	b.WriteString("#   channel_prerelease: releases\n")
+	b.WriteString("#   channels:\n")
+	b.WriteString("#     review: code-review\n")
+	b.WriteString("#     prerelease: releases\n")
 
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

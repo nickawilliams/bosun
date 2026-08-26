@@ -290,7 +290,13 @@ func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []
 			value = secretMask
 		}
 		glyph, glyphColor := sourceGlyph(source)
-		children = append(children, ui.Leaf(glyph, glyphColor, childKey, value))
+		// formatValue, same as buildLeafNode: list-valued keys
+		// (workspace.repositories, pull_request.reviewers) resolve to
+		// viper's "[a b c]" rendering, which needs unwrapping wherever
+		// it lands. It only ever landed here for reviewers before
+		// repositories moved under workspace, which is how it went
+		// unnoticed.
+		children = append(children, ui.Leaf(glyph, glyphColor, childKey, formatValue(value)))
 	}
 
 	return children
@@ -732,8 +738,15 @@ func runConfigCheck(args []string) error {
 	// map, so we collect and sort the keys to lock in order.
 	groups := schemaGroups()
 	names := make([]string, 0, len(groups))
-	for name := range groups {
+	for name, group := range groups {
 		if groupFilter != "" && name != groupFilter {
+			continue
+		}
+		// A group that declares no keys of its own is pure structure —
+		// `vcs` exists to hold `vcs.branch`, `notification.templates` to
+		// name a map-shaped block. There is nothing to validate, and a
+		// "0/0 keys" row would be noise between rows that mean something.
+		if len(group.Keys) == 0 {
 			continue
 		}
 		names = append(names, name)

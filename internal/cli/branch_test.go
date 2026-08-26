@@ -9,9 +9,9 @@ import (
 func TestBuildBranchName(t *testing.T) {
 	// Set up config for branch naming.
 	viper.Reset()
-	viper.Set("branch.template", "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}")
-	viper.Set("branch.categories.story", "feature")
-	viper.Set("branch.categories.bug", "fix")
+	viper.Set("vcs.branch.template", "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}")
+	viper.Set("vcs.branch.categories.story", "feature")
+	viper.Set("vcs.branch.categories.bug", "fix")
 	t.Cleanup(func() { viper.Reset() })
 
 	tests := []struct {
@@ -84,7 +84,7 @@ func TestBuildBranchName(t *testing.T) {
 func TestBuildBranchNameDefaultPattern(t *testing.T) {
 	viper.Reset()
 	// No pattern configured — should use default.
-	viper.Set("branch.categories.story", "feature")
+	viper.Set("vcs.branch.categories.story", "feature")
 	t.Cleanup(func() { viper.Reset() })
 
 	got, err := buildBranchName("PROJ-1", "Story", "Test", "")

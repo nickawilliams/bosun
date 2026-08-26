@@ -34,9 +34,9 @@ type Repository struct {
 // directories containing .git/, and returns the resolved set. If filterNames
 // is non-empty, only repositories whose names match are returned.
 func resolveRepositories(filterNames []string) ([]Repository, error) {
-	patterns := viper.GetStringSlice("repositories")
+	patterns := viper.GetStringSlice("workspace.repositories")
 	if len(patterns) == 0 {
-		return nil, fmt.Errorf("no repository patterns configured: set repositories in .bosun/config.yaml")
+		return nil, fmt.Errorf("no repository patterns configured: set workspace.repositories in .bosun/config.yaml")
 	}
 
 	projectRoot := config.FindProjectRoot()
@@ -411,7 +411,7 @@ func executePRTemplate(name, pattern string, data prTemplateData) (string, error
 
 // buildPRTitle generates a PR title from the configured pattern and issue metadata.
 func buildPRTitle(data prTemplateData) string {
-	pattern := viper.GetString("pull_request.title_template")
+	pattern := viper.GetString("code_host.pr.title_template")
 	if pattern == "" {
 		pattern = "[{{.IssueKey}}] {{.IssueTitle}}"
 	}
@@ -425,7 +425,7 @@ func buildPRTitle(data prTemplateData) string {
 // buildPRBody generates a PR body from the configured template and issue
 // metadata. Returns empty string if no template is configured.
 func buildPRBody(data prTemplateData) string {
-	pattern := viper.GetString("pull_request.body_template")
+	pattern := viper.GetString("code_host.pr.body_template")
 	if pattern == "" {
 		return ""
 	}
@@ -614,9 +614,9 @@ func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 	pipeline, _ := newCICD()
 	tracker, _ := newIssueTracker()
 
-	const stage = "preview"
+	const stage = preview.ConfigGroup
 	var urlTmpl *template.Template
-	if pattern := viper.GetString("cicd.workflows." + stage + ".url_template"); pattern != "" {
+	if pattern := viper.GetString(stage + ".url_template"); pattern != "" {
 		parsed, err := template.New("stage-url").Parse(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("preview url_template: %w", err)
@@ -676,8 +676,15 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 	}, nil
 }
 
-// resolveWorkflowTargets resolves configured workflow targets for a lifecycle
-// stage ("preview" or "release"). Returns nil if the stage is not configured.
+// resolveWorkflowTargets resolves the workflows configured for a preview
+// sub-stage ("preview.up", "preview.down"). Returns nil if the sub-stage
+// is not configured.
+//
+// The sub-stage doubles as the config prefix — the preview block is laid
+// out as preview.<sub-stage>.workflow — so the caller names the stage
+// once and this reads the key beneath it. Release targets do not come
+// through here: they carry per-service deploy environments and are
+// resolved by resolveReleaseDeployTargets.
 //
 // Config shapes:
 //   - String → global mode: one workflow triggered once
@@ -686,8 +693,8 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 //
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
-func resolveWorkflowTargets(ctx context.Context, workspace string, stage string) ([]WorkflowTarget, error) {
-	key := "cicd.workflows." + stage + ".target"
+func resolveWorkflowTargets(ctx context.Context, workspace string, subStage string) ([]WorkflowTarget, error) {
+	key := subStage + ".workflow"
 
 	// Try string first (global mode).
 	if s := viper.GetString(key); s != "" {
@@ -954,13 +961,14 @@ func resolveRepoServiceNames(repoName string) []string {
 	}
 }
 
-// stageInputName returns the configured workflow input parameter name for a
-// given bosun concept (e.g., "services", "issue", "name") within a lifecycle
-// stage. Returns empty string if not configured, signaling callers to skip.
+// stageInputName returns the configured workflow input parameter name
+// for a bosun concept ("name", "issue") within a preview sub-stage
+// ("preview.up", "preview.down"). Returns empty string if not
+// configured, signaling callers to skip.
 //
-// Config path: cicd.workflows.<stage>.inputs.<concept>
-func stageInputName(stage, concept string) string {
-	return viper.GetString("cicd.workflows." + stage + ".inputs." + concept)
+// Config path: <sub-stage>.inputs.<concept>
+func stageInputName(subStage, concept string) string {
+	return viper.GetString(subStage + ".inputs." + concept)
 }
 
 // stageURLTemplate holds the data available when rendering a stage URL.
@@ -971,9 +979,9 @@ type stageURLTemplate struct {
 // renderStageURL renders the url_template for a stage with the given name.
 // Returns empty string if the template is not configured or rendering fails.
 //
-// Config path: cicd.workflows.<stage>.url_template
+// Config path: <stage>.url_template
 func renderStageURL(stage, name string) string {
-	pattern := viper.GetString("cicd.workflows." + stage + ".url_template")
+	pattern := viper.GetString(stage + ".url_template")
 	if pattern == "" {
 		return ""
 	}

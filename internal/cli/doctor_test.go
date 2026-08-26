@@ -51,9 +51,9 @@ import (
 // four integrations. Scenarios that want one capability absent
 // rewrite the config without that block.
 const doctorConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   provider: "jira"
@@ -67,8 +67,9 @@ code_host:
 notification:
   provider: "slack"
   token: "slack-token"
-  channel_review: "reviews"
-  channel_prerelease: "releases"
+  channels:
+    review: "reviews"
+    prerelease: "releases"
 cicd:
   provider: "github_actions"
 `
@@ -428,7 +429,8 @@ func TestDoctor(t *testing.T) {
 		// exactly which ones, without attempting a connection.
 		h := newDoctorHarness(t)
 		h.Workspace.WriteConfig(`
-repositories: ["repos/*"]
+workspace:
+  repositories: ["repos/*"]
 issue_tracker:
   provider: "jira"
 `)

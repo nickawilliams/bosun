@@ -14,9 +14,9 @@ import (
 // startConfig is the minimum project config required for `bosun start`:
 // repository glob, workspace root, and the in_progress status mapping.
 const startConfig = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "workspaces"
 issue_tracker:
   statuses:

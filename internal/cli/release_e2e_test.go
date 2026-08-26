@@ -52,9 +52,9 @@ const releaseBranch = "story/EX-1_feature"
 //     the command reads cicd.workflows.release.inputs.version instead
 //     of hardcoding a name.
 const releaseConfigf = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "trees"
 issue_tracker:
   project: "EX"

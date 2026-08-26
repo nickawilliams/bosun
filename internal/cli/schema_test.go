@@ -2,12 +2,15 @@ package cli
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
+	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/spf13/viper"
 )
 
@@ -35,7 +38,7 @@ func TestLookupGroupSplicesProviderKeys(t *testing.T) {
 		t.Fatalf("lookupGroup(%q) not found", issue.ConfigGroup)
 	}
 
-	want := []string{"provider", "base_url", "email", "token", "project", "board_id"}
+	want := []string{"provider", "base_url", "email", "token", "project", "board_id", "issue_pattern"}
 	if got := keyNames(group); !slices.Equal(got, want) {
 		t.Errorf("keys = %v, want %v", got, want)
 	}
@@ -83,7 +86,7 @@ func TestLookupGroupProviderKeysFollowTheConfiguredProvider(t *testing.T) {
 	viper.Set(issue.ConfigGroup+".provider", "linear")
 
 	group, _ := lookupGroup(issue.ConfigGroup)
-	want := []string{"provider", "project", "board_id"}
+	want := []string{"provider", "project", "board_id", "issue_pattern"}
 	if got := keyNames(group); !slices.Equal(got, want) {
 		t.Errorf("keys = %v, want %v — only bosun's own keys for an unknown provider", got, want)
 	}
@@ -103,17 +106,41 @@ func TestLookupGroupUnsetProviderUsesTheSoleOne(t *testing.T) {
 	}
 }
 
+// declaredGroupPaths walks the declared schema and returns every group's
+// dotted path — the paths schemaGroups is expected to produce.
+func declaredGroupPaths(path string, g ConfigGroup, out *[]string) {
+	*out = append(*out, path)
+	for _, sub := range g.Groups {
+		declaredGroupPaths(path+"."+sub.Name, sub, out)
+	}
+}
+
 // TestSchemaGroupsResolvesEveryGroup guards the accessor the whole
 // config surface reads through: a group that schemaGroups drops (or
 // leaves a marker in) would go missing from `config check`, the env-var
 // scan, and secret masking all at once.
+//
+// Sub-groups count. The schema declares nesting structurally and
+// schemaGroups flattens it to dotted paths, so a flattening bug that
+// stopped at the top level would take `issue_tracker.statuses` and
+// every preview sub-stage down with it, silently.
 func TestSchemaGroupsResolvesEveryGroup(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
 
+	var want []string
+	for name, g := range configSchema {
+		declaredGroupPaths(name, g, &want)
+	}
+
 	groups := schemaGroups()
-	if len(groups) != len(configSchema) {
-		t.Errorf("schemaGroups has %d groups, want %d", len(groups), len(configSchema))
+	if len(groups) != len(want) {
+		t.Errorf("schemaGroups has %d groups, want %d", len(groups), len(want))
+	}
+	for _, path := range want {
+		if _, ok := groups[path]; !ok {
+			t.Errorf("schemaGroups dropped %q", path)
+		}
 	}
 	for name, g := range groups {
 		if slices.Contains(keyNames(g), providerKeysMarker) {
@@ -139,7 +166,7 @@ func TestIsKnownConfigGroup(t *testing.T) {
 	}{
 		{"workspace", true},               // schema-known, injects nothing
 		{"issue_tracker", true},           // schema-known
-		{"display", true},                 // schema-known, has defaults
+		{"ui", true},                      // schema-known, has defaults
 		{"issue_tracker.statuses", false}, // a sub-group, not top-level
 		{"nonsense_group", false},
 		{"", false},
@@ -193,7 +220,7 @@ func TestSecretKeysAreProviderIndependent(t *testing.T) {
 		for _, key := range []string{
 			issue.ConfigGroup + ".project",
 			issue.ConfigGroup + ".base_url",
-			notify.ConfigGroup + ".channel_review",
+			notify.ConfigGroup + ".channels.review",
 			"workspace.root",
 		} {
 			if isSecretKey(key) {
@@ -249,7 +276,15 @@ func TestSchemaCarriesNoProviderSpecificKeys(t *testing.T) {
 		"workspace": "Slack's workspace name",
 	}
 
-	for groupName, group := range configSchema {
+	// Sub-groups included: `preview` grew two of them, and a
+	// provider-flavored key smuggled into `preview.up` is the same leak
+	// one level down.
+	declared := make(map[string]ConfigGroup)
+	for name, group := range configSchema {
+		flattenSchemaGroup(name, group, declared)
+	}
+
+	for groupName, group := range declared {
 		for _, ck := range group.Keys {
 			if why, bad := forbidden[ck.Key]; bad {
 				t.Errorf("schema group %q declares %q (%s) — it belongs to the provider",
@@ -263,6 +298,112 @@ func TestSchemaCarriesNoProviderSpecificKeys(t *testing.T) {
 				t.Errorf("schema group %q hardcodes provider Options %v — the registry supplies them",
 					groupName, ck.Options)
 			}
+		}
+	}
+}
+
+// TestSchemaNestingIsStructural pins that sub-groups are declared as
+// nested ConfigGroups rather than as dotted key strings. The flattened
+// view is what every consumer reads, so the two have to agree: a key
+// declared inside `statuses` must resolve to
+// "issue_tracker.statuses.ready" and must not also appear as a dotted
+// key on its parent.
+func TestSchemaNestingIsStructural(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	groups := schemaGroups()
+
+	sub, ok := groups[issue.ConfigGroup+".statuses"]
+	if !ok {
+		t.Fatalf("issue_tracker.statuses missing from the flattened schema")
+	}
+	if !slices.Contains(keyNames(sub), "ready") {
+		t.Errorf("statuses keys = %v, want the bare key name", keyNames(sub))
+	}
+	if got := fullKey(issue.ConfigGroup+".statuses", sub.Keys[0]); got != "issue_tracker.statuses.ready" {
+		t.Errorf("fullKey = %q, want issue_tracker.statuses.ready", got)
+	}
+
+	// No key anywhere may carry a dot: a dotted key is nesting smuggled
+	// into a string, which is what the structural form replaced.
+	for name, g := range groups {
+		for _, ck := range g.Keys {
+			if strings.Contains(ck.Key, ".") {
+				t.Errorf("group %q declares dotted key %q — declare a sub-group instead", name, ck.Key)
+			}
+		}
+	}
+}
+
+// TestRegisterSourceReachesSubGroups pins that registerSource addresses
+// the same dotted namespace lookupGroup exposes. Only a top-level key
+// registers a Source today; the sub-group path exists so that adding one
+// (a status picker fed by the tracker's own states, say) doesn't
+// silently no-op and leave a free-text prompt that reads as working.
+func TestRegisterSourceReachesSubGroups(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	src := func() ([]SourceOption, error) { return nil, nil }
+	registerSource(issue.ConfigGroup+".statuses", "ready", src)
+	t.Cleanup(func() { registerSource(issue.ConfigGroup+".statuses", "ready", nil) })
+
+	group, ok := lookupGroup(issue.ConfigGroup + ".statuses")
+	if !ok {
+		t.Fatal("issue_tracker.statuses not found")
+	}
+	for _, ck := range group.Keys {
+		if ck.Key == "ready" {
+			if ck.Source == nil {
+				t.Error("registerSource did not reach the sub-group key")
+			}
+			return
+		}
+	}
+	t.Error("ready is missing from the resolved sub-group")
+}
+
+// TestRegisterSourceIgnoresUnknownTargets pins that a misaddressed
+// registration is inert rather than a panic: the callers are init()
+// functions, so a nil-map write or an index into a missing group would
+// take the whole binary down at startup.
+func TestRegisterSourceIgnoresUnknownTargets(t *testing.T) {
+	registerSource("nonsense_group", "key", func() ([]SourceOption, error) { return nil, nil })
+	registerSource(issue.ConfigGroup+".nonsense_sub", "ready", func() ([]SourceOption, error) { return nil, nil })
+	registerSource(issue.ConfigGroup, "nonsense_key", func() ([]SourceOption, error) { return nil, nil })
+}
+
+// TestCapabilityBlocksOnly pins the schema's organizing rule: every
+// top-level block names a capability that exists in code. The two
+// exceptions are named here rather than left implicit, so adding a third
+// is a deliberate edit to this list and not an accident.
+func TestCapabilityBlocksOnly(t *testing.T) {
+	// Blocks that are not capabilities, and why they are tolerated.
+	exceptions := map[string]string{
+		"workspace":    "bosun's own concept — where worktrees live and which repos are in scope",
+		"pull_request": "repo-scoped policy awaiting the per-repo descriptor (#82)",
+	}
+	capabilities := []string{
+		issue.ConfigGroup, code.ConfigGroup, notify.ConfigGroup,
+		cicd.ConfigGroup, preview.ConfigGroup, vcs.ConfigGroup, uiConfigGroup,
+	}
+
+	for name := range configSchema {
+		if _, ok := exceptions[name]; ok {
+			continue
+		}
+		if !slices.Contains(capabilities, name) {
+			t.Errorf("top-level block %q is neither a capability nor a listed exception", name)
+		}
+	}
+
+	// The blocks the reshape refused. `release` has no internal/release
+	// to be a provider for; `display` and `branch` were axes, not
+	// capabilities; `repositories` was a bare key at root.
+	for _, gone := range []string{"release", "display", "branch", "repositories"} {
+		if _, ok := configSchema[gone]; ok {
+			t.Errorf("%q is back as a top-level block", gone)
 		}
 	}
 }

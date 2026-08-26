@@ -48,9 +48,9 @@ const previewBranch = "story/EX-1_feature"
 // workflow is configured in practice, and keeping the dispatch target
 // distinguishable from the repos being deployed.
 const previewConfigf = `
-repositories:
-  - "repos/*"
 workspace:
+  repositories:
+    - "repos/*"
   root: "trees"
 issue_tracker:
   project: "EX"
@@ -62,21 +62,20 @@ services:
   web: "web-svc"
 cicd:
   provider: "github_actions"
-  workflows:
-    preview:
-      url_template: "%s/{{.Name}}"
-      up:
-        target: "acme/devops/.github/workflows/deploy-preview.yml"
-        inputs:
-          name: "env-name"
-          issue: "issue-key"
-          services: "services-to-deploy"
-      down:
-        target: "acme/devops/.github/workflows/teardown-preview.yml"
-        inputs:
-          name: "env-name"
+preview:
+  url_template: "%s/{{.Name}}"
+  up:
+    workflow: "acme/devops/.github/workflows/deploy-preview.yml"
+    inputs:
+      name: "env-name"
+      issue: "issue-key"
+  down:
+    workflow: "acme/devops/.github/workflows/teardown-preview.yml"
+    inputs:
+      name: "env-name"
 notification:
-  channel_review: "prs"
+  channels:
+    review: "prs"
 `
 
 // envServer stands in for the preview hosting environment the adapter
@@ -310,8 +309,12 @@ func TestPreview(t *testing.T) {
 		if got := d.Inputs["issue-key"]; got != "EX-1" {
 			t.Errorf("issue-key input = %q, want %q", got, "EX-1")
 		}
-		if got := d.Inputs["services-to-deploy"]; got != "api-svc" {
-			t.Errorf("services input = %q, want %q", got, "api-svc")
+		// No services input: a "deploy only these" filter is not
+		// configurable, because a subset deploy leaves the environment
+		// half-built. The overrides map below is how per-service
+		// information reaches the workflow.
+		if _, ok := d.Inputs["services-to-deploy"]; ok {
+			t.Errorf("dispatch carried a services input: %v", d.Inputs)
 		}
 		if got := d.Inputs["image-overrides"]; got != `{"api-svc":"pr-100"}` {
 			t.Errorf("image-overrides = %q, want the branch's PR tag", got)
@@ -391,8 +394,8 @@ func TestPreview(t *testing.T) {
 		f := setupPreview(t, "api")
 		f.h.Workspace.WriteConfig(strings.Replace(
 			fmt.Sprintf(previewConfigf, f.env.URL),
-			`target: "acme/devops/.github/workflows/deploy-preview.yml"`,
-			`target: "deploy-preview.yml"`,
+			`workflow: "acme/devops/.github/workflows/deploy-preview.yml"`,
+			`workflow: "deploy-preview.yml"`,
 			1,
 		))
 
@@ -410,9 +413,9 @@ func TestPreview(t *testing.T) {
 
 	t.Run("claim/services_filter", func(t *testing.T) {
 		// Both repos changed, so detection would deploy both services.
-		// --service narrows the deploy set to the one named, and the
-		// dispatch's services input is what carries that decision to
-		// the workflow.
+		// --service narrows the set the run acts on, and the image
+		// overrides are what carry that decision to the workflow —
+		// there is no services input to carry it in, deliberately.
 		f := setupPreview(t, "api", "web")
 
 		if err := f.run("--name", "brave-falcon", "--service", "api-svc", "--approve"); err != nil {
@@ -423,8 +426,8 @@ func TestPreview(t *testing.T) {
 		if len(deploys) != 1 {
 			t.Fatalf("deploy dispatches = %d, want 1", len(deploys))
 		}
-		if got := deploys[0].Inputs["services-to-deploy"]; got != "api-svc" {
-			t.Errorf("services input = %q, want only the flagged service", got)
+		if _, ok := deploys[0].Inputs["services-to-deploy"]; ok {
+			t.Errorf("dispatch carried a services input: %v", deploys[0].Inputs)
 		}
 		// Image overrides stay keyed by service across every repo whose
 		// PR resolved — an entry for a service the run isn't deploying

@@ -31,14 +31,16 @@ import (
 // so the notification action joins the plan.
 const reviewNotifyConfig = reviewConfig + `
 notification:
-  channel_review: "code-review"
+  channels:
+    review: "code-review"
 `
 
 // reviewNoSelfAssignConfig turns off the self-assign default, so
 // assignee assertions see exactly what the test asked for.
 const reviewNoSelfAssignConfig = reviewConfig + `
-pull_request:
-  self_assign: false
+code_host:
+  pr:
+    self_assign: false
 `
 
 // createdPR returns the CreatePR request for repo, failing the test when
@@ -571,9 +573,9 @@ func TestReview(t *testing.T) {
 		// Both templates render against the issue and the repo's branch
 		// pair rather than being passed through literally.
 		h, _ := startReviewWorkspace(t, reviewConfig+
-			"\npull_request:\n"+
-			"  title_template: \"{{.IssueType}} {{.IssueKey}}: {{.IssueTitle}}\"\n"+
-			"  body_template: \"{{.Branch}} onto {{.BaseBranch}}\"\n", "api")
+			"\ncode_host:\n  pr:\n"+
+			"    title_template: \"{{.IssueType}} {{.IssueKey}}: {{.IssueTitle}}\"\n"+
+			"    body_template: \"{{.Branch}} onto {{.BaseBranch}}\"\n", "api")
 
 		if err := runReview(h, "--approve"); err != nil {
 			t.Fatalf("review: %v", err)
@@ -592,9 +594,9 @@ func TestReview(t *testing.T) {
 		// --title / --body pin literals workspace-wide, beating a
 		// configured template.
 		h, _ := startReviewWorkspace(t, reviewConfig+
-			"\npull_request:\n"+
-			"  title_template: \"[{{.IssueKey}}] templated\"\n"+
-			"  body_template: \"templated body\"\n", "api")
+			"\ncode_host:\n  pr:\n"+
+			"    title_template: \"[{{.IssueKey}}] templated\"\n"+
+			"    body_template: \"templated body\"\n", "api")
 
 		if err := runReview(h, "--title", "Pinned title",
 			"--body", "Pinned body", "--approve"); err != nil {
@@ -804,7 +806,7 @@ func TestReview(t *testing.T) {
 	})
 
 	t.Run("notification/skipped_when_channel_unconfigured", func(t *testing.T) {
-		// No notification.channel_review means no announcement action at
+		// No notification.channels.review means no announcement action at
 		// all — the thread is never even looked up.
 		h, _ := startReviewWorkspace(t, reviewConfig, "api")
 
@@ -820,7 +822,7 @@ func TestReview(t *testing.T) {
 			t.Errorf("notifier calls = %v, want no announcement activity", calls)
 		}
 		// A partial config is called out rather than silently dropped.
-		wantReported(t, h, ui.CaptureSkip, "notification.channel_review")
+		wantReported(t, h, ui.CaptureSkip, "notification.channels.review")
 	})
 
 	t.Run("notification/skipped_when_notifier_unconfigured", func(t *testing.T) {

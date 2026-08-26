@@ -14,10 +14,13 @@ const providerName = "ephemeral"
 // mode later doesn't change the shape of an existing config.
 const authModeGitHubCLI = "gh-cli"
 
-// Config keys this provider contributes to the "preview" group.
+// Config keys this provider contributes to the "preview" group. They
+// sit directly in the block, the way jira's base_url sits directly in
+// issue_tracker — a provider's own keys are the block's contents, not a
+// sub-namespace within it.
 const (
-	keyBaseURL = "api.base_url"
-	keyAuth    = "api.auth"
+	keyBaseURL = "base_url"
+	keyAuth    = "auth"
 )
 
 // Descriptor registers the HTTP adapter with the services registry.
