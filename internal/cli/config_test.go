@@ -535,3 +535,51 @@ notification:
 		t.Errorf("viper's raw slice formatting leaked into the tree; got:\n%s", out)
 	}
 }
+
+// TestConfigCheckFilterReachesSubGroups pins that the group filter is a
+// prefix, not an equality test. The schema nests, so `check preview`
+// under equality validated the two keys sitting directly in the block
+// and reported a clean pass while up/down and their inputs went
+// unchecked — and `check vcs`, a block with no keys of its own,
+// answered "0 checks" for a fully configured branch template.
+func TestConfigCheckFilterReachesSubGroups(t *testing.T) {
+	run := func(t *testing.T, group string) string {
+		t.Helper()
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+preview:
+  url_template: "https://{{.Name}}.example.test"
+  up:
+    workflow: acme/infra/.github/workflows/up.yml
+    inputs:
+      name: env-name
+`)
+		if err := h.Run("config", "check", group); err != nil {
+			t.Fatalf("check %s: %v", group, err)
+		}
+		return ansi.Strip(h.Stdout())
+	}
+
+	t.Run("a block reaches its sub-groups", func(t *testing.T) {
+		out := run(t, "preview")
+		for _, want := range []string{"preview.up", "preview.up.inputs"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("check preview missed %q; got:\n%s", want, out)
+			}
+		}
+		// Still scoped: an unrelated block must not appear.
+		if strings.Contains(out, "issue_tracker") {
+			t.Errorf("filtered tree leaked an unrelated group; got:\n%s", out)
+		}
+	})
+
+	t.Run("a keyless block reaches the keys beneath it", func(t *testing.T) {
+		out := run(t, "vcs")
+		if !strings.Contains(out, "vcs.branch") {
+			t.Errorf("check vcs validated nothing; got:\n%s", out)
+		}
+	})
+}

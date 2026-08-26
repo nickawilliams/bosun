@@ -739,7 +739,15 @@ func runConfigCheck(args []string) error {
 	groups := schemaGroups()
 	names := make([]string, 0, len(groups))
 	for name, group := range groups {
-		if groupFilter != "" && name != groupFilter {
+		// Prefix, not equality: the schema nests, so `check preview`
+		// has to reach preview.up and preview.up.inputs or it validates
+		// two keys out of six and reports a clean pass. Equality would
+		// also make `check vcs` — a block with no keys of its own —
+		// answer "0 checks" for a fully configured branch template.
+		// This is the same rule keyInFilter applies to the unknown-key
+		// walk, so both halves of one command agree on what a filter
+		// means.
+		if !keyInFilter(name, groupFilter) {
 			continue
 		}
 		// A group that declares no keys of its own is pure structure —
