@@ -407,3 +407,108 @@ func TestCapabilityBlocksOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestMapShapedGroups pins which groups accept user-chosen key names.
+// It is the declaration the unknown-key check reads, so a group that
+// lost its MapKey would start reporting the user's own status names and
+// notification types as typos.
+func TestMapShapedGroups(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	want := []string{
+		issue.ConfigGroup + ".statuses",
+		vcs.ConfigGroup + ".branch.categories",
+		notify.ConfigGroup + ".templates",
+		preview.ConfigGroup + ".up.inputs",
+		preview.ConfigGroup + ".down.inputs",
+		cicd.ConfigGroup + ".workflows.release.inputs",
+	}
+
+	groups := schemaGroups()
+	for _, name := range want {
+		g, ok := groups[name]
+		if !ok {
+			t.Errorf("%q missing from the schema", name)
+			continue
+		}
+		if g.MapKey == "" {
+			t.Errorf("%q is not declared map-shaped", name)
+		}
+	}
+
+	// services.<repo> is deliberately NOT declared: it leaves for the
+	// per-repo descriptor, and the unknown-key walk exempts it instead.
+	if _, ok := groups["services"]; ok {
+		t.Error("services is declared in the schema — it should be exempted, not declared")
+	}
+	if !unknownKeyExempt["services"] {
+		t.Error("services lost its unknown-key exemption")
+	}
+}
+
+// TestUnknownConfigKeys covers the walk `bosun config check` runs
+// against the merged config. It is the only thing that surfaces a key
+// this reshape renamed: the new key merely looks unset, which for an
+// optional key is silent.
+func TestUnknownConfigKeys(t *testing.T) {
+	known := []struct {
+		key, why string
+	}{
+		{"issue_tracker.project", "a declared key"},
+		{"issue_tracker.statuses.ready", "a declared key in a sub-group"},
+		{"issue_tracker.statuses.triage", "a user-chosen key in a map-shaped group"},
+		{"notification.templates.review.header", "two levels under a map-shaped group"},
+		{"preview.up.inputs.name", "a declared key three levels down"},
+		{"preview.base_url", "a provider key from an unselected provider"},
+		{"cicd.workflows.release.target.my-repo", "beneath a declared map-valued key"},
+		{"services.my-repo", "the exempted block"},
+		{"workspace.repositories", "a moved key at its new home"},
+	}
+	for _, tc := range known {
+		t.Run("known/"+tc.key, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			viper.Set(tc.key, "x")
+			if got := unknownConfigKeys(""); len(got) != 0 {
+				t.Errorf("%s (%s) reported as unknown: %v", tc.key, tc.why, got)
+			}
+		})
+	}
+
+	unknown := []struct {
+		key, why string
+	}{
+		{"pull_request.title_template", "moved to code_host.pr"},
+		{"display.color", "moved to ui"},
+		{"notification.channel_review", "moved to notification.channels"},
+		{"branch.template", "moved to vcs.branch"},
+		{"repositories", "moved to workspace.repositories"},
+		{"cicd.workflows.preview.up.target", "moved to preview.up.workflow"},
+		{"preview.api.base_url", "flattened to preview.base_url"},
+		{"issue", "env-only, never a config key"},
+		{"project", "env-only, never a config key"},
+	}
+	for _, tc := range unknown {
+		t.Run("unknown/"+tc.key, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			viper.Set(tc.key, "x")
+			got := unknownConfigKeys("")
+			if !slices.Contains(got, tc.key) {
+				t.Errorf("%s (%s) not reported; got %v", tc.key, tc.why, got)
+			}
+		})
+	}
+
+	t.Run("filter narrows to one block", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		viper.Set("display.color", "x")
+		viper.Set("branch.template", "y")
+
+		if got := unknownConfigKeys("branch"); !slices.Equal(got, []string{"branch.template"}) {
+			t.Errorf("filtered = %v, want only branch.template", got)
+		}
+	})
+}

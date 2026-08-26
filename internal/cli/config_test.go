@@ -450,6 +450,56 @@ issue_tracker:
 	})
 }
 
+// TestConfigCheckUnknownKeys covers the half of `config check` that
+// walks the config against the schema rather than the schema against
+// the config. It is the only thing that surfaces a key the reshape
+// renamed: the new key merely looks unset, which for an optional key is
+// silent, so a config still carrying `display.color` would otherwise
+// report clean while the setting did nothing.
+func TestConfigCheckUnknownKeys(t *testing.T) {
+	t.Run("a renamed key is reported", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+display:
+  color: ansi
+`)
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, "display.color") || !strings.Contains(out, "not in schema") {
+			t.Errorf("expected a 'display.color · not in schema' row; got:\n%s", out)
+		}
+	})
+
+	t.Run("the new home is not reported", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+  statuses:
+    triage: "Triage"
+ui:
+  color: ansi
+services:
+  api: api-svc
+`)
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		// ui.color is declared, statuses is map-shaped so a state bosun
+		// doesn't model is the user's business, and services is exempt
+		// until it moves to the per-repo descriptor.
+		if out := h.Stdout(); strings.Contains(out, "not in schema") {
+			t.Errorf("a valid config reported unknown keys:\n%s", out)
+		}
+	})
+}
+
 // TestConfigShowNestedGroups covers the tree `config show` renders for a
 // config whose real shape is nested. Sub-groups have to survive as
 // sub-trees, and a list-valued key inside one has to render like a list

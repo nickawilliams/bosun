@@ -613,7 +613,7 @@ func renderSettings(settings map[string]any, format string) {
 func newConfigCheckCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check [group]",
-		Short: "Validate configuration completeness",
+		Short: "Validate configuration against the schema",
 		Args:  cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			headerAnnotationTitle: "check",
@@ -795,6 +795,26 @@ func runConfigCheck(args []string) error {
 		groupNode := ui.Group(name, children...)
 		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(worst)
 		tree.Add(groupNode)
+	}
+
+	// Keys the config sets that the schema doesn't recognize. Rendered
+	// as one group rather than folded into the per-group rows because
+	// an unknown key belongs to no group by definition — that is what
+	// makes it unknown. A warning, not a failure: the value is inert,
+	// so the command still works; it just isn't doing what the user
+	// thinks. This is how a renamed key surfaces.
+	if unknown := unknownConfigKeys(groupFilter); len(unknown) > 0 {
+		children := make([]*ui.TreeNode, 0, len(unknown))
+		for _, key := range unknown {
+			g, c := severityGlyph(configWarn)
+			child := ui.Leaf(g, c, key, "not in schema")
+			child.ValueColor = c
+			children = append(children, child)
+		}
+		groupNode := ui.Group("unknown keys", children...)
+		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(configWarn)
+		tree.Add(groupNode)
+		warned++
 	}
 
 	// ContinuesBelow so the tree's last branch is ├── and the spine
