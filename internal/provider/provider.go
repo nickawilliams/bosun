@@ -84,22 +84,6 @@ func (s Scope) Allows(layer Scope) bool {
 	return s.Effective()&layer != 0
 }
 
-// String names the layer, for the one place a scope reaches the user:
-// `bosun config check` reporting a key set in a layer that may not
-// set it. Only the single-layer constants have a name; anything else
-// renders as the empty string, which no caller asks for.
-func (s Scope) String() string {
-	switch s {
-	case ScopeGlobal:
-		return "global"
-	case ScopeProject:
-		return "project"
-	case ScopeRepo:
-		return "repo"
-	}
-	return ""
-}
-
 // ConfigKey describes a single configuration value.
 type ConfigKey struct {
 	Key      string   // Config key (relative to group, e.g. "base_url").

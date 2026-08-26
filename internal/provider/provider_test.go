@@ -63,25 +63,3 @@ func TestScopeAllows(t *testing.T) {
 		})
 	}
 }
-
-// TestScopeString covers the one place a Scope reaches the user. A
-// combination has no name because no caller has one to show: the report
-// names the layer a key was FOUND in, which is always a single layer.
-func TestScopeString(t *testing.T) {
-	tests := []struct {
-		scope Scope
-		want  string
-	}{
-		{ScopeGlobal, "global"},
-		{ScopeProject, "project"},
-		{ScopeRepo, "repo"},
-		{ScopeCentral, ""},
-		{ScopeAny, ""},
-		{0, ""},
-	}
-	for _, tt := range tests {
-		if got := tt.scope.String(); got != tt.want {
-			t.Errorf("Scope(%d).String() = %q, want %q", tt.scope, got, tt.want)
-		}
-	}
-}
