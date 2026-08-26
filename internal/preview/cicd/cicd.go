@@ -255,9 +255,11 @@ func (p *adapter) buildDeployInputs(subStage string, claim preview.Claim) map[st
 	if k := p.opts.InputName(subStage, "issue"); k != "" {
 		inputs[k] = claim.IssueKey
 	}
-	if k := p.opts.InputName(subStage, "services"); k != "" && len(claim.Services) > 0 {
-		inputs[k] = strings.Join(claim.Services, ",")
-	}
+	// No services input. A "deploy only these" filter leaves the
+	// environment half-built, so the concept is gone from both halves:
+	// there is no config key naming the input, and nothing to put in it.
+	// Per-service information reaches the workflow through the overrides
+	// below, which pin tags without narrowing the deploy.
 	if len(claim.Overrides) > 0 {
 		if b, err := json.Marshal(claim.Overrides); err == nil {
 			inputs["image-overrides"] = string(b)

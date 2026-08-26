@@ -292,7 +292,6 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 			_, err := provider.Create(ctx, preview.Claim{
 				IssueKey:      issueKey,
 				Name:          resolution.deployName,
-				Services:      services,
 				Overrides:     overrides,
 				DefaultBranch: defaultBranch,
 			})
