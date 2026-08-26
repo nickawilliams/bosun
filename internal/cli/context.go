@@ -130,8 +130,11 @@ func resolveIssueSilent(cmd *cobra.Command, workspace string) string {
 		return f.Value.String()
 	}
 
-	// (2) Env / config via viper.
-	if issue := viper.GetString("issue"); issue != "" {
+	// (2) Env. Read from the environment directly, not through viper:
+	// AutomaticEnv would also match an `issue:` key in a config file,
+	// and a file that pins one issue silently pins every command to it.
+	// This is a per-invocation override, so a file is never its home.
+	if issue := os.Getenv("BOSUN_ISSUE"); issue != "" {
 		return issue
 	}
 

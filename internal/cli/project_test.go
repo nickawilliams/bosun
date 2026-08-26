@@ -20,9 +20,9 @@ func newProjectTestCmd() *cobra.Command {
 }
 
 func TestResolveProject(t *testing.T) {
-	t.Run("from viper config", func(t *testing.T) {
+	t.Run("from the env var", func(t *testing.T) {
 		viper.Reset()
-		viper.Set("project", "Configured")
+		t.Setenv("BOSUN_PROJECT", "Configured")
 		t.Cleanup(viper.Reset)
 
 		cmd := newProjectTestCmd()
@@ -35,9 +35,9 @@ func TestResolveProject(t *testing.T) {
 		}
 	})
 
-	t.Run("trims viper whitespace", func(t *testing.T) {
+	t.Run("trims env whitespace", func(t *testing.T) {
 		viper.Reset()
-		viper.Set("project", "  Padded  ")
+		t.Setenv("BOSUN_PROJECT", "  Padded  ")
 		t.Cleanup(viper.Reset)
 
 		cmd := newProjectTestCmd()
@@ -47,6 +47,25 @@ func TestResolveProject(t *testing.T) {
 		}
 		if got != "Padded" {
 			t.Errorf("got %q, want Padded", got)
+		}
+	})
+
+	// The env var is the ONLY non-flag source. A `project:` key in a
+	// config file used to reach resolveProject through viper's
+	// AutomaticEnv, which silently pinned every command in that project
+	// to one name.
+	t.Run("a config-file key is ignored", func(t *testing.T) {
+		viper.Reset()
+		viper.Set("project", "FromFile")
+		t.Cleanup(viper.Reset)
+
+		cmd := newProjectTestCmd()
+		got, err := resolveProject(cmd)
+		if err != nil {
+			t.Fatalf("resolveProject() error: %v", err)
+		}
+		if got == "FromFile" {
+			t.Error("a config-file project: key pinned the project name")
 		}
 	})
 

@@ -265,7 +265,12 @@ func resolveWorkspaceName(cmd *cobra.Command) (string, error) {
 			return name, nil
 		}
 	}
-	if name := viper.GetString("workspace"); name != "" {
+	// Read the env var directly rather than through viper — see
+	// resolveIssueSilent. A bare `workspace:` key in a config file
+	// would otherwise pin every command to one workspace, and it would
+	// collide with the `workspace:` block that holds root and
+	// repositories.
+	if name := os.Getenv("BOSUN_WORKSPACE"); name != "" {
 		return name, nil
 	}
 	return detectWorkspaceFromCWD()
