@@ -13,7 +13,6 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // repoReadiness captures one repo's pre-deploy git state for the
@@ -346,10 +345,10 @@ func buildWorkspaceReadinessCard(readiness []repoReadiness) *ui.Card {
 // branch and fetches it for an accurate merge-base, then diffs against
 // it — callers should run this under a spinner.
 func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch string) (AffectedResult, bool, error) {
-	if !repoHasServices(r.Name) {
+	if !repoHasServices(r) {
 		return AffectedResult{}, false, nil
 	}
-	services := resolveRepoServiceNames(r.Name)
+	services := resolveRepoServiceNames(r)
 
 	defaultBranch, err := g.GetDefaultBranch(ctx, r.Path)
 	if err != nil {
@@ -378,7 +377,7 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 
 	// Per-service path filtering when configured (map form);
 	// otherwise any change includes all services.
-	pathMap := resolveServicePaths(r.Name)
+	pathMap := resolveServicePaths(r)
 	if pathMap == nil {
 		return AffectedResult{
 			RepoName:    r.Name,
@@ -400,9 +399,13 @@ func detectRepoAffected(ctx context.Context, g vcs.VCS, r Repository, branch str
 // resolveServicePaths returns the path-prefix map from the services config
 // for repos using the map form. Returns nil if the repo uses string or list
 // form (no per-service path filtering).
-func resolveServicePaths(repoName string) map[string][]string {
-	key := "services." + repoName
-	raw := viper.Get(key)
+//
+// Reads through the same repo-scoped resolution resolveRepoServiceNames
+// uses, so the names and the paths can never come from different
+// layers — a descriptor that redefines the services would otherwise
+// have been narrowed by the central map's path prefixes.
+func resolveServicePaths(r Repository) map[string][]string {
+	raw := loadRepoConfig(r).repoKeyed(servicesConfigGroup)
 
 	m, ok := raw.(map[string]any)
 	if !ok {
@@ -627,7 +630,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 
 	gathered := make([]Repository, 0, len(repos))
 	for _, repo := range repos {
-		if repoHasServices(repo.Name) {
+		if repoHasServices(repo) {
 			gathered = append(gathered, repo)
 		}
 	}

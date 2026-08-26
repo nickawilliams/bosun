@@ -32,6 +32,7 @@ import (
 
 	"github.com/nickawilliams/bosun/internal/cicd"
 	"github.com/nickawilliams/bosun/internal/code"
+	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -119,6 +120,20 @@ type releaseFixture struct {
 // releaseMonorepoTarget, or releaseNoTarget.
 func setupRelease(t *testing.T, target string) *releaseFixture {
 	t.Helper()
+	return setupReleaseWithDescriptor(t, target, "")
+}
+
+// setupReleaseWithDescriptor is setupRelease plus a `.bosun.yaml`
+// committed into the repository alongside the work, for the scenarios
+// where the deploy target comes from the repository rather than the
+// centre. Empty descriptor means no file, which is setupRelease.
+//
+// It rides on the SAME commit as the feature file deliberately: the
+// release gate keys off the merge commit that the v1.2.4 tag contains,
+// so a descriptor added in a later commit would move HEAD past the tag
+// and the run would gate out before ever resolving a target.
+func setupReleaseWithDescriptor(t *testing.T, target, descriptor string) *releaseFixture {
+	t.Helper()
 
 	h := testharness.New(t)
 	h.InstallCICD()
@@ -142,6 +157,12 @@ func setupRelease(t *testing.T, target string) *releaseFixture {
 		t.Fatalf("write feature file: %v", err)
 	}
 	testharness.Git(t, wt, "add", "feature.txt")
+	if descriptor != "" {
+		if err := os.WriteFile(filepath.Join(wt, config.RepoConfigFile), []byte(descriptor), 0o644); err != nil {
+			t.Fatalf("write descriptor: %v", err)
+		}
+		testharness.Git(t, wt, "add", config.RepoConfigFile)
+	}
 	testharness.Git(t, wt, "commit", "-m", "add feature")
 	testharness.Git(t, wt, "push", "origin", releaseBranch)
 	f.workSHA = testharness.Git(t, wt, "rev-parse", "HEAD")
@@ -229,6 +250,51 @@ func TestRelease(t *testing.T) {
 		}
 		if got := f.status(t); got != "Done" {
 			t.Errorf("issue status = %q, want %q", got, "Done")
+		}
+	})
+
+	t.Run("dispatch/target_from_repo_descriptor", func(t *testing.T) {
+		// The centre configures no targets at all; the repository names
+		// its own. Nothing about this repo appears in a central map, so
+		// it is also the case a map-first walk could never reach — the
+		// resolver has to iterate the workspace's repositories and ask
+		// each one.
+		f := setupReleaseWithDescriptor(t, releaseNoTarget,
+			"cicd:\n  workflows:\n    release:\n      target: \".github/workflows/deploy.yaml\"\n")
+
+		if err := f.run("--migrations-done", "--service", "api", "--approve"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+
+		trs := f.triggers()
+		if len(trs) != 1 {
+			t.Fatalf("dispatches = %d, want 1 (%+v)", len(trs), trs)
+		}
+		if trs[0].Workflow != "deploy.yaml" {
+			t.Errorf("workflow = %q, want the descriptor's %q", trs[0].Workflow, "deploy.yaml")
+		}
+		if trs[0].Owner != "acme" || trs[0].Repository != "api" {
+			t.Errorf("dispatch target = %s/%s, want acme/api", trs[0].Owner, trs[0].Repository)
+		}
+	})
+
+	t.Run("dispatch/descriptor_target_overrides_central", func(t *testing.T) {
+		// Both layers configure a target for the same repository. Most
+		// specific wins — the descriptor's workflow is dispatched and
+		// the central one is not.
+		f := setupReleaseWithDescriptor(t, releaseSingleTarget,
+			"cicd:\n  workflows:\n    release:\n      target: \".github/workflows/deploy-from-repo.yaml\"\n")
+
+		if err := f.run("--migrations-done", "--service", "api", "--approve"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+
+		trs := f.triggers()
+		if len(trs) != 1 {
+			t.Fatalf("dispatches = %d, want 1 (%+v)", len(trs), trs)
+		}
+		if trs[0].Workflow != "deploy-from-repo.yaml" {
+			t.Errorf("workflow = %q, want the descriptor to win", trs[0].Workflow)
 		}
 	})
 

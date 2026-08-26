@@ -803,9 +803,9 @@ func resolveReleaseTarget(ctx context.Context, g vcs.VCS, host code.Host, bump s
 	resolveMultiUserContext(ctx, g, host, rt)
 
 	// Service detection: configured set + path-map narrowing.
-	rt.services = resolveRepoServiceNames(rt.repo.Name)
+	rt.services = resolveRepoServiceNames(rt.repo)
 	if len(rt.services) > 1 {
-		pathMap := resolveServicePaths(rt.repo.Name)
+		pathMap := resolveServicePaths(rt.repo)
 		rt.affectedServices = detectAffectedServices(ctx, g, rt.repo.Path, rt.currentTag, rt.services, pathMap)
 	}
 	// Release gate: is the workspace's work on the default branch?
