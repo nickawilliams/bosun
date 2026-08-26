@@ -298,6 +298,28 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
+	t.Run("dispatch/descriptor_can_redirect_to_another_repo", func(t *testing.T) {
+		// A descriptor is committed to the repository, so anyone with
+		// commit access to any repo bosun reads can now name an
+		// absolute workflow path — and the dispatch carries the version
+		// input under the operator's own credentials.
+		//
+		// This pins that the redirect is real, which is what makes the
+		// plan label matter; deployLabel's own test covers the label
+		// that has to disclose it.
+		f := setupReleaseWithDescriptor(t, releaseNoTarget,
+			"cicd:\n  workflows:\n    release:\n      target: \"elsewhere/infra/.github/workflows/deploy.yaml\"\n")
+
+		if err := f.run("--migrations-done", "--service", "api", "--approve"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+
+		trs := f.triggers()
+		if len(trs) != 1 || trs[0].Owner != "elsewhere" || trs[0].Repository != "infra" {
+			t.Errorf("dispatches = %+v, want one at elsewhere/infra", trs)
+		}
+	})
+
 	t.Run("dispatch/services_filter_from_flag", func(t *testing.T) {
 		// A monorepo with two deployable services; --service names one.
 		// Only that service's workflow is dispatched — the sibling is a

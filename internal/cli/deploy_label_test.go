@@ -1,0 +1,97 @@
+package cli
+
+import (
+	"context"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+// gitRepoWithRemote creates a git repository whose origin is the given
+// GitHub-shaped URL, which is what code.ParseRemote reads.
+func gitRepoWithRemote(t *testing.T, origin string) Repository {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", origin},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return Repository{Name: "api", Path: dir}
+}
+
+// TestDeployLabel covers the plan row's name for a deploy target.
+//
+// The label is the ONLY part of a DeployTarget the plan renders, and
+// the plan is the approval gate for a production deploy. Since
+// cicd.workflows.release.target became repo-scoped, an absolute
+// workflow path can arrive from a file committed to the repository
+// rather than from the central config the operator wrote — so a row
+// reading `api` must not be able to mean "dispatch into someone else's
+// repository".
+func TestDeployLabel(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a workflow in the repo's own repo is not annotated", func(t *testing.T) {
+		repo := gitRepoWithRemote(t, "git@github.com:acme/api.git")
+		wt := WorkflowTarget{Owner: "acme", Repo: "api", Workflow: "deploy.yaml"}
+
+		if got := deployLabel(ctx, repo, wt, "api"); got != "api" {
+			t.Errorf("label = %q, want the bare local name for a local deploy", got)
+		}
+	})
+
+	t.Run("owner and name compare case-insensitively", func(t *testing.T) {
+		// GitHub treats them that way, so a remote spelled Acme/API and
+		// a target spelled acme/api are the same repository. Reporting
+		// that as cross-repo would cry wolf on every such project and
+		// teach the operator to ignore the annotation.
+		repo := gitRepoWithRemote(t, "git@github.com:Acme/API.git")
+		wt := WorkflowTarget{Owner: "acme", Repo: "api", Workflow: "deploy.yaml"}
+
+		if got := deployLabel(ctx, repo, wt, "api"); got != "api" {
+			t.Errorf("label = %q, want no annotation for a case-different spelling", got)
+		}
+	})
+
+	t.Run("a workflow in another repo is named", func(t *testing.T) {
+		repo := gitRepoWithRemote(t, "git@github.com:acme/api.git")
+		wt := WorkflowTarget{Owner: "elsewhere", Repo: "infra", Workflow: "deploy.yaml"}
+
+		got := deployLabel(ctx, repo, wt, "api")
+		if !strings.Contains(got, "elsewhere/infra") {
+			t.Errorf("label = %q, want it to disclose the dispatch destination", got)
+		}
+		if !strings.HasPrefix(got, "api") {
+			t.Errorf("label = %q, want the local name kept as the row's identity", got)
+		}
+	})
+
+	t.Run("the per-service label keeps its service", func(t *testing.T) {
+		repo := gitRepoWithRemote(t, "git@github.com:acme/api.git")
+		wt := WorkflowTarget{Owner: "elsewhere", Repo: "infra", Workflow: "deploy.yaml"}
+
+		got := deployLabel(ctx, repo, wt, "api · billing")
+		if !strings.HasPrefix(got, "api · billing") || !strings.Contains(got, "elsewhere/infra") {
+			t.Errorf("label = %q, want both the service and the destination", got)
+		}
+	})
+
+	// Failing to prove the target is local is not the same as knowing
+	// that it is. At an approval gate the honest answer is to show where
+	// the dispatch will land, so an unparseable remote annotates rather
+	// than staying silent.
+	t.Run("an unreadable remote annotates rather than assuming local", func(t *testing.T) {
+		repo := Repository{Name: "api", Path: t.TempDir()} // not a git repo
+		wt := WorkflowTarget{Owner: "acme", Repo: "api", Workflow: "deploy.yaml"}
+
+		if got := deployLabel(ctx, repo, wt, "api"); !strings.Contains(got, "acme/api") {
+			t.Errorf("label = %q, want the destination shown when it can't be proven local", got)
+		}
+	})
+}

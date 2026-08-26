@@ -864,7 +864,8 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 		return []DeployTarget{{
 			Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
 			Service: repoName, Workflow: wt.Workflow,
-			Environment: "production", Label: repoName,
+			Environment: "production",
+			Label:       deployLabel(ctx, repo, wt, repoName),
 		}}, nil
 	case map[string]any:
 		svcs := make([]string, 0, len(val))
@@ -898,12 +899,40 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 			out = append(out, DeployTarget{
 				Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
 				Service: svc, Workflow: wt.Workflow,
-				Environment: env, Label: repoName + " · " + svc,
+				Environment: env,
+				Label:       deployLabel(ctx, repo, wt, repoName+" · "+svc),
 			})
 		}
 		return out, nil
 	}
 	return nil, nil
+}
+
+// deployLabel is the plan row's name for one deploy target: the local
+// name (repo, or "repo · service"), plus the dispatch destination when
+// that ISN'T the local repository.
+//
+// The plan is the approval gate for a production deploy, and the label
+// is the only part of a target it renders — so a row reading `api` has
+// to mean "a workflow in api". A workflow path may be absolute
+// (owner/repo/.github/…), and now that release.target is repo-scoped
+// that path can come from a file committed to the repository rather
+// than from the central config the operator wrote. A row naming only
+// the local repo would let a dispatch — carrying the version input,
+// under the operator's own credentials — go somewhere the approval
+// never showed.
+//
+// Annotating only the cross-repo case leaves the common row unchanged.
+// A remote bosun cannot parse annotates too: failing to prove the
+// target is local is not the same as knowing that it is, and the honest
+// answer at an approval gate is to show where the dispatch will land.
+func deployLabel(ctx context.Context, repo Repository, wt WorkflowTarget, local string) string {
+	if identity, err := code.ParseRemote(ctx, repo.Path); err == nil {
+		if strings.EqualFold(identity.Owner, wt.Owner) && strings.EqualFold(identity.Name, wt.Repo) {
+			return local
+		}
+	}
+	return local + " → " + wt.Owner + "/" + wt.Repo
 }
 
 // resolveWorkflowFilename resolves a workflow path (absolute
