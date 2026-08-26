@@ -42,6 +42,20 @@ type ConfigKey struct {
 	Secret   bool     // Mask input (for tokens/passwords).
 	Required bool     // Must have a value for the group to be valid.
 
+	// NoPrompt marks a key whose UNSET state is meaningful, so bosun
+	// must never offer to fill it in. An optional key with no Default
+	// is otherwise a prompt candidate everywhere config is resolved —
+	// including the just-in-time pass a provider adapter triggers by
+	// calling Config.Require on its whole group — and a key that is
+	// correctly unset for almost every user would then be asked about
+	// on almost every command.
+	//
+	// Accepting the offer is the worse half: the prompt prefills the
+	// Example, so pressing Enter writes the example value and pins
+	// exactly the behaviour the unset state was there to avoid. Set
+	// this on escape hatches; `bosun config set` remains the way in.
+	NoPrompt bool
+
 	// Source is a dynamic value source for the interactive picker. Set
 	// by the CLI (which owns the pickers), never by provider adapters.
 	Source func() ([]SourceOption, error)

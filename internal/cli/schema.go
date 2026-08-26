@@ -89,7 +89,14 @@ var configSchema = map[string]ConfigGroup{
 			// key shape the provider doesn't recognize. It sits here,
 			// not in `workspace`, because it overrides the *tracker's*
 			// grammar; workspace names are only where it gets applied.
-			{Key: "issue_pattern", Label: "issue pattern", Example: `([A-Z][A-Z0-9]+-\d+)`},
+			//
+			// NoPrompt because unset is the right answer for almost
+			// every user, and this group is the one an adapter Requires
+			// wholesale: prompting would put an unanswerable question in
+			// front of every interactive command, and answering it with
+			// the Example would pin one tracker's grammar over whichever
+			// tracker is actually configured.
+			{Key: "issue_pattern", Label: "issue pattern", Example: `([A-Z][A-Z0-9]+-\d+)`, NoPrompt: true},
 		},
 
 		Groups: []ConfigGroup{{

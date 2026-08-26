@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/issue"
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/viper"
 )
 
@@ -43,4 +47,82 @@ func TestEnsureConfigValue(t *testing.T) {
 			t.Error("ensureConfigValue() = true for a value set nowhere")
 		}
 	})
+}
+
+// TestResolveGroupSkipsNoPromptKeys is the regression guard for a
+// blocker the schema reshape opened. `issue_tracker.issue_pattern` is
+// optional with no Default, and a provider adapter Requires its whole
+// group (jira's New calls cfg.Require(issue.ConfigGroup)), so JIT
+// resolution reached it on every command that builds a tracker — start,
+// review, doctor, issue. Unset is the correct state for almost every
+// user, so the prompt would have been permanent, and accepting the
+// prefilled Example pins a Jira-shaped grammar over whichever tracker
+// is actually configured.
+//
+// The session has to be interactive for the bug to exist at all, so
+// this injects a reader — a non-*os.File input makes ui.Interactive
+// true. The reader holds a single ctrl+c, so a prompt that should not
+// happen surfaces as ErrCancelled rather than as a hang on a drained
+// reader, which would burn the package timeout instead of failing here.
+func TestResolveGroupSkipsNoPromptKeys(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	ui.SetStreams(strings.NewReader("\x03"), io.Discard, io.Discard)
+	t.Cleanup(ui.ResetStreams)
+
+	if !isInteractive() {
+		t.Fatal("streams did not make the session interactive; the test would pass vacuously")
+	}
+
+	const groupName = "testgroup_noprompt"
+	group := ConfigGroup{
+		Label: "no-prompt probe",
+		Keys: []ConfigKey{
+			// Same shape as issue_pattern: optional, no Default, an
+			// Example to prefill with — a prompt candidate but for the
+			// flag.
+			{Key: "escape_hatch", Label: "escape hatch", Example: "(EX-1)", NoPrompt: true},
+		},
+	}
+
+	if err := resolveGroup(groupName, group); err != nil {
+		t.Fatalf("resolveGroup prompted for a NoPrompt key: %v", err)
+	}
+	if got := viper.GetString(groupName + ".escape_hatch"); got != "" {
+		t.Errorf("%s.escape_hatch = %q, want it left unset", groupName, got)
+	}
+
+	// forcePrompt too: the init wizard's reconfigure pass asks about
+	// every key, set or not, and must still skip this one.
+	if err := resolveGroupReconfigure(groupName, group); err != nil {
+		t.Fatalf("reconfigure prompted for a NoPrompt key: %v", err)
+	}
+	if got := viper.GetString(groupName + ".escape_hatch"); got != "" {
+		t.Errorf("%s.escape_hatch = %q after reconfigure, want it left unset", groupName, got)
+	}
+}
+
+// TestNoPromptKeysAreDeclared pins that a NoPrompt key is still a
+// schema key. Skipping it in resolution must not skip it in validation:
+// `config check` has to accept it, `config show` has to render it, and
+// the unknown-key walk has to know it exists.
+func TestNoPromptKeysAreDeclared(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	ck, groupName, ok := findConfigKey(issue.ConfigGroup + ".issue_pattern")
+	if !ok {
+		t.Fatal("issue_tracker.issue_pattern is not in the schema")
+	}
+	if !ck.NoPrompt {
+		t.Error("issue_tracker.issue_pattern lost NoPrompt — every tracker build would prompt for it")
+	}
+	if groupName != issue.ConfigGroup {
+		t.Errorf("groupName = %q, want %q", groupName, issue.ConfigGroup)
+	}
+
+	viper.Set(issue.ConfigGroup+".issue_pattern", `(EX-\d+)`)
+	if got := unknownConfigKeys(""); len(got) != 0 {
+		t.Errorf("a set NoPrompt key was reported as unknown: %v", got)
+	}
 }

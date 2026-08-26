@@ -121,6 +121,12 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 		if ck.Key == "provider" {
 			continue
 		}
+		if ck.NoPrompt {
+			// See ConfigKey.NoPrompt. The form prefills every field, so
+			// a user tabbing through would persist the Example for a key
+			// whose whole contract is that it stays unset.
+			continue
+		}
 		if ck.Secret {
 			// Secrets live in env vars, not the config file (no
 			// keychain integration yet). Prompting here would be a
@@ -200,6 +206,14 @@ func resolveGroupAsForm(groupName, formLabel string, group ConfigGroup) (map[str
 func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt, silent bool) error {
 	for _, ck := range group.Keys {
 		fk := fullKey(groupName, ck)
+
+		// Never offered, in any mode — see ConfigKey.NoPrompt. This
+		// runs before the already-set check so the key is skipped
+		// whether it holds a value or not: forcePrompt (the init
+		// wizard's reconfigure pass) would otherwise prompt for it too.
+		if ck.NoPrompt {
+			continue
+		}
 
 		// Already set — config file, or an env var materialized into
 		// viper by ensureConfigValue?

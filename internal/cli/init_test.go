@@ -518,11 +518,13 @@ func TestInit(t *testing.T) {
 		h.Type("dev@acme.test\r")         // email — no example, so nothing to clear
 		h.Type("\x15ACME\r")              // project key — cleared, replaced
 		h.Type("\r")                      // board ID — accept the example as-is
-		h.Type("\x15\r")                  // issue pattern — cleared, left unset
-		h.Type("\r")                      // code host gate — skip
-		h.Type("\r")                      // notification gate — skip
-		h.Type("\r")                      // ci/cd gate — skip
-		h.Type("\r")                      // preview gate — skip
+		// No issue-pattern field: it is NoPrompt. If that regresses,
+		// this "\r" feeds it instead of the code-host gate and the run
+		// walks off the end of the queued input into the tripwire.
+		h.Type("\r") // code host gate — skip
+		h.Type("\r") // notification gate — skip
+		h.Type("\r") // ci/cd gate — skip
+		h.Type("\r") // preview gate — skip
 		tripwire(h)
 
 		if err := h.Run("init"); err != nil {
@@ -556,12 +558,12 @@ func TestInit(t *testing.T) {
 		if _, ok := group["token"]; ok {
 			t.Errorf("issue_tracker.token written to config: %v", group)
 		}
-		// A cleared field writes nothing, which for issue_pattern is
-		// the answer that matters: unset means "use the tracker's own
-		// key grammar", so a stray example regex here would pin one
-		// tracker's shape onto whatever tracker is configured later.
+		// issue_pattern is never offered and never written. Unset means
+		// "use the tracker's own key grammar", so an example regex
+		// persisted by a user tabbing through the form would pin one
+		// tracker's shape onto whatever tracker is configured.
 		if _, ok := group["issue_pattern"]; ok {
-			t.Errorf("issue_tracker.issue_pattern written despite an empty answer: %v", group)
+			t.Errorf("issue_tracker.issue_pattern written by the init form: %v", group)
 		}
 	})
 
