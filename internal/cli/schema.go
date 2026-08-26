@@ -21,7 +21,26 @@ type (
 	SourceOption = provider.SourceOption
 	ConfigKey    = provider.ConfigKey
 	ConfigGroup  = provider.ConfigGroup
+	Scope        = provider.Scope
 )
+
+// The config layers, aliased alongside the vocabulary above so a schema
+// entry reads `Scope: ScopeAny` rather than naming the provider package
+// on every line of a file that is nothing but schema.
+const (
+	ScopeGlobal  = provider.ScopeGlobal
+	ScopeProject = provider.ScopeProject
+	ScopeRepo    = provider.ScopeRepo
+	ScopeCentral = provider.ScopeCentral
+	ScopeAny     = provider.ScopeAny
+)
+
+// servicesConfigGroup is the config key prefix for the repo→service
+// topology. A literal for the same reason uiConfigGroup is one: there
+// is no `services` capability for the constant to live beside.
+// internal/services is the provider registry, which is unrelated —
+// naming this after it would be a coincidence, not a reference.
+const servicesConfigGroup = "services"
 
 // uiConfigGroup is the config key prefix for presentation settings.
 // It is a literal rather than a ui.ConfigGroup constant because `ui` is
@@ -188,19 +207,57 @@ var configSchema = map[string]ConfigGroup{
 	"pull_request": {
 		Label: "pull request",
 
-		// Repo-scoped policy, held here until #82 gives it a per-repo
-		// home. Everything host-wide has moved to code_host.pr.
+		// Repo-scoped policy: every key here answers a question about
+		// ONE repository, so every key is ScopeAny — settable centrally
+		// for repositories with no descriptor of their own, and
+		// overridable by any repository that has one. Everything
+		// host-wide moved to code_host.pr.
 		//
-		// TODO(arch #82): move to the per-repo .bosun.yaml descriptor.
+		// This is the block per-repo descriptors were built for. Held
+		// centrally, `reviewers` was resolved once for a whole
+		// multi-repo fan-out and applied to every PR in it, so a team
+		// that owns one repository was requested on all of them, with
+		// no mechanism to vary it.
 		Keys: []ConfigKey{
 			// No Default: unset means "each repository's own default
 			// branch", which is the right answer far more often than a
-			// workspace-wide literal. Setting it makes it a global
-			// override applied to every repo.
-			{Key: "base", Label: "base branch", Example: "main"},
-			{Key: "reviewers", Label: "reviewers (host usernames)"},
-			{Key: "team_reviewers", Label: "team reviewers (host team slugs)"},
-			{Key: "assignees", Label: "assignees (host usernames)"},
+			// workspace-wide literal. Setting it centrally makes it an
+			// override applied to every repo that doesn't override back.
+			{Key: "base", Label: "base branch", Example: "main", Scope: ScopeAny},
+			{Key: "reviewers", Label: "reviewers (host usernames)", Scope: ScopeAny},
+			{Key: "team_reviewers", Label: "team reviewers (host team slugs)", Scope: ScopeAny},
+			{Key: "assignees", Label: "assignees (host usernames)", Scope: ScopeAny},
+		},
+	},
+	servicesConfigGroup: {
+		Label: "services",
+
+		// The repo→service topology: which deployable services each
+		// repository contributes, and optionally which paths belong to
+		// each. It is the one block whose two layers hold different
+		// SHAPES, so it declares both halves.
+		//
+		// Centrally it is a map keyed by repository name, and MapScope
+		// is what says only the central layers may write that map — a
+		// repository naming another repository's services is authority
+		// a committed file must not have.
+		MapKey:   "repository",
+		MapScope: ScopeCentral,
+
+		// The descriptor half: a bare `services` whose value is exactly
+		// what would have sat under the repository's key centrally (a
+		// name, a list of names, or a map of name → path prefixes).
+		// fullKey collapses a key whose name equals its group's to the
+		// group name itself, so this declares the top-level `services`
+		// key and nothing deeper.
+		Keys: []ConfigKey{
+			{
+				Key:      servicesConfigGroup,
+				Label:    "services",
+				Example:  "a service name, a list of them, or a map of name → path prefixes",
+				Scope:    ScopeRepo,
+				NoPrompt: true,
+			},
 		},
 	},
 	notify.ConfigGroup: {
@@ -256,8 +313,15 @@ var configSchema = map[string]ConfigGroup{
 				Name:  "release",
 				Label: "release workflow",
 
+				// ScopeAny, and the two layers hold different shapes for
+				// the same reason `services` does: centrally this is a
+				// map keyed by repository name, while a descriptor sets
+				// the value that would have sat under its own key — a
+				// workflow path, or a per-service map. The bare central
+				// scalar (one workflow for the whole workspace) is a
+				// third shape, and stays central-only.
 				Keys: []ConfigKey{
-					{Key: "target", Label: "release production workflow(s)", Example: "per repo: a workflow path string, or a per-service {workflow, environment} map"},
+					{Key: "target", Label: "release production workflow(s)", Example: "a workflow path string, or a per-service {workflow, environment} map", Scope: ScopeAny},
 				},
 
 				Groups: []ConfigGroup{{

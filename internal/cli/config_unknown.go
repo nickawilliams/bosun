@@ -12,16 +12,13 @@ import (
 // wholesale, because they are real config the schema deliberately does
 // not describe.
 //
-// `services.<repo>` is the only member: it is repo-scoped and leaves
-// for the per-repo descriptor in #82. Exempting it is cheaper than
-// declaring it map-shaped and then deleting the declaration one issue
-// later, and either way the walk must not report a key that
-// resolveRepoServiceNames reads and acts on.
-//
-// TODO(arch #82): drop the exemption when services moves to .bosun.yaml.
-var unknownKeyExempt = map[string]bool{
-	"services": true,
-}
+// Empty since `services` was declared for real: it is map-shaped
+// centrally and a plain key in a repo descriptor, and the schema now
+// says so, which is strictly better than an exemption because it also
+// says which layer may write which half. The map is kept rather than
+// deleted so a future block that genuinely cannot be described has a
+// place to go.
+var unknownKeyExempt = map[string]bool{}
 
 // unknownConfigKeys returns the fully-qualified keys present in the
 // merged config that the effective schema does not account for, sorted.
@@ -129,4 +126,81 @@ func hasPrefixIn(key string, prefixes map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// schemaScopeSurface returns the two scope tables the layer walk reads:
+// every declared key's Scope, and every map-shaped group's MapScope.
+//
+// Provider keys are folded in as the union across every registered
+// provider, matching schemaKeySurface — a scope answer that depended on
+// which provider happened to be configured would report a working
+// config as misplaced in half of a provider round trip.
+func schemaScopeSurface() (keyScope, mapScope map[string]Scope) {
+	keyScope = make(map[string]Scope)
+	mapScope = make(map[string]Scope)
+
+	for groupName, group := range schemaGroups() {
+		if group.MapKey != "" {
+			mapScope[groupName] = group.MapScope
+		}
+		for _, ck := range group.Keys {
+			keyScope[fullKey(groupName, ck)] = ck.Scope
+		}
+	}
+
+	for groupName := range configSchema {
+		for _, name := range services.ProviderNames(groupName) {
+			for _, ck := range services.ProviderKeys(groupName, name) {
+				keyScope[fullKey(groupName, ck)] = ck.Scope
+			}
+		}
+	}
+
+	return keyScope, mapScope
+}
+
+// scopeForKey returns the Scope governing a fully-qualified key, and
+// whether the schema accounts for the key at all. An unaccounted-for key
+// is not a scope problem — it is an unknown key, which the caller
+// reports separately and with a different message.
+//
+// Resolution mirrors unknownConfigKeys' notion of "accounted for": an
+// exact declaration governs its own path, and otherwise the LONGEST
+// declared ancestor governs — a map-shaped group winning a tie against a
+// key of the same path.
+//
+// That tie is not hypothetical, and `services` is why. It is declared
+// both ways at once: as a map-shaped group (the central
+// `services.<repo>` form, central-only) and as a plain key of the same
+// name (the descriptor form, repo-only). Anything BENEATH the path is
+// the central map and must answer central; the path ITSELF is the
+// descriptor key and must answer repo. Exact-match-first plus
+// map-wins-ties is exactly that split, and getting it backwards would
+// report every project's `services.<repo>` block as misplaced.
+func scopeForKey(key string, keyScope, mapScope map[string]Scope) (Scope, bool) {
+	if s, ok := keyScope[key]; ok {
+		return s.Effective(), true
+	}
+
+	best := -1
+	var found Scope
+	var foundIsMap bool
+
+	consider := func(prefix string, s Scope, isMap bool) {
+		if !strings.HasPrefix(key, prefix+".") {
+			return
+		}
+		// Longer prefix wins; on equal length the map-shaped group does.
+		if len(prefix) > best || (len(prefix) == best && isMap && !foundIsMap) {
+			best, found, foundIsMap = len(prefix), s, isMap
+		}
+	}
+	for p, s := range mapScope {
+		consider(p, s, true)
+	}
+	for p, s := range keyScope {
+		consider(p, s, false)
+	}
+
+	return found.Effective(), best >= 0
 }

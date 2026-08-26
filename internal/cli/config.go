@@ -734,6 +734,11 @@ func runConfigCheck(args []string) error {
 		groupFilter = args[0]
 	}
 
+	// The per-file view, for the scope walk below. The schema checks
+	// read viper's merged view instead — "is this required key set?" is
+	// a question about the effective config, not about any one file.
+	cs := loadConfigSources()
+
 	// Stable iteration so the output is reproducible — the schema is a
 	// map, so we collect and sort the keys to lock in order.
 	groups := schemaGroups()
@@ -825,6 +830,31 @@ func runConfigCheck(args []string) error {
 		warned++
 	}
 
+	// Keys set in a layer the schema doesn't let that layer set —
+	// `workspace.repositories` in a repo's own descriptor, a token
+	// committed where the whole team can read it, or the central
+	// `services.<repo>` form written into a descriptor that already
+	// names its repo. Its own group because the key is recognized and
+	// the value is real; what's wrong is the file it's in.
+	//
+	// A warning rather than a failure for the same reason unknown keys
+	// are: the value is inert, so the command still works. It just
+	// isn't doing what the user thinks.
+	layers := configLayers(cs)
+	if misplaced := misplacedConfigKeys(layers, groupFilter); len(misplaced) > 0 {
+		children := make([]*ui.TreeNode, 0, len(misplaced))
+		for _, iss := range misplaced {
+			g, c := severityGlyph(configWarn)
+			child := ui.Leaf(g, c, iss.Key, iss.Detail)
+			child.ValueColor = c
+			children = append(children, child)
+		}
+		groupNode := ui.Group("misplaced keys", children...)
+		groupNode.Glyph, groupNode.GlyphColor = severityGlyph(configWarn)
+		tree.Add(groupNode)
+		warned++
+	}
+
 	// ContinuesBelow so the tree's last branch is ├── and the spine
 	// flows into the summary card that follows — keeps the timeline
 	// visually connected through the rollup.
@@ -833,9 +863,18 @@ func runConfigCheck(args []string) error {
 	// Summary card — segments ordered ascending by severity so the
 	// last non-zero one drives the rollup glyph color, matching the
 	// doctor command's pattern.
+	//
+	// The descriptor count rides in the title because "0 warnings" over
+	// repo descriptors means two very different things depending on
+	// whether any were read: a clean bill of health, or a walk that
+	// never reached a file. Only the count can tell them apart.
 	total := passed + warned + failed
+	title := fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks"))
+	if n := descriptorCount(layers); n > 0 {
+		title += fmt.Sprintf(" · %d repo %s", n, pluralize(n, "descriptor", "descriptors"))
+	}
 	ui.Default().Summary(
-		fmt.Sprintf("%d %s", total, pluralize(total, "check", "checks")),
+		title,
 		[]ui.SummarySegment{
 			{Count: passed, Label: "passed", Color: ui.Palette.Success},
 			{Count: warned, Label: pluralize(warned, "warning", "warnings"), Color: ui.Palette.Warning},
