@@ -535,6 +535,11 @@ issue_tracker:
 		if err := os.WriteFile(path, []byte(descriptor), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// A second repo with NO descriptor, which is the ordinary case
+		// and has to be skipped rather than counted or complained
+		// about. It also keeps the count assertion below honest: "1
+		// descriptor" has to mean one, not "one repo exists".
+		h.Workspace.AddRepo("web")
 		if err := h.Run("config", "check"); err != nil {
 			t.Fatalf("check: %v", err)
 		}
