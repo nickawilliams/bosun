@@ -41,9 +41,15 @@ bosun status --issue PROJ-123
 
 ## Configuration
 
-Two-tier config: global at `~/.config/bosun/config.yaml`, project-level at
-`.bosun/config.yaml` (merged on top). Run `bosun init` in your project root
-to set up interactively, or `bosun doctor` to verify connectivity.
+Three-tier config, each merged on top of the last: global at
+`~/.config/bosun/config.yaml`, project-level at `.bosun/config.yaml`, and
+per-repository at `<repository>/.bosun.yaml`. Run `bosun init` in your project
+root to set up interactively, or `bosun doctor` to verify connectivity.
+
+The repository layer is optional and holds only the keys that describe one
+repository — its services, its PR base, its reviewers, its release workflow.
+Everything else, credentials included, stays central; `bosun config check`
+reports a key written into a layer that may not hold it.
 
 ### Supported Providers
 
