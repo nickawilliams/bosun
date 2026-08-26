@@ -922,15 +922,25 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 // under the operator's own credentials — go somewhere the approval
 // never showed.
 //
-// Annotating only the cross-repo case leaves the common row unchanged.
-// A remote bosun cannot parse annotates too: failing to prove the
-// target is local is not the same as knowing that it is, and the honest
-// answer at an approval gate is to show where the dispatch will land.
+// Annotating only a PROVEN mismatch leaves the common row unchanged. An
+// unreadable remote annotates nothing, which is deliberate and is the
+// weaker of the two available failures: annotating on "couldn't tell"
+// would decorate every row in a repo whose remote won't parse — most of
+// them pointing at that same repo — and a warning that fires on
+// ordinary configuration is one operators learn to read past.
+//
+// The case that motivates the annotation is unaffected. A descriptor
+// redirecting a dispatch lives in a normal repository with a working
+// remote, so the mismatch is provable; a repo whose origin can't be
+// read has no pushed branch, no merged PR and no release tag, and never
+// reaches the deploy plan at all.
 func deployLabel(ctx context.Context, repo Repository, wt WorkflowTarget, local string) string {
-	if identity, err := code.ParseRemote(ctx, repo.Path); err == nil {
-		if strings.EqualFold(identity.Owner, wt.Owner) && strings.EqualFold(identity.Name, wt.Repo) {
-			return local
-		}
+	identity, err := code.ParseRemote(ctx, repo.Path)
+	if err != nil {
+		return local
+	}
+	if strings.EqualFold(identity.Owner, wt.Owner) && strings.EqualFold(identity.Name, wt.Repo) {
+		return local
 	}
 	return local + " → " + wt.Owner + "/" + wt.Repo
 }

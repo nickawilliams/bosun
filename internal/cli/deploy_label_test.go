@@ -82,16 +82,22 @@ func TestDeployLabel(t *testing.T) {
 		}
 	})
 
-	// Failing to prove the target is local is not the same as knowing
-	// that it is. At an approval gate the honest answer is to show where
-	// the dispatch will land, so an unparseable remote annotates rather
-	// than staying silent.
-	t.Run("an unreadable remote annotates rather than assuming local", func(t *testing.T) {
+	// Only a PROVEN mismatch annotates. Firing on "couldn't tell" would
+	// decorate every row in a repo whose remote won't parse — most of
+	// them pointing at that same repo — and a warning that goes off on
+	// ordinary configuration is one operators learn to read past.
+	//
+	// It costs nothing against the case that motivates the annotation: a
+	// descriptor redirecting a dispatch lives in a normal repository
+	// with a working remote, while a repo whose origin can't be read has
+	// no pushed branch, no merged PR and no release tag, so it never
+	// reaches the deploy plan.
+	t.Run("an unreadable remote does not annotate", func(t *testing.T) {
 		repo := Repository{Name: "api", Path: t.TempDir()} // not a git repo
 		wt := WorkflowTarget{Owner: "acme", Repo: "api", Workflow: "deploy.yaml"}
 
-		if got := deployLabel(ctx, repo, wt, "api"); !strings.Contains(got, "acme/api") {
-			t.Errorf("label = %q, want the destination shown when it can't be proven local", got)
+		if got := deployLabel(ctx, repo, wt, "api"); got != "api" {
+			t.Errorf("label = %q, want the bare local name when the remote can't be read", got)
 		}
 	})
 }
