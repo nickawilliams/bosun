@@ -2,7 +2,10 @@ package cli
 
 import (
 	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestRepoContextBaseBranch(t *testing.T) {
@@ -155,4 +158,36 @@ func TestMultiSelectOver(t *testing.T) {
 			t.Errorf("bound value = %v, want the preselection preserved", got)
 		}
 	})
+}
+
+// TestRepoContextPrConfigNilReceiver covers the representative-repo
+// hole: the shared prompt pass previews one repo's resolution, and
+// there is no repo to preview when nothing in the workspace is
+// writable. A nil receiver has to answer from the central layers rather
+// than panic — the run still has prompts to show even with no PR to
+// open.
+func TestRepoContextPrConfigNilReceiver(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("pull_request.reviewers", []string{"alice"})
+
+	var rc *repoContext
+	if got := rc.prConfig().StringSlice("pull_request.reviewers"); !slices.Equal(got, []string{"alice"}) {
+		t.Errorf("reviewers = %v, want the central list", got)
+	}
+}
+
+// TestNonNilSlice pins the nil-vs-empty distinction the shared prompt
+// pass encodes: nil means unanswered, empty means answered with
+// nothing. Collapsing them would make "deselect every reviewer" fall
+// back to each repo's configured list and silently re-add the names the
+// user had just removed.
+func TestNonNilSlice(t *testing.T) {
+	if got := nonNilSlice(nil); got == nil || len(got) != 0 {
+		t.Errorf("nonNilSlice(nil) = %#v, want a non-nil empty slice", got)
+	}
+	in := []string{"alice"}
+	if got := nonNilSlice(in); !slices.Equal(got, in) {
+		t.Errorf("nonNilSlice(%v) = %v, want it unchanged", in, got)
+	}
 }
