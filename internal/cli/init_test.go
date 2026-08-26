@@ -1351,3 +1351,56 @@ func assertSaved(t *testing.T, h *testharness.Harness, label, value string) {
 		t.Errorf("%q value = %q, want %q", label, ev.Value, value)
 	}
 }
+
+// TestInitConfiguresNotificationChannels covers the one sub-group the
+// wizard folds into its parent's form. It is a regression guard with a
+// specific bug behind it: the channels used to be keys of the
+// `notification` group, and moving them into a sub-group made them
+// invisible to resolveGroupAsForm, which walks Keys and not Groups. The
+// symptom was silent — init configured a notifier with nowhere to post,
+// and every announcement thereafter reported "set
+// notification.channels.review to announce the review".
+func TestInitConfiguresNotificationChannels(t *testing.T) {
+	h := newInitHarness(t)
+
+	h.Type("src/*\r")
+	h.Type("worktrees\r")
+	h.Type("\r")       // issue tracker gate — skip
+	h.Type("\r")       // code host gate — skip
+	h.Type("\x1b[B\r") // notification gate — slack
+	// The form runs over the group's non-provider, non-secret keys in
+	// schema order, then the named sub-group's. Slack contributes auth
+	// (a select) and workspace; token is secret and filtered out.
+	// The channel fields arrive prefilled with their schema examples,
+	// so \x15 (ctrl+u) clears the line before typing — same as the
+	// prefill scenario above.
+	h.Type("\r")                // auth mode — the default option
+	h.Type("acme\r")            // slack workspace
+	h.Type("\x15code-review\r") // channels.review
+	h.Type("\x15releases\r")    // channels.prerelease
+	h.Type("\r")                // ci/cd gate — skip
+	h.Type("\r")                // preview gate — skip
+	tripwire(h)
+
+	if err := h.Run("init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	cfg := readInitConfig(t, h)
+	if got := configString(t, cfg, "notification", "channels", "review"); got != "code-review" {
+		t.Errorf("notification.channels.review = %q, want code-review", got)
+	}
+	if got := configString(t, cfg, "notification", "channels", "prerelease"); got != "releases" {
+		t.Errorf("notification.channels.prerelease = %q, want releases", got)
+	}
+	// The sub-group's keys land nested, not as a literal
+	// "channels.review" key — the relative path is a form-assembly
+	// detail and must not reach the file.
+	group, ok := cfg["notification"].(map[string]any)
+	if !ok {
+		t.Fatalf("notification = %#v, want a map", cfg["notification"])
+	}
+	if _, flat := group["channels.review"]; flat {
+		t.Errorf("dotted key written to config: %v", group)
+	}
+}

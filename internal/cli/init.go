@@ -326,6 +326,7 @@ func configureIntegration(ig initGroup, group ConfigGroup) error {
 	if refreshed, ok := lookupGroup(ig.Group); ok {
 		group = refreshed
 	}
+	group = withSubGroupKeys(ig, group)
 
 	configPath, err := configPathForScope(false)
 	if err != nil {
@@ -442,6 +443,31 @@ func findGroupProviderKey(group ConfigGroup) (ConfigKey, bool) {
 	return ConfigKey{}, false
 }
 
+// withSubGroupKeys returns group with the keys of ig.SubGroups appended,
+// each carrying its path relative to the parent as its Key
+// ("channels.review"). Both consumers — resolveGroupAsForm and
+// emitIntegrationCard — address a key through fullKey(groupName, ck),
+// so the relative path is exactly what makes the sub-group key resolve
+// to notification.channels.review from the parent group's name.
+//
+// The schema itself never holds a dotted key; this is a form assembled
+// from it. Keeping the flattening here rather than teaching the form to
+// walk ConfigGroup.Groups is what makes the wizard's shape opt-in: a
+// group that isn't named simply doesn't appear.
+func withSubGroupKeys(ig initGroup, group ConfigGroup) ConfigGroup {
+	for _, name := range ig.SubGroups {
+		sub, ok := lookupGroup(ig.Group + "." + name)
+		if !ok {
+			continue
+		}
+		for _, ck := range sub.Keys {
+			ck.Key = name + "." + ck.Key
+			group.Keys = append(group.Keys, ck)
+		}
+	}
+	return group
+}
+
 // initGroup describes an optional service group for the init wizard.
 type initGroup struct {
 	Label string // Human-readable name for the confirmation prompt.
@@ -455,6 +481,15 @@ type initGroup struct {
 	// configurable via `bosun config set` or direct YAML edits until
 	// init's UX for them lands.
 	ProviderOnly bool
+
+	// SubGroups names sub-groups whose keys join this group's form,
+	// relative to Group ("channels"). Nesting is opt-in here rather
+	// than automatic because most sub-groups are not init material:
+	// `issue_tracker.statuses` is an eight-key translation table with
+	// working defaults, and `preview.up` describes a deploy pipeline.
+	// Naming the ones that are keeps the wizard's shape a decision
+	// rather than a side effect of where a key happens to sit.
+	SubGroups []string
 }
 
 // serviceInitGroups defines the ordered list of optional service groups
@@ -462,7 +497,9 @@ type initGroup struct {
 var serviceInitGroups = []initGroup{
 	{Label: "issue tracker", Group: issue.ConfigGroup},
 	{Label: "code host", Group: code.ConfigGroup},
-	{Label: "notifications", Group: notify.ConfigGroup},
+	// The channels are the point of configuring a notifier: a provider
+	// with nowhere to post is configured and inert.
+	{Label: "notifications", Group: notify.ConfigGroup, SubGroups: []string{"channels"}},
 	{Label: "CI/CD", Group: cicd.ConfigGroup, ProviderOnly: true},
 	// After CI/CD: the workflow-dispatch preview provider reads that
 	// group's workflow keys, so picking it before CI/CD exists asks
