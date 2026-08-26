@@ -33,9 +33,17 @@ var unknownKeyExempt = map[string]bool{
 // is silent) and obvious to the second.
 //
 // A key is accounted for when it is declared, sits beneath a declared
-// key whose value is itself a map (cicd.workflows.release.target is
-// per-repo), sits beneath a map-shaped group, or belongs to an exempt
-// block. Everything else is reported.
+// key (cicd.workflows.release.target takes a per-repo map, so its own
+// subtree is its business), sits beneath a map-shaped group, or belongs
+// to an exempt block. Everything else is reported.
+//
+// That third rule is deliberately looser than "beneath a key that takes
+// a map": nothing marks which keys those are, so it admits
+// `ui.color.foo` too. Narrowing it would mean a per-key annotation, and
+// the failure modes are not symmetric — a forgotten annotation reports
+// working config as broken, while the loose rule only misses a typo
+// nested under a scalar key. It fails safe in the direction that
+// doesn't cost the user a debugging session.
 func unknownConfigKeys(groupFilter string) []string {
 	declared, mapPrefixes := schemaKeySurface()
 

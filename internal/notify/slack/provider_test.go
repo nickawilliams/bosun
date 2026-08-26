@@ -41,7 +41,7 @@ func TestDescriptorShape(t *testing.T) {
 			t.Errorf("descriptor is missing the %q key", key)
 		}
 	}
-	for _, key := range []string{"channel_review", "channel_prerelease", "provider"} {
+	for _, key := range []string{"channels", "provider"} {
 		if _, ok := byKey[key]; ok {
 			t.Errorf("descriptor claims %q, which belongs to bosun's own schema", key)
 		}

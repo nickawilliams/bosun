@@ -76,12 +76,13 @@ directs the crew and signals state changes.
   before transitioning. Unexpected status (e.g., running `release` when issue
   is still in "Review") warns and requires confirmation rather than proceeding
   blindly.
-- **Issue resolution**: `--issue` flag bound to Viper. Resolution chain:
-  (1) explicit `--issue` flag, (2) `BOSUN_ISSUE` env var (works with
-  direnv), (3) workspace path derivation (extract issue from
-  `<workspace_root>/<branch>/` using `branch.pattern` in reverse), (4) git
-  branch name derivation (same parser, different input). Error if none
-  resolve.
+- **Issue resolution**: `--issue` is a plain flag, not bound to Viper.
+  Resolution chain: (1) explicit `--issue` flag, (2) `BOSUN_ISSUE` env var
+  (works with direnv), read from the environment directly so a config file
+  can't pin it, (3) workspace path derivation (extract issue from
+  `<workspace.root>/<branch>/` using `vcs.branch.template` in reverse),
+  (4) git branch name derivation (same parser, different input). Error if
+  none resolve.
 
 ---
 
@@ -123,9 +124,19 @@ cicd.CICD                    githubactions.Adapter
 ### Configuration
 
 Two-tier Viper-managed config. Global settings at `~/.config/bosun/config.yaml`,
-project-level overrides at `.bosun/config.yaml` (merged on top). Environment
-variables override both: `BOSUN_` + the key path uppercased with dots turned
-into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` sets `issue_tracker.token`.
+project-level overrides at `.bosun/config.yaml` (merged on top).
+
+Environment variables name a key as `BOSUN_` + the key path uppercased with
+dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
+`issue_tracker.token`. **This works for schema-mediated reads, not for every
+key.** Viper is configured with `AutomaticEnv` and no key replacer, so it
+never maps a dotted key to that name on its own; the mapping is bosun's,
+applied by `effectiveEnvValue` — which is what `config check`, `config show`,
+`bosun init` and every provider `Require` go through. A key read with a bare
+`viper.GetString` (`vcs.branch.template`, `ui.color`, `workspace.root`) does
+not see it, and `config show` will report the env value as live even though
+nothing reads it. Treat the env layer as reliable for credentials and provider
+selection, and as not yet universal for the rest.
 
 The schema is organized on one axis: **every top-level block is a
 capability**, and a block earns root level only if that capability exists in

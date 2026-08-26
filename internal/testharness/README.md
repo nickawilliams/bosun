@@ -22,8 +22,8 @@ confirmation through git operations — as a user would experience them.
 func TestStart_yes_flag_skips_prompt(t *testing.T) {
     h := testharness.New(t)
     h.Workspace.WriteConfig(`
-repositories: ["repos/*"]
 workspace:
+  repositories: ["repos/*"]
   root: "workspaces"
 issue_tracker:
   statuses:
@@ -152,7 +152,7 @@ environment and dispatch for it; a fake provider there can only
 confirm that `Create` was called, and leaves the resolution itself
 untested (see "Pin key bindings" under Writing assertions).
 
-The adapter probes `cicd.workflows.preview.url_template` over HTTP to
+The adapter probes `preview.url_template` over HTTP to
 decide whether an env is alive, so a scenario that cares about
 liveness points that template at an `httptest` server and expresses
 "the env is up" as a 200 (404 = definitively gone, 500 = the
