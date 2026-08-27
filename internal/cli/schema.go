@@ -362,11 +362,14 @@ var configSchema = map[string]ConfigGroup{
 		// Reporter interface with four implementations chosen at a
 		// seam — but registering it is ruled out four times over:
 		//
-		//   - It would be an import cycle. providerConfig.Require
+		//   - It would be a bootstrap cycle. providerConfig.Require
 		//     resolves a missing key by rendering a card and a form
 		//     through the Reporter (require.go), so building the UI
 		//     capability would need a Reporter to draw the prompt for
-		//     the Reporter's own provider key.
+		//     the Reporter's own provider key. Not an import cycle —
+		//     internal/ui imports no bosun package, so the edge is
+		//     legal; it is the order of construction that has no
+		//     valid start.
 		//   - A declared `ui.provider` would silence the very check
 		//     that catches it. config_unknown.go warns on keys nothing
 		//     reads; declaring one converts that warning into a green
@@ -383,8 +386,12 @@ var configSchema = map[string]ConfigGroup{
 		//
 		// color and compact_header are the package's own keys rather
 		// than some provider's: ApplyColorMode and SetCompactHeader
-		// are package-level functions mutating global render state, so
-		// they apply whichever Reporter is live.
+		// are package-level functions mutating global render state,
+		// not methods on any Reporter. color applies whichever
+		// Reporter is live; compact_header is read only in
+		// bootstrap.go's card arm, because there is no header to
+		// compact in the other two — still a property of the
+		// rendering, not of a provider that would select it.
 		Keys: []ConfigKey{
 			{Key: "color", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
 			{Key: "compact_header", Label: "compact header", Default: "false"},
