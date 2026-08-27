@@ -154,7 +154,7 @@ var configSchema = map[string]ConfigGroup{
 			Label: "pull request",
 
 			Keys: []ConfigKey{
-				{Key: "title_template", Label: "PR title template", Default: "[{{.IssueKey}}] {{.IssueTitle}}"},
+				{Key: "title_template", Label: "PR title template", Default: "[{{.Issue.Key}}] {{.Issue.Title}}"},
 				{Key: "body_template", Label: "PR body template"},
 				{Key: "self_assign", Label: "auto-assign PR author", Default: "true"},
 			},
@@ -177,7 +177,7 @@ var configSchema = map[string]ConfigGroup{
 			// splitting them makes it unrecoverable on resume. A future
 			// workspace.name_template is additive.
 			Keys: []ConfigKey{
-				{Key: "template", Label: "branch template", Default: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"},
+				{Key: "template", Label: "branch template", Default: "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"},
 			},
 
 			Groups: []ConfigGroup{{
@@ -346,7 +346,7 @@ var configSchema = map[string]ConfigGroup{
 		Keys: []ConfigKey{
 			{Key: "provider", Label: "provider"},
 			providerKeys,
-			{Key: "url_template", Label: "preview URL template", Example: "https://host-ui-{{.Name}}.example.dev"},
+			{Key: "url_template", Label: "preview URL template", Example: "https://host-ui-{{.Preview.Name}}.example.dev"},
 		},
 
 		Groups: []ConfigGroup{

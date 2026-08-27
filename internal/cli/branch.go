@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"text/template"
@@ -9,16 +10,16 @@ import (
 )
 
 // branchData holds the template variables for branch name generation.
+// Category is the branch's own; everything about the issue comes from
+// the shared vocabulary (see template.go).
 type branchData struct {
-	Category    string // e.g., "feature", "fix", "chore"
-	IssueNumber string // e.g., "PROJ-123"
-	IssueSlug   string // e.g., "add-widget-endpoint"
-	IssueTitle  string // e.g., "Add widget endpoint"
+	Category string // e.g., "feature", "fix", "chore"
+	Issue    issueRef
 }
 
 var (
 	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
-	defaultPattern = "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"
+	defaultPattern = "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"
 )
 
 // buildBranchName generates a branch name from the configured pattern,
@@ -42,12 +43,21 @@ func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, erro
 
 	var buf strings.Builder
 	err = tmpl.Execute(&buf, branchData{
-		Category:    category,
-		IssueNumber: issueKey,
-		IssueSlug:   slug,
-		IssueTitle:  issueTitle,
+		Category: category,
+		Issue: issueRef{
+			Key:   issueKey,
+			Title: issueTitle,
+			Slug:  slug,
+		},
 	})
 	if err != nil {
+		// The only render path that aborts rather than degrading: a
+		// branch name is the run's identity, and half a name is worse
+		// than a refusal. The hint still travels — this error reaches
+		// the user verbatim.
+		if h := templateMigrationHint(pattern, nil); h != "" {
+			return "", fmt.Errorf("vcs.branch.template: %w — %s", err, h)
+		}
 		return "", err
 	}
 

@@ -35,9 +35,6 @@ func newPreviewCmd() *cobra.Command {
 			ctx := cmd.Context()
 			detail, _ := emitLifecyclePreamble(ctx, issueKey)
 			currentStatus := detail.Status
-			issueTitle := detail.Title
-			issueType := detail.Type
-			issueURL := detail.URL
 
 			provider, err := newPreviewProvider(cc.Workspace)
 			if err != nil {
@@ -141,16 +138,13 @@ func newPreviewCmd() *cobra.Command {
 							Channel:  channel,
 							IssueKey: issueKey,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:         issueKey,
-								IssueTitle:       issueTitle,
-								IssueType:        issueType,
-								IssueURL:         issueURL,
-								IssueDescription: detail.Description,
-								IssueIconURL:     detail.TypeIconURL,
-								IconURL:          iconURL,
-								PreviewName:      resolution.previewName,
-								PreviewURL:       resolution.previewURL,
-								Items:            items,
+								Issue: issueRefFrom(issueKey, detail),
+								Preview: preview.Ref{
+									Name: resolution.previewName,
+									URL:  resolution.previewURL,
+								},
+								IconURL: iconURL,
+								Items:   items,
 							}),
 						})
 						return err

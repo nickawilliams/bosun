@@ -392,12 +392,11 @@ func lifecycleKeyForStatus(status string) string {
 	return ""
 }
 
-// prTemplateData holds the fields available to PR title and body templates.
+// prTemplateData holds the fields available to PR title and body
+// templates. Branch and BaseBranch are the PR's own; the issue fields
+// come from the shared vocabulary (see template.go).
 type prTemplateData struct {
-	IssueKey   string
-	IssueTitle string
-	IssueType  string
-	IssueURL   string
+	Issue      issueRef
 	Branch     string
 	BaseBranch string
 }
@@ -418,12 +417,19 @@ func executePRTemplate(name, pattern string, data prTemplateData) (string, error
 // buildPRTitle generates a PR title from the configured pattern and issue metadata.
 func buildPRTitle(data prTemplateData) string {
 	pattern := viper.GetString("code_host.pr.title_template")
-	if pattern == "" {
-		pattern = "[{{.IssueKey}}] {{.IssueTitle}}"
+	configured := pattern != ""
+	if !configured {
+		pattern = "[{{.Issue.Key}}] {{.Issue.Title}}"
 	}
 	result, err := executePRTemplate("pr-title", pattern, data)
 	if err != nil {
-		return fmt.Sprintf("[%s] %s", data.IssueKey, data.IssueTitle)
+		// The fallback still runs — a PR title is worth having even
+		// from a broken template — but the substitution is reported
+		// rather than made silently.
+		if configured {
+			reportTemplateFailure("code_host.pr.title_template", pattern, err, nil)
+		}
+		return fmt.Sprintf("[%s] %s", data.Issue.Key, data.Issue.Title)
 	}
 	return result
 }
@@ -437,6 +443,7 @@ func buildPRBody(data prTemplateData) string {
 	}
 	result, err := executePRTemplate("pr-body", pattern, data)
 	if err != nil {
+		reportTemplateFailure("code_host.pr.body_template", pattern, err, nil)
 		return ""
 	}
 	return result
@@ -485,18 +492,21 @@ func branchURL(host code.Host, owner, repository, branch string) string {
 	return host.BranchURL(code.RepositoryIdentity{Owner: owner, Name: repository}, branch)
 }
 
-// notifyTemplateData holds the fields available to notification templates.
+// notifyTemplateData holds the fields available to notification
+// templates. Items and IconURL are the notification's own; Issue and
+// Preview come from the shared vocabulary (see template.go).
+//
+// The namespacing does useful work here beyond consistency: the
+// author avatar and the issue-type icon used to sit side by side as
+// IconURL and IssueIconURL, one letter of prefix apart. They are now
+// IconURL and Issue.IconURL, which reads as the different subjects
+// they are.
 type notifyTemplateData struct {
-	IssueKey         string
-	IssueTitle       string
-	IssueType        string // e.g., "Story", "Bug".
-	IssueURL         string
-	IssueDescription string        // Issue body text, plain. Empty when tracker has none.
-	IssueIconURL     string        // Issue-type icon URL for the tracker card. Empty falls back to a glyph.
-	IconURL          string        // Avatar or icon URL for card blocks.
-	Items            []notify.Item // Per-repository items (PRs, releases, etc.).
-	PreviewName      string        // Ephemeral environment name (e.g., "brave-falcon").
-	PreviewURL       string        // Rendered preview environment URL.
+	Issue   issueRef
+	Preview preview.Ref
+
+	IconURL string        // Avatar or icon URL for card blocks.
+	Items   []notify.Item // Per-repository items (PRs, releases, etc.).
 }
 
 // Default structured templates per notification type. Used when the type
@@ -539,13 +549,13 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 
 	// Check if it's a simple string template.
 	if s := viper.GetString(key); s != "" {
-		return notify.Content{Text: renderTemplate(s, data)}
+		return notify.Content{Text: renderNotifyTemplate(key, s, data)}
 	}
 
 	// Built-in text default — overridden by a map config for this type.
 	if s, ok := defaultTextNotifyTemplates[notifType]; ok {
 		if sub := viper.GetStringMapString(key); len(sub) == 0 {
-			return notify.Content{Text: renderTemplate(s, data)}
+			return notify.Content{Text: renderNotifyTemplate(key, s, data)}
 		}
 	}
 
@@ -560,42 +570,46 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 	}
 
 	c := notify.Content{
-		Header:  renderTemplate(get("header"), data),
-		Body:    renderTemplate(get("body"), data),
-		Context: renderTemplate(get("context"), data),
+		Header:  renderNotifyTemplate(key, get("header"), data),
+		Body:    renderNotifyTemplate(key, get("body"), data),
+		Context: renderNotifyTemplate(key, get("context"), data),
 		Items:   data.Items,
 		IconURL: data.IconURL,
 	}
-	if data.IssueKey != "" {
+	if data.Issue.Key != "" {
 		c.Issue = &notify.IssueRef{
-			Key:         data.IssueKey,
-			Title:       data.IssueTitle,
-			Type:        data.IssueType,
-			URL:         data.IssueURL,
-			Description: data.IssueDescription,
-			IconURL:     data.IssueIconURL,
+			Key:         data.Issue.Key,
+			Title:       data.Issue.Title,
+			Type:        data.Issue.Type,
+			URL:         data.Issue.URL,
+			Description: data.Issue.Description,
+			IconURL:     data.Issue.IconURL,
 		}
 	}
-	if data.PreviewName != "" || data.PreviewURL != "" {
-		c.Preview = &notify.PreviewRef{Name: data.PreviewName, URL: data.PreviewURL}
+	if data.Preview.Name != "" || data.Preview.URL != "" {
+		c.Preview = &notify.PreviewRef{Name: data.Preview.Name, URL: data.Preview.URL}
 	}
 	return c
 }
 
-// renderTemplate parses and executes a Go text/template. Returns empty
-// string on empty pattern or error.
-func renderTemplate(pattern string, data notifyTemplateData) string {
+// renderNotifyTemplate parses and executes a Go text/template. Returns
+// empty string on empty pattern or error, reporting the failure under
+// configKey so a template that stopped being honored doesn't read as
+// one that was never set.
+func renderNotifyTemplate(configKey, pattern string, data notifyTemplateData) string {
 	if pattern == "" {
 		return ""
 	}
 
 	tmpl, err := template.New("notify").Parse(pattern)
 	if err != nil {
+		reportTemplateFailure(configKey, pattern, err, nil)
 		return ""
 	}
 
 	var buf strings.Builder
 	if err := tmpl.Execute(&buf, data); err != nil {
+		reportTemplateFailure(configKey, pattern, err, nil)
 		return ""
 	}
 
@@ -1066,26 +1080,29 @@ func stageInputName(subStage, concept string) string {
 	return viper.GetString(subStage + ".inputs." + concept)
 }
 
-// stageURLTemplate holds the data available when rendering a stage URL.
-type stageURLTemplate struct {
-	Name string // Environment name (e.g., "brave-falcon").
-}
-
 // renderStageURL renders the url_template for a stage with the given name.
 // Returns empty string if the template is not configured or rendering fails.
 //
 // Config path: <stage>.url_template
 func renderStageURL(stage, name string) string {
-	pattern := viper.GetString(stage + ".url_template")
+	configKey := stage + ".url_template"
+	pattern := viper.GetString(configKey)
 	if pattern == "" {
 		return ""
 	}
+	// Bare {{.Name}} was this template's own spelling before the
+	// vocabulary was unified, and it is the one legacy field the
+	// shared map can't claim globally — elsewhere .Name is a range
+	// variable's field, not a stale reference.
+	legacy := map[string]string{"Name": "Preview.Name"}
 	tmpl, err := template.New("stage-url").Parse(pattern)
 	if err != nil {
+		reportTemplateFailure(configKey, pattern, err, legacy)
 		return ""
 	}
 	var buf strings.Builder
-	if err := tmpl.Execute(&buf, stageURLTemplate{Name: name}); err != nil {
+	if err := tmpl.Execute(&buf, preview.URLTemplateData{Preview: preview.Ref{Name: name}}); err != nil {
+		reportTemplateFailure(configKey, pattern, err, legacy)
 		return ""
 	}
 	return buf.String()
