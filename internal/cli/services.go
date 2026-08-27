@@ -1006,6 +1006,18 @@ func resolveRepoServiceNames(r Repository) []string {
 				names = append(names, k)
 			}
 		}
+		// Sorted because a YAML mapping has no order to preserve, and
+		// Go randomizes map iteration — so without this the same config
+		// yields a different slice from one call to the next. Callers
+		// compare these names (affected-service narrowing), render them,
+		// and key deploy targets off them, so the nondeterminism reaches
+		// output and assertions rather than staying internal.
+		//
+		// The list branch above is deliberately left in declaration
+		// order: a YAML sequence is written in an order the author
+		// chose, and reordering it would discard information this
+		// branch doesn't have.
+		sort.Strings(names)
 		return names
 	default:
 		// Not configured — repo name is the service name.

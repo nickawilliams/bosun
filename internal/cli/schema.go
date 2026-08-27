@@ -84,7 +84,7 @@ var providerKeys = ConfigKey{Key: providerKeysMarker}
 // One rule governs the shape: every top-level block is a capability,
 // and a block earns root level only if that capability exists in code,
 // registered or not. That admits `preview` (an interface with two
-// adapters) and `ui` (internal/ui's Reporter with three
+// adapters) and `ui` (internal/ui's Reporter with four
 // implementations, merely unregistered), and excludes `release` —
 // there is no internal/release, and a release deploy is literally a
 // CI/CD workflow dispatch, so its keys stay under `cicd`.
