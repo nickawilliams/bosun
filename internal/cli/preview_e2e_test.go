@@ -1056,6 +1056,42 @@ func TestPreview(t *testing.T) {
 		}
 	})
 
+	t.Run("errors/nothing_deployable_claims_no_env", func(t *testing.T) {
+		// Every workspace repo declares an empty service list, so
+		// detection drops all of them and the deploy set is empty.
+		// The provider is perfectly wired — this is not a readiness
+		// skip, it is a deploy with nothing in it.
+		//
+		// The failure mode is dispatching anyway: a workflow run and a
+		// registry binding for an environment with zero services
+		// behind it, which every later run then reads as "already
+		// claimed" and never redeploys. Exit 0 is right, and so is
+		// leaving the registry untouched.
+		f := setupPreview(t, "api")
+		f.h.Workspace.WriteConfig(strings.Replace(
+			fmt.Sprintf(previewConfigf, f.env.URL),
+			`  api: "api-svc"`,
+			`  api: []`,
+			1,
+		))
+
+		if err := f.run("--name", "brave-falcon", "--approve"); err != nil {
+			t.Fatalf("nothing to deploy is a no-op, not a failure: %v", err)
+		}
+
+		if n := len(f.deploys()); n != 0 {
+			t.Errorf("dispatched %d deploy(s) with no services behind them", n)
+		}
+		if got := f.boundName(t, "EX-1"); got != "" {
+			t.Errorf("bound env %q that nothing was deployed into", got)
+		}
+		// Not a readiness skip: the provider never reported a problem,
+		// so nothing should have been attributed to it.
+		if got := f.h.Reporter.OfKind(ui.CaptureSkip); len(got) != 0 {
+			t.Errorf("a wired provider was reported as skipped: %v", got)
+		}
+	})
+
 	t.Run("errors/dispatch_failure_surfaces", func(t *testing.T) {
 		// The pipeline rejects the dispatch at apply time. The error
 		// propagates out of the plan apply, and the binding is not
