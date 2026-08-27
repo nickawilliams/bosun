@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -803,43 +804,43 @@ type DeployTarget struct {
 	Label       string // display: "repo" or "repo · service"
 }
 
+// releaseTargetKey is the config path for production deploy targets.
+// Centrally it holds a map keyed by repo name; a repository's own
+// descriptor holds the value that would sit under its key.
+const releaseTargetKey = "cicd.workflows.release.target"
+
 // resolveReleaseDeployTargets resolves per-service production deploy
-// targets from cicd.workflows.release.target, a per-repo map whose value
-// is either a workflow-path string (single-service; env "production") or
-// a per-service map {service: workflow-string | {workflow, environment}}.
+// targets from cicd.workflows.release.target. A repository's value is
+// either a workflow-path string (single-service; env "production") or a
+// per-service map {service: workflow-string | {workflow, environment}}.
 // Env for a map entry defaults to "<service>-production" unless overridden.
 // Returns nil when unconfigured. Only active workspace repos are included.
+//
+// The walk is over the active repositories rather than over the central
+// map's keys, which is the inversion the per-repo layer forces: a
+// repository configured only by its own descriptor appears in no
+// central map, so a map-first walk would never reach it. Iterating
+// repositories reaches both layers through repoConfig, and sorting by
+// name keeps the plan's row order stable — resolveActiveRepositories
+// returns whatever order the workspace manager reports.
 func resolveReleaseDeployTargets(ctx context.Context, workspace string) ([]DeployTarget, error) {
-	raw := viper.Get("cicd.workflows.release.target")
-	m, ok := raw.(map[string]any)
-	if !ok {
-		// Unset, or a bare global-string (not supported by the
-		// deployment-aware path). Caller reports "no targets".
-		return nil, nil
-	}
-
 	repos, err := resolveActiveRepositories(ctx, workspace, nil)
 	if err != nil {
 		return nil, err
 	}
-	repoByName := make(map[string]Repository, len(repos))
-	for _, r := range repos {
-		repoByName[r.Name] = r
-	}
-
-	names := make([]string, 0, len(m))
-	for n := range m {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	sorted := slices.Clone(repos)
+	slices.SortFunc(sorted, func(a, b Repository) int { return strings.Compare(a.Name, b.Name) })
 
 	var targets []DeployTarget
-	for _, repoName := range names {
-		repo, active := repoByName[repoName]
-		if !active {
+	for _, repo := range sorted {
+		// A bare central string is the whole-workspace form, which this
+		// deployment-aware path doesn't support; repoKeyed returns nil
+		// for it because there is no per-repo level to index into.
+		raw := loadRepoConfig(repo).repoKeyed(releaseTargetKey)
+		if raw == nil {
 			continue
 		}
-		ts, err := parseServiceDeployValue(ctx, repo, repoName, m[repoName])
+		ts, err := parseServiceDeployValue(ctx, repo, repo.Name, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -863,7 +864,8 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 		return []DeployTarget{{
 			Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
 			Service: repoName, Workflow: wt.Workflow,
-			Environment: "production", Label: repoName,
+			Environment: "production",
+			Label:       deployLabel(ctx, repo, wt, repoName),
 		}}, nil
 	case map[string]any:
 		svcs := make([]string, 0, len(val))
@@ -897,12 +899,50 @@ func parseServiceDeployValue(ctx context.Context, repo Repository, repoName stri
 			out = append(out, DeployTarget{
 				Owner: wt.Owner, Repo: wt.Repo, RepoName: repoName,
 				Service: svc, Workflow: wt.Workflow,
-				Environment: env, Label: repoName + " · " + svc,
+				Environment: env,
+				Label:       deployLabel(ctx, repo, wt, repoName+" · "+svc),
 			})
 		}
 		return out, nil
 	}
 	return nil, nil
+}
+
+// deployLabel is the plan row's name for one deploy target: the local
+// name (repo, or "repo · service"), plus the dispatch destination when
+// that ISN'T the local repository.
+//
+// The plan is the approval gate for a production deploy, and the label
+// is the only part of a target it renders — so a row reading `api` has
+// to mean "a workflow in api". A workflow path may be absolute
+// (owner/repo/.github/…), and now that release.target is repo-scoped
+// that path can come from a file committed to the repository rather
+// than from the central config the operator wrote. A row naming only
+// the local repo would let a dispatch — carrying the version input,
+// under the operator's own credentials — go somewhere the approval
+// never showed.
+//
+// Annotating only a PROVEN mismatch leaves the common row unchanged. An
+// unreadable remote annotates nothing, which is deliberate and is the
+// weaker of the two available failures: annotating on "couldn't tell"
+// would decorate every row in a repo whose remote won't parse — most of
+// them pointing at that same repo — and a warning that fires on
+// ordinary configuration is one operators learn to read past.
+//
+// The case that motivates the annotation is unaffected. A descriptor
+// redirecting a dispatch lives in a normal repository with a working
+// remote, so the mismatch is provable; a repo whose origin can't be
+// read has no pushed branch, no merged PR and no release tag, and never
+// reaches the deploy plan at all.
+func deployLabel(ctx context.Context, repo Repository, wt WorkflowTarget, local string) string {
+	identity, err := code.ParseRemote(ctx, repo.Path)
+	if err != nil {
+		return local
+	}
+	if strings.EqualFold(identity.Owner, wt.Owner) && strings.EqualFold(identity.Name, wt.Repo) {
+		return local
+	}
+	return local + " → " + wt.Owner + "/" + wt.Repo
 }
 
 // resolveWorkflowFilename resolves a workflow path (absolute
@@ -930,16 +970,23 @@ func resolveWorkflowFilename(ctx context.Context, repo Repository, path string) 
 // repo (emitDeploymentSources drops these repos ahead of its gather
 // rather than stepping through them) ask the same question rather than
 // a lookalike of it.
-func repoHasServices(repoName string) bool {
-	return len(resolveRepoServiceNames(repoName)) > 0
+func repoHasServices(r Repository) bool {
+	return len(resolveRepoServiceNames(r)) > 0
 }
 
 // resolveRepoServiceNames returns the service names configured for a single
 // repository. Supports string, list, and map config shapes. Falls back to
 // the repo name when not configured.
-func resolveRepoServiceNames(repoName string) []string {
-	key := "services." + repoName
-	raw := viper.Get(key)
+//
+// It takes the whole Repository rather than its name because the answer
+// now comes from the repository's own `.bosun.yaml` when it has one,
+// with the central `services.<repo>` map as the fallback. Which path
+// the caller resolved therefore decides which topology is read: the
+// workspace-scoped callers pass worktree paths, so a branch that adds a
+// service is seen by affected-service detection on that branch — the
+// capability a central map structurally cannot have.
+func resolveRepoServiceNames(r Repository) []string {
+	raw := loadRepoConfig(r).repoKeyed(servicesConfigGroup)
 
 	switch val := raw.(type) {
 	case string:
@@ -962,7 +1009,7 @@ func resolveRepoServiceNames(repoName string) []string {
 		return names
 	default:
 		// Not configured — repo name is the service name.
-		return []string{repoName}
+		return []string{r.Name}
 	}
 }
 

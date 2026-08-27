@@ -24,7 +24,8 @@ directs the crew and signals state changes.
   across all repositories associated with an issue.
 - **Configuration**: Global config at `~/.config/bosun/config.yaml`. Project-
   level overrides via `.bosun/config.yaml` (discovered by walking up from CWD,
-  like `.git/`).
+  like `.git/`). Repository-level overrides via a committed `.bosun.yaml` in
+  each repository, for the handful of keys that describe one repository.
 - **Language**: Go. Cobra + Viper for CLI and config. Charmbracelet libraries
   (lipgloss, bubbletea, etc.) for terminal UI/UX.
 - **Lifecycle stages**: Driven by current workflow. Not a generic state machine
@@ -123,8 +124,80 @@ cicd.CICD                    githubactions.Adapter
 
 ### Configuration
 
-Two-tier Viper-managed config. Global settings at `~/.config/bosun/config.yaml`,
-project-level overrides at `.bosun/config.yaml` (merged on top).
+Three-tier Viper-managed config, outermost first:
+
+| Layer     | File                                | Holds                                          |
+| --------- | ----------------------------------- | ---------------------------------------------- |
+| `global`  | `~/.config/bosun/config.yaml`       | providers, credentials, personal preferences    |
+| `project` | `<project>/.bosun/config.yaml`      | where the repositories are, workspace-wide policy |
+| `repo`    | `<repository>/.bosun.yaml`          | what one repository is and how it wants its PRs |
+
+Most specific wins, for lists as well as scalars. A repository's
+`reviewers: [bob]` **replaces** the project's `reviewers: [alice]` rather
+than appending to it — appending would mean a workspace-wide list kept
+applying to every repository no matter what any repository said, which is
+the behaviour the repo layer exists to end. `reviewers: []` is how a
+repository opts out entirely.
+
+Every repository must keep working without a descriptor, so the central
+layers are a permanent fallback rather than a migration shim.
+
+A **file**, not a `.bosun/` directory: `FindProjectRoot` walks up looking
+for `.bosun/` and returns the first hit, so a repository carrying its
+config in a directory of that name would shadow the workspace's project
+root for every command run inside it.
+
+Descriptors are read from the **worktree**, not the main checkout, wherever
+a command is workspace-scoped. That is what makes service topology and PR
+policy branch-scoped: a branch that adds a service, or moves one between
+repositories, changes what "affected" means for that branch. A central map
+structurally cannot express that.
+
+#### Scope
+
+Each `ConfigKey` declares a `Scope` — the set of layers allowed to set it.
+The zero value is `global | project`, so a key reaches a repository's own
+`.bosun.yaml` only by asking to. That default is what keeps credentials out
+of shared repositories without a rule of its own: a `Secret` key has no
+reason to name `repo`, and the default denies it.
+
+Only these keys are repo-scoped today:
+
+- `pull_request.{base, reviewers, team_reviewers, assignees}`
+- `services`
+- `cicd.workflows.release.target`
+
+Violations ride on the unknown-key check: `bosun config check` walks each
+config **file** (not the merged view — merging is precisely the operation
+that forgets which file a value came from) and reports keys sitting in a
+layer that may not hold them. It reaches every repository it can resolve,
+and stays quiet about descriptors when it cannot resolve the repositories
+at all.
+
+Two keys hold **different shapes** in the two layers, because centrally they
+are keyed by repository name and a descriptor already knows which repository
+it is:
+
+| Key                             | Central                             | Descriptor            |
+| ------------------------------- | ----------------------------------- | --------------------- |
+| `services`                      | `services.<repo>: <value>`          | `services: <value>`   |
+| `cicd.workflows.release.target` | `target.<repo>: <value>`            | `target: <value>`     |
+
+Dropping the repository level is not cosmetic. Keeping it would let a
+repository configure a *different* repository by naming it — authority a
+committed file must not have. `repoKeyed` reads the bare key from a
+descriptor and never the nested one, so a descriptor that spells the
+central form is inert: it cannot reach another repository's resolution.
+
+The scope check deliberately stops at the path itself for these two
+keys. Below it, the two forms are textually identical —
+`services.billing` is a repository name centrally and a service name in
+a descriptor, with nothing in the text to tell them apart — so "is this
+in a layer allowed to hold it?" has no decidable answer there, and
+answering anyway would false-positive on the map form that carries
+per-service path filtering. What stays decidable, and is still checked,
+is the bare path: a lone `services` written centrally names no
+repository and configures nothing.
 
 Environment variables name a key as `BOSUN_` + the key path uppercased with
 dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
@@ -289,7 +362,9 @@ cicd:
       # A workflow path, or a per-repo map. A repo's value may itself be a
       # per-service map, each entry a workflow path or a
       # {workflow, environment} pair; environment defaults to
-      # "<service>-production".
+      # "<service>-production". A repository can set its own value in
+      # `.bosun.yaml` with the repo level dropped; the bare
+      # whole-workspace scalar form stays central-only.
       target:
         my-service: .github/workflows/deploy.yml
         my-monorepo:
@@ -300,11 +375,12 @@ cicd:
         version: version
 ```
 
-**Repo-scoped policy** (project config for now) — reviewers, assignees, and
-the PR base are per-repository concerns held centrally until each repository
-carries its own `.bosun.yaml`:
+**Repo-scoped policy** — reviewers, assignees, and the PR base. Settable
+centrally for repositories with no descriptor, and overridable by any
+repository that has one:
 
 ```yaml
+# project config: the default for every repository
 pull_request:
   # Unset means "each repository's own default branch", which is right far
   # more often than one workspace-wide literal.
@@ -313,14 +389,39 @@ pull_request:
   team_reviewers: [backend]
 ```
 
-**Per-repository services** (project config) — which services a repository
-contributes to the deploy surfaces. Read directly rather than through the
-schema, and also bound for the per-repo descriptor:
+```yaml
+# <repository>/.bosun.yaml: this repository only
+pull_request:
+  base: release/2.0
+  reviewers: [bob]         # REPLACES [alice]; use [] to request nobody
+```
+
+`--reviewer` still *adds* to whatever each repository resolved, while an
+answered interactive prompt *pins* one list across the workspace — the
+prompt is one question over one candidate list, so its answer can only mean
+the latter. The per-repo customization pass is where a repository diverges
+from a pinned answer.
+
+**Per-repository services** — which services a repository contributes to the
+deploy surfaces:
 
 ```yaml
+# project config: keyed by repository name
 services:
   my-service: my-service           # or a list, or a map of service -> paths
 ```
+
+```yaml
+# <repository>/.bosun.yaml: the repository level dropped
+services:
+  billing: [billing/]
+  search: [search/]
+  _shared: [go.mod]                # a match here affects every service
+```
+
+The names and the path prefixes always come from the same layer, so a
+descriptor that redefines the services is never narrowed by the central
+map's prefixes.
 
 ### Project Structure
 

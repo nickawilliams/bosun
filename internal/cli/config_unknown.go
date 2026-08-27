@@ -12,16 +12,13 @@ import (
 // wholesale, because they are real config the schema deliberately does
 // not describe.
 //
-// `services.<repo>` is the only member: it is repo-scoped and leaves
-// for the per-repo descriptor in #82. Exempting it is cheaper than
-// declaring it map-shaped and then deleting the declaration one issue
-// later, and either way the walk must not report a key that
-// resolveRepoServiceNames reads and acts on.
-//
-// TODO(arch #82): drop the exemption when services moves to .bosun.yaml.
-var unknownKeyExempt = map[string]bool{
-	"services": true,
-}
+// Empty since `services` was declared for real: it is map-shaped
+// centrally and a plain key in a repo descriptor, and the schema now
+// says so, which is strictly better than an exemption because it also
+// says which layer may write which half. The map is kept rather than
+// deleted so a future block that genuinely cannot be described has a
+// place to go.
+var unknownKeyExempt = map[string]bool{}
 
 // unknownConfigKeys returns the fully-qualified keys present in the
 // merged config that the effective schema does not account for, sorted.
@@ -129,4 +126,95 @@ func hasPrefixIn(key string, prefixes map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// schemaScopeSurface returns the two scope tables the layer walk reads:
+// every declared key's Scope, and every map-shaped group's MapScope.
+//
+// Provider keys are folded in as the union across every registered
+// provider, matching schemaKeySurface — a scope answer that depended on
+// which provider happened to be configured would report a working
+// config as misplaced in half of a provider round trip.
+func schemaScopeSurface() (keyScope, mapScope map[string]Scope) {
+	keyScope = make(map[string]Scope)
+	mapScope = make(map[string]Scope)
+
+	for groupName, group := range schemaGroups() {
+		if group.MapKey != "" {
+			mapScope[groupName] = group.MapScope
+		}
+		for _, ck := range group.Keys {
+			keyScope[fullKey(groupName, ck)] = ck.Scope
+		}
+	}
+
+	for groupName := range configSchema {
+		for _, name := range services.ProviderNames(groupName) {
+			for _, ck := range services.ProviderKeys(groupName, name) {
+				keyScope[fullKey(groupName, ck)] = ck.Scope
+			}
+		}
+	}
+
+	return keyScope, mapScope
+}
+
+// scopeForKey returns the Scope governing a fully-qualified key, and
+// whether the schema accounts for the key at all. An unaccounted-for key
+// is not a scope problem — it is an unknown key, which the caller
+// reports separately and with a different message.
+//
+// Resolution mirrors unknownConfigKeys' notion of "accounted for": an
+// exact declaration governs its own path, and otherwise the LONGEST
+// declared ancestor governs. When a map-shaped group and a key declare
+// the SAME path, the subtree beneath it takes the UNION of their
+// scopes.
+//
+// The union is not a shrug, it is the only sound answer, and `services`
+// is why. It is declared both ways at once: a map-shaped group for the
+// central `services.<repo>` form, and a plain key of the same name for
+// the descriptor form. Beneath the path the two shapes are
+// indistinguishable — `services.billing` is a repo name centrally and a
+// service name in a descriptor, and nothing in the text says which. So
+// "is this key in a layer allowed to hold it?" has no decidable answer
+// below the path, and answering it anyway means false-positiving on one
+// of the two legitimate spellings. The union declines to guess.
+//
+// What survives is the half that IS decidable: the path ITSELF. A bare
+// `services` written centrally names no repository and configures
+// nothing, and an exact match still reports it.
+//
+// Nothing is lost on the read side. repoKeyed reads the bare key from a
+// descriptor and never the nested one, so a descriptor spelling the
+// central form is inert rather than dangerous — it cannot reach another
+// repository's configuration whether or not this walk mentions it.
+func scopeForKey(key string, keyScope, mapScope map[string]Scope) (Scope, bool) {
+	if s, ok := keyScope[key]; ok {
+		return s.Effective(), true
+	}
+
+	best := -1
+	var found Scope
+
+	consider := func(prefix string, s Scope) {
+		if !strings.HasPrefix(key, prefix+".") {
+			return
+		}
+		switch {
+		case len(prefix) > best:
+			// More specific: it replaces whatever was found.
+			best, found = len(prefix), s.Effective()
+		case len(prefix) == best:
+			// Same path declared twice — union, per above.
+			found |= s.Effective()
+		}
+	}
+	for p, s := range mapScope {
+		consider(p, s)
+	}
+	for p, s := range keyScope {
+		consider(p, s)
+	}
+
+	return found, best >= 0
 }

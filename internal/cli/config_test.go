@@ -1,11 +1,15 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/testharness"
+	"github.com/nickawilliams/bosun/internal/ui"
 )
 
 const baseConfig = `
@@ -492,10 +496,109 @@ services:
 			t.Fatalf("check: %v", err)
 		}
 		// ui.color is declared, statuses is map-shaped so a state bosun
-		// doesn't model is the user's business, and services is exempt
-		// until it moves to the per-repo descriptor.
+		// doesn't model is the user's business, and services is
+		// declared map-shaped too — keyed by repository name, which is
+		// the central half of the per-repo layer.
 		if out := h.Stdout(); strings.Contains(out, "not in schema") {
 			t.Errorf("a valid config reported unknown keys:\n%s", out)
+		}
+	})
+}
+
+// TestConfigCheckReachesRepoDescriptors covers the validation-reach
+// half of the per-repo layer: `bosun config check` walks every
+// repository's committed `.bosun.yaml`, not only the central config.
+//
+// It matters more than the central walk does. A descriptor is never
+// merged into viper — each is read per repository, on demand — so this
+// walk is the ONLY thing that can see a typo or a misplaced key in one.
+// Without it a repository could carry a broken descriptor indefinitely
+// and every command would just quietly fall back to central config.
+func TestConfigCheckReachesRepoDescriptors(t *testing.T) {
+	// checkWithDescriptor builds a project with one repo carrying the
+	// given descriptor, runs check, and returns the harness plus what
+	// the tree printed.
+	checkWithDescriptor := func(t *testing.T, descriptor string) (*testharness.Harness, string) {
+		t.Helper()
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+workspace:
+  repositories:
+    - "repos/*"
+  root: trees
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+`)
+		repo := h.Workspace.AddRepo("api")
+		path := filepath.Join(repo.Path, config.RepoConfigFile)
+		if err := os.WriteFile(path, []byte(descriptor), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// A second repo with NO descriptor, which is the ordinary case
+		// and has to be skipped rather than counted or complained
+		// about. It also keeps the count assertion below honest: "1
+		// descriptor" has to mean one, not "one repo exists".
+		h.Workspace.AddRepo("web")
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		return h, h.Stdout()
+	}
+
+	t.Run("a valid descriptor is counted, not reported", func(t *testing.T) {
+		h, out := checkWithDescriptor(t, "services: [billing]\npull_request:\n  base: develop\n")
+		if strings.Contains(out, "misplaced keys") {
+			t.Errorf("a valid descriptor was reported as misplaced:\n%s", out)
+		}
+
+		// The count is what separates "descriptors are clean" from "no
+		// descriptor was ever read" — silence alone means both. It
+		// rides on the summary card, so it is read from the Reporter
+		// rather than from the tree above it.
+		summaries := h.Reporter.OfKind(ui.CaptureSummary)
+		if len(summaries) != 1 {
+			t.Fatalf("summary events = %d, want 1", len(summaries))
+		}
+		if !strings.Contains(summaries[0].Label, "1 repo descriptor") {
+			t.Errorf("summary = %q, want it to report reading the descriptor", summaries[0].Label)
+		}
+	})
+
+	// The map form, which is the one that carries per-service path
+	// filtering and the one DESIGN.md documents. Its keys are service
+	// names, and they are spelled exactly like the central form's
+	// repository names — so a scope rule that tried to tell the two
+	// apart reported this working, documented config as broken. The
+	// earlier scenarios all used the list form and sailed past it.
+	t.Run("the services map form is not reported", func(t *testing.T) {
+		_, raw := checkWithDescriptor(t, "services:\n  billing: [billing/]\n  _shared: [go.mod]\n")
+		out := ansi.Strip(raw)
+		if strings.Contains(out, "misplaced keys") {
+			t.Errorf("the documented services map form was reported as misplaced:\n%s", out)
+		}
+	})
+
+	t.Run("a committed credential is reported", func(t *testing.T) {
+		_, raw := checkWithDescriptor(t, "code_host:\n  token: ghp_secret\n")
+		out := ansi.Strip(raw)
+		if !strings.Contains(out, "misplaced keys") || !strings.Contains(out, "code_host.token") {
+			t.Errorf("a committed token was not reported:\n%s", out)
+		}
+		if !strings.Contains(out, "api/"+config.RepoConfigFile) {
+			t.Errorf("the report does not name the offending file:\n%s", out)
+		}
+		// And the value never appears, here or anywhere else.
+		if strings.Contains(out, "ghp_secret") {
+			t.Errorf("check printed the secret it was reporting:\n%s", out)
+		}
+	})
+
+	t.Run("an unknown descriptor key is reported", func(t *testing.T) {
+		_, raw := checkWithDescriptor(t, "pull_reqeust:\n  base: main\n")
+		out := ansi.Strip(raw)
+		if !strings.Contains(out, "pull_reqeust.base") || !strings.Contains(out, "not in schema") {
+			t.Errorf("a typo'd descriptor key was not reported:\n%s", out)
 		}
 	})
 }

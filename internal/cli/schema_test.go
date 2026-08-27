@@ -10,6 +10,8 @@ import (
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
 	"github.com/nickawilliams/bosun/internal/preview"
+	"github.com/nickawilliams/bosun/internal/provider"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/spf13/viper"
 )
@@ -382,7 +384,8 @@ func TestCapabilityBlocksOnly(t *testing.T) {
 	// Blocks that are not capabilities, and why they are tolerated.
 	exceptions := map[string]string{
 		"workspace":    "bosun's own concept — where worktrees live and which repos are in scope",
-		"pull_request": "repo-scoped policy awaiting the per-repo descriptor (#82)",
+		"pull_request": "repo-scoped policy, settable centrally and overridable per repo",
+		"services":     "the repo→service topology — a fact about the repos, not a capability bosun implements",
 	}
 	capabilities := []string{
 		issue.ConfigGroup, code.ConfigGroup, notify.ConfigGroup,
@@ -423,6 +426,7 @@ func TestMapShapedGroups(t *testing.T) {
 		preview.ConfigGroup + ".up.inputs",
 		preview.ConfigGroup + ".down.inputs",
 		cicd.ConfigGroup + ".workflows.release.inputs",
+		servicesConfigGroup,
 	}
 
 	groups := schemaGroups()
@@ -437,13 +441,87 @@ func TestMapShapedGroups(t *testing.T) {
 		}
 	}
 
-	// services.<repo> is deliberately NOT declared: it leaves for the
-	// per-repo descriptor, and the unknown-key walk exempts it instead.
-	if _, ok := groups["services"]; ok {
-		t.Error("services is declared in the schema — it should be exempted, not declared")
+	// services is declared for real now rather than exempted, which is
+	// what lets the scope walk say which layer may write which of its
+	// two forms. An exemption would have to skip both.
+	if len(unknownKeyExempt) != 0 {
+		t.Errorf("unknownKeyExempt = %v, want empty — blocks should be declared, not exempted", unknownKeyExempt)
 	}
-	if !unknownKeyExempt["services"] {
-		t.Error("services lost its unknown-key exemption")
+}
+
+// TestSecretKeysAreNeverRepoScoped is the pairing ConfigKey.Scope's
+// zero value was chosen to make automatic: a secret has no business in
+// a file committed to a repository the whole team can read, and the
+// default denies it without a rule of its own. This test is what turns
+// "nobody would do that" into something that fails the build.
+//
+// Provider keys are included — GitHub's and Jira's tokens are declared
+// in the provider packages, which is exactly where a Scope annotation
+// would be added without anyone thinking about this file.
+func TestSecretKeysAreNeverRepoScoped(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	check := func(groupName string, ck ConfigKey) {
+		if ck.Secret && ck.Scope.Allows(provider.ScopeRepo) {
+			t.Errorf("%s: secret key %q is repo-scoped — it would be committed to a shared repository",
+				groupName, ck.Key)
+		}
+	}
+
+	declared := make(map[string]ConfigGroup)
+	for name, group := range configSchema {
+		flattenSchemaGroup(name, group, declared)
+	}
+	for groupName, group := range declared {
+		for _, ck := range group.Keys {
+			check(groupName, ck)
+		}
+	}
+	for groupName := range configSchema {
+		for _, name := range services.ProviderNames(groupName) {
+			for _, ck := range services.ProviderKeys(groupName, name) {
+				check(groupName, ck)
+			}
+		}
+	}
+}
+
+// TestRepoScopedKeys pins exactly which keys a repository may set in
+// its own descriptor. The list is short on purpose: everything on it
+// answers a question about ONE repository, and everything off it either
+// describes the workspace (which repos exist, where worktrees go) or
+// the user's own machine.
+//
+// Pinning it as a set rather than spot-checking members is what makes
+// widening the repo surface a deliberate edit. A key that drifts to
+// ScopeAny by copy-paste becomes writable by anyone with commit access
+// to any repository bosun reads.
+func TestRepoScopedKeys(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	want := []string{
+		"cicd.workflows.release.target",
+		"pull_request.assignees",
+		"pull_request.base",
+		"pull_request.reviewers",
+		"pull_request.team_reviewers",
+		servicesConfigGroup,
+	}
+
+	var got []string
+	for groupName, group := range schemaGroups() {
+		for _, ck := range group.Keys {
+			if ck.Scope.Allows(provider.ScopeRepo) {
+				got = append(got, fullKey(groupName, ck))
+			}
+		}
+	}
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("repo-scoped keys = %v, want %v", got, want)
 	}
 }
 

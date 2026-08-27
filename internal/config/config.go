@@ -94,3 +94,42 @@ func FindProjectRoot() string {
 		dir = parent
 	}
 }
+
+// RepoConfigFile is the name of a repository's own bosun descriptor,
+// committed to that repository and read as the innermost config layer.
+//
+// A file rather than a `.bosun/` directory, and the distinction is
+// load-bearing: FindProjectRoot walks up looking for `.bosun/` and
+// returns the first hit, so a repository carrying its config in a
+// directory of that name would shadow the workspace's project root for
+// every command run from inside it. A distinct filename leaves the walk
+// untouched.
+const RepoConfigFile = ".bosun.yaml"
+
+// LoadRepoConfig reads the descriptor at <repoPath>/.bosun.yaml into
+// its own viper instance. It returns (nil, nil) when the repository has
+// no descriptor, which is the ordinary case — every repository must
+// keep working without one, resolving repo-scoped keys from the central
+// layers instead.
+//
+// The result is deliberately NOT merged into the global viper: there is
+// one descriptor per repository and a single command reads several of
+// them in one fan-out, so merging would let the last repository read
+// win for all of them. The CLI layer overlays it per repository.
+func LoadRepoConfig(repoPath string) (*viper.Viper, error) {
+	if repoPath == "" {
+		return nil, nil
+	}
+
+	path := filepath.Join(repoPath, RepoConfigFile)
+	if _, err := os.Stat(path); err != nil {
+		return nil, nil
+	}
+
+	v := viper.New()
+	v.SetConfigFile(path)
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return v, nil
+}

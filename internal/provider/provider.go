@@ -31,6 +31,59 @@ type SourceOption struct {
 	Value string // Stored value (e.g., "42").
 }
 
+// Scope is the set of configuration layers a key may legally be set
+// in. It is a bit set because most keys are legal in more than one.
+//
+// The layers, innermost last, are the ones config.Load merges: the
+// global file, the project file, and — since per-repo descriptors —
+// each repository's own committed .bosun.yaml.
+type Scope uint8
+
+const (
+	// ScopeGlobal is ~/.config/bosun/config.yaml (or $XDG_CONFIG_HOME).
+	ScopeGlobal Scope = 1 << iota
+	// ScopeProject is <project root>/.bosun/config.yaml.
+	ScopeProject
+	// ScopeRepo is <repository>/.bosun.yaml, committed to the repo.
+	ScopeRepo
+)
+
+// ScopeCentral is the pair of layers that existed before per-repo
+// descriptors: the user's own machine and the project they own. It is
+// what an unannotated key means, so the annotation is only needed on
+// the keys a repository may actually carry.
+//
+// Reading the zero value as ScopeCentral rather than as "no layer" is
+// what keeps a credential out of a shared repository without a rule of
+// its own: a Secret key that nobody thought about is central-only,
+// which is the safe answer. The alternative — zero meaning "anywhere" —
+// fails open, and it fails open on exactly the keys nobody reviewed.
+const ScopeCentral = ScopeGlobal | ScopeProject
+
+// ScopeAny is every layer: central configuration with a per-repo
+// override. This is the annotation on repo-scoped policy — a base
+// branch, a reviewer list — which a repository may claim for itself but
+// which must keep working from the centre for repositories that have no
+// descriptor.
+const ScopeAny = ScopeCentral | ScopeRepo
+
+// Effective resolves the zero value to what it means — ScopeCentral —
+// and returns every other Scope unchanged. Anything that reports a
+// key's scope rather than merely testing it goes through here, so the
+// zero-value reading lives in exactly one place.
+func (s Scope) Effective() Scope {
+	if s == 0 {
+		return ScopeCentral
+	}
+	return s
+}
+
+// Allows reports whether a key carrying this Scope may be set in layer,
+// which must be a single layer constant.
+func (s Scope) Allows(layer Scope) bool {
+	return s.Effective()&layer != 0
+}
+
 // ConfigKey describes a single configuration value.
 type ConfigKey struct {
 	Key      string   // Config key (relative to group, e.g. "base_url").
@@ -41,6 +94,17 @@ type ConfigKey struct {
 	EnvVar   string   // Environment variable name (if value comes from env).
 	Secret   bool     // Mask input (for tokens/passwords).
 	Required bool     // Must have a value for the group to be valid.
+
+	// Scope declares which configuration layers may set this key. The
+	// zero value is ScopeCentral — global and project only — so a key
+	// reaches a repository's own .bosun.yaml solely by asking to.
+	//
+	// This is what keeps `Secret: true` out of a shared repository: a
+	// secret key has no reason to name ScopeRepo, and the default
+	// denies it, so no separate "secrets are never repo-scoped" rule
+	// has to be written or remembered. TestSecretKeysAreNeverRepoScoped
+	// holds the pairing.
+	Scope Scope
 
 	// NoPrompt marks a key whose UNSET state is meaningful, so bosun
 	// must never offer to fill it in. An optional key with no Default
@@ -95,4 +159,18 @@ type ConfigGroup struct {
 	// It exists for the unknown-key check, which otherwise has no way
 	// to tell a user-chosen key from a typo.
 	MapKey string
+
+	// MapScope is ConfigKey.Scope for the open set MapKey admits — the
+	// keys the user names, which no ConfigKey can carry a Scope for
+	// because no ConfigKey declares them. Same zero value, same
+	// meaning: ScopeCentral.
+	//
+	// It is separate from a group-wide scope on purpose. `services` is
+	// the group that needs it, and it needs the two halves to differ:
+	// the central form is `services.<repo>`, a map only the centre may
+	// write, while the repo-descriptor form is a bare `services` whose
+	// value is what would have sat under the repo key. One field per
+	// half keeps that legible instead of encoding it in an inheritance
+	// rule.
+	MapScope Scope
 }

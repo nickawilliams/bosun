@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -36,8 +37,87 @@ type repoContext struct {
 	include       bool             // selected for PR creation (creatable repos)
 	defaultBranch string           // repo's own default branch (base fallback)
 
+	// cfg is this repository's effective configuration — its own
+	// committed .bosun.yaml over the central layers. Loaded from the
+	// WORKTREE path, so PR policy is read from the branch under review
+	// rather than from whatever the main checkout happens to be on.
+	cfg repoConfig
+
 	meta prMetadata // the PR content this repo is created/synced with
 }
+
+// prConfig returns rc's effective configuration, nil-safe because the
+// shared prompt pass reads it through the representative repo, which is
+// nil when this run has nothing writable. A nil receiver answers from
+// the central layers, which is all a run with no PR to open can show.
+func (rc *repoContext) prConfig() repoConfig {
+	if rc == nil {
+		return repoConfig{}
+	}
+	return rc.cfg
+}
+
+// pinnedSelection turns one shared multi-select's outcome into the
+// workspace-wide pin, or nil for "this prompt did not speak for every
+// repo". It is the list-prompt counterpart of the rule --base and the
+// body prompt already follow: only an ANSWER that changes something
+// overrides the per-repo resolution.
+//
+// Two outcomes must not pin, and they look different from each other:
+//
+//   - selected is nil. typeaheadMultiSelect returns (nil, nil) when the
+//     fetch yields no options — a token without the scope to list
+//     collaborators, an org with no teams — and reports a skip. No form
+//     ever rendered, so reading it as "the user cleared the list" would
+//     wipe every repository's configured reviewers on the strength of a
+//     prompt nobody saw.
+//   - selected matches the seed. The seed is one representative repo's
+//     resolution, so submitting it unchanged says nothing about the
+//     others; pinning it there would push that repo's reviewers onto
+//     every sibling, which is the workspace-wide fan-out this whole
+//     change exists to end.
+//
+// A genuine edit pins, including an edit down to nothing — hence the
+// empty-but-non-nil return, which is what lets "the user deselected
+// everyone" survive as an answer instead of falling back to config.
+//
+// Set comparison, not order: the seed is in config order while the form
+// returns items in fetch order, so a sequence comparison would read
+// every unchanged submission as an edit.
+func pinnedSelection(selected, seed []string) []string {
+	if selected == nil {
+		return nil
+	}
+	if sameStringSet(selected, seed) {
+		return nil
+	}
+	return append([]string{}, selected...)
+}
+
+// sameStringSet reports whether a and b hold the same values, ignoring
+// order and duplicates.
+func sameStringSet(a, b []string) bool {
+	set := make(map[string]bool, len(a))
+	for _, v := range a {
+		set[v] = true
+	}
+	other := make(map[string]bool, len(b))
+	for _, v := range b {
+		other[v] = true
+	}
+	return maps.Equal(set, other)
+}
+
+// The repo-scoped PR policy keys. Named once because each is now read
+// through repoConfig rather than viper, and a typo in one of them would
+// silently resolve to "nothing configured" — the same failure the
+// unknown-key check exists to catch, but on the reading side.
+const (
+	prBaseKey          = "pull_request.base"
+	prReviewersKey     = "pull_request.reviewers"
+	prTeamReviewersKey = "pull_request.team_reviewers"
+	prAssigneesKey     = "pull_request.assignees"
+)
 
 // prMetadata is the PR content applied to ONE repository. Every repo
 // starts from the shared resolution (flags, config, the shared prompt
@@ -60,10 +140,19 @@ type prMetadata struct {
 // what the repo actually targets.
 const defaultBaseBranch = "main"
 
-// baseBranch returns the branch rc's PR targets when no global override
-// applies: the repo's own default branch, falling back to
-// defaultBaseBranch when it couldn't be resolved.
+// baseBranch returns the branch rc's PR targets when no --base override
+// applies: this repository's configured base, else its own default
+// branch, falling back to defaultBaseBranch when neither resolves.
+//
+// The configured base sits here rather than in the caller because it is
+// now repo-scoped — a repository's descriptor may name a base its
+// siblings don't have. Reading it per repo is also what lets the shared
+// Base Branch prompt tell "every repo agrees" from "each repo differs"
+// instead of showing one central literal as though it applied to all.
 func (rc *repoContext) baseBranch() string {
+	if b := rc.cfg.String(prBaseKey); b != "" {
+		return b
+	}
 	if rc.defaultBranch != "" {
 		return rc.defaultBranch
 	}
@@ -588,6 +677,7 @@ func newReviewCmd() *cobra.Command {
 				resolved = append(resolved, repoContext{
 					repo: rr.repo, branch: rr.branch,
 					owner: identity.Owner, repoName: identity.Name,
+					cfg: loadRepoConfig(rr.repo),
 				})
 			}
 
@@ -617,11 +707,13 @@ func newReviewCmd() *cobra.Command {
 			// goes workspace-wide when --base or config says so, because a
 			// base that doesn't exist in repo N fails N's CreatePR.
 
-			// globalBase is "" when nothing overrides the per-repo default.
+			// globalBase is "" when nothing overrides the per-repo
+			// resolution. Config no longer feeds it: pull_request.base
+			// is repo-scoped now, so it is read inside baseBranch()
+			// per repo rather than hoisted to a workspace-wide value
+			// here. Only --base and the prompt still speak for every
+			// repo, which is what they were always for.
 			globalBase, _ := cmd.Flags().GetString("base")
-			if globalBase == "" {
-				globalBase = viper.GetString("pull_request.base")
-			}
 			if promptForValues(cmd) && !cmd.Flags().Changed("base") {
 				// Open-ended text input whose placeholder is whatever
 				// submitting nothing yields — the override when one is set,
@@ -717,38 +809,24 @@ func newReviewCmd() *cobra.Command {
 			}
 
 			// Resolve reviewers and assignees from config + flags.
-			reviewers := viper.GetStringSlice("pull_request.reviewers")
-			if flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer"); len(flagReviewers) > 0 {
-				reviewers = append(reviewers, flagReviewers...)
-			}
-			if promptForValues(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
-				selected, err := typeaheadMultiSelect("Reviewers", reviewers, func() ([]string, error) {
-					return host.ListCollaborators(ctx, apiOwner, apiRepo)
-				}, excludeUser(selfUser))
-				if err != nil {
-					return err
-				}
-				reviewers = selected
-			}
-
-			teamReviewers := viper.GetStringSlice("pull_request.team_reviewers")
-			if flagTeams, _ := cmd.Flags().GetStringSlice("team-reviewer"); len(flagTeams) > 0 {
-				teamReviewers = append(teamReviewers, flagTeams...)
-			}
-			if promptForValues(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
-				selected, err := typeaheadMultiSelect("Team Reviewers", teamReviewers, func() ([]string, error) {
-					return host.ListTeams(ctx, apiOwner)
-				})
-				if err != nil {
-					return err
-				}
-				teamReviewers = selected
-			}
-
-			assignees := viper.GetStringSlice("pull_request.assignees")
-			if flagAssignees, _ := cmd.Flags().GetStringSlice("assignee"); len(flagAssignees) > 0 {
-				assignees = append(assignees, flagAssignees...)
-			}
+			//
+			// Config is repo-scoped now, so these resolve to a FUNCTION
+			// of the repository rather than to one list. That is the
+			// whole point of the per-repo layer: the old single list was
+			// read once for the entire fan-out and applied to every PR
+			// in it, so a team that owns one repository was requested on
+			// all of them.
+			//
+			// Flags and the prompt still speak workspace-wide, and the
+			// two do it differently, matching how they always have:
+			// --reviewer ADDS to whatever each repository resolved,
+			// while an answered prompt PINS one list for every
+			// repository. The prompt is one question over one candidate
+			// list, so the answer can only mean the latter; the
+			// customization pass below is where a repo diverges from it.
+			flagReviewers, _ := cmd.Flags().GetStringSlice("reviewer")
+			flagTeams, _ := cmd.Flags().GetStringSlice("team-reviewer")
+			flagAssignees, _ := cmd.Flags().GetStringSlice("assignee")
 
 			// Resolve self-assign before the interactive prompt so the
 			// current user appears pre-selected in the list.
@@ -756,41 +834,76 @@ func newReviewCmd() *cobra.Command {
 			if cmd.Flags().Changed("self-assign") {
 				selfAssign, _ = cmd.Flags().GetBool("self-assign")
 			}
-			if selfAssign && selfUser != "" {
-				duplicate := false
-				for _, a := range assignees {
-					if strings.EqualFold(a, selfUser) {
-						duplicate = true
-						break
-					}
+
+			// Non-nil once a prompt has pinned that list workspace-wide.
+			var pinnedRevs, pinnedTeams, pinnedAsns []string
+
+			// reviewersFor resolves one repo's reviewers. GitHub forbids
+			// requesting a review from the PR author (422), and the
+			// typeahead already filters self out of its candidates —
+			// dropping the author here too is what makes the config,
+			// --reviewer and -y paths agree with it.
+			reviewersFor := func(rc *repoContext) []string {
+				out := pinnedRevs
+				if out == nil {
+					out = append(slices.Clone(rc.prConfig().StringSlice(prReviewersKey)), flagReviewers...)
 				}
-				if !duplicate {
-					assignees = append(assignees, selfUser)
+				return withoutUser(out, selfUser)
+			}
+			teamsFor := func(rc *repoContext) []string {
+				if pinnedTeams != nil {
+					return slices.Clone(pinnedTeams)
 				}
+				return append(slices.Clone(rc.prConfig().StringSlice(prTeamReviewersKey)), flagTeams...)
+			}
+			assigneesFor := func(rc *repoContext) []string {
+				if pinnedAsns != nil {
+					return slices.Clone(pinnedAsns)
+				}
+				out := append(slices.Clone(rc.prConfig().StringSlice(prAssigneesKey)), flagAssignees...)
+				if selfAssign && selfUser != "" && !slices.ContainsFunc(out, func(a string) bool {
+					return strings.EqualFold(a, selfUser)
+				}) {
+					out = append(out, selfUser)
+				}
+				return out
+			}
+
+			// The prompts preview ONE repo's resolution, the same
+			// representative repo the title and body previews use, so
+			// the pre-selected values belong to a repo this run will
+			// actually write to.
+			if promptForValues(cmd) && !cmd.Flags().Changed("reviewer") && host != nil {
+				seed := reviewersFor(repRepo)
+				selected, err := typeaheadMultiSelect("Reviewers", seed, func() ([]string, error) {
+					return host.ListCollaborators(ctx, apiOwner, apiRepo)
+				}, excludeUser(selfUser))
+				if err != nil {
+					return err
+				}
+				pinnedRevs = pinnedSelection(selected, seed)
+			}
+
+			if promptForValues(cmd) && !cmd.Flags().Changed("team-reviewer") && host != nil {
+				seed := teamsFor(repRepo)
+				selected, err := typeaheadMultiSelect("Team Reviewers", seed, func() ([]string, error) {
+					return host.ListTeams(ctx, apiOwner)
+				})
+				if err != nil {
+					return err
+				}
+				pinnedTeams = pinnedSelection(selected, seed)
 			}
 
 			if promptForValues(cmd) && !cmd.Flags().Changed("assignee") && host != nil {
-				selected, err := typeaheadMultiSelect("Assignees", assignees, func() ([]string, error) {
+				seed := assigneesFor(repRepo)
+				selected, err := typeaheadMultiSelect("Assignees", seed, func() ([]string, error) {
 					return host.ListCollaborators(ctx, apiOwner, apiRepo)
 				}, promoteUser(selfUser))
 				if err != nil {
 					return err
 				}
-				assignees = selected
-			}
-
-			// GitHub forbids requesting a review from the PR author
-			// (422). The typeahead already filters self out, but the
-			// config / --reviewer / -y paths bypass it — drop the
-			// author from the FINAL list so every path agrees.
-			if selfUser != "" {
-				kept := reviewers[:0]
-				for _, r := range reviewers {
-					if !strings.EqualFold(r, selfUser) {
-						kept = append(kept, r)
-					}
-				}
-				reviewers = kept
+				pinnedAsns = pinnedSelection(selected, seed)
 			}
 
 			// --- Seed per-repo metadata, then offer the override pass ---
@@ -805,9 +918,9 @@ func newReviewCmd() *cobra.Command {
 					base:      data.BaseBranch,
 					title:     prTitle,
 					body:      prBody,
-					reviewers: slices.Clone(reviewers),
-					teams:     slices.Clone(teamReviewers),
-					assignees: slices.Clone(assignees),
+					reviewers: reviewersFor(rc),
+					teams:     teamsFor(rc),
+					assignees: assigneesFor(rc),
 				}
 				if !titlePinned {
 					rc.meta.title = buildPRTitle(data)
@@ -1145,7 +1258,7 @@ func newReviewCmd() *cobra.Command {
 	addIssueFlag(cmd)
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	cmd.Flags().Bool("draft", false, "create draft pull request(s), skip status update and notifications")
-	cmd.Flags().String("base", "", "target branch for every repo (default: pull_request.base config, else each repo's default branch)")
+	cmd.Flags().String("base", "", "target branch for every repo (default: each repo's pull_request.base, else its own default branch)")
 	cmd.Flags().String("title", "", "override PR title")
 	cmd.Flags().String("body", "", "override PR body")
 	cmd.Flags().StringSlice("reviewer", nil, "request review from user (repeatable)")
