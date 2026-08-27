@@ -205,7 +205,7 @@ A hierarchical, recursive display of labeled nodes (`Tree`,
 ## Key abstractions
 
 - **`Reporter` interface** (`reporter.go`) — the seam between
-  commands and rendering. Three implementations exist:
+  commands and rendering. Four implementations exist:
   - `cardReporter` — interactive TTY; full animated timeline.
   - `plainReporter` (`plain_reporter.go`) — non-TTY stdout without
     explicit structured-output request; emits plain, unstyled lines
