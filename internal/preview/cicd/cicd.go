@@ -38,7 +38,7 @@ type Options struct {
 	InputName   func(subStage, concept string) string
 }
 
-// ErrNoPipeline is returned by Create and Destroy when no CI/CD
+// ErrNoPipeline is returned by Ready, Create, and Destroy when no CI/CD
 // pipeline is configured. Callers should treat this like the
 // existing "skip" path in the preview command rather than a fatal error.
 //
@@ -47,9 +47,9 @@ type Options struct {
 // importing the adapter to name its sentinel.
 var ErrNoPipeline = notConfigured("preview: no CI/CD pipeline configured")
 
-// ErrNoWorkflow is returned when the requested sub-stage has no
-// workflow targets configured. Matches preview.ErrNotConfigured for the
-// same reason as ErrNoPipeline.
+// ErrNoWorkflow is returned by the same three when the requested
+// sub-stage has no workflow targets configured. Matches
+// preview.ErrNotConfigured for the same reason as ErrNoPipeline.
 var ErrNoWorkflow = notConfigured("preview: no workflow configured for stage")
 
 // notConfigured is an error that answers to preview.ErrNotConfigured
@@ -153,21 +153,61 @@ func (p *adapter) Inspect(ctx context.Context, name string) (preview.Environment
 	return env, nil
 }
 
+// Ready reports whether the dispatch wiring for op is complete: a
+// pipeline to dispatch through, and at least one workflow target for
+// the sub-stage op maps to. It resolves through the same helper the
+// real call uses, so a readiness answer and the attempt that follows it
+// cannot disagree.
+func (p *adapter) Ready(ctx context.Context, op preview.Operation) error {
+	_, _, err := p.resolve(ctx, op)
+	return err
+}
+
+// resolve maps op onto its sub-stage and the workflow targets
+// configured for it. The two failure arms are the ones a caller is
+// expected to treat as "no backend": no pipeline at all, or a pipeline
+// with nothing wired for this half of the lifecycle. Both answer to
+// preview.ErrNotConfigured.
+func (p *adapter) resolve(ctx context.Context, op preview.Operation) (string, []Target, error) {
+	if p.opts.Pipeline == nil {
+		return "", nil, ErrNoPipeline
+	}
+	subStage, err := p.subStage(op)
+	if err != nil {
+		return "", nil, err
+	}
+	targets, err := p.opts.Targets(ctx, subStage)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(targets) == 0 {
+		return "", nil, ErrNoWorkflow
+	}
+	return subStage, targets, nil
+}
+
+// subStage renders the configured stage prefix plus the suffix op
+// dispatches under — "preview.up", "preview.down". An unrecognized op
+// is a programming error rather than a configuration one, so it does
+// not answer to ErrNotConfigured.
+func (p *adapter) subStage(op preview.Operation) (string, error) {
+	switch op {
+	case preview.OpCreate:
+		return p.opts.Stage + ".up", nil
+	case preview.OpDestroy:
+		return p.opts.Stage + ".down", nil
+	default:
+		return "", fmt.Errorf("preview: unknown operation %q", op)
+	}
+}
+
 func (p *adapter) Create(ctx context.Context, claim preview.Claim) (preview.Environment, error) {
 	if claim.Name == "" {
 		return preview.Environment{}, errors.New("preview: claim name is empty")
 	}
-	if p.opts.Pipeline == nil {
-		return preview.Environment{}, ErrNoPipeline
-	}
-
-	subStage := p.opts.Stage + ".up"
-	targets, err := p.opts.Targets(ctx, subStage)
+	subStage, targets, err := p.resolve(ctx, preview.OpCreate)
 	if err != nil {
 		return preview.Environment{}, err
-	}
-	if len(targets) == 0 {
-		return preview.Environment{}, ErrNoWorkflow
 	}
 
 	inputs := p.buildDeployInputs(subStage, claim)
@@ -204,17 +244,9 @@ func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("preview: refusing to destroy without an env name")
 	}
-	if p.opts.Pipeline == nil {
-		return ErrNoPipeline
-	}
-
-	subStage := p.opts.Stage + ".down"
-	targets, err := p.opts.Targets(ctx, subStage)
+	subStage, targets, err := p.resolve(ctx, preview.OpDestroy)
 	if err != nil {
 		return err
-	}
-	if len(targets) == 0 {
-		return ErrNoWorkflow
 	}
 
 	nameKey := p.opts.InputName(subStage, "name")

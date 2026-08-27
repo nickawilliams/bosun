@@ -1172,6 +1172,52 @@ func TestGitHubCLIToken_NoCredential(t *testing.T) {
 	}
 }
 
+// --- Ready ---
+
+// TestReady_ConfiguredIsReadyWithoutTouchingTheNetwork pins both
+// halves of the contract this adapter's readiness answers: an
+// addressable base URL is ready, and answering costs no request. The
+// question is "can this provider be addressed", not "is the service
+// up" — a reachability check here would drop a deploy out of the plan
+// for a blip the attempt itself reports properly.
+func TestReady_ConfiguredIsReadyWithoutTouchingTheNetwork(t *testing.T) {
+	p, rec := newBuilder().build(t)
+	for _, op := range []preview.Operation{preview.OpCreate, preview.OpDestroy} {
+		if err := p.Ready(context.Background(), op); err != nil {
+			t.Errorf("Ready(%s) = %v, want nil", op, err)
+		}
+	}
+	if n := rec.calls(); n != 0 {
+		t.Errorf("Ready made %d request(s); want 0", n)
+	}
+}
+
+// TestReady_UnsetBaseURLIsNotConfigured is the answer that keeps a
+// deploy this adapter cannot address out of the plan, with the same
+// sentinel Get and Create report for the same reason.
+func TestReady_UnsetBaseURLIsNotConfigured(t *testing.T) {
+	p, _ := newBuilder().withoutServer().build(t)
+	for _, op := range []preview.Operation{preview.OpCreate, preview.OpDestroy} {
+		if err := p.Ready(context.Background(), op); !errors.Is(err, preview.ErrNotConfigured) {
+			t.Errorf("Ready(%s) = %v, want ErrNotConfigured", op, err)
+		}
+	}
+}
+
+// TestReady_UnknownOperation guards the switch: an operation with no
+// endpoint behind it is a programming error, and answering it as
+// not-configured would turn that into a silent skip.
+func TestReady_UnknownOperation(t *testing.T) {
+	p, _ := newBuilder().build(t)
+	err := p.Ready(context.Background(), preview.Operation("resize"))
+	if err == nil {
+		t.Fatal("expected an error for an unknown operation")
+	}
+	if errors.Is(err, preview.ErrNotConfigured) {
+		t.Errorf("err = %v, must not read as a not-configured skip", err)
+	}
+}
+
 // --- Base URL handling ---
 
 func TestBaseURL_TrailingSlashIsTolerated(t *testing.T) {

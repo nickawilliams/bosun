@@ -635,6 +635,86 @@ func TestDestroy_DispatchErrorSkipsClear(t *testing.T) {
 	}
 }
 
+// --- Ready ---
+
+// TestReady_NilPipeline pins the answer callers act on before they
+// plan anything: no pipeline is not-configured, for both halves.
+func TestReady_NilPipeline(t *testing.T) {
+	p := newBuilder().build(t)
+	for _, op := range []preview.Operation{preview.OpCreate, preview.OpDestroy} {
+		if err := p.Ready(context.Background(), op); !errors.Is(err, ErrNoPipeline) {
+			t.Errorf("Ready(%s) = %v, want ErrNoPipeline", op, err)
+		}
+	}
+}
+
+// TestReady_AnswersPerSubStage is the reason readiness is a
+// per-operation question rather than one "is this provider
+// configured?" flag: a project can wire the up workflow and not the
+// down one, and a caller planning a teardown must get the answer for
+// the teardown.
+func TestReady_AnswersPerSubStage(t *testing.T) {
+	b := newBuilder().withPipeline(newFakePipeline())
+	b.targetsFunc = func(_ context.Context, subStage string) ([]Target, error) {
+		if subStage == "preview.up" {
+			return []Target{{Owner: "o", Repo: "r", Workflow: "up.yml"}}, nil
+		}
+		return nil, nil
+	}
+	p := b.build(t)
+
+	if err := p.Ready(context.Background(), preview.OpCreate); err != nil {
+		t.Errorf("Ready(create) = %v, want nil — preview.up has a target", err)
+	}
+	if err := p.Ready(context.Background(), preview.OpDestroy); !errors.Is(err, ErrNoWorkflow) {
+		t.Errorf("Ready(destroy) = %v, want ErrNoWorkflow", err)
+	}
+}
+
+// TestReady_MatchesErrNotConfigured pins the property a caller holding
+// only the interface depends on: it recognizes "no backend" without
+// importing this package to name the sentinel.
+func TestReady_MatchesErrNotConfigured(t *testing.T) {
+	p := newBuilder().build(t)
+	if err := p.Ready(context.Background(), preview.OpCreate); !errors.Is(err, preview.ErrNotConfigured) {
+		t.Fatalf("err = %v, want it to match preview.ErrNotConfigured", err)
+	}
+}
+
+// TestReady_TargetResolutionErrorIsNotASkip separates the two failure
+// kinds. A malformed workflow target is a fault to report, not a
+// provider quietly saying it has no backend — routing it to
+// ErrNotConfigured would drop the deploy with a "nothing configured"
+// notice and never name the broken target.
+func TestReady_TargetResolutionErrorIsNotASkip(t *testing.T) {
+	b := newBuilder().withPipeline(newFakePipeline())
+	boom := errors.New("malformed target \"deploy-preview.yml\"")
+	b.targetsFunc = func(context.Context, string) ([]Target, error) { return nil, boom }
+	p := b.build(t)
+
+	err := p.Ready(context.Background(), preview.OpCreate)
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the resolver's error", err)
+	}
+	if errors.Is(err, preview.ErrNotConfigured) {
+		t.Error("a resolver fault must not read as a not-configured skip")
+	}
+}
+
+// TestReady_UnknownOperation guards the switch: an operation the
+// adapter has no sub-stage for is a programming error, and answering
+// it as not-configured would turn that into a silent skip.
+func TestReady_UnknownOperation(t *testing.T) {
+	p := newBuilder().withPipeline(newFakePipeline()).build(t)
+	err := p.Ready(context.Background(), preview.Operation("resize"))
+	if err == nil {
+		t.Fatal("expected an error for an unknown operation")
+	}
+	if errors.Is(err, preview.ErrNotConfigured) {
+		t.Errorf("err = %v, must not read as a not-configured skip", err)
+	}
+}
+
 // --- Builder fluent setters ---
 
 func (b *providerBuilder) withTracker(t issue.Tracker) *providerBuilder {

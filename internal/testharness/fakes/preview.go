@@ -45,10 +45,15 @@ type Preview struct {
 	// passes it to Destroy, so a fake that zeroed the Environment here
 	// would let a test lock in "Destroy receives an empty name" and
 	// pass, while the real provider hands over the real one.
+	//
+	// ReadyErr is the "provider has no backend" answer. Seed it with
+	// something matching preview.ErrNotConfigured to drive the
+	// not-configured plan rows; the default nil means fully wired.
 	GetErr     error
 	CreateErr  error
 	DestroyErr error
 	ListErr    error
+	ReadyErr   error
 
 	// calls records the method names invoked, in order.
 	calls []string
@@ -128,6 +133,18 @@ func (p *Preview) recordCall(name string) {
 }
 
 // --- preview.Provider implementation ---
+
+// Ready answers ReadyErr for every operation. The fake has no wiring
+// to be partially complete, so it does not distinguish OpCreate from
+// OpDestroy — a test that needs the halves to disagree wants the real
+// adapter, whose per-sub-stage targets are the reason the distinction
+// exists.
+func (p *Preview) Ready(_ context.Context, _ preview.Operation) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recordCall("Ready")
+	return p.ReadyErr
+}
 
 func (p *Preview) Get(_ context.Context, issueKey string) (preview.Environment, error) {
 	p.mu.Lock()
