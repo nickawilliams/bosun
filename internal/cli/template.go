@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/ui"
@@ -91,32 +93,53 @@ var legacyTemplateFields = map[string]string{
 	"PreviewURL":       "Preview.URL",
 }
 
+// fieldRefRe builds the matcher for one retired field name.
+//
+// The boundaries are the whole difficulty. A plain substring scan for
+// ".Name" also matches ".Preview.Name", so a CORRECT template failing
+// for an unrelated reason would be told to fix the one thing it got
+// right — advice that points away from the real fault. And a scan for
+// ".IssueKey" also matches ".IssueKeyword", a field this project never
+// retired.
+//
+// So: the dot may not be preceded by an identifier character or
+// another dot (which is what excludes a selector chain like
+// .Preview.Name and a variable like $i.Key), and the name may not be
+// followed by one (which is what excludes .IssueKeyword).
+//
+// $i := .Issue followed by $i.Key is a false negative, accepted: the
+// alternative is parsing, and the patterns that reach here include
+// ones that do not parse.
+func fieldRefRe(field string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[^\w.])\.` + regexp.QuoteMeta(field) + `($|[^\w])`)
+}
+
 // templateMigrationHint reports the retired variables a pattern still
 // uses, as a single ready-to-print clause naming each replacement, or
 // "" when the pattern is clean. extra carries context-specific
-// retirements the shared map cannot claim globally.
+// retirements the shared map cannot claim globally, and wins over it.
 //
-// Matching is a substring scan rather than a parse of the template's
-// action list: the pattern that reaches here has already failed, and a
-// pattern that fails to PARSE has no action list to walk. A false
-// positive costs a line of advice; a false negative costs the whole
-// point of the diagnostic.
+// Matching scans the raw pattern rather than walking the template's
+// parsed actions, because a pattern that fails to PARSE has no action
+// list — and a stale variable inside an unclosed action is the
+// likeliest way both faults arrive together.
 func templateMigrationHint(pattern string, extra map[string]string) string {
-	var hints []string
-	seen := map[string]bool{}
-
-	check := func(field, replacement string) {
-		if seen[field] || !strings.Contains(pattern, "."+field) {
-			return
-		}
-		seen[field] = true
-		hints = append(hints, fmt.Sprintf("{{.%s}} is now {{.%s}}", field, replacement))
+	// One map rather than two loops with a seen-set: an overlapping
+	// key can then only resolve one way, instead of depending on which
+	// loop ran first.
+	fields := make(map[string]string, len(legacyTemplateFields)+len(extra))
+	for field, replacement := range legacyTemplateFields {
+		fields[field] = replacement
 	}
 	for field, replacement := range extra {
-		check(field, replacement)
+		fields[field] = replacement
 	}
-	for field, replacement := range legacyTemplateFields {
-		check(field, replacement)
+
+	var hints []string
+	for field, replacement := range fields {
+		if fieldRefRe(field).MatchString(pattern) {
+			hints = append(hints, fmt.Sprintf("{{.%s}} is now {{.%s}}", field, replacement))
+		}
 	}
 
 	if len(hints) == 0 {
@@ -127,6 +150,30 @@ func templateMigrationHint(pattern string, extra map[string]string) string {
 	return strings.Join(hints, "; ")
 }
 
+// reportedTemplates dedupes template warnings within one command run.
+//
+// The render paths are called repeatedly by design — buildPRTitle once
+// for the shared prompt and again per repository, buildNotifyContent
+// once in Assess and again in Apply — so one stale template in a
+// five-repo workspace would otherwise print the same sentence six
+// times, some of it from inside a plan's assessment spinner. The
+// failure is a property of the config, not of the call, and saying it
+// once is saying it.
+var reportedTemplates = struct {
+	sync.Mutex
+	seen map[string]bool
+}{seen: map[string]bool{}}
+
+// resetTemplateReports clears the dedup state. Called once per command
+// from Bootstrap: the state is per run, and a long-lived process (or a
+// test binary running many commands) must not inherit an earlier run's
+// silence.
+func resetTemplateReports() {
+	reportedTemplates.Lock()
+	defer reportedTemplates.Unlock()
+	clear(reportedTemplates.seen)
+}
+
 // reportTemplateFailure surfaces a template that would otherwise fail
 // in silence, naming the config key that carries it and — when the
 // cause is a variable this project retired — the replacement.
@@ -134,10 +181,29 @@ func templateMigrationHint(pattern string, extra map[string]string) string {
 // The render paths keep their fallbacks. The point is not to abort a
 // command over a notification's wording; it is that a template which
 // stopped being honored must not look identical to one that was.
+//
+// An empty configKey means the pattern is a bosun built-in rather than
+// the user's, and nothing is reported: blaming a config key the user
+// never set would send them to edit something that isn't there. Those
+// built-ins cannot currently fail — they are literals or reference
+// only .Items — so this is a guard against a future one that can, not
+// a live path.
 func reportTemplateFailure(configKey, pattern string, err error, extra map[string]string) {
+	if configKey == "" {
+		return
+	}
 	msg := fmt.Sprintf("%s: %v", configKey, err)
 	if hint := templateMigrationHint(pattern, extra); hint != "" {
 		msg += " — " + hint
 	}
+
+	reportedTemplates.Lock()
+	already := reportedTemplates.seen[msg]
+	reportedTemplates.seen[msg] = true
+	reportedTemplates.Unlock()
+	if already {
+		return
+	}
+
 	ui.Warning("%s", msg)
 }

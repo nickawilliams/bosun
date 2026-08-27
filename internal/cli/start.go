@@ -123,7 +123,7 @@ func newStartCmd() *cobra.Command {
 				// Build branch name.
 				branchName = issue
 				if detail.Key != "" {
-					name, err := buildBranchName(detail.Key, detail.Type, detail.Title, slug)
+					name, err := buildBranchName(detail, slug)
 					if err != nil {
 						ui.Skip(fmt.Sprintf("branch naming: %v (using %s)", err, issue))
 					} else {

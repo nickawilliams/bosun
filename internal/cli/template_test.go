@@ -47,7 +47,7 @@ func TestTemplateVocabularyIsShared(t *testing.T) {
 	// contexts that carry one.
 	t.Run("issue key", func(t *testing.T) {
 		viper.Set("vcs.branch.template", "{{.Issue.Key}}")
-		got, err := buildBranchName("PROJ-1", "Story", "Add widget", "")
+		got, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Add widget"}, "")
 		if err != nil || got != "PROJ-1" {
 			t.Errorf("branch = (%q, %v), want PROJ-1", got, err)
 		}
@@ -162,6 +162,38 @@ func TestTemplateMigrationHint(t *testing.T) {
 			name:    "repeats collapse",
 			pattern: "{{.IssueKey}} {{.IssueKey}}",
 			want:    "{{.IssueKey}} is now {{.Issue.Key}}",
+		},
+		{
+			// The worst false positive: a CORRECT template failing for
+			// an unrelated reason must not be told to fix the one thing
+			// it got right. A substring scan for ".Name" matches
+			// ".Preview.Name", so the advice would point away from the
+			// real fault (.Typo) at the thing already migrated.
+			name:    "the new spelling is not mistaken for the old one",
+			pattern: "https://{{.Preview.Name}}-{{.Typo}}.test",
+			extra:   map[string]string{"Name": "Preview.Name"},
+		},
+		{
+			// A longer identifier that merely starts with a retired
+			// name is a different field, and this project never
+			// retired it.
+			name:    "a longer identifier is not a retired one",
+			pattern: "{{.IssueKeyword}}",
+		},
+		{
+			// Whitespace inside the action is legal Go template syntax
+			// and must not hide a genuinely stale field.
+			name:    "spaces inside the action still match",
+			pattern: "{{ .IssueKey }}",
+			want:    "{{.IssueKey}} is now {{.Issue.Key}}",
+		},
+		{
+			// extra wins over the shared map for the same key, rather
+			// than the answer depending on which loop ran first.
+			name:    "extra overrides the shared map",
+			pattern: "{{.PreviewName}}",
+			extra:   map[string]string{"PreviewName": "Somewhere.Else"},
+			want:    "{{.PreviewName}} is now {{.Somewhere.Else}}",
 		},
 	}
 
@@ -378,7 +410,7 @@ func TestBuildBranchNameMalformedTemplate(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set("vcs.branch.template", "{{.Issue.Key")
 
-	got, err := buildBranchName("PROJ-1", "Story", "Add widget", "")
+	got, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Add widget"}, "")
 	if err == nil {
 		t.Fatalf("buildBranchName() = %q, want a parse error", got)
 	}
@@ -393,12 +425,156 @@ func TestBuildBranchNameNonLegacyFailureHasNoHint(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set("vcs.branch.template", "{{.Category}}/{{.Nonsense}}")
 
-	_, err := buildBranchName("PROJ-1", "Story", "Add widget", "")
+	_, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Add widget"}, "")
 	if err == nil {
 		t.Fatal("expected an error for an unknown field")
 	}
 	if strings.Contains(err.Error(), " is now ") {
 		t.Errorf("err %q offers a migration for a field that was never retired", err)
+	}
+}
+
+// TestStageURLTemplateRejectsLegacyAtConstruction is the fix for the
+// hole the diagnostic originally left. Both preview adapters render
+// URLTemplate themselves, deep inside Get/Inspect/List, and return ""
+// on error — a legacy {{.Name}} PARSES, so it survived construction and
+// then produced blank URLs everywhere in silence. Proving it can render
+// is the only check positioned before anything depends on it.
+func TestStageURLTemplateRejectsLegacyAtConstruction(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("preview.url_template", "https://{{.Name}}.test")
+
+	tmpl, err := stageURLTemplate("preview")
+	if err == nil {
+		t.Fatal("a legacy url_template was admitted; every preview URL would render empty")
+	}
+	if tmpl != nil {
+		t.Error("a rejected template was still returned")
+	}
+	for _, want := range []string{"preview.url_template", "{{.Preview.Name}}"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err %q does not carry %q", err, want)
+		}
+	}
+}
+
+func TestStageURLTemplateAcceptsCurrentVocabulary(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("preview.url_template", "https://{{.Preview.Name}}.test")
+
+	tmpl, err := stageURLTemplate("preview")
+	if err != nil {
+		t.Fatalf("stageURLTemplate: %v", err)
+	}
+	if tmpl == nil {
+		t.Fatal("a valid template was dropped")
+	}
+}
+
+func TestStageURLTemplateUnsetIsNotAnError(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	tmpl, err := stageURLTemplate("preview")
+	if err != nil || tmpl != nil {
+		t.Errorf("stageURLTemplate() = (%v, %v), want (nil, nil) when unset", tmpl, err)
+	}
+}
+
+func TestStageURLTemplateRejectsUnparseable(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("preview.url_template", "https://{{.Preview.Name")
+
+	if _, err := stageURLTemplate("preview"); err == nil {
+		t.Fatal("an unparseable url_template was admitted")
+	}
+}
+
+// TestTemplateWarningIsReportedOnce covers the dedup. The render paths
+// are called repeatedly by design — buildPRTitle once for the shared
+// prompt and again per repository — so one stale template would
+// otherwise print the same sentence once per call, some of it from
+// inside a plan's assessment spinner.
+func TestTemplateWarningIsReportedOnce(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	resetTemplateReports()
+	t.Cleanup(resetTemplateReports)
+	viper.Set("code_host.pr.title_template", "{{.IssueKey}}")
+	rep := captureReporter(t)
+
+	data := prTemplateData{Issue: issueRef{Key: "PROJ-1", Title: "Add widget"}}
+	for range 5 {
+		buildPRTitle(data)
+	}
+
+	if got := warnings(rep); len(got) != 1 {
+		t.Errorf("warnings = %v, want exactly one for five identical failures", got)
+	}
+}
+
+// TestTemplateWarningResetsPerRun is the other half: the dedup is
+// per command, so a second run reports again rather than inheriting
+// the first run's silence.
+func TestTemplateWarningResetsPerRun(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	resetTemplateReports()
+	t.Cleanup(resetTemplateReports)
+	viper.Set("code_host.pr.title_template", "{{.IssueKey}}")
+	rep := captureReporter(t)
+
+	data := prTemplateData{Issue: issueRef{Key: "PROJ-1"}}
+	buildPRTitle(data)
+	resetTemplateReports()
+	buildPRTitle(data)
+
+	if got := warnings(rep); len(got) != 2 {
+		t.Errorf("warnings = %v, want one per run", got)
+	}
+}
+
+// TestBuiltInTemplateFailureBlamesNobody pins that a bosun built-in is
+// never reported against a config key the user did not set. The
+// built-ins cannot currently fail, so this exercises the guard
+// directly rather than through a contrived failure.
+func TestBuiltInTemplateFailureBlamesNobody(t *testing.T) {
+	resetTemplateReports()
+	t.Cleanup(resetTemplateReports)
+	rep := captureReporter(t)
+
+	reportTemplateFailure("", "{{.IssueKey}}", errors.New("boom"), nil)
+
+	if got := warnings(rep); len(got) != 0 {
+		t.Errorf("a built-in failure was blamed on config: %v", got)
+	}
+}
+
+// TestBranchTemplateExposesTheWholeIssue guards the regression the
+// namespacing introduced and this change closes: a field the context
+// advertises but nobody populates renders as "" rather than failing,
+// so {{.Issue.Type}} in a branch template silently produced a
+// leading-slash refname. Every advertised field is populated now.
+func TestBranchTemplateExposesTheWholeIssue(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("vcs.branch.template", "{{.Issue.Type}}/{{.Issue.Key}}/{{.Issue.Title}}/{{.Issue.URL}}")
+
+	got, err := buildBranchName(issue.Issue{
+		Key:   "PROJ-1",
+		Type:  "Story",
+		Title: "Add widget",
+		URL:   "https://tracker.test/PROJ-1",
+	}, "")
+	if err != nil {
+		t.Fatalf("buildBranchName: %v", err)
+	}
+	want := "Story/PROJ-1/Add widget/https://tracker.test/PROJ-1"
+	if got != want {
+		t.Errorf("branch = %q, want %q — an unpopulated field renders empty, not as an error", got, want)
 	}
 }
 
@@ -411,7 +587,7 @@ func TestBuildBranchNameAbortsOnStaleTemplate(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set("vcs.branch.template", "{{.Category}}/{{.IssueNumber}}")
 
-	got, err := buildBranchName("PROJ-1", "Story", "Add widget", "")
+	got, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Add widget"}, "")
 	if err == nil {
 		t.Fatalf("buildBranchName() = %q, want an error on a stale template", got)
 	}

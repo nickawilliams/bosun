@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/spf13/viper"
 )
 
@@ -22,18 +23,25 @@ var (
 	defaultPattern = "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"
 )
 
-// buildBranchName generates a branch name from the configured pattern,
-// the issue type (from the tracker), and the issue title. When slug is
-// non-empty it is used directly; otherwise one is derived from the title.
-func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, error) {
+// buildBranchName generates a branch name from the configured pattern
+// and the fetched issue. When slug is non-empty it is used directly;
+// otherwise one is derived from the issue title.
+//
+// It takes the whole issue rather than the three fields it needs
+// directly, because the template context advertises all of them. A
+// field left unpopulated does not fail — Go renders a known-but-empty
+// field as "" — so {{.Issue.Type}} in a branch template would have
+// produced a silent "/PROJ-1" rather than an error. Passing the issue
+// whole is what makes the advertised vocabulary the real one.
+func buildBranchName(detail issue.Issue, slug string) (string, error) {
 	pattern := viper.GetString("vcs.branch.template")
 	if pattern == "" {
 		pattern = defaultPattern
 	}
 
-	category := resolveCategory(issueType)
+	category := resolveCategory(detail.Type)
 	if slug == "" {
-		slug = slugify(issueTitle)
+		slug = slugify(detail.Title)
 	}
 
 	tmpl, err := template.New("branch").Parse(pattern)
@@ -41,15 +49,11 @@ func buildBranchName(issueKey, issueType, issueTitle, slug string) (string, erro
 		return "", err
 	}
 
+	ref := issueRefFrom(detail.Key, detail)
+	ref.Slug = slug
+
 	var buf strings.Builder
-	err = tmpl.Execute(&buf, branchData{
-		Category: category,
-		Issue: issueRef{
-			Key:   issueKey,
-			Title: issueTitle,
-			Slug:  slug,
-		},
-	})
+	err = tmpl.Execute(&buf, branchData{Category: category, Issue: ref})
 	if err != nil {
 		// The only render path that aborts rather than degrading: a
 		// branch name is the run's identity, and half a name is worse

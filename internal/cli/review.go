@@ -751,14 +751,7 @@ func newReviewCmd() *cobra.Command {
 				repRepo = &resolved[writable[0]]
 			}
 			templateData := func(rc *repoContext) prTemplateData {
-				d := prTemplateData{
-					Issue: issueRef{
-						Key:   issue,
-						Title: detail.Title,
-						Type:  detail.Type,
-						URL:   detail.URL,
-					},
-				}
+				d := prTemplateData{Issue: issueRefFrom(issue, detail)}
 				if rc != nil {
 					d.Branch = rc.branch
 					d.BaseBranch = baseFor(rc)

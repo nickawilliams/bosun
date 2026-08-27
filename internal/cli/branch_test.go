@@ -3,6 +3,7 @@ package cli
 import (
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/spf13/viper"
 )
 
@@ -70,7 +71,7 @@ func TestBuildBranchName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildBranchName(tt.issueKey, tt.issueType, tt.title, tt.slug)
+			got, err := buildBranchName(issue.Issue{Key: tt.issueKey, Type: tt.issueType, Title: tt.title}, tt.slug)
 			if err != nil {
 				t.Fatalf("buildBranchName() error: %v", err)
 			}
@@ -87,7 +88,7 @@ func TestBuildBranchNameDefaultPattern(t *testing.T) {
 	viper.Set("vcs.branch.categories.story", "feature")
 	t.Cleanup(func() { viper.Reset() })
 
-	got, err := buildBranchName("PROJ-1", "Story", "Test", "")
+	got, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Test"}, "")
 	if err != nil {
 		t.Fatalf("buildBranchName() error: %v", err)
 	}

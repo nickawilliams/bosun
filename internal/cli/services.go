@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -553,26 +554,35 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 	}
 
 	// Built-in text default — overridden by a map config for this type.
+	// The empty key is what stops a failing built-in from being
+	// reported against a config key the user never set.
 	if s, ok := defaultTextNotifyTemplates[notifType]; ok {
 		if sub := viper.GetStringMapString(key); len(sub) == 0 {
-			return notify.Content{Text: renderNotifyTemplate(key, s, data)}
+			return notify.Content{Text: renderNotifyTemplate("", s, data)}
 		}
 	}
 
 	// Structured path: a map of override fields, falling back to defaults.
 	sub := viper.GetStringMapString(key)
 	defaults := defaultNotifyTemplates[notifType]
-	get := func(field string) string {
+	// get returns the pattern and the key to blame for it — the user's
+	// when they supplied an override, none when the built-in default
+	// is what rendered.
+	get := func(field string) (string, string) {
 		if v, ok := sub[field]; ok {
-			return v
+			return v, key + "." + field
 		}
-		return defaults[field]
+		return defaults[field], ""
+	}
+	render := func(field string) string {
+		pattern, blame := get(field)
+		return renderNotifyTemplate(blame, pattern, data)
 	}
 
 	c := notify.Content{
-		Header:  renderNotifyTemplate(key, get("header"), data),
-		Body:    renderNotifyTemplate(key, get("body"), data),
-		Context: renderNotifyTemplate(key, get("context"), data),
+		Header:  render("header"),
+		Body:    render("body"),
+		Context: render("context"),
 		Items:   data.Items,
 		IconURL: data.IconURL,
 	}
@@ -635,13 +645,9 @@ func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 	tracker, _ := newIssueTracker()
 
 	const stage = preview.ConfigGroup
-	var urlTmpl *template.Template
-	if pattern := viper.GetString(stage + ".url_template"); pattern != "" {
-		parsed, err := template.New("stage-url").Parse(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("preview url_template: %w", err)
-		}
-		urlTmpl = parsed
+	urlTmpl, err := stageURLTemplate(stage)
+	if err != nil {
+		return nil, err
 	}
 
 	return services.PreviewProvider(providerConfig{}, preview.Deps{
@@ -1080,6 +1086,54 @@ func stageInputName(subStage, concept string) string {
 	return viper.GetString(subStage + ".inputs." + concept)
 }
 
+// stageURLLegacyFields is the retirement the shared map cannot claim
+// globally: bare {{.Name}} was this template's own spelling before the
+// vocabulary was unified, and elsewhere .Name is a range variable's
+// field rather than a stale reference.
+var stageURLLegacyFields = map[string]string{"Name": "Preview.Name"}
+
+// stageURLTemplate parses <stage>.url_template and proves it can
+// actually render, returning nil when none is configured.
+//
+// The render is the point. Parsing alone admits {{.Name}} — valid
+// syntax naming a field that no longer exists — and the adapters
+// render URLTemplate themselves, deep inside Get/Inspect/List, where
+// they have no way to report and simply return "". A legacy template
+// would then leave `bosun preview list` printing blank URLs and the
+// cicd adapter probing nothing, in silence. This is the one place that
+// sees the template before anything depends on it.
+//
+// A template that cannot render is a hard error rather than a warning,
+// matching what a parse failure already did: every preview URL in the
+// run comes from it, so there is no degraded mode worth having.
+func stageURLTemplate(stage string) (*template.Template, error) {
+	configKey := stage + ".url_template"
+	pattern := viper.GetString(configKey)
+	if pattern == "" {
+		return nil, nil
+	}
+
+	fail := func(err error) error {
+		if hint := templateMigrationHint(pattern, stageURLLegacyFields); hint != "" {
+			return fmt.Errorf("%s: %w — %s", configKey, err, hint)
+		}
+		return fmt.Errorf("%s: %w", configKey, err)
+	}
+
+	parsed, err := template.New("stage-url").Parse(pattern)
+	if err != nil {
+		return nil, fail(err)
+	}
+	// The context carries only Preview.Name and Preview.URL, so a probe
+	// value exercises every field a real render could reach.
+	if err := parsed.Execute(io.Discard, preview.URLTemplateData{
+		Preview: preview.Ref{Name: "probe"},
+	}); err != nil {
+		return nil, fail(err)
+	}
+	return parsed, nil
+}
+
 // renderStageURL renders the url_template for a stage with the given name.
 // Returns empty string if the template is not configured or rendering fails.
 //
@@ -1090,19 +1144,14 @@ func renderStageURL(stage, name string) string {
 	if pattern == "" {
 		return ""
 	}
-	// Bare {{.Name}} was this template's own spelling before the
-	// vocabulary was unified, and it is the one legacy field the
-	// shared map can't claim globally — elsewhere .Name is a range
-	// variable's field, not a stale reference.
-	legacy := map[string]string{"Name": "Preview.Name"}
 	tmpl, err := template.New("stage-url").Parse(pattern)
 	if err != nil {
-		reportTemplateFailure(configKey, pattern, err, legacy)
+		reportTemplateFailure(configKey, pattern, err, stageURLLegacyFields)
 		return ""
 	}
 	var buf strings.Builder
 	if err := tmpl.Execute(&buf, preview.URLTemplateData{Preview: preview.Ref{Name: name}}); err != nil {
-		reportTemplateFailure(configKey, pattern, err, legacy)
+		reportTemplateFailure(configKey, pattern, err, stageURLLegacyFields)
 		return ""
 	}
 	return buf.String()

@@ -102,6 +102,9 @@ func Bootstrap(cmd *cobra.Command) error {
 		return nil
 	}
 	bootstrapped = true
+	// Template warnings are deduped for the life of one run, so the
+	// state has to be cleared at the start of one.
+	resetTemplateReports()
 
 	if cmd != nil {
 		ui.SetStreams(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
