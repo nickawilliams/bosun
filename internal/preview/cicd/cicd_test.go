@@ -226,7 +226,7 @@ func TestGet_Alive(t *testing.T) {
 	tracker := newFakeTracker().withName("brave-falcon")
 	p := newBuilder().
 		withTracker(tracker).
-		withURLPattern(server.URL + "/{{.Name}}").
+		withURLPattern(server.URL + "/{{.Preview.Name}}").
 		build(t)
 
 	env, err := p.Get(context.Background(), "PROJ-1")
@@ -250,7 +250,7 @@ func TestGet_DeadKeepsBinding(t *testing.T) {
 	tracker := newFakeTracker().withName("brave-falcon")
 	p := newBuilder().
 		withTracker(tracker).
-		withURLPattern(server.URL + "/{{.Name}}").
+		withURLPattern(server.URL + "/{{.Preview.Name}}").
 		build(t)
 
 	// Get is a pure read: a definitive-dead probe reports the binding as
@@ -284,7 +284,7 @@ func TestGet_Indeterminate(t *testing.T) {
 	tracker := newFakeTracker().withName("brave-falcon")
 	p := newBuilder().
 		withTracker(tracker).
-		withURLPattern(server.URL + "/{{.Name}}").
+		withURLPattern(server.URL + "/{{.Preview.Name}}").
 		build(t)
 
 	env, err := p.Get(context.Background(), "PROJ-1")
@@ -336,7 +336,7 @@ func TestInspect_Alive(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p := newBuilder().withURLPattern(server.URL + "/{{.Name}}").build(t)
+	p := newBuilder().withURLPattern(server.URL + "/{{.Preview.Name}}").build(t)
 	env, err := p.Inspect(context.Background(), "brave-falcon")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -355,7 +355,7 @@ func TestInspect_Indeterminate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p := newBuilder().withURLPattern(server.URL + "/{{.Name}}").build(t)
+	p := newBuilder().withURLPattern(server.URL + "/{{.Preview.Name}}").build(t)
 	env, err := p.Inspect(context.Background(), "brave-falcon")
 
 	var pe *preview.ProbeError
@@ -380,7 +380,7 @@ func TestInspect_DeadDoesNotAutoClear(t *testing.T) {
 	tracker := newFakeTracker().withName("brave-falcon")
 	p := newBuilder().
 		withTracker(tracker).
-		withURLPattern(server.URL + "/{{.Name}}").
+		withURLPattern(server.URL + "/{{.Preview.Name}}").
 		build(t)
 
 	env, err := p.Inspect(context.Background(), "brave-falcon")

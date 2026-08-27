@@ -76,11 +76,6 @@ type adapter struct {
 	binding preview.Binding
 }
 
-// stageURLData is the template context passed to URLTemplate.
-type stageURLData struct {
-	Name string
-}
-
 // probeStatus maps a reachability probe onto the status enum. A probe
 // only ever answers "serving" or "not there" — it cannot see a
 // provision in flight or a partial deploy — so this adapter reports
@@ -331,7 +326,7 @@ func (p *adapter) renderURL(name string) string {
 		return ""
 	}
 	var buf strings.Builder
-	if err := p.opts.URLTemplate.Execute(&buf, stageURLData{Name: name}); err != nil {
+	if err := p.opts.URLTemplate.Execute(&buf, preview.URLTemplateData{Preview: preview.Ref{Name: name}}); err != nil {
 		return ""
 	}
 	return buf.String()

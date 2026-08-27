@@ -123,7 +123,7 @@ func (b *builder) store_(s preview.PropertyStore) *builder {
 	return b
 }
 func (b *builder) withTemplate() *builder {
-	b.tmpl = template.Must(template.New("u").Parse("https://{{.Name}}.example.dev"))
+	b.tmpl = template.Must(template.New("u").Parse("https://{{.Preview.Name}}.example.dev"))
 	return b
 }
 func (b *builder) withToken(f func(context.Context) (string, error)) *builder {
