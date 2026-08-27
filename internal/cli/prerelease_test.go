@@ -599,3 +599,151 @@ func TestResolveReleaseGateFailsClosed(t *testing.T) {
 		}
 	})
 }
+
+// TestDetectAffectedServices covers the narrowing that decides which of
+// a monorepo's services a release actually ships.
+//
+// The body is thin — matchServicePaths does the matching, and is
+// covered in affected_test.go — but the RETURN CONTRACT is not, and it
+// is the load-bearing part. defaultSubjectsFor branches on
+// `affectedServices != nil`: nil means "couldn't narrow, pre-check
+// everything", non-nil means "this is the answer, pre-check exactly
+// these". Confusing the two either ships services that weren't touched
+// or holds back ones that were.
+//
+// Every "can't narrow" path the doc comment lists gets a case, because
+// each is a different upstream failure (no previous tag, list-form
+// config, a broken diff, an empty diff) collapsing to the same
+// conservative answer — and a regression in any one of them looks
+// identical from the outside: a release that quietly pre-checks
+// everything.
+func TestDetectAffectedServices(t *testing.T) {
+	services := []string{"api", "worker"}
+	pathMap := map[string][]string{
+		"api":    {"api/"},
+		"worker": {"worker/"},
+	}
+
+	tests := []struct {
+		name       string
+		currentTag string
+		pathMap    map[string][]string
+		changed    []string
+		changedErr error
+		want       []string
+	}{
+		{
+			// First release: nothing to diff against.
+			name:    "no previous tag cannot narrow",
+			pathMap: pathMap,
+			changed: []string{"api/main.go"},
+			want:    nil,
+		},
+		{
+			// The list form of services configures no path prefixes, so
+			// there is nothing to narrow BY.
+			name:       "no path map cannot narrow",
+			currentTag: "v1.2.3",
+			changed:    []string{"api/main.go"},
+			want:       nil,
+		},
+		{
+			// A failed diff must not read as "nothing changed" — that
+			// would silently hold back a release that touched
+			// everything.
+			name:       "a diff failure cannot narrow",
+			currentTag: "v1.2.3",
+			pathMap:    pathMap,
+			changedErr: errors.New("fatal: bad revision"),
+			want:       nil,
+		},
+		{
+			// currentTag == HEAD. An empty diff is not evidence that no
+			// service changed, only that this comparison had nothing to
+			// say.
+			name:       "an empty diff cannot narrow",
+			currentTag: "v1.2.3",
+			pathMap:    pathMap,
+			changed:    nil,
+			want:       nil,
+		},
+		{
+			name:       "narrows to the services whose paths changed",
+			currentTag: "v1.2.3",
+			pathMap:    pathMap,
+			changed:    []string{"api/handler.go", "docs/README.md"},
+			want:       []string{"api"},
+		},
+		{
+			// Sorted, because the result is rendered in a form and in a
+			// release announcement — map iteration order reaching either
+			// would make both non-deterministic.
+			name:       "the result is sorted",
+			currentTag: "v1.2.3",
+			pathMap:    pathMap,
+			changed:    []string{"worker/queue.go", "api/handler.go"},
+			want:       []string{"api", "worker"},
+		},
+		{
+			// _shared is the escape hatch for files no single service
+			// owns: a match there means everything ships.
+			name:       "a _shared match includes every service",
+			currentTag: "v1.2.3",
+			pathMap: map[string][]string{
+				"api":     {"api/"},
+				"worker":  {"worker/"},
+				"_shared": {"go.mod"},
+			},
+			changed: []string{"go.mod"},
+			want:    []string{"api", "worker"},
+		},
+		{
+			// A service with no prefixes configured is included rather
+			// than dropped — an unconfigured service is an unknown, and
+			// the narrowing errs toward shipping it.
+			name:       "a service with no prefixes is included",
+			currentTag: "v1.2.3",
+			pathMap:    map[string][]string{"api": {"api/"}},
+			changed:    []string{"docs/README.md"},
+			want:       []string{"worker"},
+		},
+		{
+			// NOTE: this pins CURRENT behaviour, which contradicts the
+			// doc comment's promise of "an empty (non-nil) slice only
+			// when the diff genuinely found no matching service".
+			// matchServicePaths appends to a nil slice, so no-match is
+			// indistinguishable from can't-narrow, and the caller
+			// pre-checks every service instead of none.
+			//
+			// It errs toward shipping too much rather than too little,
+			// so it is not dangerous — but the distinction
+			// defaultSubjectsFor implements has no way to be produced.
+			// Asserted as-is rather than as-documented so this test
+			// describes the code; see the note raised alongside it.
+			name:       "a diff matching no service is indistinguishable from can't-narrow",
+			currentTag: "v1.2.3",
+			pathMap:    pathMap,
+			changed:    []string{"docs/README.md"},
+			want:       nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := affVCS{changed: tt.changed, changedErr: tt.changedErr}
+
+			got := detectAffectedServices(
+				context.Background(), g, "/repo", tt.currentTag, services, tt.pathMap)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("detectAffectedServices() = %#v, want %#v", got, tt.want)
+			}
+			// nil vs empty is the contract, and DeepEqual already
+			// separates them — state it so a future rewrite to
+			// slices.Equal (which does NOT) can't quietly erase it.
+			if (got == nil) != (tt.want == nil) {
+				t.Errorf("nil-ness = %v, want %v — the caller branches on it", got == nil, tt.want == nil)
+			}
+		})
+	}
+}
