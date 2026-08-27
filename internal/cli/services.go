@@ -597,7 +597,12 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		}
 	}
 	if data.Preview.Name != "" || data.Preview.URL != "" {
-		c.Preview = &notify.PreviewRef{Name: data.Preview.Name, URL: data.Preview.URL}
+		// A conversion rather than a field-by-field copy: the two
+		// types are structurally identical, so this is free, and a
+		// field added to one and not the other stops compiling instead
+		// of silently arriving at the adapter as a zero value.
+		ref := notify.PreviewRef(data.Preview)
+		c.Preview = &ref
 	}
 	return c
 }

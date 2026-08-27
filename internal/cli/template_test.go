@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -110,6 +111,68 @@ func TestIssueRefFromCarriesEveryField(t *testing.T) {
 	// from a possibly user-supplied override, not carried on the issue.
 	if got.Slug != "" {
 		t.Errorf("Slug = %q, want empty — buildBranchName owns it", got.Slug)
+	}
+}
+
+// TestNotifyContentCarriesEveryIssueField guards the boundary
+// translation buildNotifyContent performs, which is the one place the
+// template vocabulary stops being a single struct: cli.issueRef is
+// copied field-by-field into notify.IssueRef, because the two are
+// different concerns that happen to overlap — the notification model
+// has no use for Slug, and the template vocabulary should not inherit
+// whatever the notification model grows next.
+//
+// The copy is right; being silent when it falls behind is not. A field
+// added to notify.IssueRef and missed here reaches the Slack adapter as
+// a zero value with nothing to show for it — the same failure
+// issueRefFrom exists to prevent, one layer down. Reflection rather
+// than a literal comparison so the test fails when either type grows.
+func TestNotifyContentCarriesEveryIssueField(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	// Every field distinct and non-zero, so a field the copy drops
+	// shows up as the zero value rather than coincidentally matching.
+	content := buildNotifyContent("review", notifyTemplateData{
+		Issue: issueRef{
+			Key:         "PROJ-1",
+			Title:       "Add widget",
+			Slug:        "add-widget",
+			Type:        "Story",
+			URL:         "https://tracker.test/PROJ-1",
+			Description: "body text",
+			IconURL:     "https://tracker.test/icon.png",
+		},
+	})
+	if content.Issue == nil {
+		t.Fatal("Issue = nil, want populated issue data")
+	}
+
+	// Slug is the deliberate exception: it is a branch-naming concern
+	// and the notification model has no field for it. If notify ever
+	// grows one, this list is what has to change with it.
+	got := reflect.ValueOf(*content.Issue)
+	for i := range got.NumField() {
+		field := got.Type().Field(i)
+		if got.Field(i).IsZero() {
+			t.Errorf("notify.IssueRef.%s was not carried across from issueRef", field.Name)
+		}
+	}
+
+	// The other direction: a field on issueRef with no counterpart in
+	// notify.IssueRef is fine, but the set of exceptions is not allowed
+	// to grow quietly.
+	exceptions := map[string]bool{"Slug": true}
+	notifyFields := map[string]bool{}
+	for i := range got.NumField() {
+		notifyFields[got.Type().Field(i).Name] = true
+	}
+	src := reflect.TypeOf(issueRef{})
+	for i := range src.NumField() {
+		name := src.Field(i).Name
+		if !notifyFields[name] && !exceptions[name] {
+			t.Errorf("issueRef.%s reaches no notification field and is not a declared exception", name)
+		}
 	}
 }
 
