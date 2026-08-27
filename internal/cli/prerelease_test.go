@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/vcs"
+	"github.com/spf13/viper"
 )
 
 // TestReleaseTargetVersionEligibility covers the pre-gate filter:
@@ -598,6 +600,130 @@ func TestResolveReleaseGateFailsClosed(t *testing.T) {
 			t.Fatalf("gate = %v, want gateAllow", rt.gate)
 		}
 	})
+}
+
+// relTargetVCS is the vcs.VCS surface resolveReleaseTarget touches
+// across all three of its phases: multi-user context (GetDefaultBranch,
+// FetchTags, HeadSHA, TagsContaining), service detection
+// (ChangedFiles), and the release gate (Fetch, IsMergedInto). Anything
+// beyond that panics through the embedded nil interface, the same
+// contract gateVCS states — a seam that starts needing more should say
+// so loudly rather than silently pass a zero value around.
+type relTargetVCS struct {
+	vcs.VCS
+	defaultBranch string
+	changed       []string
+}
+
+func (f relTargetVCS) GetDefaultBranch(context.Context, string) (string, error) {
+	return f.defaultBranch, nil
+}
+func (f relTargetVCS) FetchTags(context.Context, string, string) error { return nil }
+func (f relTargetVCS) HeadSHA(context.Context, string) (string, error) {
+	return "deadbeef", nil
+}
+func (f relTargetVCS) TagsContaining(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (f relTargetVCS) ChangedFiles(context.Context, string, string) ([]string, error) {
+	return f.changed, nil
+}
+func (f relTargetVCS) Fetch(context.Context, string, string, string) error { return nil }
+func (f relTargetVCS) IsMergedInto(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+
+// relTargetHost is seamHost plus the tag lookup resolveReleaseTarget
+// opens with. seamHost already answers everything the multi-user phase
+// asks (GetPRForBranch, GetReleaseByTag, PRsInRange), so this only adds
+// the one method it lacks.
+type relTargetHost struct {
+	*seamHost
+	tag string
+}
+
+func (h relTargetHost) GetLatestTag(context.Context, string, string) (string, error) {
+	return h.tag, nil
+}
+
+// TestResolveReleaseTargetReadsTheDescriptor covers the wiring between
+// the per-repo config layer and release-service detection: a monorepo
+// whose services are declared in its own `.bosun.yaml`, narrowed by the
+// path prefixes declared in that same file.
+//
+// That configuration is newly reachable — before the descriptor layer,
+// a repo's services could only come from the central `services.<repo>`
+// map — and it is the combination the layer exists for, since service
+// topology is the part that is genuinely branch-scoped.
+//
+// It also reaches the one line the unit tests around it cannot: the
+// `len(rt.services) > 1` guard is what makes path-map narrowing run at
+// all, and a single-service repo (every other prerelease fixture)
+// skips it entirely.
+func TestResolveReleaseTargetReadsTheDescriptor(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	repo := writeDescriptor(t, "api", `
+services:
+  api: [api/]
+  worker: [worker/]
+`)
+
+	rt := &releaseTarget{
+		repo: repo, branch: "story/EX-1_feature",
+		owner: "acme", repoName: "api",
+	}
+	g := relTargetVCS{defaultBranch: "main", changed: []string{"api/handler.go"}}
+	host := relTargetHost{seamHost: &seamHost{}, tag: "v1.2.3"}
+
+	resolveReleaseTarget(context.Background(), g, host, "patch", rt)
+
+	if rt.tagErr != nil {
+		t.Fatalf("tagErr = %v, want nil", rt.tagErr)
+	}
+	// The descriptor's services, not the repo name — a single synthetic
+	// service is what an unconfigured repo falls back to, and it would
+	// skip narrowing entirely.
+	if !slices.Equal(rt.services, []string{"api", "worker"}) {
+		t.Fatalf("services = %v, want the descriptor's two", rt.services)
+	}
+	// Narrowed by the descriptor's OWN path prefixes: only api/ changed.
+	if !slices.Equal(rt.affectedServices, []string{"api"}) {
+		t.Errorf("affectedServices = %v, want [api] — narrowed by the descriptor's prefixes",
+			rt.affectedServices)
+	}
+}
+
+// TestResolveReleaseTargetSkipsNarrowingForOneService is the control:
+// with a single service there is nothing to narrow between, so
+// detection is skipped and affectedServices stays nil — which
+// defaultSubjectsFor reads as "pre-check everything", correctly, since
+// everything is one thing.
+func TestResolveReleaseTargetSkipsNarrowingForOneService(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	repo := writeDescriptor(t, "api", "services: [api]\n")
+
+	rt := &releaseTarget{
+		repo: repo, branch: "story/EX-1_feature",
+		owner: "acme", repoName: "api",
+	}
+	// changed names a path no service prefix would match; if narrowing
+	// ran anyway it would come back empty rather than nil.
+	g := relTargetVCS{defaultBranch: "main", changed: []string{"docs/README.md"}}
+	host := relTargetHost{seamHost: &seamHost{}, tag: "v1.2.3"}
+
+	resolveReleaseTarget(context.Background(), g, host, "patch", rt)
+
+	if !slices.Equal(rt.services, []string{"api"}) {
+		t.Fatalf("services = %v, want the descriptor's one", rt.services)
+	}
+	if rt.affectedServices != nil {
+		t.Errorf("affectedServices = %v, want nil — narrowing must not run for one service",
+			rt.affectedServices)
+	}
 }
 
 // TestDetectAffectedServices covers the narrowing that decides which of
