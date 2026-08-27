@@ -411,6 +411,43 @@ func TestPreview(t *testing.T) {
 		}
 	})
 
+	t.Run("errors/malformed_teardown_target_surfaces", func(t *testing.T) {
+		// The teardown half's own target is the broken one, so the
+		// fault surfaces while the teardown row is being built —
+		// before the deploy row's readiness is even asked. It has to
+		// abort the command and name the offending target: reading it
+		// as "this provider has no teardown backend" would drop the
+		// teardown to a no-op row and leak the old env forever, with
+		// nothing naming the typo that caused it.
+		f := setupPreview(t, "api")
+		f.bindEnv("EX-1", "old-env")
+		f.env.alive("old-env")
+		f.h.Workspace.WriteConfig(strings.Replace(
+			fmt.Sprintf(previewConfigf, f.env.URL),
+			`workflow: "acme/devops/.github/workflows/teardown-preview.yml"`,
+			`workflow: "teardown-preview.yml"`,
+			1,
+		))
+
+		err := f.run("--name", "new-env", "--approve")
+		if err == nil {
+			t.Fatal("preview succeeded with a malformed down-workflow target")
+		}
+		if !strings.Contains(err.Error(), "teardown-preview.yml") {
+			t.Errorf("err = %v, want it to name the offending target", err)
+		}
+		if n := len(f.h.CICD.Triggers()); n != 0 {
+			t.Errorf("dispatched %d workflow(s) despite the bad target", n)
+		}
+		// A fault is not a skip: reporting it as one is exactly how
+		// the leak would go unnoticed.
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "teardown-preview.yml") {
+				t.Errorf("the fault was reported as a skip: %q", ev.Label)
+			}
+		}
+	})
+
 	t.Run("claim/services_filter", func(t *testing.T) {
 		// Both repos changed, so detection would deploy both services.
 		// --service narrows the set the run acts on, and the image
@@ -864,10 +901,13 @@ func TestPreview(t *testing.T) {
 	})
 
 	t.Run("errors/cicd_unconfigured", func(t *testing.T) {
-		// No CI/CD pipeline on this project. That is a skip, not a
-		// failure: preview reports it, builds no deploy row, and still
-		// runs the rest of the plan. Nothing is dispatched and no env
-		// is bound, because no env was ever stood up.
+		// No CI/CD pipeline on this project, and the workflow-dispatch
+		// preview provider is the one selected — so this provider
+		// genuinely has no backend. That is a skip, not a failure:
+		// preview reports it in the provider's own words, renders the
+		// deploy as a no-op rather than dropping it, and still runs
+		// the rest of the plan. Nothing is dispatched and no env is
+		// bound, because no env was ever stood up.
 		f := setupPreview(t, "api")
 		f.h.CICD.NewErr = errors.New("cicd: not configured")
 
@@ -888,17 +928,58 @@ func TestPreview(t *testing.T) {
 			t.Errorf("issue status = %q, want %q (the plan still ran)", got.Status, "In Preview Env")
 		}
 		// Silently doing less than asked is the failure mode here, so
-		// the skip has to actually reach the user. Assertable only
+		// the skip has to actually reach the user. It travels on
+		// ui.Skip rather than only on the plan row because the plan
+		// card is suppressed in raw and plain modes — a row alone
+		// would be silence for every non-TTY run. Assertable only
 		// because the harness captures Reporter calls — h.Stdout() is
 		// still empty for this command.
-		var reported bool
+		//
+		// The wording is the provider's: this is the CI/CD-backed
+		// preview provider reporting its own missing backend, not the
+		// command consulting a capability on the provider's behalf.
+		var reported int
 		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
-			if strings.Contains(ev.Label, "CI/CD") {
-				reported = true
+			if strings.Contains(ev.Label, "no CI/CD pipeline configured") {
+				reported++
+			}
+			if strings.HasPrefix(ev.Label, "CI/CD:") {
+				t.Errorf("skip %q is attributed to the CI/CD capability, not the preview provider", ev.Label)
 			}
 		}
-		if !reported {
-			t.Errorf("no CI/CD skip reported; the deploy was dropped silently\n%s", f.h.Reporter.Dump())
+		if reported == 0 {
+			t.Errorf("no skip reported; the deploy was dropped silently\n%s", f.h.Reporter.Dump())
+		}
+		// Both halves of the provider are unwired and answer
+		// identically here; the same sentence twice reads as two
+		// separate problems.
+		if reported > 1 {
+			t.Errorf("the same reason was reported %d times\n%s", reported, f.h.Reporter.Dump())
+		}
+	})
+
+	t.Run("errors/pipelineless_provider_deploys_anyway", func(t *testing.T) {
+		// The bug this replaced: the deploy and teardown rows were
+		// gated on constructing the CI/CD capability, so a preview
+		// provider that never dispatches a workflow was silenced by a
+		// pipeline it does not use — exit 0, no deploy row, no
+		// explanation. The provider now answers for itself, so a
+		// ready one deploys with no pipeline in sight.
+		f := setupPreview(t, "api")
+		f.h.CICD.NewErr = errors.New("cicd: not configured")
+		fake := f.h.InstallPreview()
+
+		if err := f.run("--name", "brave-falcon", "--approve"); err != nil {
+			t.Fatalf("preview: %v", err)
+		}
+
+		if !slices.Contains(fake.Calls(), "Create") {
+			t.Errorf("provider was never asked to create; calls=%v\n%s", fake.Calls(), f.h.Reporter.Dump())
+		}
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "CI/CD") || strings.Contains(ev.Label, "pipeline") {
+				t.Errorf("a provider that needs no pipeline was skipped for one: %q", ev.Label)
+			}
 		}
 	})
 

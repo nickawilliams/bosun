@@ -12,8 +12,9 @@ import (
 )
 
 // fakePreviewProvider drives resolvePreview's probes. Get returns the
-// metadata binding; Inspect answers by name. Mutating methods are
-// never reached by resolution (it plans; the actions apply).
+// metadata binding; Inspect answers by name. Mutating methods, and the
+// readiness check that gates them, are never reached by resolution (it
+// plans; the actions apply).
 type fakePreviewProvider struct {
 	getEnv  preview.Environment
 	getErr  error
@@ -30,6 +31,8 @@ func (f *fakePreviewProvider) Inspect(_ context.Context, name string) (preview.E
 	}
 	return preview.Environment{}, preview.ErrNoEnvironment
 }
+
+func (f *fakePreviewProvider) Ready(context.Context, preview.Operation) error { return nil }
 
 func (f *fakePreviewProvider) Create(context.Context, preview.Claim) (preview.Environment, error) {
 	return preview.Environment{}, nil
