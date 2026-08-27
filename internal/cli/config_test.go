@@ -503,6 +503,35 @@ services:
 			t.Errorf("a valid config reported unknown keys:\n%s", out)
 		}
 	})
+
+	// `ui` is a capability with a root block and deliberately no
+	// provider key: nothing selects a Reporter from config, so
+	// `ui.provider` reads nothing. This is the check that says so.
+	// Declaring the key to make `ui` look like its siblings would
+	// convert this warning into a green check, leaving someone who set
+	// it — and got whatever the terminal detection decided anyway —
+	// with no signal from anywhere.
+	t.Run("ui.provider is reported, not silently accepted", func(t *testing.T) {
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(`
+issue_tracker:
+  provider: jira
+  base_url: https://example.atlassian.net
+ui:
+  provider: stdio
+  color: ansi
+`)
+		if err := h.Run("config", "check"); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		out := h.Stdout()
+		if !strings.Contains(out, "ui.provider") || !strings.Contains(out, "not in schema") {
+			t.Errorf("expected a 'ui.provider · not in schema' row; got:\n%s", out)
+		}
+		if strings.Contains(out, "ui.color") {
+			t.Errorf("ui.color is declared and must not be flagged:\n%s", out)
+		}
+	})
 }
 
 // TestConfigCheckReachesRepoDescriptors covers the validation-reach
