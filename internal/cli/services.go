@@ -634,27 +634,58 @@ func newPreviewProviderImpl(workspace string) (preview.Provider, error) {
 		Tracker:     tracker,
 		URLTemplate: urlTmpl,
 		Workflow: preview.WorkflowDeps{
-			Pipeline: pipeline,
-			Stage:    stage,
-			Targets: func(ctx context.Context, subStage string) ([]preview.Target, error) {
-				raw, err := resolveWorkflowTargets(ctx, workspace, subStage)
-				if err != nil {
-					return nil, err
-				}
-				out := make([]preview.Target, len(raw))
-				for i, t := range raw {
-					out[i] = preview.Target{
-						Owner:    t.Owner,
-						Repo:     t.Repo,
-						Workflow: t.Workflow,
-						Label:    t.Label,
-					}
-				}
-				return out, nil
-			},
+			Pipeline:  pipeline,
+			Stage:     stage,
+			Targets:   memoizedWorkflowTargets(workspace),
 			InputName: stageInputName,
 		},
 	})
+}
+
+// memoizedWorkflowTargets adapts resolveWorkflowTargets to the shape
+// preview.Deps carries, caching per sub-stage for the life of the
+// returned closure — which is one provider, built once per command.
+//
+// The cache is not premature. In per-repo mode resolution walks the
+// workspace status and shells out to parse each repo's git remote, and
+// the provider now asks twice per operation: once to answer Ready
+// before the row is planned, once to dispatch. Neither the config nor
+// the active repo set changes mid-command, so the second answer is the
+// first one by construction. Errors are cached alongside successes for
+// the same reason — a target that will not parse will not parse twice.
+func memoizedWorkflowTargets(workspace string) func(context.Context, string) ([]preview.Target, error) {
+	type resolved struct {
+		targets []preview.Target
+		err     error
+	}
+	var mu sync.Mutex
+	cache := map[string]resolved{}
+
+	return func(ctx context.Context, subStage string) ([]preview.Target, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r, ok := cache[subStage]; ok {
+			return r.targets, r.err
+		}
+
+		var r resolved
+		raw, err := resolveWorkflowTargets(ctx, workspace, subStage)
+		if err != nil {
+			r.err = err
+		} else {
+			r.targets = make([]preview.Target, len(raw))
+			for i, t := range raw {
+				r.targets[i] = preview.Target{
+					Owner:    t.Owner,
+					Repo:     t.Repo,
+					Workflow: t.Workflow,
+					Label:    t.Label,
+				}
+			}
+		}
+		cache[subStage] = r
+		return r.targets, r.err
+	}
 }
 
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
