@@ -107,10 +107,45 @@ services:
   _shared: [go.mod]
 `)
 
+	// Compared without sorting first: the resolver sorts, so sorting
+	// again here would hide a regression in the thing being asserted.
 	got := resolveRepoServiceNames(r)
-	slices.Sort(got)
 	if !slices.Equal(got, []string{"billing", "search"}) {
 		t.Errorf("services = %v, want the two real services (not _shared)", got)
+	}
+}
+
+// TestResolveRepoServiceNamesMapFormIsDeterministic pins the ordering
+// guarantee the map branch makes.
+//
+// Go randomizes map iteration, so an unsorted resolver returns a
+// different slice from one call to the next for the same config. That
+// was latent for a long time — nothing compared the order — until a
+// test did, and then it failed roughly one CI run in several on changes
+// that had nothing to do with services. Callers narrow affected
+// services against these names, render them, and key deploy targets off
+// them, so the nondeterminism reaches output, not just assertions.
+//
+// The fixture declares its services in reverse alphabetical order, so
+// "sorted" and "declaration order" are distinguishable, and the loop is
+// what gives the test teeth: a single call has an even chance of coming
+// out sorted by luck.
+func TestResolveRepoServiceNamesMapFormIsDeterministic(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	r := writeDescriptor(t, "api", `
+services:
+  worker: [worker/]
+  search: [search/]
+  billing: [billing/]
+`)
+
+	want := []string{"billing", "search", "worker"}
+	for i := range 50 {
+		if got := resolveRepoServiceNames(r); !slices.Equal(got, want) {
+			t.Fatalf("call %d: services = %v, want %v on every call", i, got, want)
+		}
 	}
 }
 
