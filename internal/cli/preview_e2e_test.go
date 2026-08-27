@@ -25,6 +25,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
@@ -411,14 +412,17 @@ func TestPreview(t *testing.T) {
 		}
 	})
 
-	t.Run("errors/malformed_teardown_target_surfaces", func(t *testing.T) {
-		// The teardown half's own target is the broken one, so the
-		// fault surfaces while the teardown row is being built —
-		// before the deploy row's readiness is even asked. It has to
-		// abort the command and name the offending target: reading it
-		// as "this provider has no teardown backend" would drop the
-		// teardown to a no-op row and leak the old env forever, with
-		// nothing naming the typo that caused it.
+	t.Run("errors/malformed_teardown_target_does_not_cancel_the_deploy", func(t *testing.T) {
+		// Only the DOWN workflow's target is broken. The two halves
+		// are configured independently — which is why readiness is
+		// asked per operation — so the teardown's problem must stay
+		// the teardown's: it becomes a ✗ row, the deploy alongside it
+		// still dispatches, and the run exits non-zero naming the
+		// offending target.
+		//
+		// The failure this pins is a readiness check that aborts the
+		// command: a typo in preview.down would then cancel a deploy
+		// that has nothing to do with it, and leak the old env anyway.
 		f := setupPreview(t, "api")
 		f.bindEnv("EX-1", "old-env")
 		f.env.alive("old-env")
@@ -431,16 +435,19 @@ func TestPreview(t *testing.T) {
 
 		err := f.run("--name", "new-env", "--approve")
 		if err == nil {
-			t.Fatal("preview succeeded with a malformed down-workflow target")
+			t.Fatal("preview exited 0 with a malformed down-workflow target")
 		}
 		if !strings.Contains(err.Error(), "teardown-preview.yml") {
 			t.Errorf("err = %v, want it to name the offending target", err)
 		}
-		if n := len(f.h.CICD.Triggers()); n != 0 {
-			t.Errorf("dispatched %d workflow(s) despite the bad target", n)
+		if got := f.deploys(); len(got) != 1 {
+			t.Errorf("deploy dispatches = %d, want 1 — the broken half is the teardown's", len(got))
 		}
-		// A fault is not a skip: reporting it as one is exactly how
-		// the leak would go unnoticed.
+		if got := f.teardowns(); len(got) != 0 {
+			t.Errorf("teardown dispatched %d workflow(s) through wiring that would not resolve", len(got))
+		}
+		// A fault is not a skip: reporting it as one would drop the
+		// row and leave the exit code green.
 		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
 			if strings.Contains(ev.Label, "teardown-preview.yml") {
 				t.Errorf("the fault was reported as a skip: %q", ev.Label)
@@ -904,10 +911,14 @@ func TestPreview(t *testing.T) {
 		// No CI/CD pipeline on this project, and the workflow-dispatch
 		// preview provider is the one selected — so this provider
 		// genuinely has no backend. That is a skip, not a failure:
-		// preview reports it in the provider's own words, renders the
-		// deploy as a no-op rather than dropping it, and still runs
-		// the rest of the plan. Nothing is dispatched and no env is
-		// bound, because no env was ever stood up.
+		// preview reports it in the provider's own words and still
+		// runs the rest of the plan. Nothing is dispatched and no env
+		// is bound, because no env was ever stood up.
+		//
+		// The no-op deploy ROW is not asserted here — CaptureReporter
+		// suppresses the plan card, which is the same reason the
+		// reason has to travel on ui.Skip at all. The row itself is
+		// pinned in preview_readiness_test.go.
 		f := setupPreview(t, "api")
 		f.h.CICD.NewErr = errors.New("cicd: not configured")
 
@@ -979,6 +990,68 @@ func TestPreview(t *testing.T) {
 		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
 			if strings.Contains(ev.Label, "CI/CD") || strings.Contains(ev.Label, "pipeline") {
 				t.Errorf("a provider that needs no pipeline was skipped for one: %q", ev.Label)
+			}
+		}
+	})
+
+	t.Run("errors/unwired_provider_skips_without_failing", func(t *testing.T) {
+		// The provider itself reports no backend, with CI/CD perfectly
+		// healthy — the mirror of cicd_unconfigured, and the case that
+		// proves the gate now reads the provider rather than the
+		// pipeline. It is a skip, not a failure: nothing is created,
+		// nothing is bound, the reason is the provider's own, and the
+		// rest of the plan still applies.
+		f := setupPreview(t, "api")
+		fake := f.h.InstallPreview()
+		fake.ReadyErr = fmt.Errorf("%w: preview.base_url is unset", preview.ErrNotConfigured)
+
+		if err := f.run("--name", "brave-falcon", "--approve"); err != nil {
+			t.Fatalf("preview should skip an unwired provider, not fail: %v", err)
+		}
+
+		if slices.Contains(fake.Calls(), "Create") {
+			t.Errorf("created through a provider that said it has no backend; calls=%v", fake.Calls())
+		}
+		if n := len(f.h.CICD.Triggers()); n != 0 {
+			t.Errorf("dispatched %d workflow(s); want 0", n)
+		}
+		var reported bool
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "preview.base_url is unset") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the provider's own reason never reached the user\n%s", f.h.Reporter.Dump())
+		}
+		// "Skip, not fail" means the rest of the plan still applies.
+		if got, _ := f.h.Tracker.Issue("EX-1"); got.Status != "In Preview Env" {
+			t.Errorf("issue status = %q, want %q (the plan still ran)", got.Status, "In Preview Env")
+		}
+	})
+
+	t.Run("errors/unwired_provider_fault_still_fails", func(t *testing.T) {
+		// The other arm: answering the readiness question failed
+		// outright. That is a fault, not an absent dependency —
+		// swallowing it as a skip is how a typo becomes a green run
+		// that deployed nothing.
+		f := setupPreview(t, "api")
+		fake := f.h.InstallPreview()
+		fake.ReadyErr = errors.New("preview.base_url \"ephemeral.example.dev\" needs a scheme and host")
+
+		err := f.run("--name", "brave-falcon", "--approve")
+		if err == nil {
+			t.Fatal("a readiness fault exited 0")
+		}
+		if !strings.Contains(err.Error(), "needs a scheme and host") {
+			t.Errorf("err = %v, want it to carry the provider's diagnosis", err)
+		}
+		if slices.Contains(fake.Calls(), "Create") {
+			t.Errorf("created despite the fault; calls=%v", fake.Calls())
+		}
+		for _, ev := range f.h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "scheme and host") {
+				t.Errorf("the fault was reported as a skip: %q", ev.Label)
 			}
 		}
 	})

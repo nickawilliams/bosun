@@ -154,12 +154,24 @@ func (p *adapter) Inspect(ctx context.Context, name string) (preview.Environment
 }
 
 // Ready reports whether the dispatch wiring for op is complete: a
-// pipeline to dispatch through, and at least one workflow target for
-// the sub-stage op maps to. It resolves through the same helper the
-// real call uses, so a readiness answer and the attempt that follows it
-// cannot disagree.
+// pipeline to dispatch through, at least one workflow target for the
+// sub-stage op maps to, and — for a teardown — the name input the
+// dispatch is refused without.
+//
+// Every one of those checks is the same call the operation itself
+// makes, so a readiness answer and the attempt that follows it cannot
+// disagree. Keeping that true is the whole value of the method: a
+// caller uses it to decide whether to plan a step, and a precondition
+// only the Apply knows about would put a row on screen that then
+// fails.
 func (p *adapter) Ready(ctx context.Context, op preview.Operation) error {
-	_, _, err := p.resolve(ctx, op)
+	subStage, _, err := p.resolve(ctx, op)
+	if err != nil {
+		return err
+	}
+	if op == preview.OpDestroy {
+		_, err = p.destroyNameKey(subStage)
+	}
 	return err
 }
 
@@ -184,6 +196,23 @@ func (p *adapter) resolve(ctx context.Context, op preview.Operation) (string, []
 		return "", nil, ErrNoWorkflow
 	}
 	return subStage, targets, nil
+}
+
+// destroyNameKey returns the workflow input key teardown passes the env
+// name under. An unconfigured one is a refusal, not a default: the
+// workflow would be invoked with no name, and teardown workflows
+// commonly interpret that as "clean everything."
+//
+// It is a fault rather than an ErrNotConfigured skip. The stage IS
+// wired — there is a pipeline and a workflow — so standing the
+// teardown down as "nothing configured here" would leave a live
+// environment behind under a notice that says the opposite.
+func (p *adapter) destroyNameKey(subStage string) (string, error) {
+	key := p.opts.InputName(subStage, "name")
+	if key == "" {
+		return "", fmt.Errorf("preview: %s workflow has no name input configured", subStage)
+	}
+	return key, nil
 }
 
 // subStage renders the configured stage prefix plus the suffix op
@@ -249,12 +278,9 @@ func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 		return err
 	}
 
-	nameKey := p.opts.InputName(subStage, "name")
-	if nameKey == "" {
-		// Without a name input the workflow would be invoked with no
-		// name; teardown workflows commonly interpret that as "clean
-		// everything." Refuse rather than risk it.
-		return fmt.Errorf("preview: %s workflow has no name input configured", subStage)
+	nameKey, err := p.destroyNameKey(subStage)
+	if err != nil {
+		return err
 	}
 	issueInputKey := p.opts.InputName(subStage, "issue")
 

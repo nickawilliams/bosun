@@ -1204,6 +1204,35 @@ func TestReady_UnsetBaseURLIsNotConfigured(t *testing.T) {
 	}
 }
 
+// TestReady_MalformedBaseURLIsAFaultNotASkip separates a base URL the
+// user never set from one they set wrong. resolve files both under
+// preview.ErrNotConfigured, because Get and List degrade the same way
+// on either — but a pre-plan gate reads that sentinel as "the
+// dependency is absent, stand this step down", and a typo is not an
+// absent dependency. Routed there it becomes an exit-0 run that
+// deployed nothing and never named the typo.
+func TestReady_MalformedBaseURLIsAFaultNotASkip(t *testing.T) {
+	for _, base := range []string{"ephemeral.example.dev", "/api", "ephemeral.example.dev:3001", "ht tp://x"} {
+		p := New(Options{
+			BaseURL: base,
+			Token:   func(context.Context) (string, error) { return "t", nil },
+		})
+		err := p.Ready(context.Background(), preview.OpCreate)
+		if err == nil {
+			t.Errorf("base_url %q: Ready = nil, want an error", base)
+			continue
+		}
+		if errors.Is(err, preview.ErrNotConfigured) {
+			t.Errorf("base_url %q: %v reads as a not-configured skip", base, err)
+		}
+		// The diagnosis still has to survive the reclassification —
+		// a fault the user cannot act on is barely better than a skip.
+		if !strings.Contains(err.Error(), base) {
+			t.Errorf("base_url %q: %v does not name the offending value", base, err)
+		}
+	}
+}
+
 // TestReady_UnknownOperation guards the switch: an operation with no
 // endpoint behind it is a programming error, and answering it as
 // not-configured would turn that into a silent skip.

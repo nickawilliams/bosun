@@ -175,9 +175,32 @@ func (p *adapter) Ready(_ context.Context, op preview.Operation) error {
 	if err != nil {
 		return err
 	}
-	_, err = p.resolve(path)
-	return err
+	if _, err := p.resolve(path); err != nil {
+		if p.baseURL == "" {
+			// Nothing configured at all — the case a caller should
+			// stand the step down for and say why.
+			return err
+		}
+		return &unusableBaseURL{err}
+	}
+	return nil
 }
+
+// unusableBaseURL re-files a resolve failure as a fault when a base URL
+// is present but malformed, keeping the diagnosis and dropping the
+// kinship with preview.ErrNotConfigured.
+//
+// resolve files both cases under that sentinel because its own callers
+// degrade the same way on either: Get and List want a definitive "no
+// answer available" rather than a retried probe. A pre-plan gate is the
+// one caller that must tell them apart. It treats ErrNotConfigured as
+// "skip this step, the dependency is absent" — and a typo in a base URL
+// the user did set is not an absent dependency. Routed to that arm it
+// becomes a green run that deployed nothing and never named the typo,
+// which is the exact failure this readiness check exists to end.
+type unusableBaseURL struct{ reason error }
+
+func (e *unusableBaseURL) Error() string { return e.reason.Error() }
 
 // opPath maps an operation onto the endpoint it posts to. An
 // unrecognized op is a programming error rather than a configuration

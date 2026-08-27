@@ -701,6 +701,45 @@ func TestReady_TargetResolutionErrorIsNotASkip(t *testing.T) {
 	}
 }
 
+// TestReady_AgreesWithDestroyOnTheNameInput is the property the whole
+// method rests on: a readiness answer and the attempt that follows it
+// must not disagree. A down-workflow with no `name` input is a
+// schema-valid config (the key is optional) that Destroy refuses, so a
+// Ready that only checked pipeline-and-targets would greenlight a
+// teardown row whose apply then hard-fails.
+func TestReady_AgreesWithDestroyOnTheNameInput(t *testing.T) {
+	b := newBuilder().
+		withPipeline(newFakePipeline()).
+		withTargets([]Target{{Owner: "o", Repo: "r", Workflow: "down.yml"}})
+	b.inputName = func(_, concept string) string {
+		if concept == "name" {
+			return ""
+		}
+		return concept
+	}
+	p := b.build(t)
+
+	readyErr := p.Ready(context.Background(), preview.OpDestroy)
+	destroyErr := p.Destroy(context.Background(), "PROJ-1", "brave-falcon")
+	if readyErr == nil {
+		t.Fatalf("Ready said ready; Destroy said %v", destroyErr)
+	}
+	if readyErr.Error() != destroyErr.Error() {
+		t.Errorf("Ready = %v, Destroy = %v; the two must give the same answer", readyErr, destroyErr)
+	}
+	// A wired stage missing one input is a fault, not an absent
+	// backend: standing the teardown down as "nothing configured"
+	// would leave a live environment behind under a notice saying the
+	// opposite.
+	if errors.Is(readyErr, preview.ErrNotConfigured) {
+		t.Error("a missing name input must not read as a not-configured skip")
+	}
+	// The create half has no such input requirement and stays ready.
+	if err := p.Ready(context.Background(), preview.OpCreate); err != nil {
+		t.Errorf("Ready(create) = %v, want nil", err)
+	}
+}
+
 // TestReady_UnknownOperation guards the switch: an operation the
 // adapter has no sub-stage for is a programming error, and answering
 // it as not-configured would turn that into a silent skip.

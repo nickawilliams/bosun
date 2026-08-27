@@ -140,10 +140,7 @@ func TestBuildTeardownAction_UnwiredProviderStillRows(t *testing.T) {
 	}}
 	r := &previewReadiness{provider: p}
 
-	action, err := buildTeardownAction(context.Background(), r, p, "brave-falcon", "EX-1")
-	if err != nil {
-		t.Fatalf("buildTeardownAction: %v", err)
-	}
+	action := buildTeardownAction(context.Background(), r, p, "brave-falcon", "EX-1")
 	if action.Apply != nil {
 		t.Error("the no-op row carries an Apply; it would tear down through a provider that said it cannot")
 	}
@@ -168,10 +165,7 @@ func TestBuildTeardownAction_ReadyProviderTearsDown(t *testing.T) {
 	p := &readyProvider{}
 	r := &previewReadiness{provider: p}
 
-	action, err := buildTeardownAction(context.Background(), r, p, "brave-falcon", "EX-1")
-	if err != nil {
-		t.Fatalf("buildTeardownAction: %v", err)
-	}
+	action := buildTeardownAction(context.Background(), r, p, "brave-falcon", "EX-1")
 	if action.Apply == nil {
 		t.Fatal("a ready provider's teardown row has no Apply")
 	}
@@ -181,16 +175,48 @@ func TestBuildTeardownAction_ReadyProviderTearsDown(t *testing.T) {
 	}
 }
 
-// TestBuildTeardownAction_FaultAborts pins that a fault stops the
-// command rather than becoming a quiet no-op row.
-func TestBuildTeardownAction_FaultAborts(t *testing.T) {
+// TestBuildTeardownAction_FaultIsARowNotAnAbort pins that a teardown
+// whose readiness could not be established stays this row's problem.
+// Returning the error instead would abort the command before the
+// deploy row is even built — so a typo in preview.down would cancel a
+// deploy that has nothing to do with it, and leak the old env anyway.
+// The ✗ row still reaches the exit code, via runActions.
+func TestBuildTeardownAction_FaultIsARowNotAnAbort(t *testing.T) {
 	captureUI(t)
 	boom := errors.New("malformed target")
 	p := &readyProvider{errs: map[preview.Operation]error{preview.OpDestroy: boom}}
 
-	_, err := buildTeardownAction(context.Background(), &previewReadiness{provider: p}, p, "brave-falcon", "EX-1")
+	action := buildTeardownAction(context.Background(), &previewReadiness{provider: p}, p, "brave-falcon", "EX-1")
+	if action.Apply != nil {
+		t.Error("the ✗ row carries an Apply; it would dispatch through wiring that would not resolve")
+	}
+	_, _, err := action.Assess(context.Background())
 	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the fault to abort", err)
+		t.Fatalf("Assess err = %v, want the fault to travel on the row", err)
+	}
+}
+
+// TestBuildDeployAction_FaultIsARowNotAnAbort is the deploy-side twin,
+// for the same reason: a broken preview.up must not cancel a teardown
+// queued beside it.
+func TestBuildDeployAction_FaultIsARowNotAnAbort(t *testing.T) {
+	captureUI(t)
+	boom := errors.New("malformed target")
+	p := &readyProvider{errs: map[preview.Operation]error{preview.OpCreate: boom}}
+
+	action, prs, err := buildDeployAction(
+		&cobra.Command{Use: "preview"}, context.Background(),
+		&previewReadiness{provider: p}, "", p, "EX-1",
+		previewResolution{previewName: "brave-falcon", deployName: "brave-falcon"},
+	)
+	if err != nil {
+		t.Fatalf("buildDeployAction returned %v; the fault belongs on the row", err)
+	}
+	if prs != nil {
+		t.Errorf("prs = %v, want none — no inputs should have been resolved", prs)
+	}
+	if _, _, err := action.Assess(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("Assess err = %v, want the fault to travel on the row", err)
 	}
 }
 

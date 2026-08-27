@@ -33,8 +33,9 @@ type Preview struct {
 	// silently make an env listable and vice versa.
 	listed []preview.Environment
 
-	// ListErr, GetErr, CreateErr, DestroyErr override default behavior
-	// to force error paths. nil means use the default success behavior.
+	// ListErr, GetErr, CreateErr, DestroyErr, ReadyErr override default
+	// behavior to force error paths. nil means use the default success
+	// behavior — for ReadyErr, a fully wired provider.
 	//
 	// GetErr stands in for an indeterminate probe, and Get returns it
 	// the way the real contract specifies: alongside the seeded
@@ -46,9 +47,10 @@ type Preview struct {
 	// would let a test lock in "Destroy receives an empty name" and
 	// pass, while the real provider hands over the real one.
 	//
-	// ReadyErr is the "provider has no backend" answer. Seed it with
-	// something matching preview.ErrNotConfigured to drive the
-	// not-configured plan rows; the default nil means fully wired.
+	// ReadyErr drives the two answers a caller acts on differently:
+	// seed something matching preview.ErrNotConfigured for the
+	// "no backend, stand the step down" arm, or any other error for
+	// the "answering the question failed" arm.
 	GetErr     error
 	CreateErr  error
 	DestroyErr error
