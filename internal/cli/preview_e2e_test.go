@@ -64,7 +64,7 @@ services:
 cicd:
   provider: "github_actions"
 preview:
-  url_template: "%s/{{.Name}}"
+  url_template: "%s/{{.Preview.Name}}"
   up:
     workflow: "acme/devops/.github/workflows/deploy-preview.yml"
     inputs:

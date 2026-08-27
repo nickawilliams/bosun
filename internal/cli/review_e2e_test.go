@@ -574,7 +574,7 @@ func TestReview(t *testing.T) {
 		// pair rather than being passed through literally.
 		h, _ := startReviewWorkspace(t, reviewConfig+
 			"\ncode_host:\n  pr:\n"+
-			"    title_template: \"{{.IssueType}} {{.IssueKey}}: {{.IssueTitle}}\"\n"+
+			"    title_template: \"{{.Issue.Type}} {{.Issue.Key}}: {{.Issue.Title}}\"\n"+
 			"    body_template: \"{{.Branch}} onto {{.BaseBranch}}\"\n", "api")
 
 		if err := runReview(h, "--approve"); err != nil {
@@ -595,7 +595,7 @@ func TestReview(t *testing.T) {
 		// configured template.
 		h, _ := startReviewWorkspace(t, reviewConfig+
 			"\ncode_host:\n  pr:\n"+
-			"    title_template: \"[{{.IssueKey}}] templated\"\n"+
+			"    title_template: \"[{{.Issue.Key}}] templated\"\n"+
 			"    body_template: \"templated body\"\n", "api")
 
 		if err := runReview(h, "--title", "Pinned title",
