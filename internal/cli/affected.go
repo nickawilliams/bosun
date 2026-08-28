@@ -718,17 +718,16 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			isInteractive() && !isAutoApprove(cmd)
 	}
 
-	// The form is built inside a closure because the steps program's
-	// final frame paints the form header plus the form's EXACT first
-	// frame (formFirstFrame — same construction as runForm), so the
-	// takeover below repaints identical bytes and the gather → form
-	// transition has no collapse and no flash.
+	// The form is built lazily so its options reflect the gather's
+	// results. Under the session shell it embeds directly beneath the
+	// "services" input header in the same program — the takeover
+	// machinery (formFirstFrame paint + cursor-up repaint) that used
+	// to bridge the steps program into huh's program is gone, because
+	// there is no boundary to bridge.
 	var (
-		picked      []string
-		toggles     []toggle
-		msField     *huh.MultiSelect[string]
-		formFrame   string
-		headerLines int
+		picked  []string
+		toggles []toggle
+		msField *huh.MultiSelect[string]
 	)
 	buildSelectionForm := func() {
 		if msField != nil {
@@ -768,55 +767,33 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 			Options(opts...).
 			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
-		formFrame = formFirstFrame(msField)
-		if !strings.HasSuffix(formFrame, "\n") {
-			formFrame += "\n"
-		}
 	}
 
-	// The spinner program's final frame morphs into whatever comes
-	// next — the selection form's header plus its first frame when the
-	// form will show, the final Services card otherwise — so the
-	// program's exit paints content instead of clearing to blank.
-	if err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() && !ui.IsRaw() {
-			buildSelectionForm()
-			header := ui.NewCard(ui.CardInput, "services").Tight().Render()
-			headerLines = strings.Count(header, "\n")
-			return header + formFrame
+	// Run the gather; its final card is the tail the next phase builds
+	// on — the "services" input header when the selection form follows
+	// (the form embeds directly beneath it, same program, no seam), or
+	// the final Services card when no form will show. In raw mode the
+	// input-state header stays silent and the form runs against the
+	// harness's injected reader, exactly as before.
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if formGate() {
+			// Input-state successor: silent in raw mode (the record
+			// card would misreport — the form hasn't adjusted the
+			// selection yet), the form's header otherwise.
+			return ui.NewCard(ui.CardInput, "services").Tight()
 		}
-		return buildServicesCard(sources, detFails, withPRs).Render()
-	}); err != nil {
+		return buildServicesCard(sources, detFails, withPRs)
+	})
+	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	formShown := formGate()
 	if formShown {
-		if msField == nil {
-			// Raw rendering: RunCardStepsInto runs its final-frame closure
-			// in raw mode for side effects only (no ANSI painted), so the
-			// form hasn't been built. Build it now and run it standalone,
-			// skipping the cursor takeover below, which assumes a painted
-			// frame to repaint over. Mirrors release's selectServiceDeploys.
-			// The form runs when stdin can drive it (the harness's injected
-			// reader); a TTY-stdin/piped-stdout session is refused cleanly
-			// by runForm's render guard instead.
-			buildSelectionForm()
-			if err := runForm(msField); err != nil {
-				return nil, nil, nil, err
-			}
-		} else {
-			// Seamless takeover: the form's first frame is already on
-			// screen — move the cursor to its origin and let huh repaint
-			// the same bytes in place. ClearSpacer: the header was painted
-			// by the spinner program's final frame (not via Print), so
-			// suppress the spacer the way Tight-on-Print would.
-			fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-			ui.ClearSpacer()
-			if err := runForm(msField); err != nil {
-				ui.RequestSpacer()
-				return nil, nil, nil, err
-			}
+		buildSelectionForm()
+		if err := runForm(msField); err != nil {
+			ui.RequestSpacer()
+			return nil, nil, nil, err
 		}
 
 		pickedSet := make(map[int]bool, len(picked))
@@ -882,25 +859,13 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 	}
 
 	if formShown {
-		// The no-form path's final card was already painted by the
-		// spinner program's final frame. On the form path huh cleared
-		// its own frame on submit, leaving the cursor at the form's
-		// origin (the line below the header) — erase the header above
-		// and drop the selection-adjusted card in its place.
-		// ClearSpacer first: runForm's prologue armed the spacer flag,
-		// but the gather program's original spacer line is still on
-		// screen above the header, so printing another would
-		// double-space.
-		if headerLines > 0 {
-			fmt.Printf("\x1b[%dF\x1b[J", headerLines)
-		}
+		// The submitted form has resolved; erase the input header (a
+		// tail drop under the session shell) and put the
+		// selection-adjusted Services card in its place. The no-form
+		// path's final card is already the tail — nothing to do.
+		rewind()
 		ui.ClearSpacer()
 		buildServicesCard(sources, detFails, withPRs).Print()
-	} else {
-		// Nothing took the region over, so the card the final frame
-		// painted is the timeline's tail. Record it or its rows keep a
-		// blank gutter while the spine resumes on the cards below.
-		ui.RecordOpenCard(buildServicesCard(sources, detFails, withPRs))
 	}
 
 	if len(overrides) == 0 {
