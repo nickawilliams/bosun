@@ -43,11 +43,11 @@ const (
 const servicesConfigGroup = "services"
 
 // uiConfigGroup is the config key prefix for presentation settings.
-// It is a literal rather than a ui.ConfigGroup constant because `ui` is
-// not a registered capability yet — nothing selects a provider for it,
-// so there is no descriptor for the constant to live beside.
-//
-// TODO(arch #83): register ui as a capability and move this constant.
+// It is a literal rather than a ui.ConfigGroup constant because `ui`
+// is deliberately not a registered capability — nothing selects a
+// Reporter from config, so there is no descriptor for the constant to
+// live beside, and none is coming. See the ui group in configSchema
+// for why.
 const uiConfigGroup = "ui"
 
 // lifecycleStatusKeys defines the canonical ordering of lifecycle
@@ -85,7 +85,7 @@ var providerKeys = ConfigKey{Key: providerKeysMarker}
 // and a block earns root level only if that capability exists in code,
 // registered or not. That admits `preview` (an interface with two
 // adapters) and `ui` (internal/ui's Reporter with four
-// implementations, merely unregistered), and excludes `release` —
+// implementations, deliberately unregistered), and excludes `release` —
 // there is no internal/release, and a release deploy is literally a
 // CI/CD workflow dispatch, so its keys stay under `cicd`.
 //
@@ -357,11 +357,41 @@ var configSchema = map[string]ConfigGroup{
 	uiConfigGroup: {
 		Label: "UI",
 
-		// No `provider` key: internal/ui picks its Reporter at runtime
-		// rather than from config, so a selector would be inert.
+		// No `provider` key, and `ui` is not a registered capability.
+		// It qualifies as a root block under the rule above — a
+		// Reporter interface with four implementations chosen at a
+		// seam — but registering it is ruled out four times over:
 		//
-		// TODO(arch #83): color and compact_header belong to a `stdio`
-		// provider, not to the capability itself.
+		//   - It would be a bootstrap cycle. providerConfig.Require
+		//     resolves a missing key by rendering a card and a form
+		//     through the Reporter (require.go), so building the UI
+		//     capability would need a Reporter to draw the prompt for
+		//     the Reporter's own provider key. Not an import cycle —
+		//     internal/ui imports no bosun package, so the edge is
+		//     legal; it is the order of construction that has no
+		//     valid start.
+		//   - A declared `ui.provider` would silence the very check
+		//     that catches it. config_unknown.go warns on keys nothing
+		//     reads; declaring one converts that warning into a green
+		//     check, leaving a user who sets it and gets something
+		//     else with no signal anywhere.
+		//   - The selection axis is wrong. Every registered capability
+		//     keys on a config value naming an external system.
+		//     Reporter selection is a runtime-environment fact —
+		//     bootstrap.go switches on the output annotation and
+		//     whether stdout is a terminal, with no config input.
+		//   - The interface is not open. ui.IsRaw and ui.IsPlain type-
+		//     switch over the package's own Reporters and say so; an
+		//     adapter in a sibling package cannot participate.
+		//
+		// color and compact_header are the package's own keys rather
+		// than some provider's: ApplyColorMode and SetCompactHeader
+		// are package-level functions mutating global render state,
+		// not methods on any Reporter. color applies whichever
+		// Reporter is live; compact_header is read only in
+		// bootstrap.go's card arm, because there is no header to
+		// compact in the other two — still a property of the
+		// rendering, not of a provider that would select it.
 		Keys: []ConfigKey{
 			{Key: "color", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
 			{Key: "compact_header", Label: "compact header", Default: "false"},

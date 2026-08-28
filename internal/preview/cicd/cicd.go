@@ -38,7 +38,7 @@ type Options struct {
 	InputName   func(subStage, concept string) string
 }
 
-// ErrNoPipeline is returned by Create and Destroy when no CI/CD
+// ErrNoPipeline is returned by Ready, Create, and Destroy when no CI/CD
 // pipeline is configured. Callers should treat this like the
 // existing "skip" path in the preview command rather than a fatal error.
 //
@@ -47,9 +47,9 @@ type Options struct {
 // importing the adapter to name its sentinel.
 var ErrNoPipeline = notConfigured("preview: no CI/CD pipeline configured")
 
-// ErrNoWorkflow is returned when the requested sub-stage has no
-// workflow targets configured. Matches preview.ErrNotConfigured for the
-// same reason as ErrNoPipeline.
+// ErrNoWorkflow is returned by the same three when the requested
+// sub-stage has no workflow targets configured. Matches
+// preview.ErrNotConfigured for the same reason as ErrNoPipeline.
 var ErrNoWorkflow = notConfigured("preview: no workflow configured for stage")
 
 // notConfigured is an error that answers to preview.ErrNotConfigured
@@ -153,21 +153,90 @@ func (p *adapter) Inspect(ctx context.Context, name string) (preview.Environment
 	return env, nil
 }
 
+// Ready reports whether the dispatch wiring for op is complete: a
+// pipeline to dispatch through, at least one workflow target for the
+// sub-stage op maps to, and — for a teardown — the name input the
+// dispatch is refused without.
+//
+// Every one of those checks is the same call the operation itself
+// makes, so a readiness answer and the attempt that follows it cannot
+// disagree. Keeping that true is the whole value of the method: a
+// caller uses it to decide whether to plan a step, and a precondition
+// only the Apply knows about would put a row on screen that then
+// fails.
+func (p *adapter) Ready(ctx context.Context, op preview.Operation) error {
+	subStage, _, err := p.resolve(ctx, op)
+	if err != nil {
+		return err
+	}
+	if op == preview.OpDestroy {
+		_, err = p.destroyNameKey(subStage)
+	}
+	return err
+}
+
+// resolve maps op onto its sub-stage and the workflow targets
+// configured for it. The two failure arms are the ones a caller is
+// expected to treat as "no backend": no pipeline at all, or a pipeline
+// with nothing wired for this half of the lifecycle. Both answer to
+// preview.ErrNotConfigured.
+func (p *adapter) resolve(ctx context.Context, op preview.Operation) (string, []Target, error) {
+	if p.opts.Pipeline == nil {
+		return "", nil, ErrNoPipeline
+	}
+	subStage, err := p.subStage(op)
+	if err != nil {
+		return "", nil, err
+	}
+	targets, err := p.opts.Targets(ctx, subStage)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(targets) == 0 {
+		return "", nil, ErrNoWorkflow
+	}
+	return subStage, targets, nil
+}
+
+// destroyNameKey returns the workflow input key teardown passes the env
+// name under. An unconfigured one is a refusal, not a default: the
+// workflow would be invoked with no name, and teardown workflows
+// commonly interpret that as "clean everything."
+//
+// It is a fault rather than an ErrNotConfigured skip. The stage IS
+// wired — there is a pipeline and a workflow — so standing the
+// teardown down as "nothing configured here" would leave a live
+// environment behind under a notice that says the opposite.
+func (p *adapter) destroyNameKey(subStage string) (string, error) {
+	key := p.opts.InputName(subStage, "name")
+	if key == "" {
+		return "", fmt.Errorf("preview: %s workflow has no name input configured", subStage)
+	}
+	return key, nil
+}
+
+// subStage renders the configured stage prefix plus the suffix op
+// dispatches under — "preview.up", "preview.down". An unrecognized op
+// is a programming error rather than a configuration one, so it does
+// not answer to ErrNotConfigured.
+func (p *adapter) subStage(op preview.Operation) (string, error) {
+	switch op {
+	case preview.OpCreate:
+		return p.opts.Stage + ".up", nil
+	case preview.OpDestroy:
+		return p.opts.Stage + ".down", nil
+	default:
+		return "", fmt.Errorf("preview: unknown operation %q", op)
+	}
+}
+
 func (p *adapter) Create(ctx context.Context, claim preview.Claim) (preview.Environment, error) {
 	if claim.Name == "" {
 		return preview.Environment{}, errors.New("preview: claim name is empty")
 	}
-	if p.opts.Pipeline == nil {
-		return preview.Environment{}, ErrNoPipeline
-	}
-
-	subStage := p.opts.Stage + ".up"
-	targets, err := p.opts.Targets(ctx, subStage)
+	subStage, targets, err := p.resolve(ctx, preview.OpCreate)
 	if err != nil {
 		return preview.Environment{}, err
-	}
-	if len(targets) == 0 {
-		return preview.Environment{}, ErrNoWorkflow
 	}
 
 	inputs := p.buildDeployInputs(subStage, claim)
@@ -204,25 +273,14 @@ func (p *adapter) Destroy(ctx context.Context, issueKey, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("preview: refusing to destroy without an env name")
 	}
-	if p.opts.Pipeline == nil {
-		return ErrNoPipeline
-	}
-
-	subStage := p.opts.Stage + ".down"
-	targets, err := p.opts.Targets(ctx, subStage)
+	subStage, targets, err := p.resolve(ctx, preview.OpDestroy)
 	if err != nil {
 		return err
 	}
-	if len(targets) == 0 {
-		return ErrNoWorkflow
-	}
 
-	nameKey := p.opts.InputName(subStage, "name")
-	if nameKey == "" {
-		// Without a name input the workflow would be invoked with no
-		// name; teardown workflows commonly interpret that as "clean
-		// everything." Refuse rather than risk it.
-		return fmt.Errorf("preview: %s workflow has no name input configured", subStage)
+	nameKey, err := p.destroyNameKey(subStage)
+	if err != nil {
+		return err
 	}
 	issueInputKey := p.opts.InputName(subStage, "issue")
 

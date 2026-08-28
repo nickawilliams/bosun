@@ -158,6 +158,64 @@ type urlData struct {
 	Name string
 }
 
+// Ready reports whether the API endpoint op posts to can be addressed
+// at all. There is nothing per-operation to configure here — one base
+// URL serves both halves — so the only way this fails is an unset or
+// unparseable base_url, which resolve already diagnoses as
+// preview.ErrNotConfigured. Answering through resolve rather than
+// re-deriving the rule keeps Ready and the call it precedes in
+// agreement.
+//
+// Ready deliberately does not reach the network. It answers "is this
+// provider addressable", not "is the service up" — an unreachable host
+// is a failure of the attempt, which Create and Destroy report, not a
+// reason to leave the step out of the plan.
+func (p *adapter) Ready(_ context.Context, op preview.Operation) error {
+	path, err := opPath(op)
+	if err != nil {
+		return err
+	}
+	if _, err := p.resolve(path); err != nil {
+		if p.baseURL == "" {
+			// Nothing configured at all — the case a caller should
+			// stand the step down for and say why.
+			return err
+		}
+		return &unusableBaseURL{err}
+	}
+	return nil
+}
+
+// unusableBaseURL re-files a resolve failure as a fault when a base URL
+// is present but malformed, keeping the diagnosis and dropping the
+// kinship with preview.ErrNotConfigured.
+//
+// resolve files both cases under that sentinel because its own callers
+// degrade the same way on either: Get and List want a definitive "no
+// answer available" rather than a retried probe. A pre-plan gate is the
+// one caller that must tell them apart. It treats ErrNotConfigured as
+// "skip this step, the dependency is absent" — and a typo in a base URL
+// the user did set is not an absent dependency. Routed to that arm it
+// becomes a green run that deployed nothing and never named the typo,
+// which is the exact failure this readiness check exists to end.
+type unusableBaseURL struct{ reason error }
+
+func (e *unusableBaseURL) Error() string { return e.reason.Error() }
+
+// opPath maps an operation onto the endpoint it posts to. An
+// unrecognized op is a programming error rather than a configuration
+// one, so it does not answer to preview.ErrNotConfigured.
+func opPath(op preview.Operation) (string, error) {
+	switch op {
+	case preview.OpCreate:
+		return pathDeploy, nil
+	case preview.OpDestroy:
+		return pathDelete, nil
+	default:
+		return "", fmt.Errorf("preview: unknown operation %q", op)
+	}
+}
+
 func (p *adapter) Get(ctx context.Context, issueKey string) (preview.Environment, error) {
 	name := p.binding.Name(ctx, issueKey)
 	if name == "" {

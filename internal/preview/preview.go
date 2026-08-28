@@ -112,8 +112,37 @@ type Claim struct {
 	DefaultBranch string
 }
 
+// Operation names a provider operation whose readiness can be settled
+// before it is planned. It exists because readiness is per-operation:
+// an adapter can be wired for one half of the lifecycle and not the
+// other, so "is this provider configured?" has no single answer.
+type Operation string
+
+const (
+	// OpCreate is the provisioning half — Provider.Create.
+	OpCreate Operation = "create"
+
+	// OpDestroy is the teardown half — Provider.Destroy.
+	OpDestroy Operation = "destroy"
+)
+
 // Provider defines preview environment operations needed by bosun.
 type Provider interface {
+	// Ready reports whether the provider can carry out op, without
+	// making the attempt. A nil error means op is wired. An error
+	// matching ErrNotConfigured means the provider has no backend for
+	// it, and callers should skip that step and say why — the same
+	// treatment they give the sentinel coming back out of Create or
+	// Destroy, just early enough to keep the step out of a plan it
+	// could never apply. Any other error is a genuine fault in
+	// answering the question and should be surfaced as one.
+	//
+	// Ready may perform I/O — the workflow-dispatch adapter resolves
+	// its targets to answer — but it never changes anything, so a
+	// caller may call it before deciding whether to do the expensive
+	// input resolution a real call would need.
+	Ready(ctx context.Context, op Operation) error
+
 	// Get returns the environment currently bound to issueKey, including
 	// a freshness probe when the adapter is able to perform one. Returns
 	// ErrNoEnvironment when no env is bound — callers should treat this

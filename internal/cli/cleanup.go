@@ -120,7 +120,8 @@ func newCleanupCmd() *cobra.Command {
 			case providerErr != nil:
 				ui.Skip(fmt.Sprintf("preview teardown: %v", providerErr))
 			case provider != nil && cc.Issue != "":
-				actions = append(actions, cleanupPreviewAction(ctx, provider, cc.Issue))
+				ready := &previewReadiness{provider: provider}
+				actions = append(actions, cleanupPreviewAction(ctx, ready, provider, cc.Issue))
 			}
 
 			for i := range workspaceRepos {
@@ -215,7 +216,28 @@ func newCleanupCmd() *cobra.Command {
 // env → ActionCompleted (the row still appears, marked as already
 // done). Apply tears down via the provider — idempotent on the
 // adapter side, so a stale registry entry doesn't cause failure.
-func cleanupPreviewAction(_ context.Context, provider preview.Provider, issueKey string) Action {
+//
+// The provider is asked whether it can tear down at all, the same way
+// `bosun preview` asks. This is the second of the two places that call
+// Destroy, and until it asked, "the provider answers for itself
+// whether each half of its lifecycle is wired" held in one of them:
+// an unwired provider got an operative row here that failed at apply,
+// after cleanup had already destroyed the worktrees.
+//
+// Readiness is settled here rather than inside Assess because the
+// reason travels on ui.Skip, and Assess runs inside the assessment
+// spinner. The cost is that a run with no env bound still hears why a
+// teardown it did not need could not have happened; the alternative is
+// a reason that arrives inside a spinner or not at all.
+func cleanupPreviewAction(ctx context.Context, ready *previewReadiness, provider preview.Provider, issueKey string) Action {
+	reason, err := ready.reason(ctx, preview.OpDestroy)
+	switch {
+	case err != nil:
+		return failedAction(ui.PlanDestroy, "teardown", issueKey, err)
+	case reason != "":
+		return noopAction("teardown", issueKey, reason)
+	}
+
 	var envName string
 	return Action{
 		Op:     ui.PlanDestroy,

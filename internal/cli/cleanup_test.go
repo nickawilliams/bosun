@@ -9,6 +9,7 @@ package cli_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -345,6 +346,82 @@ func TestCleanup(t *testing.T) {
 			t.Errorf("Destroy called with no env bound; calls=%v", h.Preview.Calls())
 		}
 		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("preview/unwired_provider_is_reported_not_attempted", func(t *testing.T) {
+		// The provider builds but reports no backend for the destroy
+		// half. Distinct from the unbuildable case below: there is a
+		// provider, it simply cannot tear anything down.
+		//
+		// Attempting anyway is the failure this guards. cleanup
+		// destroys the worktrees either way, so a Destroy that fails at
+		// apply leaves the environment running behind a command that
+		// already removed everything local pointing at it.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon", IssueKey: "EX-1"})
+		h.Preview.ReadyErr = fmt.Errorf("%w: no CI/CD pipeline configured", preview.ErrNotConfigured)
+
+		if err := runCleanup(h, "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		if slices.Contains(h.Preview.Calls(), "Destroy") {
+			t.Errorf("tore down through a provider that said it cannot; calls=%v", h.Preview.Calls())
+		}
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no CI/CD pipeline configured") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the provider's own reason never reached the user\n%s", h.Reporter.Dump())
+		}
+		// Still a skip, not a refusal — the local destruction proceeds.
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("preview/readiness_fault_does_not_block_the_local_teardown", func(t *testing.T) {
+		// Answering the readiness question failed outright. That is a
+		// ✗ row rather than a skip, and the exit code carries it — but
+		// the sibling rows still apply, because cleanup's local
+		// destruction has nothing to do with the preview backend.
+		//
+		// The workspace DIRECTORY survives, and deliberately so: it is
+		// removed after runActions returns, and a non-nil return
+		// short-circuits it. That is cleanup's existing posture for any
+		// failed row, not something readiness introduced — a run that
+		// could not finish leaves the directory behind as the signal.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon", IssueKey: "EX-1"})
+		h.Preview.ReadyErr = errors.New("resolving workflow targets: malformed target")
+
+		err := runCleanup(h, "--approve")
+		if err == nil {
+			t.Fatal("a readiness fault exited 0")
+		}
+		if !strings.Contains(err.Error(), "malformed target") {
+			t.Errorf("err = %v, want the provider's diagnosis", err)
+		}
+		if slices.Contains(h.Preview.Calls(), "Destroy") {
+			t.Errorf("tore down despite the fault; calls=%v", h.Preview.Calls())
+		}
+		// A fault is not a skip: it must not be filed as one.
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "malformed target") {
+				t.Errorf("the fault was reported as a skip: %q", ev.Label)
+			}
+		}
+		if api.WorktreeExists(h.WorktreePath(cleanupBranch, api.Name)) {
+			t.Error("the worktree survived a fault in an unrelated row")
+		}
+		if api.HasBranch(cleanupBranch) {
+			t.Error("the local branch survived a fault in an unrelated row")
+		}
 	})
 
 	t.Run("preview/unbuildable_provider_is_reported", func(t *testing.T) {

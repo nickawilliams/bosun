@@ -44,14 +44,6 @@ func newPreviewCmd() *cobra.Command {
 				return fmt.Errorf("preview provider: %w", err)
 			}
 
-			// Separate pipeline check drives whether the deploy/teardown
-			// actions are even built. The provider has its own pipeline
-			// reference internally; this is just the pre-plan gate.
-			_, pipelineErr := newCICD()
-			if pipelineErr != nil {
-				ui.Skip(fmt.Sprintf("CI/CD: %v", pipelineErr))
-			}
-
 			const stage = preview.ConfigGroup
 			force, _ := cmd.Flags().GetBool("force")
 
@@ -69,8 +61,14 @@ func newPreviewCmd() *cobra.Command {
 			var actions []Action
 			var prData []repoPR
 
-			if resolution.teardownName != "" && pipelineErr == nil {
-				actions = append(actions, buildTeardownAction(provider, resolution.teardownName, issueKey))
+			// The provider answers for itself whether each half of its
+			// lifecycle is wired. This replaces a CI/CD capability
+			// check that gated both rows regardless of whether the
+			// selected provider dispatches workflows at all.
+			ready := &previewReadiness{provider: provider}
+
+			if resolution.teardownName != "" {
+				actions = append(actions, buildTeardownAction(ctx, ready, provider, resolution.teardownName, issueKey))
 			}
 
 			if resolution.isCurrent {
@@ -81,8 +79,8 @@ func newPreviewCmd() *cobra.Command {
 				actions = append(actions, adoptAction(provider, issueKey, resolution.previewName))
 			}
 
-			if resolution.deployName != "" && pipelineErr == nil {
-				deployAction, prs, err := buildDeployAction(cmd, ctx, cc.Workspace, provider, issueKey, resolution)
+			if resolution.deployName != "" {
+				deployAction, prs, err := buildDeployAction(cmd, ctx, ready, cc.Workspace, provider, issueKey, resolution)
 				if err != nil {
 					return err
 				}
@@ -189,7 +187,27 @@ func newPreviewCmd() *cobra.Command {
 // buildTeardownAction returns a single rolled-up teardown action. The
 // adapter fans out the underlying workflow dispatches across all
 // configured targets.
-func buildTeardownAction(provider preview.Provider, name, issueKey string) Action {
+//
+// The provider is asked whether it can tear down at all, so a provider
+// with no backend for the destroy half says so in its own words,
+// instead of the command guessing on its behalf from a capability the
+// provider may never touch.
+//
+// Neither answer aborts the command. A destroy half that is unwired,
+// or one whose targets will not resolve, is this row's problem and not
+// the deploy's — the halves are independently configured, which is why
+// readiness is asked per operation in the first place. A fault becomes
+// a ✗ row, which runActions surfaces after letting the siblings run,
+// so a typo in preview.down still leaves the new env deployed.
+func buildTeardownAction(ctx context.Context, ready *previewReadiness, provider preview.Provider, name, issueKey string) Action {
+	reason, err := ready.reason(ctx, preview.OpDestroy)
+	switch {
+	case err != nil:
+		return failedAction(ui.PlanDestroy, "teardown", name, err)
+	case reason != "":
+		return noopAction("teardown", name, reason)
+	}
+
 	return Action{
 		Op:     ui.PlanDestroy,
 		Action: "teardown",
@@ -246,7 +264,22 @@ func currentAction(name string) Action {
 // targets internally. A non-nil error means input resolution was
 // aborted (e.g. the user cancelled the service-selection form) and
 // the command should stop rather than deploy an empty set.
-func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR, error) {
+//
+// A provider that cannot deploy — whether because it reports no
+// backend or because answering faulted — yields a row and no PR data,
+// before any input is resolved. Neither is the returned error: a
+// deploy that cannot happen is this row's problem, and aborting here
+// would take a teardown queued alongside it down too. See
+// previewReadiness.
+func buildDeployAction(cmd *cobra.Command, ctx context.Context, ready *previewReadiness, workspace string, provider preview.Provider, issueKey string, resolution previewResolution) (Action, []repoPR, error) {
+	reason, err := ready.reason(ctx, preview.OpCreate)
+	switch {
+	case err != nil:
+		return failedAction(ui.PlanCreate, "deploy", resolution.previewName, err), nil, nil
+	case reason != "":
+		return noopAction("deploy", resolution.previewName, reason), nil, nil
+	}
+
 	services, overrides, prData, err := resolvePreviewInputs(cmd, ctx, workspace)
 	if err != nil {
 		return Action{}, nil, err
@@ -264,15 +297,7 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 	// than a "+ deploy env" that would claim an environment with zero
 	// services behind it.
 	if len(services) == 0 {
-		return Action{
-			Op:     ui.PlanNoChange,
-			Action: "deploy",
-			Type:   "env",
-			Name:   resolution.previewName,
-			Assess: func(_ context.Context) (ActionState, string, error) {
-				return ActionCompleted, "no services selected", nil
-			},
-		}, prData, nil
+		return noopAction("deploy", resolution.previewName, "no services selected"), prData, nil
 	}
 
 	deployOp := ui.PlanCreate
@@ -298,6 +323,98 @@ func buildDeployAction(cmd *cobra.Command, ctx context.Context, workspace string
 			return err
 		},
 	}, prData, nil
+}
+
+// noopAction renders an honest no-op row carrying the reason nothing
+// will happen — nothing selected to deploy, or a provider with no
+// backend to act through.
+//
+// A row stating the reason beats both alternatives: an operative row
+// that claims work nothing stands behind, and ActionSkipped, which
+// omits the row and takes the reason with it — the silent exit this
+// command used to produce when its gate lived upstream.
+//
+// There is deliberately no op parameter. runActions renders every
+// ActionCompleted as ui.PlanNoChange regardless of the action's own
+// op, so one would be inert, and a field that looks like it selects a
+// glyph but doesn't is worse than its absence.
+func noopAction(action, name, reason string) Action {
+	return Action{
+		Op:     ui.PlanNoChange,
+		Action: action,
+		Type:   "env",
+		Name:   name,
+		Assess: func(_ context.Context) (ActionState, string, error) {
+			return ActionCompleted, reason, nil
+		},
+	}
+}
+
+// failedAction renders a ✗ row for a step whose readiness could not
+// even be established — a workflow target that will not parse, say.
+//
+// It is a row rather than a returned error so the siblings still plan
+// and apply: runActions treats a failed assessment as a per-target
+// failure, not a run-wide abort, and returns the error afterwards so
+// the exit code still reflects it. That contract is what keeps a typo
+// in the teardown wiring from also cancelling the deploy queued
+// beside it.
+func failedAction(op ui.PlanOp, action, name string, err error) Action {
+	return Action{
+		Op:     op,
+		Action: action,
+		Type:   "env",
+		Name:   name,
+		Assess: func(_ context.Context) (ActionState, string, error) {
+			return ActionNeeded, "", err
+		},
+	}
+}
+
+// previewReadiness asks a provider whether it can carry out an
+// operation and announces each distinct "no backend for that" answer
+// once.
+//
+// It exists because the answer needs to reach the user twice over. The
+// plan row carries it for a reader of the plan — but the plan card
+// renders only on a terminal, so for a piped or --output run the row
+// alone is silence. ui.Skip is the channel that survives both, and it
+// is the one this command already used, back when the question was put
+// to the CI/CD capability instead of to the provider.
+//
+// Asking before the rows are built is deliberate on the deploy side:
+// resolving deploy inputs detects affected repos, pushes branches, and
+// can put a selection form on screen, none of which should happen for
+// a deploy the provider has already said it cannot carry out.
+type previewReadiness struct {
+	provider preview.Provider
+	reported map[string]bool
+}
+
+// reason returns why the provider cannot carry out op, or "" when it
+// can. A non-nil error means answering the question itself failed,
+// which is a fault rather than a skip.
+func (r *previewReadiness) reason(ctx context.Context, op preview.Operation) (string, error) {
+	err := r.provider.Ready(ctx, op)
+	switch {
+	case err == nil:
+		return "", nil
+	case !errors.Is(err, preview.ErrNotConfigured):
+		return "", err
+	}
+
+	// The two halves of a provider's lifecycle usually go unwired
+	// together and then answer identically; reporting the same
+	// sentence per row would read as two separate problems.
+	reason := err.Error()
+	if !r.reported[reason] {
+		if r.reported == nil {
+			r.reported = map[string]bool{}
+		}
+		r.reported[reason] = true
+		ui.Skip(reason)
+	}
+	return reason, nil
 }
 
 // prDetailActions renders one PlanDetail row per affected repo's PR

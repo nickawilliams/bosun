@@ -33,8 +33,9 @@ type Preview struct {
 	// silently make an env listable and vice versa.
 	listed []preview.Environment
 
-	// ListErr, GetErr, CreateErr, DestroyErr override default behavior
-	// to force error paths. nil means use the default success behavior.
+	// ListErr, GetErr, CreateErr, DestroyErr, ReadyErr override default
+	// behavior to force error paths. nil means use the default success
+	// behavior — for ReadyErr, a fully wired provider.
 	//
 	// GetErr stands in for an indeterminate probe, and Get returns it
 	// the way the real contract specifies: alongside the seeded
@@ -45,10 +46,16 @@ type Preview struct {
 	// passes it to Destroy, so a fake that zeroed the Environment here
 	// would let a test lock in "Destroy receives an empty name" and
 	// pass, while the real provider hands over the real one.
+	//
+	// ReadyErr drives the two answers a caller acts on differently:
+	// seed something matching preview.ErrNotConfigured for the
+	// "no backend, stand the step down" arm, or any other error for
+	// the "answering the question failed" arm.
 	GetErr     error
 	CreateErr  error
 	DestroyErr error
 	ListErr    error
+	ReadyErr   error
 
 	// calls records the method names invoked, in order.
 	calls []string
@@ -128,6 +135,18 @@ func (p *Preview) recordCall(name string) {
 }
 
 // --- preview.Provider implementation ---
+
+// Ready answers ReadyErr for every operation. The fake has no wiring
+// to be partially complete, so it does not distinguish OpCreate from
+// OpDestroy — a test that needs the halves to disagree wants the real
+// adapter, whose per-sub-stage targets are the reason the distinction
+// exists.
+func (p *Preview) Ready(_ context.Context, _ preview.Operation) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recordCall("Ready")
+	return p.ReadyErr
+}
 
 func (p *Preview) Get(_ context.Context, issueKey string) (preview.Environment, error) {
 	p.mu.Lock()

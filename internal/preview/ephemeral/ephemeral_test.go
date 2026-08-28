@@ -1172,6 +1172,81 @@ func TestGitHubCLIToken_NoCredential(t *testing.T) {
 	}
 }
 
+// --- Ready ---
+
+// TestReady_ConfiguredIsReadyWithoutTouchingTheNetwork pins both
+// halves of the contract this adapter's readiness answers: an
+// addressable base URL is ready, and answering costs no request. The
+// question is "can this provider be addressed", not "is the service
+// up" — a reachability check here would drop a deploy out of the plan
+// for a blip the attempt itself reports properly.
+func TestReady_ConfiguredIsReadyWithoutTouchingTheNetwork(t *testing.T) {
+	p, rec := newBuilder().build(t)
+	for _, op := range []preview.Operation{preview.OpCreate, preview.OpDestroy} {
+		if err := p.Ready(context.Background(), op); err != nil {
+			t.Errorf("Ready(%s) = %v, want nil", op, err)
+		}
+	}
+	if n := rec.calls(); n != 0 {
+		t.Errorf("Ready made %d request(s); want 0", n)
+	}
+}
+
+// TestReady_UnsetBaseURLIsNotConfigured is the answer that keeps a
+// deploy this adapter cannot address out of the plan, with the same
+// sentinel Get and Create report for the same reason.
+func TestReady_UnsetBaseURLIsNotConfigured(t *testing.T) {
+	p, _ := newBuilder().withoutServer().build(t)
+	for _, op := range []preview.Operation{preview.OpCreate, preview.OpDestroy} {
+		if err := p.Ready(context.Background(), op); !errors.Is(err, preview.ErrNotConfigured) {
+			t.Errorf("Ready(%s) = %v, want ErrNotConfigured", op, err)
+		}
+	}
+}
+
+// TestReady_MalformedBaseURLIsAFaultNotASkip separates a base URL the
+// user never set from one they set wrong. resolve files both under
+// preview.ErrNotConfigured, because Get and List degrade the same way
+// on either — but a pre-plan gate reads that sentinel as "the
+// dependency is absent, stand this step down", and a typo is not an
+// absent dependency. Routed there it becomes an exit-0 run that
+// deployed nothing and never named the typo.
+func TestReady_MalformedBaseURLIsAFaultNotASkip(t *testing.T) {
+	for _, base := range []string{"ephemeral.example.dev", "/api", "ephemeral.example.dev:3001", "ht tp://x"} {
+		p := New(Options{
+			BaseURL: base,
+			Token:   func(context.Context) (string, error) { return "t", nil },
+		})
+		err := p.Ready(context.Background(), preview.OpCreate)
+		if err == nil {
+			t.Errorf("base_url %q: Ready = nil, want an error", base)
+			continue
+		}
+		if errors.Is(err, preview.ErrNotConfigured) {
+			t.Errorf("base_url %q: %v reads as a not-configured skip", base, err)
+		}
+		// The diagnosis still has to survive the reclassification —
+		// a fault the user cannot act on is barely better than a skip.
+		if !strings.Contains(err.Error(), base) {
+			t.Errorf("base_url %q: %v does not name the offending value", base, err)
+		}
+	}
+}
+
+// TestReady_UnknownOperation guards the switch: an operation with no
+// endpoint behind it is a programming error, and answering it as
+// not-configured would turn that into a silent skip.
+func TestReady_UnknownOperation(t *testing.T) {
+	p, _ := newBuilder().build(t)
+	err := p.Ready(context.Background(), preview.Operation("resize"))
+	if err == nil {
+		t.Fatal("expected an error for an unknown operation")
+	}
+	if errors.Is(err, preview.ErrNotConfigured) {
+		t.Errorf("err = %v, must not read as a not-configured skip", err)
+	}
+}
+
 // --- Base URL handling ---
 
 func TestBaseURL_TrailingSlashIsTolerated(t *testing.T) {
