@@ -427,6 +427,10 @@ func (c *Card) Print() {
 	if IsRaw() {
 		return
 	}
+	if s := sessionActive(); s != nil {
+		s.print(c.Render(), c.renderContinuing(), c.tight)
+		return
+	}
 	rendered := c.Render()
 	fmt.Print(spacerPrefix() + rendered)
 	if c.tight {
@@ -487,6 +491,10 @@ func (c *Card) EmitToReporter(r Reporter) {
 func (c *Card) PrintRewindable() func() {
 	if IsRaw() {
 		return func() {}
+	}
+	if s := sessionActive(); s != nil {
+		rec := s.print(c.Render(), c.renderContinuing(), c.tight)
+		return s.sessionRewind(rec)
 	}
 	prev := needsSpacer
 	card := c.Render()
@@ -1143,6 +1151,10 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 	if IsRaw() {
 		return fn()
 	}
+	if s := sessionActive(); s != nil {
+		_, err := sessionRunCard(s, card, fn, successCard, false)
+		return err
+	}
 
 	resultCh := make(chan error, 1)
 	go func() {
@@ -1216,6 +1228,11 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 
 	card := NewCard(CardRunning, title)
 
+	if s := sessionActive(); s != nil {
+		_, err := sessionRunCard(s, card, fn, successCard, false)
+		return err
+	}
+
 	resultCh := make(chan error, 1)
 	go func() {
 		start := time.Now()
@@ -1272,6 +1289,18 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
 	if IsRaw() {
 		return func() {}, fn()
+	}
+	if s := sessionActive(); s != nil {
+		var successCard func() *Card
+		vanish := finalCard == nil
+		if !vanish {
+			successCard = func() *Card { return finalCard }
+		}
+		rec, err := sessionRunCard(s, spinCard, fn, successCard, vanish)
+		if err != nil {
+			return nil, err
+		}
+		return s.sessionRewind(rec), nil
 	}
 
 	spinCard.state = CardRunning
@@ -1350,6 +1379,13 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 	if IsRaw() {
 		err := fn()
 		return func() {}, err
+	}
+	if s := sessionActive(); s != nil {
+		rec, err := sessionRunCard(s, card, fn, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		return s.sessionRewind(rec), nil
 	}
 
 	card.state = CardRunning

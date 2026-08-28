@@ -67,6 +67,10 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 		return func() {}, nil
 	}
 
+	if s := sessionActive(); s != nil {
+		return sessionRunCardSteps(s, steps, successor)
+	}
+
 	prevSpacer := needsSpacer
 	prefix := spacerPrefix()
 
@@ -187,6 +191,24 @@ func RunCardStepsInto(steps []CardStep, finalView func() string) error {
 		if finalView != nil {
 			finalView()
 		}
+		return nil
+	}
+
+	if s := sessionActive(); s != nil {
+		// Session mode needs no cursor takeover: the steps animate on
+		// the tail and the final view becomes the open block, ready
+		// for whatever the caller mounts next.
+		prefix := sessionPrefix()
+		s.commitOpen()
+		if err := sessionRunSteps(s, prefix, steps); err != nil {
+			return err
+		}
+		if finalView == nil {
+			s.spinnerFinish("", "", true)
+			return nil
+		}
+		text := prefix + ensureTrailingNL(finalView())
+		s.spinnerFinish(text, text, false)
 		return nil
 	}
 

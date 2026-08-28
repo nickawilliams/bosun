@@ -110,7 +110,13 @@ func RecordOpenCard(c *Card) { recordCard(c) }
 // handed off. Mirrors FlushSpacer's role for the connector row.
 //
 // A no-op when there is no open card, and in raw mode.
-func FinalizeOpenCard() { closeOpenCard() }
+func FinalizeOpenCard() {
+	if s := sessionActive(); s != nil {
+		s.commitOpen()
+		return
+	}
+	closeOpenCard()
+}
 
 // DiscardOpenCard forgets the open card WITHOUT rewriting it. Use
 // when the block is about to be erased, or when something has already

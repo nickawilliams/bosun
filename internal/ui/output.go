@@ -107,12 +107,17 @@ func EmptyState(msg string, args ...any) {
 	chrome := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	glyph := lipgloss.NewStyle().Foreground(Palette.Error)
 	subtle := lipgloss.NewStyle().Foreground(Palette.Subtle)
-	fmt.Print(spacerPrefix())
-	fmt.Printf(" %s %s %s\n",
+	line := fmt.Sprintf(" %s %s %s\n",
 		chrome.Render(BoxElbow+BoxHorizontal+BoxHorizontal),
 		glyph.Render(Palette.Cross),
 		subtle.Render(text),
 	)
+	if s := sessionActive(); s != nil {
+		s.print(line, line, false)
+		return
+	}
+	fmt.Print(spacerPrefix())
+	fmt.Print(line)
 }
 
 // SuccessLine prints a one-line confirmation row in the timeline:
@@ -122,17 +127,27 @@ func EmptyState(msg string, args ...any) {
 // a sentence with both a key and a file path emphasized differently).
 // Always renders so piped callers see the line too.
 func SuccessLine(content string) {
-	fmt.Print(spacerPrefix())
 	glyph := lipgloss.NewStyle().Foreground(Palette.Success).Render(Palette.Check)
-	fmt.Printf(" %s  %s\n", glyph, content)
+	line := fmt.Sprintf(" %s  %s\n", glyph, content)
+	if s := sessionActive(); s != nil {
+		s.print(line, line, false)
+		return
+	}
+	fmt.Print(spacerPrefix())
+	fmt.Print(line)
 }
 
 // Bold prints bold text. Not a card and not on the timeline grid, so
 // it finalizes the open card first: without that, the next card's
 // rewrite would reach back over this line and erase it.
 func Bold(msg string, args ...any) {
-	FinalizeOpenCard()
 	text := fmt.Sprintf(msg, args...)
+	if s := sessionActive(); s != nil {
+		s.commitOpen()
+		s.println(boldStyle.Render(text) + "\n")
+		return
+	}
+	FinalizeOpenCard()
 	fmt.Println(boldStyle.Render(text))
 }
 

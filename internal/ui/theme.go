@@ -130,6 +130,11 @@ func RequestSpacer() {
 // Use before non-card output (e.g., huh forms) that won't call
 // spacerPrefix() itself.
 func FlushSpacer() {
+	if s := sessionActive(); s != nil {
+		s.commitOpen()
+		s.println(sessionPrefix())
+		return
+	}
 	fmt.Print(spacerPrefix())
 }
 

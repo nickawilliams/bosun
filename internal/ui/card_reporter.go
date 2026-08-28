@@ -99,8 +99,13 @@ func (r *cardReporter) Info(format string, args ...any) {
 // Muted prints dimmed text in the timeline without a glyph.
 func (r *cardReporter) Muted(format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
+	line := fmt.Sprintf(" %s  %s\n", NewCard(CardInfo, "").renderConnector(), mutedStyle.Render(text))
+	if s := sessionActive(); s != nil {
+		s.print(line, line, false)
+		return
+	}
 	fmt.Print(spacerPrefix())
-	fmt.Printf(" %s  %s\n", NewCard(CardInfo, "").renderConnector(), mutedStyle.Render(text))
+	fmt.Print(line)
 }
 
 // DryRun emits a CardInfo with a dry-run prefix.
@@ -164,6 +169,11 @@ func (r *cardReporter) Spinner(_ string, fn func() error) error {
 // callback returns, BubbleTea exits and the final static render is
 // printed.
 func (r *cardReporter) Group(title string, fn func(g Reporter)) {
+	if s := sessionActive(); s != nil {
+		s.runSessionGroup(title, fn)
+		return
+	}
+
 	indentLevel := 0
 	msgCh := make(chan groupMsg, 256)
 

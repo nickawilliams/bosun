@@ -109,6 +109,10 @@ func (pc *PlanCard) Print() {
 	if IsRaw() {
 		return
 	}
+	if s := sessionActive(); s != nil {
+		s.print(pc.Render(), pc.renderContinuing(), false)
+		return
+	}
 	rendered := pc.Render()
 	fmt.Print(spacerPrefix() + rendered)
 	recordOpenCard(rendered, pc.renderContinuing())
@@ -117,6 +121,10 @@ func (pc *PlanCard) Print() {
 // PrintRewindable writes the card to stdout and returns a function that
 // erases it via ANSI cursor movement.
 func (pc *PlanCard) PrintRewindable() func() {
+	if s := sessionActive(); s != nil {
+		rec := s.print(pc.Render(), pc.renderContinuing(), false)
+		return s.sessionRewind(rec)
+	}
 	prev := needsSpacer
 	card := pc.Render()
 	rendered := spacerPrefix() + card
@@ -298,6 +306,29 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 	// Raw mode: run actions synchronously without BubbleTea.
 	if IsRaw() {
 		return pc.applyActions(actions).err
+	}
+
+	if s := sessionActive(); s != nil {
+		pc.SetState(PlanApplying)
+		prefix := sessionPrefix()
+		s.commitOpen()
+		// A frame snapshot, not a live render: mid-apply ref updates
+		// (DetailRef, SkipRef) land on the final frame, which is the
+		// documented place they resolve anyway.
+		s.spinnerStart(prefix + pc.renderWithGlyph(GlyphSlot))
+		start := time.Now()
+		result := pc.applyActions(actions)
+		holdSpinner(start)
+		if s.interrupted() {
+			if result.err != nil {
+				return result.err
+			}
+			return errInterrupted
+		}
+		pc.SetResults(result.succeeded, result.failed, result.skipped)
+		pc.setFinalState(result)
+		s.spinnerFinish(prefix+pc.Render(), prefix+pc.renderContinuing(), false)
+		return result.err
 	}
 
 	pc.SetState(PlanApplying)
