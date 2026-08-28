@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -408,22 +407,19 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		})
 	}
 
-	// Selection form construction, needed inside the final-frame
-	// closure: the steps program's last frame paints the form header
-	// plus the form's EXACT first frame (formFirstFrame — same
-	// construction as runForm), so the takeover below repaints
-	// identical bytes and the gather → form transition has no
-	// collapse and no flash.
+	// Selection form construction, deferred until the gather has
+	// resolved every target (the options are its rows). Under the
+	// session shell the form embeds beneath the "deploy" input header
+	// in the same program — the formFirstFrame takeover that used to
+	// bridge the steps program into huh's program is gone.
 	//
 	// Rows: deployable targets toggleable and pre-checked;
 	// skip/block/error rows inert (visible with their reason, toggles
 	// no-op'd at parse — huh has no disabled options) so every target
 	// is accounted for inside the picker.
 	var (
-		picked      []string
-		msField     *huh.MultiSelect[string]
-		formFrame   string
-		headerLines int
+		picked  []string
+		msField *huh.MultiSelect[string]
 	)
 	buildSelectionForm := func() {
 		opts := make([]huh.Option[string], 0, len(states))
@@ -461,57 +457,32 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			Options(opts...).
 			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
-		formFrame = formFirstFrame(msField)
-		if !strings.HasSuffix(formFrame, "\n") {
-			formFrame += "\n"
-		}
 	}
 
-	err = ui.RunCardStepsInto(steps, func() string {
-		if formGate() && !ui.IsRaw() {
-			buildSelectionForm()
-			header := ui.NewCard(ui.CardInput, "deploy").Tight().Render()
-			headerLines = strings.Count(header, "\n")
-			return header + formFrame
+	// Run the gather; its final card is the tail the next phase builds
+	// on — the "deploy" input header when the selection form follows
+	// (silent in raw mode: the record card would misreport before the
+	// form adjusts the selection), or the record card when no form
+	// will show.
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if formGate() {
+			return ui.NewCard(ui.CardInput, "deploy").Tight()
 		}
 		applyDefaults()
-		return buildDeployTargetsCard(states).Render()
+		return buildDeployTargetsCard(states)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if !formGate() {
 		applyDefaults() // no-op when the closure already ran
-		// Nothing takes the region over, so the targets card the final
-		// frame painted is the timeline's tail — record it or its rows
-		// keep a blank gutter while the spine resumes below.
-		ui.RecordOpenCard(buildDeployTargetsCard(states))
 		return states, nil
 	}
 
-	if msField == nil {
-		// Raw rendering: RunCardStepsInto runs its final-frame closure
-		// in raw mode for side effects only (no ANSI painted), so the
-		// form hasn't been built. Build it now and run it standalone,
-		// skipping the cursor takeover below, which assumes a painted
-		// frame to repaint over. Mirrors prerelease's selectReleaseTargets.
-		// The form runs when stdin can drive it (the harness's injected
-		// reader); a TTY-stdin/piped-stdout session is refused cleanly
-		// by runForm's render guard instead.
-		buildSelectionForm()
-		if err := runForm(msField); err != nil {
-			return nil, err
-		}
-	} else {
-		// Seamless takeover: the form's first frame is already on screen —
-		// move the cursor to its origin and let huh repaint the same bytes
-		// in place.
-		fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-		ui.ClearSpacer()
-		if err := runForm(msField); err != nil {
-			ui.RequestSpacer()
-			return nil, err
-		}
+	buildSelectionForm()
+	if err := runForm(msField); err != nil {
+		ui.RequestSpacer()
+		return nil, err
 	}
 
 	for i := range states {
@@ -530,15 +501,10 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 		states[i].include = true
 	}
 
-	// huh cleared its frame on submit, leaving the cursor at the form's
-	// origin (the line below the header). Erase the header above and
-	// drop the record card in its place. ClearSpacer first: runForm's
-	// prologue armed the spacer flag (FlushSpacer → spacerPrefix arms
-	// on empty), but the gather program's original spacer line is still
-	// on screen above the header — printing another would double-space.
-	if headerLines > 0 {
-		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
-	}
+	// The submitted form has resolved; erase the input header (a tail
+	// drop under the session shell) and put the selection-adjusted
+	// record card in its place.
+	rewind()
 	ui.ClearSpacer()
 	buildDeployTargetsCard(states).Print()
 	return states, nil
