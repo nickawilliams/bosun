@@ -34,7 +34,7 @@ func TestDescriptor(t *testing.T) {
 func TestDescriptorNewWiresDeps(t *testing.T) {
 	pipeline := newFakePipeline()
 	tracker := newFakeTracker()
-	tmpl := template.Must(template.New("u").Parse("https://{{.Name}}.example.dev"))
+	tmpl := template.Must(template.New("u").Parse("https://{{.Preview.Name}}.example.dev"))
 
 	var askedFor []string
 	p, err := Descriptor().New(nil, preview.Deps{

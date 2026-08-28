@@ -751,12 +751,7 @@ func newReviewCmd() *cobra.Command {
 				repRepo = &resolved[writable[0]]
 			}
 			templateData := func(rc *repoContext) prTemplateData {
-				d := prTemplateData{
-					IssueKey:   issue,
-					IssueTitle: detail.Title,
-					IssueType:  detail.Type,
-					IssueURL:   detail.URL,
-				}
+				d := prTemplateData{Issue: issueRefFrom(issue, detail)}
 				if rc != nil {
 					d.Branch = rc.branch
 					d.BaseBranch = baseFor(rc)
@@ -1193,14 +1188,9 @@ func newReviewCmd() *cobra.Command {
 						// full open-PR set — compare hashes to detect a real
 						// change.
 						content := buildNotifyContent("review", notifyTemplateData{
-							IssueKey:         issue,
-							IssueTitle:       detail.Title,
-							IssueType:        detail.Type,
-							IssueURL:         detail.URL,
-							IssueDescription: detail.Description,
-							IssueIconURL:     detail.TypeIconURL,
-							IconURL:          authorAvatar,
-							Items:            notifyItems(),
+							Issue:   issueRefFrom(issue, detail),
+							IconURL: authorAvatar,
+							Items:   notifyItems(),
 						})
 						hash := notify.ContentHash(content)
 						if ref.ContentHash == hash {
@@ -1222,14 +1212,9 @@ func newReviewCmd() *cobra.Command {
 							IssueURL: detail.URL,
 							Items:    items,
 							Content: buildNotifyContent("review", notifyTemplateData{
-								IssueKey:         issue,
-								IssueTitle:       detail.Title,
-								IssueType:        detail.Type,
-								IssueURL:         detail.URL,
-								IssueDescription: detail.Description,
-								IssueIconURL:     detail.TypeIconURL,
-								IconURL:          authorAvatar,
-								Items:            items,
+								Issue:   issueRefFrom(issue, detail),
+								IconURL: authorAvatar,
+								Items:   items,
 							}),
 						})
 						return err

@@ -21,7 +21,7 @@ func TestPrereleaseDefaultTextTemplate(t *testing.T) {
 	// adapter wraps the text in a markdown block).
 	body := "## What's Changed\n* PR title by @alice in https://example.com/pull/1"
 	c := buildNotifyContent("prerelease", notifyTemplateData{
-		IssueKey: "PROJ-1",
+		Issue: issueRef{Key: "PROJ-1"},
 		Items: []notify.Item{
 			{Label: "host-ui", URL: "https://example.com/host-ui/releases/tag/v1.0.0", Detail: "v1.0.0", Body: body},
 		},
@@ -63,9 +63,9 @@ func TestPrereleaseDefaultTextTemplateMultipleItems(t *testing.T) {
 func TestPrereleaseStringConfigOverridesDefault(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
-	viper.Set("notification.templates.prerelease", "custom: {{.IssueKey}}")
+	viper.Set("notification.templates.prerelease", "custom: {{.Issue.Key}}")
 
-	c := buildNotifyContent("prerelease", notifyTemplateData{IssueKey: "PROJ-1"})
+	c := buildNotifyContent("prerelease", notifyTemplateData{Issue: issueRef{Key: "PROJ-1"}})
 	if c.Text != "custom: PROJ-1" {
 		t.Errorf("got %q, want %q", c.Text, "custom: PROJ-1")
 	}
@@ -82,10 +82,12 @@ func TestReviewIssueDataPopulated(t *testing.T) {
 
 	rawIcon := "https://x.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/10315?size=medium"
 	c := buildNotifyContent("review", notifyTemplateData{
-		IssueKey:     "PROJ-1",
-		IssueTitle:   "Add widget",
-		IssueType:    "Story",
-		IssueIconURL: rawIcon,
+		Issue: issueRef{
+			Key:     "PROJ-1",
+			Title:   "Add widget",
+			Type:    "Story",
+			IconURL: rawIcon,
+		},
 	})
 	if !c.Structured() {
 		t.Fatal("Structured() = false, want true (review builds structured content)")
@@ -109,7 +111,7 @@ func TestPrereleaseMapConfigEntersStructuredPath(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set("notification.templates.prerelease.header", "Custom Header")
 
-	c := buildNotifyContent("prerelease", notifyTemplateData{IssueKey: "PROJ-1"})
+	c := buildNotifyContent("prerelease", notifyTemplateData{Issue: issueRef{Key: "PROJ-1"}})
 	if !c.Structured() {
 		t.Fatalf("Structured() = false, want true (map config should enter structured path)")
 	}

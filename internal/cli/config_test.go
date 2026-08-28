@@ -683,7 +683,7 @@ issue_tracker:
   provider: jira
   base_url: https://example.atlassian.net
 preview:
-  url_template: "https://{{.Name}}.example.test"
+  url_template: "https://{{.Preview.Name}}.example.test"
   up:
     workflow: acme/infra/.github/workflows/up.yml
     inputs:

@@ -246,7 +246,7 @@ code_host:
   # Auth: gh CLI, or BOSUN_CODE_HOST_TOKEN
   merge_method: squash
   pr:
-    title_template: "[{{.IssueKey}}] {{.IssueTitle}}"
+    title_template: "[{{.Issue.Key}}] {{.Issue.Title}}"
 
 notification:
   provider: slack
@@ -254,7 +254,7 @@ notification:
 
 vcs:
   branch:
-    template: "{{.Category}}/{{.IssueNumber}}_{{.IssueSlug}}"
+    template: "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"
     categories:                 # keyed by the tracker's issue types
       story: feature
       bug: fix
@@ -293,7 +293,7 @@ notification:
 ```yaml
 preview:
   provider: cicd                # or 'ephemeral'
-  url_template: "https://{{.Name}}.preview.example.com"
+  url_template: "https://{{.Preview.Name}}.preview.example.com"
 
   # cicd adapter: the workflows to dispatch
   up:

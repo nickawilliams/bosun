@@ -285,6 +285,34 @@ func ProviderValidateName(p Provider, name string) error {
 	return ValidateName(name)
 }
 
+// --- Templates ---
+
+// Ref is how a preview environment appears inside a user-facing
+// template. It is the `preview` half of bosun's shared template
+// vocabulary: {{.Preview.Name}} means the same thing in a URL
+// template, a notification template, and anywhere else a template
+// context carries one.
+//
+// It lives here rather than in the CLI because the adapters render
+// URLTemplate themselves and cannot import the CLI. Three copies of
+// the same shape in three packages is precisely how the vocabulary
+// fragmented before — {{.Name}} in a URL template against
+// {{.PreviewName}} in a notification — so there is one type and the
+// packages that render share it.
+type Ref struct {
+	Name string // Ephemeral environment name, e.g. "brave-falcon".
+	URL  string // Rendered environment URL.
+}
+
+// URLTemplateData is the context passed to <stage>.url_template.
+//
+// Ref.URL is empty here: this is the template that computes it. The
+// field stays visible rather than being split into a narrower type,
+// because a second shape is how the split starts.
+type URLTemplateData struct {
+	Preview Ref
+}
+
 // --- Provider registration ---
 
 // Target identifies a workflow the cicd adapter should dispatch to.

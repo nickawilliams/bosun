@@ -64,7 +64,7 @@ services:
 cicd:
   provider: "github_actions"
 preview:
-  url_template: "%s/{{.Name}}"
+  url_template: "%s/{{.Preview.Name}}"
   up:
     workflow: "acme/devops/.github/workflows/deploy-preview.yml"
     inputs:
@@ -1089,6 +1089,37 @@ func TestPreview(t *testing.T) {
 		// so nothing should have been attributed to it.
 		if got := f.h.Reporter.OfKind(ui.CaptureSkip); len(got) != 0 {
 			t.Errorf("a wired provider was reported as skipped: %v", got)
+		}
+	})
+
+	t.Run("errors/legacy_url_template_is_refused_not_ignored", func(t *testing.T) {
+		// A url_template still on the pre-unification {{.Name}}. It
+		// PARSES — the syntax is fine, the field is simply gone — so
+		// nothing upstream of the render catches it, and both preview
+		// adapters render URLTemplate themselves and return "" on
+		// error. Left unchecked this is blank URLs everywhere with no
+		// diagnostic, which is the one thing the vocabulary change was
+		// not allowed to introduce.
+		//
+		// Building the provider is what refuses, so this covers every
+		// command that reaches for one, not just this one.
+		f := setupPreview(t, "api")
+		f.h.Workspace.WriteConfig(strings.Replace(
+			fmt.Sprintf(previewConfigf, f.env.URL),
+			"{{.Preview.Name}}", "{{.Name}}", 1,
+		))
+
+		err := f.run("--name", "brave-falcon", "--approve")
+		if err == nil {
+			t.Fatal("a legacy url_template was accepted; every preview URL would render empty")
+		}
+		for _, want := range []string{"preview.url_template", "{{.Preview.Name}}"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want it to carry %q", err, want)
+			}
+		}
+		if n := len(f.h.CICD.Triggers()); n != 0 {
+			t.Errorf("dispatched %d workflow(s) on a config that cannot render URLs", n)
 		}
 	})
 

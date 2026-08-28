@@ -152,12 +152,6 @@ type adapter struct {
 	listingAt time.Time
 }
 
-// urlData is the template context passed to URLTemplate. It matches the
-// cicd adapter's so one configured template serves both providers.
-type urlData struct {
-	Name string
-}
-
 // Ready reports whether the API endpoint op posts to can be addressed
 // at all. There is nothing per-operation to configure here — one base
 // URL serves both halves — so the only way this fails is an unset or
@@ -531,7 +525,7 @@ func (p *adapter) renderURL(name string) string {
 		return ""
 	}
 	var buf strings.Builder
-	if err := p.urlTemplate.Execute(&buf, urlData{Name: name}); err != nil {
+	if err := p.urlTemplate.Execute(&buf, preview.URLTemplateData{Preview: preview.Ref{Name: name}}); err != nil {
 		return ""
 	}
 	return buf.String()

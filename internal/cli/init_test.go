@@ -1113,7 +1113,7 @@ cicd:
       inputs:
         version: release_version
 preview:
-  url_template: https://preview-{{.Name}}.acme.test
+  url_template: https://preview-{{.Preview.Name}}.acme.test
   up:
     workflow: acme/infra/.github/workflows/up.yml
     inputs:
@@ -1140,7 +1140,7 @@ var configuredWorkflows = map[string]any{
 }
 
 var configuredPreview = map[string]any{
-	"url_template": "https://preview-{{.Name}}.acme.test",
+	"url_template": "https://preview-{{.Preview.Name}}.acme.test",
 	"up": map[string]any{
 		"workflow": "acme/infra/.github/workflows/up.yml",
 		"inputs":   map[string]any{"name": "name"},

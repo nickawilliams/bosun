@@ -738,8 +738,8 @@ func newPrereleaseCmd() *cobra.Command {
 							IssueKey: issue,
 							Items:    items,
 							Content: buildNotifyContent("prerelease", notifyTemplateData{
-								IssueKey: issue,
-								Items:    items,
+								Issue: issueRefFrom(issue, detail),
+								Items: items,
 							}),
 						})
 						return err
