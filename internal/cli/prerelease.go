@@ -354,11 +354,23 @@ func (rt *releaseTarget) preselect() bool { return rt.eligible() }
 // A repo whose work already shipped is covered by containingRelease:
 // the tag holding it resolves to a release object, so the re-run keeps
 // announcing it (with its URL) rather than dropping it from a thread
-// the notifier upserts. A containing tag with NO release object is
-// deliberately not announced — there is no URL to link, matching the
-// URL-less skip in the notify Apply.
+// the notifier upserts.
+//
+// The URL check mirrors the notify Apply's skip rather than merely
+// echoing it. A containing release with no URL is the synthetic one
+// resolveMultiUserContext builds when confirming the release object
+// failed with something other than a 404: enough to render "in <tag>"
+// on the repo's own row, but nothing to link. Apply drops those items,
+// so counting them here made the plan promise an announcement that
+// could never be sent.
 func (rt *releaseTarget) producesResult() bool {
-	return rt.tagErr == nil && (rt.include || rt.containingRelease != nil)
+	if rt.tagErr != nil {
+		return false
+	}
+	if rt.include {
+		return true
+	}
+	return rt.containingRelease != nil && rt.containingRelease.URL != ""
 }
 
 // infoRowNote returns the reason an inert (non-selectable) row carries

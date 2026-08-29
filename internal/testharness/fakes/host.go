@@ -90,8 +90,14 @@ type Host struct {
 	// best-effort writes that follow a PR create or update: the caller
 	// reports them and keeps going, which is only observable if the
 	// write can be made to fail.
-	CreateReleaseErr       error
-	GetLatestTagErr        error
+	CreateReleaseErr error
+	GetLatestTagErr  error
+	// GetReleaseByTagErr forces the lookup to fail with something
+	// OTHER than ErrNotFound — the seam for "this tag exists but we
+	// could not confirm whether it is a published release", which
+	// prerelease's sweep-up detection treats differently from a plain
+	// 404. Without it the fake can only ever answer "no such release".
+	GetReleaseByTagErr     error
 	GetPRErr               error
 	CreatePRErr            error
 	EditPRErr              error
@@ -440,6 +446,9 @@ func (h *Host) GetReleaseByTag(_ context.Context, owner, repository, tag string)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordCall("GetReleaseByTag")
+	if h.GetReleaseByTagErr != nil {
+		return code.Release{}, h.GetReleaseByTagErr
+	}
 	rel, ok := h.releasesByTag[repoKey(owner, repository)+"@"+tag]
 	if !ok {
 		return code.Release{}, code.ErrNotFound

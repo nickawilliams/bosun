@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -369,6 +370,38 @@ func TestPrereleaseNotificationBranches(t *testing.T) {
 		}
 		if !strings.Contains(strings.Join(labels, ","), "api") {
 			t.Errorf("second announcement = %v, want it to still carry the repo released in run 1", labels)
+		}
+	})
+
+	t.Run("unconfirmable_release_plans_nothing_to_announce", func(t *testing.T) {
+		// A release-shaped tag contains the merged work, but confirming
+		// whether it is a published release fails with something other
+		// than a 404. Sweep-up then synthesizes a containing release
+		// carrying only the tag — no URL — and Apply skips URL-less
+		// items so nothing can be posted.
+		//
+		// The plan has to say so. Counting that result as an outcome
+		// made the notify row read "new notification" for an Apply that
+		// was guaranteed to send nothing; FindThread being called is
+		// the observable signature of that promise, since Assess only
+		// reaches it once something is deemed announceable.
+		h, api := setupReleasable(t)
+		api.Tag("v1.2.4", "main")
+		h.Host.GetReleaseByTagErr = errors.New("502 bad gateway")
+
+		if err := runPrerelease(h, "--approve"); err != nil {
+			t.Fatalf("prerelease: %v", err)
+		}
+
+		calls := h.Notifier.Calls()
+		if slices.Contains(calls, "FindThread") {
+			t.Errorf("notify assessed as announceable (calls=%v), want \"nothing to announce\"", calls)
+		}
+		if n := len(h.Notifier.Messages()); n != 0 {
+			t.Errorf("posted %d message(s), want 0", n)
+		}
+		if n := len(h.Host.Releases()); n != 0 {
+			t.Errorf("created %d release(s), want 0 (work is already in v1.2.4)", n)
 		}
 	})
 
