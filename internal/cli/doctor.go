@@ -141,7 +141,7 @@ func newDoctorCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "system check",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			// Validated before anything runs: an unusable --require
 			// value is the caller's mistake, and reporting it after a
 			// full 30s of probing would bury it under the report it
@@ -239,7 +239,7 @@ func newDoctorCmd() *cobra.Command {
 				return doctorGateError(level, gating)
 			}
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)

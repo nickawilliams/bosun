@@ -19,7 +19,7 @@ func newCreateCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "create issue",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			title, _ := cmd.Flags().GetString("title")
 			description, _ := cmd.Flags().GetString("description")
 			issueType, _ := cmd.Flags().GetString("type")
@@ -150,7 +150,7 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)
