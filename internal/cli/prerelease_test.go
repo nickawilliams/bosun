@@ -86,7 +86,11 @@ func TestProducesResult(t *testing.T) {
 	}{
 		{"selected for release", releaseTarget{include: true, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
 		{"sweep-up containing release", releaseTarget{containingRelease: &code.Release{Tag: "v1.2.4"}, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
-		{"already at current version", releaseTarget{currentTag: "v2.0.0", nextVersion: "v2.0.0"}, true},
+		// A repo whose work already shipped reaches the notification
+		// through containingRelease (the tag resolves to a release
+		// object), which the sweep-up case above covers. There is no
+		// separate "already at current version" arm: DeriveNextVersion
+		// always increments, so nextVersion can never equal currentTag.
 		{"gate-blocked (unmerged, would-release)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateBlock}, false},
 		{"gate-skipped (nothing beyond default)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateSkip}, false},
 		{"deselected eligible", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", include: false}, false},

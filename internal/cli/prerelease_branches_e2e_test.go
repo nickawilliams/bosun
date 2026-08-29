@@ -315,6 +315,63 @@ func TestPrereleaseNotificationBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("rerun_keeps_previously_released_repos_in_the_thread", func(t *testing.T) {
+		// The notification upserts: a second run REPLACES the thread's
+		// message. A repo released by the first run must therefore
+		// still appear in the second run's announcement, or the issue's
+		// release record silently loses it.
+		//
+		// It survives via containingRelease — the tag holding its work
+		// resolves to a release object, so the repo still produces a
+		// result. That is the mechanism, and this test is what makes
+		// the guarantee explicit.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(prereleaseConfig)
+		api := h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+		h.Tracker.SeedIssue(issue.Issue{Key: "EX-1", Title: "Add feature", Type: "Story"})
+		if err := h.Run(
+			"start", "--issue", "EX-1", "--slug", "feature",
+			"--repository", "api", "--repository", "web", "--approve",
+		); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+
+		// Run 1: only api has merged work.
+		shaAPI := mergeReleasableWork(t, h, api)
+		h.Host.SeedPR(api.Owner, api.Name, prereleaseBranch, code.PullRequest{
+			Number: 7, State: "merged", MergeCommitSHA: shaAPI,
+		})
+		if err := runPrerelease(h, "--approve"); err != nil {
+			t.Fatalf("run 1: %v", err)
+		}
+
+		// Run 2: web's work merges later; api now has nothing new.
+		shaWeb := mergeReleasableWork(t, h, web)
+		h.Host.SeedPR(web.Owner, web.Name, prereleaseBranch, code.PullRequest{
+			Number: 8, State: "merged", MergeCommitSHA: shaWeb,
+		})
+		if err := runPrerelease(h, "--approve"); err != nil {
+			t.Fatalf("run 2: %v", err)
+		}
+
+		msgs := h.Notifier.Messages()
+		if len(msgs) != 2 {
+			t.Fatalf("messages = %d, want 2 (one per run)", len(msgs))
+		}
+		last := msgs[len(msgs)-1]
+		labels := make([]string, 0, len(last.Items))
+		for _, it := range last.Items {
+			labels = append(labels, it.Label)
+		}
+		if len(labels) != 2 {
+			t.Fatalf("second announcement items = %v, want both repos", labels)
+		}
+		if !strings.Contains(strings.Join(labels, ","), "api") {
+			t.Errorf("second announcement = %v, want it to still carry the repo released in run 1", labels)
+		}
+	})
+
 	t.Run("already_announced_release_is_skipped", func(t *testing.T) {
 		// Sweep-up: another user cut the containing release AND
 		// already announced it, so this run posts nothing.

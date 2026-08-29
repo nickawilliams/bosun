@@ -311,8 +311,7 @@ func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget)
 // its lookup succeeded, the derived next version differs from the latest
 // tag, and no existing release already contains its work. Used to scope
 // gate-reason rendering to repos that would otherwise release (so an
-// already-current or already-shipped repo shows its tag, not a gate
-// note).
+// already-shipped repo shows its tag, not a gate note).
 func (rt *releaseTarget) versionEligible() bool {
 	if rt.containingRelease != nil {
 		// Another release already contains our work — don't cut a
@@ -320,6 +319,11 @@ func (rt *releaseTarget) versionEligible() bool {
 		// doesn't already know.
 		return false
 	}
+	// The nextVersion != currentTag clause is a fail-safe, not a live
+	// branch: DeriveNextVersion always increments, so the two can't be
+	// equal today. It stays because the failure it prevents — cutting a
+	// release over the tag we're already on — is the one that would
+	// matter if a no-op bump level ever existed.
 	return rt.tagErr == nil && rt.nextVersion != "" && rt.nextVersion != rt.currentTag
 }
 
@@ -340,20 +344,21 @@ func (rt *releaseTarget) preselect() bool { return rt.eligible() }
 
 // producesResult reports whether this repo lands a row in
 // releaseResults — i.e. something the notification would announce: a
-// release we'll create (include), a sweep-up we'll point at
-// (containingRelease), or an already-at-current-version listing.
-// Mirrors the branches of the release action's Assess/Apply that append
-// to releaseResults, computed from target state so the notify action
-// can predict an empty announcement before any Apply runs. Blocked,
-// skipped, deselected, and errored repos produce nothing.
+// release we'll create (include), or a sweep-up we'll point at
+// (containingRelease). Mirrors the branches of the release action's
+// Assess/Apply that append to releaseResults, computed from target
+// state so the notify action can predict an empty announcement before
+// any Apply runs. Blocked, skipped, deselected, and errored repos
+// produce nothing.
+//
+// A repo whose work already shipped is covered by containingRelease:
+// the tag holding it resolves to a release object, so the re-run keeps
+// announcing it (with its URL) rather than dropping it from a thread
+// the notifier upserts. A containing tag with NO release object is
+// deliberately not announced — there is no URL to link, matching the
+// URL-less skip in the notify Apply.
 func (rt *releaseTarget) producesResult() bool {
-	if rt.tagErr != nil {
-		return false
-	}
-	if rt.include || rt.containingRelease != nil {
-		return true
-	}
-	return rt.currentTag != "" && rt.nextVersion == rt.currentTag
+	return rt.tagErr == nil && (rt.include || rt.containingRelease != nil)
 }
 
 // infoRowNote returns the reason an inert (non-selectable) row carries
@@ -543,41 +548,18 @@ func runPrerelease(cmd *cobra.Command) error {
 						}
 						// Blocked or skipped by the release gate — the
 						// work isn't on the default branch, or there's
-						// nothing of ours to release. Not announced.
-						// Plan-detail grammar: persisting tag first
-						// (when known), the gate reason parenthesized
-						// — `= v1.2.3 (PR #42 open — not merged)`.
-						// Must precede the already-current branch
-						// below, which would otherwise mislabel a
-						// version-eligible-but-blocked repo.
+						// nothing of ours to release (including work
+						// already shipped in the latest tag). Not
+						// announced. Plan-detail grammar: persisting tag
+						// first (when known), the gate reason
+						// parenthesized — `= v1.2.3 (PR #42 open — not
+						// merged)`.
 						if rt.versionEligible() && rt.gate != gateAllow {
 							detail := "(" + rt.gateReason + ")"
 							if rt.currentTag != "" {
 								detail = rt.currentTag + " " + detail
 							}
 							return ActionCompleted, detail, nil
-						}
-						// Already at a release version — capture it so
-						// notifications still list the repo, and render
-						// an unchanged row (the = glyph already reads as
-						// "current"). Deselected-eligible repos fall
-						// through to a "not selected" no-op (not
-						// announced), which distinguishes the two in the
-						// plan.
-						if !rt.eligible() && rt.currentTag != "" {
-							// Already-current row in the notification — use
-							// the configured services + the prior subjects
-							// so the label format stays consistent with the
-							// active-release case (collapses to repo name
-							// when all services were "shipped" previously).
-							releaseResults = append(releaseResults, releaseResult{
-								repo:     rt.repo.Name,
-								services: rt.services,
-								subjects: rt.subjects,
-								release:  code.Release{Tag: rt.currentTag},
-								version:  rt.currentTag,
-							})
-							return ActionCompleted, rt.currentTag, nil
 						}
 						// Deselected-eligible: persisting tag first,
 						// why parenthesized (plan-detail grammar).
