@@ -62,6 +62,30 @@ one merged one.
   a forced destructive run still confirms its plan (or passes
   `--approve` explicitly).
 
+### Init CI/CD Inputs Rework
+
+Re-add the 9 CI/CD workflow keys to `init`'s prompts. They are currently
+dropped (`ProviderOnly` on the cicd entry in `serviceInitGroups`) because the
+flat schema layout asks questions the user can't reasonably answer:
+
+- preview/release targets vary per repo (and since 4ee6cdb,
+  `workflows.release.target.<repo>` is polymorphic — string or per-service
+  map — which a flat prompt can't express);
+- the URL template needs context to fill in;
+- input parameter names are GitHub-Actions-specific.
+
+The inputs need a redesign before init can ask about them — likely tied to
+whatever scheme replaces the flat keys (per-repo subtrees; see Config Schema
+Refactor above). A `discover-production` bootstrap (matching each workflow's
+`k8s-directory` against `services.<repo>.<svc>` path prefixes to generate the
+per-service map) was sketched during the release rework and would fit here.
+
+**When the input redesign lands:** re-add CI/CD to init via the standard
+gate → form → consolidated card pattern and drop `ProviderOnly` from the
+cicd entry.
+
+_Migrated from issue #36 (originally from the #26 working checklist)._
+
 ### Status Command — CI/CD Integration
 
 - [ ] Last build/deploy status per repository
@@ -183,6 +207,41 @@ because it doesn't know whether a single- or multi-input form follows.
   proceed/dismiss positions are stable across every prompt.
 - [ ] Fold the existing binary `Dialog` into it, and migrate hand-rolled prompts
   (preview adopt, typeahead helpers) onto it.
+
+## Deferred by Design
+
+Designed answers recorded so they don't get re-litigated when hit. None
+built because nothing requires them today and each failure mode is loud +
+actionable.
+
+### `create` — Tracker Field Escape Hatches
+
+Parked design answers from #26's `bosun create` review (2026-07-20).
+_Migrated from issue #35._
+
+**Tracker-required custom fields — `issue_tracker.create_fields`.** Some
+Jira projects require fields at creation that bosun doesn't model;
+`CreateIssue` would 400 with the field named in Jira's error. Designed
+answer: `issue_tracker.create_fields: {customfield_XXXXX: <static value>}`
+merged into the create request body — no createmeta fetching, no dynamic
+form (that's the same complexity class as the deferred init CI/CD rework;
+see Init CI/CD Inputs Rework above). Build when a project actually hits
+the 400.
+
+**Create-time sizing — `issue_tracker.size_field`.** The Size field
+(small/medium/large) was dropped 2026-07-20 (9a93c1a) because it was
+collected and silently discarded — the Jira adapter never sent it. If
+T-shirt sizing at creation is ever wanted back, map it to the instance's
+custom field ID via config rather than reintroducing an unmapped form
+field.
+
+**Per-provider display labels.** bosun says "Title" where Jira's UI says
+"Summary" (semantic equivalents; the adapter maps `Title → summary`). Kept
+canonical deliberately — internal consistency over per-provider vocabulary.
+If the mismatch ever genuinely confuses, the presentation-only fixes are a
+muted help line on the field ("Jira: Summary") or an adapter-supplied
+`FieldLabels()` map — neither disturbs the canonical model. Don't build
+preemptively.
 
 ## Future Ideas
 
