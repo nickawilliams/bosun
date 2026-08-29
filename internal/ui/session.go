@@ -54,12 +54,31 @@ package ui
 // — and the CaptureReporter test contract built on it — is unchanged.
 //
 // Interrupts: ctrl+c during a form is the form's abort (ErrCancelled
-// path, worker unwinds normally). ctrl+c anywhere else ends the
-// program; RunSession returns "interrupted" immediately and the worker
-// goroutine is abandoned, matching the legacy primitives' behavior of
-// returning from a spinner while its task goroutine still runs. The
-// session is marked closed so the abandoned worker's subsequent UI
-// calls are no-ops.
+// path, worker unwinds normally). ctrl+c as a key press anywhere else
+// ends the program, as does an external SIGINT (which bubbletea turns
+// into ErrInterrupted from Run without the model ever seeing it).
+// Either way RunSession returns "interrupted" immediately and the
+// worker goroutine is abandoned, matching the legacy primitives'
+// behavior of returning from a spinner while its task goroutine still
+// runs.
+//
+// Abandonment is deliberately best-effort, and the process is expected
+// to exit shortly after. A call the worker has already entered
+// unwinds via session.interrupted; a call it makes AFTER abandonment
+// finds no active session and falls through to the legacy
+// non-session path, exactly as it would have before this shell
+// existed. That can briefly interleave with the error card the main
+// goroutine renders — bounded by process exit, and preferable to
+// swallowing output on a path where the user is already leaving.
+//
+// One bubbletea constraint shapes the failure paths: Program.Println
+// is an unguarded send on an unbuffered channel (unlike Program.Send,
+// which selects on the program context), so a commit racing program
+// teardown can park forever. Commits therefore go through Println for
+// its FIFO ordering guarantee — routing them as commands instead
+// would let two scrollback inserts land out of order — and every path
+// that waits on the worker is bounded so a parked commit can never
+// hang the command.
 
 import (
 	"errors"
@@ -77,6 +96,13 @@ import (
 // return when ctrl+c ends a run mid-task.
 var errInterrupted = errors.New("interrupted")
 
+// sessionDrainTimeout bounds how long a failed run waits for the
+// worker's result. The worker can be parked forever in a commit whose
+// program has gone away (Program.Println is an unguarded send), and a
+// command that hangs with no UI is strictly worse than one that
+// reports the renderer error it already has in hand.
+const sessionDrainTimeout = 2 * time.Second
+
 // session is the worker-side handle for the active shell program. All
 // fields except closed are owned by the worker goroutine; main touches
 // them only before the worker starts and after it finishes (or is
@@ -90,9 +116,11 @@ type session struct {
 	// the whole tail.
 	open *sesOpenRec
 
-	// closed marks the program as gone (ctrl+c abandonment or run
-	// failure). Worker-side calls become no-ops so an abandoned
-	// worker cannot block on a dead program's queue.
+	// closed marks the program as gone (interrupt abandonment or run
+	// failure). Worker-side session calls check it so an in-flight
+	// primitive unwinds instead of pushing onto a dead program's
+	// queue; calls made after abandonment see no active session at
+	// all and take the legacy path (see the package header).
 	closed atomic.Bool
 
 	// done closes when the program has exited, releasing any worker
@@ -158,7 +186,9 @@ func RunSession(fn func() error) error {
 	defer activeSession.Store(nil)
 
 	workerErr := make(chan error, 1)
+	var started atomic.Bool
 	m.onStart = func() {
+		started.Store(true)
 		go func() {
 			err := fn()
 			// Keep the program alive long enough to consume its own
@@ -174,16 +204,37 @@ func RunSession(fn func() error) error {
 
 	final, runErr := p.Run()
 	close(s.done)
-	if runErr != nil {
-		// The renderer failed outright (rare environment issue). The
-		// worker is already running; mark the session closed so its UI
-		// calls no-op, and wait for its result.
+
+	// Run can fail before Init — OpenTTY, terminal setup, the size
+	// query, and the input reader all precede it — in which case
+	// onStart never fired and no worker exists to wait for. Nothing
+	// has painted either, so run the body directly on the legacy
+	// primitives: the same fallback the per-primitive programs had.
+	if !started.Load() {
 		s.closed.Store(true)
-		return <-workerErr
+		return fn()
+	}
+
+	if runErr != nil {
+		// Either an external SIGINT (bubbletea returns ErrInterrupted
+		// from Run rather than routing it through the model) or a
+		// renderer failure. Abandon in both cases; the worker may be
+		// parked in a commit whose program is gone, so the wait is
+		// bounded rather than open-ended.
+		s.closed.Store(true)
+		if errors.Is(runErr, tea.ErrInterrupted) {
+			return errInterrupted
+		}
+		select {
+		case err := <-workerErr:
+			return err
+		case <-time.After(sessionDrainTimeout):
+			return runErr
+		}
 	}
 
 	if fm, ok := final.(*shellModel); ok && fm.err != nil {
-		// ctrl+c outside a form: abandon the worker, mirroring the
+		// ctrl+c as a key press: abandon the worker, mirroring the
 		// legacy primitives (their programs returned "interrupted"
 		// while the task goroutine kept running until process exit).
 		s.closed.Store(true)
@@ -233,6 +284,12 @@ func (s *session) commitOpen() {
 	}
 	s.println(s.open.continuing)
 	s.open = nil
+	// Drop the committed block from the managed frame too, or it
+	// stays painted below its own scrollback copy. Callers that mount
+	// replacement content post their own tail immediately after, and
+	// both messages travel the same FIFO queue, so the intermediate
+	// clear never reaches the screen on those paths.
+	s.send(sesTailMsg{text: ""})
 }
 
 // println commits raw text to scrollback. Text carries its own
@@ -294,6 +351,13 @@ func (s *session) spinnerSwap(frame string) {
 // spinnerFinish resolves the animated tail into a finalized block (or
 // nothing, when vanish). Returns the record for rewinds.
 func (s *session) spinnerFinish(open, continuing string, vanish bool) *sesOpenRec {
+	// A card printed from inside the spinner's task became the open
+	// block; commit it rather than overwriting it. Emitting during a
+	// spinner is against the house style (see cleanup.go) and no
+	// caller does it today, but losing the output entirely is a worse
+	// failure than the legacy path's garbled-but-present one. A no-op
+	// on every well-behaved path, where the open block is already nil.
+	s.commitOpen()
 	if vanish {
 		s.open = nil
 		s.send(sesTailMsg{text: ""})
@@ -413,7 +477,9 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
 	}()
 
 	g := &group{outer: defaultReporter, title: title, indent: 1, msgCh: msgCh}
+	start := time.Now()
 	fn(g)
+	holdSpinner(start) // display floor, as cardReporter.Group applies
 	msgCh <- groupDoneMsg{}
 	<-drained
 
@@ -569,13 +635,9 @@ func (m *shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.InterruptMsg:
-		if m.formTail != nil {
-			return m.updateForm(msg)
-		}
-		m.err = errInterrupted
-		m.quitting = true
-		return m, tea.Quit
+		// No InterruptMsg case: bubbletea's event loop returns
+		// ErrInterrupted from Run before the message reaches Update,
+		// so an external SIGINT is handled in RunSession instead.
 	}
 
 	if m.formTail != nil {
@@ -624,7 +686,11 @@ func sessionRunCard(s *session, card *Card, fn func() error, successCard func() 
 	card.state = CardRunning
 	s.spinnerStart(prefix + card.renderWithGlyph(GlyphSlot))
 
+	start := time.Now()
 	err := fn()
+	// Same display floor the legacy per-primitive runners applied, so
+	// a fast task's spinner is still readable rather than a blip.
+	holdSpinner(start)
 	if s.interrupted() {
 		if err == nil {
 			err = errInterrupted
@@ -653,6 +719,13 @@ func sessionRunCard(s *session, card *Card, fn func() error, successCard func() 
 	rec := s.spinnerFinish(prefix+final.Render(), prefix+final.renderContinuing(), false)
 	if rec != nil {
 		rec.prevSpacer = prevSpacer
+	}
+	// Tight suppresses the connector before whatever renders next —
+	// the resolution paints through the program rather than Print, so
+	// it has to be applied here (Card.Tight's contract, and what keeps
+	// an embedded form flush against its header).
+	if final.tight {
+		ClearSpacer()
 	}
 	return rec, nil
 }
@@ -713,6 +786,11 @@ func sessionRunCardSteps(s *session, steps []CardStep, successor func() *Card) (
 	rec := s.spinnerFinish(prefix+final.Render(), prefix+final.renderContinuing(), false)
 	if rec != nil {
 		rec.prevSpacer = prevSpacer
+	}
+	// See sessionRunCard: the gather seams end on a Tight input header
+	// that an embedded form renders directly beneath.
+	if final.tight {
+		ClearSpacer()
 	}
 	return s.sessionRewind(rec), nil
 }

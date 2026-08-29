@@ -558,6 +558,98 @@ func TestRunSessionRoutedHelpers(t *testing.T) {
 	}
 }
 
+// TestSessionCommitClearsTail is the regression test for a committed
+// block staying painted in the managed frame below its own scrollback
+// copy. Every commit-without-replacement path (FinalizeOpenCard,
+// Bold, FlushSpacer, a nil-successor step run) must leave the card on
+// screen exactly once.
+func TestSessionCommitClearsTail(t *testing.T) {
+	out, _ := sessionTestStreams(t)
+
+	err := RunSession(func() error {
+		NewCard(CardSuccess, "solitary").Print()
+		FinalizeOpenCard()
+		Bold("a heading")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+	if n := strings.Count(out.String(), "Solitary"); n != 1 {
+		t.Errorf("committed card rendered %d times, want 1 (stale tail duplicate)", n)
+	}
+}
+
+// TestSessionTightSuppressesConnector locks the Tight contract across
+// a program-painted resolution: the gather seams end on a Tight input
+// header that an embedded form renders flush beneath, so no connector
+// row may be pending afterwards.
+func TestSessionTightSuppressesConnector(t *testing.T) {
+	sessionTestStreams(t)
+
+	var spacerAfterSteps, spacerAfterCard bool
+	err := RunSession(func() error {
+		NewCard(CardSuccess, "before").Print()
+		if _, err := RunCardSteps([]CardStep{
+			{Card: NewCard(CardRunning, "gather"), Run: func() error { return nil }},
+		}, func() *Card { return NewCard(CardInput, "picker").Tight() }); err != nil {
+			return err
+		}
+		spacerAfterSteps = needsSpacer
+
+		if err := RunCard("second", func() error { return nil }); err != nil {
+			return err
+		}
+		_, err := RunCardMorph(
+			NewCard(CardRunning, "morphing"),
+			NewCard(CardInput, "morphed").Tight(),
+			func() error { return nil },
+		)
+		spacerAfterCard = needsSpacer
+		return err
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+	if spacerAfterSteps {
+		t.Error("steps successor was Tight but left a connector armed")
+	}
+	if spacerAfterCard {
+		t.Error("morph successor was Tight but left a connector armed")
+	}
+}
+
+// TestRunSessionStepsVanishAllSucceed covers the nil-successor path
+// with every step succeeding — the counterpart to the failing-step
+// case, and a commit-without-replacement path.
+func TestRunSessionStepsVanishAllSucceed(t *testing.T) {
+	out, _ := sessionTestStreams(t)
+
+	err := RunSession(func() error {
+		NewCard(CardSuccess, "anchor").Print()
+		rewind, err := RunCardSteps([]CardStep{
+			{Card: NewCard(CardRunning, "quiet one"), Run: func() error { return nil }},
+			{Card: NewCard(CardRunning, "quiet two"), Run: func() error { return nil }},
+		}, nil)
+		if err != nil {
+			return err
+		}
+		rewind()
+		NewCard(CardSuccess, "after vanish").Print()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+	text := out.String()
+	if n := strings.Count(text, "Anchor"); n != 1 {
+		t.Errorf("anchor rendered %d times, want 1", n)
+	}
+	if !strings.Contains(text, "After Vanish") {
+		t.Errorf("output missing the post-vanish card: %q", text)
+	}
+}
+
 // TestSessionFormOutsideSession locks the misuse guard: SessionForm
 // with no active session errors instead of hanging.
 func TestSessionFormOutsideSession(t *testing.T) {
