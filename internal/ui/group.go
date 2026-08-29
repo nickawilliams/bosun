@@ -457,6 +457,15 @@ func (m *groupModel) processMsg(msg groupMsg) {
 	}
 }
 
+// viewString renders the group tree to a plain string — the shared
+// render for the standalone program's View and the session shell's
+// tail composition.
+func (m *groupModel) viewString() string {
+	var b strings.Builder
+	m.renderNode(&b, m.root)
+	return b.String()
+}
+
 func (m *groupModel) View() tea.View {
 	// Always render the current state — including the final frame.
 	// When done, the root is finalized so renderNode uses aggregate

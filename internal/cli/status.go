@@ -30,7 +30,7 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show what wants your attention at workspace or project scope",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
 			cc := commandContext(cmd)
@@ -49,7 +49,7 @@ func newStatusCmd() *cobra.Command {
 				return runStatusWorkspace(ctx, cc, mgr)
 			}
 			return runStatusProject(ctx)
-		},
+		}),
 	}
 
 	setTitleResolver(cmd, func(cc CommandContext) string {

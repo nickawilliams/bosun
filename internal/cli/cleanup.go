@@ -24,7 +24,7 @@ func newCleanupCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "clean up workspace",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			if err := cc.RequireWorkspace(); err != nil {
 				return err
@@ -201,7 +201,7 @@ func newCleanupCmd() *cobra.Command {
 			}
 
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)

@@ -26,7 +26,7 @@ func newInitCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "initialize project",
 		},
-		RunE: runInit,
+		RunE: shellRunE(runInit),
 	}
 
 	addProjectFlag(cmd)

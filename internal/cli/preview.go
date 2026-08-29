@@ -23,146 +23,12 @@ func newPreviewCmd() *cobra.Command {
 			headerAnnotationTitle: "deploy preview",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc := commandContext(cmd)
-			if err := cc.RequireWorkspace(); err != nil {
-				return err
-			}
-			if err := cc.RequireIssue(); err != nil {
-				return err
-			}
-			issueKey := cc.Issue
-
-			ctx := cmd.Context()
-			detail, _ := emitLifecyclePreamble(ctx, issueKey)
-			currentStatus := detail.Status
-
-			provider, err := newPreviewProvider(cc.Workspace)
-			if err != nil {
-				return fmt.Errorf("preview provider: %w", err)
-			}
-
-			const stage = preview.ConfigGroup
-			force, _ := cmd.Flags().GetBool("force")
-
-			resolution, err := resolvePreview(cmd, ctx, provider, issueKey, stage, force)
-			if err != nil {
-				return err
-			}
-
-			if resolution.previewName != "" && !resolution.cardPainted {
-				ui.Selected("preview", resolution.previewName)
-			}
-
-			// --- Plan + Apply ---
-
-			var actions []Action
-			var prData []repoPR
-
-			// The provider answers for itself whether each half of its
-			// lifecycle is wired. This replaces a CI/CD capability
-			// check that gated both rows regardless of whether the
-			// selected provider dispatches workflows at all.
-			ready := &previewReadiness{provider: provider}
-
-			if resolution.teardownName != "" {
-				actions = append(actions, buildTeardownAction(ctx, ready, provider, resolution.teardownName, issueKey))
-			}
-
-			if resolution.isCurrent {
-				actions = append(actions, currentAction(resolution.previewName))
-			}
-
-			if resolution.isAdopt {
-				actions = append(actions, adoptAction(provider, issueKey, resolution.previewName))
-			}
-
-			if resolution.deployName != "" {
-				deployAction, prs, err := buildDeployAction(cmd, ctx, ready, cc.Workspace, provider, issueKey, resolution)
-				if err != nil {
-					return err
-				}
-				actions = append(actions, deployAction)
-				actions = append(actions, prDetailActions(prs)...)
-				prData = prs
-			}
-
-			tracker, _ := newIssueTracker()
-			if sa, ok := statusAction(tracker, issueKey, currentStatus, "preview"); ok {
-				actions = append(actions, sa)
-			}
-
-			channel := viper.GetString("notification.channels.review")
-			previewNotifier, previewNotifierErr := newNotifier()
-			if previewNotifierErr == nil {
-				defer previewNotifier.Close()
-			}
-			if channel != "" && previewNotifierErr == nil {
-				actions = append(actions, Action{
-					Op:     ui.PlanModify,
-					Action: "notify",
-					Type:   "channel",
-					Name:   channel,
-					Assess: func(ctx context.Context) (ActionState, string, error) {
-						ref, _ := previewNotifier.FindThread(ctx, channel, issueKey)
-						if ref.Timestamp == "" {
-							return ActionSkipped, "", nil
-						}
-						return ActionNeeded, "update review notification", nil
-					},
-					Apply: func(ctx context.Context) error {
-						// The host supplies both the branch links and the
-						// author avatar; without one the notification
-						// still goes out, just plainer.
-						host, _ := newCodeHost()
-
-						// Build notification items from PR data.
-						items := make([]notify.Item, len(prData))
-						for i, rp := range prData {
-							items[i] = notify.Item{
-								Label:     rp.RepoName,
-								URL:       rp.PR.URL,
-								Detail:    fmt.Sprintf("#%d", rp.PR.Number),
-								Body:      rp.PR.Body,
-								BranchURL: branchURL(host, rp.Owner, rp.Repo, rp.Branch),
-							}
-						}
-						// Resolve the author's avatar for card icons.
-						var iconURL string
-						if host != nil {
-							if user, err := host.GetAuthenticatedUser(ctx); err == nil {
-								iconURL = avatarURL(host, user)
-							}
-						}
-
-						_, err := previewNotifier.Notify(ctx, notify.Message{
-							Channel:  channel,
-							IssueKey: issueKey,
-							Content: buildNotifyContent("review", notifyTemplateData{
-								Issue: issueRefFrom(issueKey, detail),
-								Preview: preview.Ref{
-									Name: resolution.previewName,
-									URL:  resolution.previewURL,
-								},
-								IconURL: iconURL,
-								Items:   items,
-							}),
-						})
-						return err
-					},
-				})
-			} else if previewNotifierErr == nil {
-				// Notification is configured (the notifier built), but this
-				// command has no channel to post to — a partial config, not an
-				// opt-out. Surface it (naming the key) rather than dropping the
-				// announcement silently; an unconfigured provider stays quiet.
-				ui.Skip("notification: set notification.channels.review to announce the preview")
-			}
-
-			if err := runActions(cmd, ctx, actions); err != nil {
-				return err
-			}
-
-			return nil
+			// The whole command runs inside the single-program shell:
+			// one BubbleTea program hosts every phase (readiness,
+			// services, resolution, plan, apply) and every prompt, so
+			// phase transitions are frame swaps rather than program
+			// boundaries. See internal/ui/session.go for the contract.
+			return ui.RunSession(func() error { return runPreview(cmd) })
 		},
 	}
 
@@ -176,6 +42,150 @@ func newPreviewCmd() *cobra.Command {
 	cmd.Flags().String("default-branch", "", "branch every unpinned service runs (provider default if not set)")
 	cmd.Flags().Bool("force", false, "replace existing or create missing without asking; proceed past failed probes (plan confirmation still applies — see --approve)")
 	return cmd
+}
+
+// runPreview is the preview command body, hosted by the session shell.
+func runPreview(cmd *cobra.Command) error {
+	cc := commandContext(cmd)
+	if err := cc.RequireWorkspace(); err != nil {
+		return err
+	}
+	if err := cc.RequireIssue(); err != nil {
+		return err
+	}
+	issueKey := cc.Issue
+
+	ctx := cmd.Context()
+	detail, _ := emitLifecyclePreamble(ctx, issueKey)
+	currentStatus := detail.Status
+
+	provider, err := newPreviewProvider(cc.Workspace)
+	if err != nil {
+		return fmt.Errorf("preview provider: %w", err)
+	}
+
+	const stage = preview.ConfigGroup
+	force, _ := cmd.Flags().GetBool("force")
+
+	resolution, err := resolvePreview(cmd, ctx, provider, issueKey, stage, force)
+	if err != nil {
+		return err
+	}
+
+	if resolution.previewName != "" && !resolution.cardPainted {
+		ui.Selected("preview", resolution.previewName)
+	}
+
+	// --- Plan + Apply ---
+
+	var actions []Action
+	var prData []repoPR
+
+	// The provider answers for itself whether each half of its
+	// lifecycle is wired. This replaces a CI/CD capability
+	// check that gated both rows regardless of whether the
+	// selected provider dispatches workflows at all.
+	ready := &previewReadiness{provider: provider}
+
+	if resolution.teardownName != "" {
+		actions = append(actions, buildTeardownAction(ctx, ready, provider, resolution.teardownName, issueKey))
+	}
+
+	if resolution.isCurrent {
+		actions = append(actions, currentAction(resolution.previewName))
+	}
+
+	if resolution.isAdopt {
+		actions = append(actions, adoptAction(provider, issueKey, resolution.previewName))
+	}
+
+	if resolution.deployName != "" {
+		deployAction, prs, err := buildDeployAction(cmd, ctx, ready, cc.Workspace, provider, issueKey, resolution)
+		if err != nil {
+			return err
+		}
+		actions = append(actions, deployAction)
+		actions = append(actions, prDetailActions(prs)...)
+		prData = prs
+	}
+
+	tracker, _ := newIssueTracker()
+	if sa, ok := statusAction(tracker, issueKey, currentStatus, "preview"); ok {
+		actions = append(actions, sa)
+	}
+
+	channel := viper.GetString("notification.channels.review")
+	previewNotifier, previewNotifierErr := newNotifier()
+	if previewNotifierErr == nil {
+		defer previewNotifier.Close()
+	}
+	if channel != "" && previewNotifierErr == nil {
+		actions = append(actions, Action{
+			Op:     ui.PlanModify,
+			Action: "notify",
+			Type:   "channel",
+			Name:   channel,
+			Assess: func(ctx context.Context) (ActionState, string, error) {
+				ref, _ := previewNotifier.FindThread(ctx, channel, issueKey)
+				if ref.Timestamp == "" {
+					return ActionSkipped, "", nil
+				}
+				return ActionNeeded, "update review notification", nil
+			},
+			Apply: func(ctx context.Context) error {
+				// The host supplies both the branch links and the
+				// author avatar; without one the notification
+				// still goes out, just plainer.
+				host, _ := newCodeHost()
+
+				// Build notification items from PR data.
+				items := make([]notify.Item, len(prData))
+				for i, rp := range prData {
+					items[i] = notify.Item{
+						Label:     rp.RepoName,
+						URL:       rp.PR.URL,
+						Detail:    fmt.Sprintf("#%d", rp.PR.Number),
+						Body:      rp.PR.Body,
+						BranchURL: branchURL(host, rp.Owner, rp.Repo, rp.Branch),
+					}
+				}
+				// Resolve the author's avatar for card icons.
+				var iconURL string
+				if host != nil {
+					if user, err := host.GetAuthenticatedUser(ctx); err == nil {
+						iconURL = avatarURL(host, user)
+					}
+				}
+
+				_, err := previewNotifier.Notify(ctx, notify.Message{
+					Channel:  channel,
+					IssueKey: issueKey,
+					Content: buildNotifyContent("review", notifyTemplateData{
+						Issue: issueRefFrom(issueKey, detail),
+						Preview: preview.Ref{
+							Name: resolution.previewName,
+							URL:  resolution.previewURL,
+						},
+						IconURL: iconURL,
+						Items:   items,
+					}),
+				})
+				return err
+			},
+		})
+	} else if previewNotifierErr == nil {
+		// Notification is configured (the notifier built), but this
+		// command has no channel to post to — a partial config, not an
+		// opt-out. Surface it (naming the key) rather than dropping the
+		// announcement silently; an unconfigured provider stays quiet.
+		ui.Skip("notification: set notification.channels.review to announce the preview")
+	}
+
+	if err := runActions(cmd, ctx, actions); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // buildTeardownAction returns a single rolled-up teardown action. The

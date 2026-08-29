@@ -24,7 +24,7 @@ func newStartCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "start work",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			if err := cc.RequireIssue(); err != nil {
 				return err
@@ -310,7 +310,7 @@ func newStartCmd() *cobra.Command {
 			}
 
 			return runActions(cmd, ctx, actions)
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)

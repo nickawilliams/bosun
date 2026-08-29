@@ -129,6 +129,16 @@ func runForm(fields ...huh.Field) error {
 	if !ui.Interactive() || !ui.CanRenderInteractively() {
 		return fmt.Errorf("interactive input required but stdin or stdout is not a terminal")
 	}
+	// Under the single-program shell the form embeds in the session's
+	// tail — no second tea.Program, no prologue cursor math, no
+	// input-stream handoff (input flows through the one program).
+	if ui.InSession() {
+		err := ui.SessionForm(buildForm(fields), len(fields) > 1)
+		if errors.Is(err, huh.ErrUserAborted) {
+			return ErrCancelled
+		}
+		return err
+	}
 	// Announce form exit on every return path: a read loop this form
 	// leaks (bubbletea can't cancel reads on non-File inputs) must not
 	// be able to consume input meant for a later prompt in the same

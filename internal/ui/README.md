@@ -29,6 +29,20 @@ The application chooses how to render a command's output:
   data directly to stdout (e.g. `config get`, `config show --output
   json`). Components don't render in this mode.
 
+**The session shell.** An interactive command wraps its body in
+`ui.RunSession` (`session.go`), which hosts the whole run in ONE
+BubbleTea program: every primitive below routes through it as messages
+instead of launching a program of its own, so a phase change is a
+frame swap rather than a program boundary — the blank flash between
+phases is gone by construction. The program's `View` holds only the
+live tail; finalized blocks commit to scrollback via `Program.Println`
+in continuing form, and huh forms embed in the tail rather than taking
+the terminal over. Raw, plain, and capture modes bypass the session
+entirely, so every primitive keeps its existing non-session path.
+Commands that write straight to stdout with no animated phases
+(`config`, `captain`) and `demo` stay outside it. The full contract is
+the package header on `session.go`.
+
 **Mode selection.** Auto-detect: interactive when stdout is a TTY,
 raw otherwise. Explicit flags (e.g. `--output json`) or command
 annotations (`"output": "raw"`) override.
@@ -93,9 +107,11 @@ A line in a vertical timeline, representing one outcome (`Card`).
 - **Aggregate status**: failure dominates; all-skipped -> skipped;
   any success (including success+skipped mix) -> success; info
   doesn't propagate.
-- **Spinner timing floor**: 100ms minimum display duration prevents
-  BubbleTea v2 terminal-mode-query escapes from leaking on fast
-  operations.
+- **Spinner timing floor**: a 250ms minimum display duration
+  (`minSpinnerDuration`) keeps a fast operation's spinner readable,
+  and outside the session shell it also gives a per-primitive
+  BubbleTea program long enough to consume its own terminal-mode-query
+  escapes instead of leaking them into the shell's input.
 
 #### Timeline termination
 
@@ -122,10 +138,10 @@ open is what says "this is the end."
   rewriting, for blocks about to be erased.
 - **`spacerPrefix()` guarantees the close, not the record.** Every
   emitter gets the *rewrite* of the previous card for free, because
-  they all call it. Putting a card on screen some other way — a
-  BubbleTea final frame, `RunCardStepsInto`'s raw hand-off — still
-  needs an explicit `ui.RecordOpenCard(card)`, or that card never gets
-  its spine back.
+  they all call it. A card that reaches the screen some other way — a
+  BubbleTea program's final frame — has to be recorded explicitly
+  (`recordCard`), or it never gets its spine back. The `RunCard*`
+  runners already do this for the frames they paint.
 - **No-op swaps are skipped.** A card with no body renders the same
   either way, so it is never recorded or repainted — that covers most
   cards and the whole logo box.

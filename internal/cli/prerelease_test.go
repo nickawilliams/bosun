@@ -85,8 +85,35 @@ func TestProducesResult(t *testing.T) {
 		want bool
 	}{
 		{"selected for release", releaseTarget{include: true, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
-		{"sweep-up containing release", releaseTarget{containingRelease: &code.Release{Tag: "v1.2.4"}, currentTag: "v1.2.3", nextVersion: "v1.2.4"}, true},
-		{"already at current version", releaseTarget{currentTag: "v2.0.0", nextVersion: "v2.0.0"}, true},
+		{
+			// A confirmed sweep-up always carries the release object,
+			// URL included — that link is what the announcement points
+			// at.
+			"sweep-up containing release",
+			releaseTarget{
+				containingRelease: &code.Release{Tag: "v1.2.4", URL: "https://github.test/acme/api/releases/tag/v1.2.4"},
+				currentTag:        "v1.2.3", nextVersion: "v1.2.4",
+			},
+			true,
+		},
+		{
+			// The synthetic containing release built when confirming
+			// the object failed with a non-404: enough to render "in
+			// <tag>" on the repo's row, but no URL to announce. Apply
+			// skips URL-less items, so this must not read as an
+			// outcome or the plan promises a message that never sends.
+			"unconfirmed containing release has nothing to announce",
+			releaseTarget{
+				containingRelease: &code.Release{Tag: "v1.2.4"},
+				currentTag:        "v1.2.3", nextVersion: "v1.2.4",
+			},
+			false,
+		},
+		// A repo whose work already shipped reaches the notification
+		// through containingRelease (the tag resolves to a release
+		// object), which the sweep-up case above covers. There is no
+		// separate "already at current version" arm: DeriveNextVersion
+		// always increments, so nextVersion can never equal currentTag.
 		{"gate-blocked (unmerged, would-release)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateBlock}, false},
 		{"gate-skipped (nothing beyond default)", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", gate: gateSkip}, false},
 		{"deselected eligible", releaseTarget{currentTag: "v1.2.3", nextVersion: "v1.2.4", include: false}, false},

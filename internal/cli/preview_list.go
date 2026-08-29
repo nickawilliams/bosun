@@ -28,7 +28,7 @@ func newPreviewListCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "preview environments",
 		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
 			// No workspace scope: listing is fleet-wide, and the
@@ -67,7 +67,7 @@ func newPreviewListCmd() *cobra.Command {
 
 			ui.Details("Environments", previewListFields(envs))
 			return nil
-		},
+		}),
 	}
 
 	// Project scope only — no workspace or issue flag. Listing is

@@ -375,7 +375,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 			headerAnnotationTitle: "create workspace",
 		},
 		Args: cobra.MinimumNArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			repositoryNames := args[1:]
 			fromHead, _ := cmd.Flags().GetBool("from-head")
@@ -403,7 +403,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 				Confirm: false,
 				Apply:   !isDryRun(cmd),
 			})
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)
@@ -424,7 +424,7 @@ func newWorkspaceReposCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "workspace repos",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			if err := cc.RequireWorkspace(); err != nil {
 				return err
@@ -551,7 +551,7 @@ func newWorkspaceReposCmd() *cobra.Command {
 					movedFrom, projectRoot)
 			}
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)
@@ -574,7 +574,7 @@ func newWorkspaceReposAddCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "add repository",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			if err := cc.RequireWorkspace(); err != nil {
 				return err
@@ -617,7 +617,7 @@ func newWorkspaceReposAddCmd() *cobra.Command {
 				Confirm: false,
 				Apply:   !isDryRun(cmd),
 			})
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)
@@ -634,7 +634,7 @@ func newWorkspaceReposRmCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "remove repository",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			if err := cc.RequireWorkspace(); err != nil {
 				return err
@@ -734,7 +734,7 @@ func newWorkspaceReposRmCmd() *cobra.Command {
 					movedFrom, projectRoot)
 			}
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)
@@ -751,7 +751,7 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 		Annotations: map[string]string{
 			headerAnnotationTitle: "delete workspace",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			cc := commandContext(cmd)
 			// Positional name wins over the resolution chain — it's an
 			// explicit on-the-line target. Otherwise fall through to the
@@ -826,7 +826,7 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 				ui.Info("shell is in a removed directory (%s); cd to %s", movedFrom, projectRoot)
 			}
 			return nil
-		},
+		}),
 	}
 
 	addProjectFlag(cmd)

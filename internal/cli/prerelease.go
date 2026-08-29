@@ -311,8 +311,7 @@ func offerPRMerges(ctx context.Context, host code.Host, targets []releaseTarget)
 // its lookup succeeded, the derived next version differs from the latest
 // tag, and no existing release already contains its work. Used to scope
 // gate-reason rendering to repos that would otherwise release (so an
-// already-current or already-shipped repo shows its tag, not a gate
-// note).
+// already-shipped repo shows its tag, not a gate note).
 func (rt *releaseTarget) versionEligible() bool {
 	if rt.containingRelease != nil {
 		// Another release already contains our work — don't cut a
@@ -320,6 +319,11 @@ func (rt *releaseTarget) versionEligible() bool {
 		// doesn't already know.
 		return false
 	}
+	// The nextVersion != currentTag clause is a fail-safe, not a live
+	// branch: DeriveNextVersion always increments, so the two can't be
+	// equal today. It stays because the failure it prevents — cutting a
+	// release over the tag we're already on — is the one that would
+	// matter if a no-op bump level ever existed.
 	return rt.tagErr == nil && rt.nextVersion != "" && rt.nextVersion != rt.currentTag
 }
 
@@ -340,20 +344,33 @@ func (rt *releaseTarget) preselect() bool { return rt.eligible() }
 
 // producesResult reports whether this repo lands a row in
 // releaseResults — i.e. something the notification would announce: a
-// release we'll create (include), a sweep-up we'll point at
-// (containingRelease), or an already-at-current-version listing.
-// Mirrors the branches of the release action's Assess/Apply that append
-// to releaseResults, computed from target state so the notify action
-// can predict an empty announcement before any Apply runs. Blocked,
-// skipped, deselected, and errored repos produce nothing.
+// release we'll create (include), or a sweep-up we'll point at
+// (containingRelease). Mirrors the branches of the release action's
+// Assess/Apply that append to releaseResults, computed from target
+// state so the notify action can predict an empty announcement before
+// any Apply runs. Blocked, skipped, deselected, and errored repos
+// produce nothing.
+//
+// A repo whose work already shipped is covered by containingRelease:
+// the tag holding it resolves to a release object, so the re-run keeps
+// announcing it (with its URL) rather than dropping it from a thread
+// the notifier upserts.
+//
+// The URL check mirrors the notify Apply's skip rather than merely
+// echoing it. A containing release with no URL is the synthetic one
+// resolveMultiUserContext builds when confirming the release object
+// failed with something other than a 404: enough to render "in <tag>"
+// on the repo's own row, but nothing to link. Apply drops those items,
+// so counting them here made the plan promise an announcement that
+// could never be sent.
 func (rt *releaseTarget) producesResult() bool {
 	if rt.tagErr != nil {
 		return false
 	}
-	if rt.include || rt.containingRelease != nil {
+	if rt.include {
 		return true
 	}
-	return rt.currentTag != "" && rt.nextVersion == rt.currentTag
+	return rt.containingRelease != nil && rt.containingRelease.URL != ""
 }
 
 // infoRowNote returns the reason an inert (non-selectable) row carries
@@ -389,375 +406,9 @@ func newPrereleaseCmd() *cobra.Command {
 			headerAnnotationTitle: "prepare release",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cc := commandContext(cmd)
-			if err := cc.RequireWorkspace(); err != nil {
-				return err
-			}
-			if err := cc.RequireIssue(); err != nil {
-				return err
-			}
-			issue := cc.Issue
-
-			ctx := cmd.Context()
-			bump, _ := cmd.Flags().GetString("bump")
-
-			// --- Resolve ---
-
-			detail, _ := emitLifecyclePreamble(ctx, issue)
-
-			filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
-			repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
-			if err != nil {
-				return err
-			}
-
-			host, hostErr := newCodeHost()
-			if hostErr != nil {
-				ui.Skip(fmt.Sprintf("code host: %v", hostErr))
-			}
-
-			// --- Pre-flight: Workspace Readiness ---
-			//
-			// Shared readiness section (same as review/preview/release):
-			// one card per repo with the push offer + dirty gate folded
-			// in. Pushing matters here too — CreateRelease tags a
-			// commitish on the remote, so a never-pushed branch has no ref
-			// to tag (it drops out of the release set) and a
-			// pushed-but-behind branch would otherwise tag stale commits.
-			g := git.New()
-			readiness, _, err := emitWorkspaceReadiness(ctx, g, repositories)
-			if err != nil {
-				return err // ErrCancelled (dirty gate) propagates as a clean abort
-			}
-
-			// Build release targets from the repos that have a remote
-			// branch to tag. A never-pushed branch has no remote ref for
-			// CreateRelease, so it drops out with a note rather than
-			// failing mid-apply. Identity-resolution failures ride on
-			// tagErr so the repo still appears as a ✗ row.
-			targets := make([]releaseTarget, 0, len(readiness))
-			for i := range readiness {
-				rr := &readiness[i]
-				if !rr.hasRemoteBranch() {
-					ui.SkipValue(ui.PreserveCase(rr.repo.Name), "not pushed — no remote branch to release")
-					continue
-				}
-				rt := releaseTarget{repo: rr.repo, branch: rr.branch}
-				if identity, err := repoIdentity(ctx, host, rr.repo.Path); err != nil {
-					rt.tagErr = err
-				} else {
-					rt.owner = identity.Owner
-					rt.repoName = identity.Name
-				}
-				targets = append(targets, rt)
-			}
-
-			// Pre-check: offer to merge unmerged-but-mergeable workspace
-			// PRs before the release plan is built, so the gate + tag T
-			// see settled merge state. Mirrors the push offer's position.
-			if err := offerPRMerges(ctx, host, targets); err != nil {
-				return err
-			}
-
-			// Observe → Select → record which repos get a release.
-			if err := selectReleaseTargets(ctx, cmd, host, bump, targets); err != nil {
-				return err
-			}
-
-			// --- Plan + Apply ---
-
-			var actions []Action
-
-			type releaseResult struct {
-				repo     string
-				services []string // configured services for the repo
-				subjects []string // user-selected services; formatSubjects collapses to repo when full coverage
-				release  code.Release
-				version  string
-
-				// isExisting is true when this result represents a
-				// release another user cut whose tag already contains
-				// our work (sweep-up case). Notify Apply consults
-				// HasAnnouncement before re-posting and skips when an
-				// announcement is already in the channel.
-				isExisting bool
-
-				// extraPRs carries the "this release also includes
-				// work by these contributors" list, surfaced in both
-				// the result card and the notification.
-				extraPRs []code.PullRequest
-			}
-			var releaseResults []releaseResult
-
-			if host != nil {
-				for i := range targets {
-					rt := &targets[i]
-					actions = append(actions, Action{
-						Op:     ui.PlanCreate,
-						Action: "release",
-						Type:   "repo",
-						Name:   rt.repo.Name,
-						Assess: func(_ context.Context) (ActionState, string, error) {
-							if rt.tagErr != nil {
-								return 0, "", rt.tagErr
-							}
-							if !rt.include {
-								// Containing-release: another user already
-								// cut a release whose tag contains our work
-								// (sweep-up). Capture it as a result so the
-								// notify path can check Slack and announce
-								// if missing. Render as "in v1.2.4" (the
-								// existing tag).
-								if rt.containingRelease != nil {
-									releaseResults = append(releaseResults, releaseResult{
-										repo:       rt.repo.Name,
-										services:   rt.services,
-										subjects:   rt.subjects,
-										release:    *rt.containingRelease,
-										version:    rt.containingRelease.Tag,
-										isExisting: true,
-										extraPRs:   rt.extraPRs,
-									})
-									detail := "in " + rt.containingRelease.Tag
-									if rt.containingRelease.AuthorLogin != "" {
-										detail += " (by @" + rt.containingRelease.AuthorLogin + ")"
-									}
-									return ActionCompleted, detail, nil
-								}
-								// Blocked or skipped by the release gate — the
-								// work isn't on the default branch, or there's
-								// nothing of ours to release. Not announced.
-								// Plan-detail grammar: persisting tag first
-								// (when known), the gate reason parenthesized
-								// — `= v1.2.3 (PR #42 open — not merged)`.
-								// Must precede the already-current branch
-								// below, which would otherwise mislabel a
-								// version-eligible-but-blocked repo.
-								if rt.versionEligible() && rt.gate != gateAllow {
-									detail := "(" + rt.gateReason + ")"
-									if rt.currentTag != "" {
-										detail = rt.currentTag + " " + detail
-									}
-									return ActionCompleted, detail, nil
-								}
-								// Already at a release version — capture it so
-								// notifications still list the repo, and render
-								// an unchanged row (the = glyph already reads as
-								// "current"). Deselected-eligible repos fall
-								// through to a "not selected" no-op (not
-								// announced), which distinguishes the two in the
-								// plan.
-								if !rt.eligible() && rt.currentTag != "" {
-									// Already-current row in the notification — use
-									// the configured services + the prior subjects
-									// so the label format stays consistent with the
-									// active-release case (collapses to repo name
-									// when all services were "shipped" previously).
-									releaseResults = append(releaseResults, releaseResult{
-										repo:     rt.repo.Name,
-										services: rt.services,
-										subjects: rt.subjects,
-										release:  code.Release{Tag: rt.currentTag},
-										version:  rt.currentTag,
-									})
-									return ActionCompleted, rt.currentTag, nil
-								}
-								// Deselected-eligible: persisting tag first,
-								// why parenthesized (plan-detail grammar).
-								if rt.currentTag != "" {
-									return ActionCompleted, rt.currentTag + " (not selected)", nil
-								}
-								return ActionCompleted, "(not selected)", nil
-							}
-							from := rt.currentTag
-							if from == "" {
-								from = "(none)"
-							}
-							return ActionNeeded, fmt.Sprintf("%s → %s", from, rt.nextVersion), nil
-						},
-						Apply: func(ctx context.Context) error {
-							// Subjects were already resolved during the spinner
-							// phase of selectReleaseTargets and finalized by the
-							// form (or applyDefaults in the non-interactive
-							// path). Apply just reads them through.
-							// Tag default-branch HEAD: the release must contain
-							// the workspace's work, and the gate already verified
-							// it's on the default branch. Tagging HEAD (rather
-							// than a specific commit) also gives
-							// generate_release_notes full ancestry, so the
-							// changelog is never empty. Never fall back to the
-							// feature branch: for a squash-merged PR its tip is
-							// pre-merge history, and for no-PR work it's exactly
-							// the unreleased state the gate blocks. The no-PR
-							// gate already fails closed on an unresolved
-							// default; this guards the merged-PR path, which
-							// allows on the PR signal alone.
-							if rt.defaultBranch == "" {
-								return fmt.Errorf("default branch unknown — refusing to tag the feature branch (git remote set-head origin -a)")
-							}
-							target := rt.defaultBranch
-							// Pin the changelog baseline to the tag we
-							// resolved as "latest" — GitHub's own pick uses
-							// /releases/latest, which can miss intermediate
-							// tags that weren't marked latest and produce
-							// nonsense ranges like v4.19.130...v4.19.142 with
-							// an empty body.
-							rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
-								Owner:         rt.owner,
-								Repository:    rt.repoName,
-								Tag:           rt.nextVersion,
-								Target:        target,
-								Name:          rt.nextVersion,
-								GenerateNotes: true,
-								PreviousTag:   rt.currentTag,
-							})
-							if err != nil {
-								return err
-							}
-							releaseResults = append(releaseResults, releaseResult{
-								repo:     rt.repo.Name,
-								services: rt.services,
-								subjects: rt.subjects,
-								release:  rel,
-								version:  rt.nextVersion,
-								extraPRs: rt.extraPRs,
-							})
-							return nil
-						},
-					})
-				}
-			}
-
-			// Status + notify gates share these rollups. Status advances
-			// to ready_for_release UNLESS nothing releases AND something is
-			// blocked (an unmerged PR that didn't merge) — mirrors the
-			// release command's gate, so an unmerged PR no longer marks
-			// the issue ready while shipping nothing. All-already-current
-			// still advances. Notify no-ops when nothing produces a result.
-			anyReleaseOutcome, anyBlocked := false, false
-			for i := range targets {
-				rt := &targets[i]
-				if rt.producesResult() {
-					anyReleaseOutcome = true
-				}
-				if rt.versionEligible() && rt.gate == gateBlock {
-					anyBlocked = true
-				}
-			}
-
-			tracker, _ := newIssueTracker()
-			if !anyBlocked || anyReleaseOutcome {
-				if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
-					actions = append(actions, sa)
-				}
-			}
-
-			releaseChannel := viper.GetString("notification.channels.prerelease")
-			releaseNotifier, releaseNotifierErr := newNotifier()
-			if releaseNotifierErr == nil {
-				defer releaseNotifier.Close()
-			}
-			if releaseChannel != "" && releaseNotifierErr == nil {
-				releaseNotifyOp := ui.PlanCreate
-				actions = append(actions, Action{
-					Op:     ui.PlanCreate,
-					OpRef:  &releaseNotifyOp,
-					Action: "notify",
-					Type:   "channel",
-					Name:   releaseChannel,
-					Assess: func(ctx context.Context) (ActionState, string, error) {
-						if !anyReleaseOutcome {
-							return ActionCompleted, "nothing to announce", nil
-						}
-						ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
-						if ref.Timestamp != "" {
-							releaseNotifyOp = ui.PlanModify
-							return ActionNeeded, "update notification", nil
-						}
-						return ActionNeeded, "new notification", nil
-					},
-					Apply: func(ctx context.Context) error {
-						if len(releaseResults) == 0 {
-							return nil
-						}
-						sort.Slice(releaseResults, func(i, j int) bool {
-							return releaseResults[i].repo < releaseResults[j].repo
-						})
-						items := make([]notify.Item, 0, len(releaseResults))
-						for _, r := range releaseResults {
-							// Containing-release rows (sweep-up): another
-							// user cut the release. Skip the item when
-							// Slack already has an announcement for that
-							// URL — avoids duplicate posts when multiple
-							// users run prerelease for overlapping work.
-							// Soft-fail on HasAnnouncement errors: post
-							// conservatively so we never silently miss
-							// an announcement on a transient lookup hiccup.
-							if r.isExisting {
-								if r.release.URL == "" {
-									// Assumed-contained: sweep-up couldn't
-									// confirm the release object (non-404
-									// lookup error), so we skipped cutting a
-									// release but have no URL to announce.
-									// Nothing to post for this repo.
-									continue
-								}
-								// excludeIssueKey lets re-runs in this
-								// workspace fall through to Notify (which
-								// upserts our own prior message); only a
-								// different user's announcement skips.
-								found, _ := releaseNotifier.HasAnnouncement(ctx, releaseChannel, r.release.URL, issue)
-								if found {
-									continue
-								}
-							}
-							// formatSubjects collapses to repo name when the
-							// user kept (or seeded) all services, so the team's
-							// "we shipped everything in this repo" announcement
-							// renders as `` `host-ui`: <url> `` rather than a
-							// long comma list. The "`, `" separator lives
-							// between adjacent service names inside the
-							// template's outer backticks, producing
-							//     going out `svc-a`, `svc-b`: <url>
-							// for the partial-selection case.
-							items = append(items, notify.Item{
-								Label:  formatSubjects(r.repo, r.services, r.subjects, "`, `"),
-								URL:    r.release.URL,
-								Detail: r.version,
-								Body:   r.release.Body, // host-generated release notes
-							})
-						}
-						if len(items) == 0 {
-							// Everything was already announced — nothing to
-							// post. Returning nil here lets the action card
-							// finalize as Completed without sending.
-							return nil
-						}
-						_, err := releaseNotifier.Notify(ctx, notify.Message{
-							Channel:  releaseChannel,
-							IssueKey: issue,
-							Items:    items,
-							Content: buildNotifyContent("prerelease", notifyTemplateData{
-								Issue: issueRefFrom(issue, detail),
-								Items: items,
-							}),
-						})
-						return err
-					},
-				})
-			} else if releaseNotifierErr == nil {
-				// Notification is configured (the notifier built), but this
-				// command has no channel to post to — a partial config, not an
-				// opt-out. Surface it (naming the key) rather than dropping the
-				// announcement silently; an unconfigured provider stays quiet.
-				ui.Skip("notification: set notification.channels.prerelease to announce releases")
-			}
-
-			if err := runActions(cmd, ctx, actions); err != nil {
-				return err
-			}
-
-			return nil
+			// One BubbleTea program hosts the whole command — see
+			// internal/ui/session.go for the shell contract.
+			return ui.RunSession(func() error { return runPrerelease(cmd) })
 		},
 	}
 
@@ -767,6 +418,357 @@ func newPrereleaseCmd() *cobra.Command {
 	cmd.Flags().String("bump", "patch", "version bump level (patch|minor|major)")
 	cmd.Flags().StringSlice("repository", nil, "filter repositories to operate on")
 	return cmd
+}
+
+// runPrerelease is the prerelease command body, hosted by the session
+// shell.
+func runPrerelease(cmd *cobra.Command) error {
+	cc := commandContext(cmd)
+	if err := cc.RequireWorkspace(); err != nil {
+		return err
+	}
+	if err := cc.RequireIssue(); err != nil {
+		return err
+	}
+	issue := cc.Issue
+
+	ctx := cmd.Context()
+	bump, _ := cmd.Flags().GetString("bump")
+
+	// --- Resolve ---
+
+	detail, _ := emitLifecyclePreamble(ctx, issue)
+
+	filterRepositories, _ := cmd.Flags().GetStringSlice("repository")
+	repositories, err := resolveActiveRepositories(ctx, cc.Workspace, filterRepositories)
+	if err != nil {
+		return err
+	}
+
+	host, hostErr := newCodeHost()
+	if hostErr != nil {
+		ui.Skip(fmt.Sprintf("code host: %v", hostErr))
+	}
+
+	// --- Pre-flight: Workspace Readiness ---
+	//
+	// Shared readiness section (same as review/preview/release):
+	// one card per repo with the push offer + dirty gate folded
+	// in. Pushing matters here too — CreateRelease tags a
+	// commitish on the remote, so a never-pushed branch has no ref
+	// to tag (it drops out of the release set) and a
+	// pushed-but-behind branch would otherwise tag stale commits.
+	g := git.New()
+	readiness, _, err := emitWorkspaceReadiness(ctx, g, repositories)
+	if err != nil {
+		return err // ErrCancelled (dirty gate) propagates as a clean abort
+	}
+
+	// Build release targets from the repos that have a remote
+	// branch to tag. A never-pushed branch has no remote ref for
+	// CreateRelease, so it drops out with a note rather than
+	// failing mid-apply. Identity-resolution failures ride on
+	// tagErr so the repo still appears as a ✗ row.
+	targets := make([]releaseTarget, 0, len(readiness))
+	for i := range readiness {
+		rr := &readiness[i]
+		if !rr.hasRemoteBranch() {
+			ui.SkipValue(ui.PreserveCase(rr.repo.Name), "not pushed — no remote branch to release")
+			continue
+		}
+		rt := releaseTarget{repo: rr.repo, branch: rr.branch}
+		if identity, err := repoIdentity(ctx, host, rr.repo.Path); err != nil {
+			rt.tagErr = err
+		} else {
+			rt.owner = identity.Owner
+			rt.repoName = identity.Name
+		}
+		targets = append(targets, rt)
+	}
+
+	// Pre-check: offer to merge unmerged-but-mergeable workspace
+	// PRs before the release plan is built, so the gate + tag T
+	// see settled merge state. Mirrors the push offer's position.
+	if err := offerPRMerges(ctx, host, targets); err != nil {
+		return err
+	}
+
+	// Observe → Select → record which repos get a release.
+	if err := selectReleaseTargets(ctx, cmd, host, bump, targets); err != nil {
+		return err
+	}
+
+	// --- Plan + Apply ---
+
+	var actions []Action
+
+	type releaseResult struct {
+		repo     string
+		services []string // configured services for the repo
+		subjects []string // user-selected services; formatSubjects collapses to repo when full coverage
+		release  code.Release
+		version  string
+
+		// isExisting is true when this result represents a
+		// release another user cut whose tag already contains
+		// our work (sweep-up case). Notify Apply consults
+		// HasAnnouncement before re-posting and skips when an
+		// announcement is already in the channel.
+		isExisting bool
+
+		// extraPRs carries the "this release also includes
+		// work by these contributors" list, surfaced in both
+		// the result card and the notification.
+		extraPRs []code.PullRequest
+	}
+	var releaseResults []releaseResult
+
+	if host != nil {
+		for i := range targets {
+			rt := &targets[i]
+			actions = append(actions, Action{
+				Op:     ui.PlanCreate,
+				Action: "release",
+				Type:   "repo",
+				Name:   rt.repo.Name,
+				Assess: func(_ context.Context) (ActionState, string, error) {
+					if rt.tagErr != nil {
+						return 0, "", rt.tagErr
+					}
+					if !rt.include {
+						// Containing-release: another user already
+						// cut a release whose tag contains our work
+						// (sweep-up). Capture it as a result so the
+						// notify path can check Slack and announce
+						// if missing. Render as "in v1.2.4" (the
+						// existing tag).
+						if rt.containingRelease != nil {
+							releaseResults = append(releaseResults, releaseResult{
+								repo:       rt.repo.Name,
+								services:   rt.services,
+								subjects:   rt.subjects,
+								release:    *rt.containingRelease,
+								version:    rt.containingRelease.Tag,
+								isExisting: true,
+								extraPRs:   rt.extraPRs,
+							})
+							detail := "in " + rt.containingRelease.Tag
+							if rt.containingRelease.AuthorLogin != "" {
+								detail += " (by @" + rt.containingRelease.AuthorLogin + ")"
+							}
+							return ActionCompleted, detail, nil
+						}
+						// Blocked or skipped by the release gate — the
+						// work isn't on the default branch, or there's
+						// nothing of ours to release (including work
+						// already shipped in the latest tag). Not
+						// announced. Plan-detail grammar: persisting tag
+						// first (when known), the gate reason
+						// parenthesized — `= v1.2.3 (PR #42 open — not
+						// merged)`.
+						if rt.versionEligible() && rt.gate != gateAllow {
+							detail := "(" + rt.gateReason + ")"
+							if rt.currentTag != "" {
+								detail = rt.currentTag + " " + detail
+							}
+							return ActionCompleted, detail, nil
+						}
+						// Deselected-eligible: persisting tag first,
+						// why parenthesized (plan-detail grammar).
+						if rt.currentTag != "" {
+							return ActionCompleted, rt.currentTag + " (not selected)", nil
+						}
+						return ActionCompleted, "(not selected)", nil
+					}
+					from := rt.currentTag
+					if from == "" {
+						from = "(none)"
+					}
+					return ActionNeeded, fmt.Sprintf("%s → %s", from, rt.nextVersion), nil
+				},
+				Apply: func(ctx context.Context) error {
+					// Subjects were already resolved during the spinner
+					// phase of selectReleaseTargets and finalized by the
+					// form (or applyDefaults in the non-interactive
+					// path). Apply just reads them through.
+					// Tag default-branch HEAD: the release must contain
+					// the workspace's work, and the gate already verified
+					// it's on the default branch. Tagging HEAD (rather
+					// than a specific commit) also gives
+					// generate_release_notes full ancestry, so the
+					// changelog is never empty. Never fall back to the
+					// feature branch: for a squash-merged PR its tip is
+					// pre-merge history, and for no-PR work it's exactly
+					// the unreleased state the gate blocks. The no-PR
+					// gate already fails closed on an unresolved
+					// default; this guards the merged-PR path, which
+					// allows on the PR signal alone.
+					if rt.defaultBranch == "" {
+						return fmt.Errorf("default branch unknown — refusing to tag the feature branch (git remote set-head origin -a)")
+					}
+					target := rt.defaultBranch
+					// Pin the changelog baseline to the tag we
+					// resolved as "latest" — GitHub's own pick uses
+					// /releases/latest, which can miss intermediate
+					// tags that weren't marked latest and produce
+					// nonsense ranges like v4.19.130...v4.19.142 with
+					// an empty body.
+					rel, err := host.CreateRelease(ctx, code.CreateReleaseRequest{
+						Owner:         rt.owner,
+						Repository:    rt.repoName,
+						Tag:           rt.nextVersion,
+						Target:        target,
+						Name:          rt.nextVersion,
+						GenerateNotes: true,
+						PreviousTag:   rt.currentTag,
+					})
+					if err != nil {
+						return err
+					}
+					releaseResults = append(releaseResults, releaseResult{
+						repo:     rt.repo.Name,
+						services: rt.services,
+						subjects: rt.subjects,
+						release:  rel,
+						version:  rt.nextVersion,
+						extraPRs: rt.extraPRs,
+					})
+					return nil
+				},
+			})
+		}
+	}
+
+	// Status + notify gates share these rollups. Status advances
+	// to ready_for_release UNLESS nothing releases AND something is
+	// blocked (an unmerged PR that didn't merge) — mirrors the
+	// release command's gate, so an unmerged PR no longer marks
+	// the issue ready while shipping nothing. All-already-current
+	// still advances. Notify no-ops when nothing produces a result.
+	anyReleaseOutcome, anyBlocked := false, false
+	for i := range targets {
+		rt := &targets[i]
+		if rt.producesResult() {
+			anyReleaseOutcome = true
+		}
+		if rt.versionEligible() && rt.gate == gateBlock {
+			anyBlocked = true
+		}
+	}
+
+	tracker, _ := newIssueTracker()
+	if !anyBlocked || anyReleaseOutcome {
+		if sa, ok := statusAction(tracker, issue, detail.Status, "ready_for_release"); ok {
+			actions = append(actions, sa)
+		}
+	}
+
+	releaseChannel := viper.GetString("notification.channels.prerelease")
+	releaseNotifier, releaseNotifierErr := newNotifier()
+	if releaseNotifierErr == nil {
+		defer releaseNotifier.Close()
+	}
+	if releaseChannel != "" && releaseNotifierErr == nil {
+		releaseNotifyOp := ui.PlanCreate
+		actions = append(actions, Action{
+			Op:     ui.PlanCreate,
+			OpRef:  &releaseNotifyOp,
+			Action: "notify",
+			Type:   "channel",
+			Name:   releaseChannel,
+			Assess: func(ctx context.Context) (ActionState, string, error) {
+				if !anyReleaseOutcome {
+					return ActionCompleted, "nothing to announce", nil
+				}
+				ref, _ := releaseNotifier.FindThread(ctx, releaseChannel, issue)
+				if ref.Timestamp != "" {
+					releaseNotifyOp = ui.PlanModify
+					return ActionNeeded, "update notification", nil
+				}
+				return ActionNeeded, "new notification", nil
+			},
+			Apply: func(ctx context.Context) error {
+				if len(releaseResults) == 0 {
+					return nil
+				}
+				sort.Slice(releaseResults, func(i, j int) bool {
+					return releaseResults[i].repo < releaseResults[j].repo
+				})
+				items := make([]notify.Item, 0, len(releaseResults))
+				for _, r := range releaseResults {
+					// Containing-release rows (sweep-up): another
+					// user cut the release. Skip the item when
+					// Slack already has an announcement for that
+					// URL — avoids duplicate posts when multiple
+					// users run prerelease for overlapping work.
+					// Soft-fail on HasAnnouncement errors: post
+					// conservatively so we never silently miss
+					// an announcement on a transient lookup hiccup.
+					if r.isExisting {
+						if r.release.URL == "" {
+							// Assumed-contained: sweep-up couldn't
+							// confirm the release object (non-404
+							// lookup error), so we skipped cutting a
+							// release but have no URL to announce.
+							// Nothing to post for this repo.
+							continue
+						}
+						// excludeIssueKey lets re-runs in this
+						// workspace fall through to Notify (which
+						// upserts our own prior message); only a
+						// different user's announcement skips.
+						found, _ := releaseNotifier.HasAnnouncement(ctx, releaseChannel, r.release.URL, issue)
+						if found {
+							continue
+						}
+					}
+					// formatSubjects collapses to repo name when the
+					// user kept (or seeded) all services, so the team's
+					// "we shipped everything in this repo" announcement
+					// renders as `` `host-ui`: <url> `` rather than a
+					// long comma list. The "`, `" separator lives
+					// between adjacent service names inside the
+					// template's outer backticks, producing
+					//     going out `svc-a`, `svc-b`: <url>
+					// for the partial-selection case.
+					items = append(items, notify.Item{
+						Label:  formatSubjects(r.repo, r.services, r.subjects, "`, `"),
+						URL:    r.release.URL,
+						Detail: r.version,
+						Body:   r.release.Body, // host-generated release notes
+					})
+				}
+				if len(items) == 0 {
+					// Everything was already announced — nothing to
+					// post. Returning nil here lets the action card
+					// finalize as Completed without sending.
+					return nil
+				}
+				_, err := releaseNotifier.Notify(ctx, notify.Message{
+					Channel:  releaseChannel,
+					IssueKey: issue,
+					Items:    items,
+					Content: buildNotifyContent("prerelease", notifyTemplateData{
+						Issue: issueRefFrom(issue, detail),
+						Items: items,
+					}),
+				})
+				return err
+			},
+		})
+	} else if releaseNotifierErr == nil {
+		// Notification is configured (the notifier built), but this
+		// command has no channel to post to — a partial config, not an
+		// opt-out. Surface it (naming the key) rather than dropping the
+		// announcement silently; an unconfigured provider stays quiet.
+		ui.Skip("notification: set notification.channels.prerelease to announce releases")
+	}
+
+	if err := runActions(cmd, ctx, actions); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // resolveReleaseTarget fills one repo's release state: latest tag, next
@@ -909,11 +911,10 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 
 	// --- Phase 2: selection form, one row per service ---
 	//
-	// Built inside a closure because the steps program's final frame
-	// paints the form header plus the form's EXACT first frame
-	// (formFirstFrame — same construction as runForm), so the takeover
-	// below repaints identical bytes and the gather → form transition
-	// has no collapse and no flash.
+	// Built lazily so the options reflect the gather's results. Under
+	// the session shell the form embeds beneath the "releases" input
+	// header in the same program — the formFirstFrame takeover that
+	// used to bridge the steps program into huh's program is gone.
 	//
 	// Rows are flat (`repo · service`) sorted by (repo, service). Repos
 	// without configured services contribute a single fallback row with
@@ -928,10 +929,8 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 	}
 	const infoOnlyServiceIdx = -2
 	var (
-		picked      []string
-		msField     *huh.MultiSelect[string]
-		formFrame   string
-		headerLines int
+		picked  []string
+		msField *huh.MultiSelect[string]
 	)
 	buildSelectionForm := func() {
 		var rows []optRow
@@ -1008,58 +1007,32 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 			Options(opts...).
 			Height(fittedSelectHeight(len(opts))).
 			Value(&picked)
-		formFrame = formFirstFrame(msField)
-		if !strings.HasSuffix(formFrame, "\n") {
-			formFrame += "\n"
-		}
 	}
 
-	err := ui.RunCardStepsInto(steps, func() string {
-		if formGate() && !ui.IsRaw() {
-			buildSelectionForm()
-			header := ui.NewCard(ui.CardInput, "releases").Tight().Render()
-			headerLines = strings.Count(header, "\n")
-			return header + formFrame
+	// Run the gather; its final card is the tail the next phase builds
+	// on — the "releases" input header when the selection form follows
+	// (silent in raw mode: the record card would misreport before the
+	// form adjusts the selection), or the record card when no form
+	// will show.
+	rewind, err := ui.RunCardSteps(steps, func() *ui.Card {
+		if formGate() {
+			return ui.NewCard(ui.CardInput, "releases").Tight()
 		}
 		applyDefaults()
-		return buildReleaseTargetsCard(targets).Render()
+		return buildReleaseTargetsCard(targets)
 	})
 	if err != nil {
 		return err
 	}
 	if !formGate() {
 		applyDefaults() // no-op when the closure already ran
-		// Nothing takes the region over, so the targets card the final
-		// frame painted is the timeline's tail — record it or its rows
-		// keep a blank gutter while the spine resumes below.
-		ui.RecordOpenCard(buildReleaseTargetsCard(targets))
 		return nil
 	}
 
-	if msField == nil {
-		// Raw rendering: RunCardStepsInto runs its final-frame closure
-		// in raw mode for side effects only (no ANSI painted), so the
-		// form hasn't been built. Build it now and run it standalone,
-		// skipping the cursor takeover below, which assumes a painted
-		// frame to repaint over. The form runs when stdin can drive it
-		// (the harness's injected reader); a TTY-stdin/piped-stdout
-		// session is refused cleanly by runForm's render guard instead.
-		buildSelectionForm()
-		if err := runForm(msField); err != nil {
-			return err
-		}
-	} else {
-		// Seamless takeover: the form's first frame is already on screen —
-		// move the cursor to its origin and let huh repaint the same bytes
-		// in place. ClearSpacer: the header was painted by the spinner
-		// program's final frame (not via Print), so suppress the spacer the
-		// way Tight-on-Print would.
-		fmt.Printf("\x1b[%dF", strings.Count(formFrame, "\n"))
-		ui.ClearSpacer()
-		if err := runForm(msField); err != nil {
-			ui.RequestSpacer()
-			return err
-		}
+	buildSelectionForm()
+	if err := runForm(msField); err != nil {
+		ui.RequestSpacer()
+		return err
 	}
 
 	// Apply the form result: clear subjects on every eligible repo,
@@ -1091,15 +1064,10 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 		rt.include = true
 	}
 
-	// huh cleared its frame on submit, leaving the cursor at the form's
-	// origin (the line below the header). Erase the header above and
-	// drop the record card in its place. ClearSpacer first: runForm's
-	// prologue armed the spacer flag, but the gather program's original
-	// spacer line is still on screen above the header — printing another
-	// would double-space.
-	if headerLines > 0 {
-		fmt.Printf("\x1b[%dF\x1b[J", headerLines)
-	}
+	// The submitted form has resolved; erase the input header (a tail
+	// drop under the session shell) and put the selection-adjusted
+	// record card in its place.
+	rewind()
 	ui.ClearSpacer()
 	buildReleaseTargetsCard(targets).Print()
 	return nil

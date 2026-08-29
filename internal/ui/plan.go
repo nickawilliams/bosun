@@ -182,6 +182,10 @@ func (p *Plan) AppendItemsToCard(c *Card) *Card {
 
 // Print writes the plan to stdout.
 func (p *Plan) Print() {
+	if s := sessionActive(); s != nil {
+		s.print(p.Render(), p.renderContinuing(), false)
+		return
+	}
 	rendered := p.Render()
 	fmt.Print(spacerPrefix() + rendered)
 	recordOpenCard(rendered, p.renderContinuing())
@@ -190,6 +194,10 @@ func (p *Plan) Print() {
 // PrintRewindable writes the plan to stdout and returns a function that
 // erases it (same pattern as Card.PrintRewindable).
 func (p *Plan) PrintRewindable() func() {
+	if s := sessionActive(); s != nil {
+		rec := s.print(p.Render(), p.renderContinuing(), false)
+		return s.sessionRewind(rec)
+	}
 	prev := needsSpacer
 	plan := p.Render()
 	rendered := spacerPrefix() + plan
