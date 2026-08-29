@@ -1035,7 +1035,6 @@ type cardSpinnerModel struct {
 	resultCh    <-chan error
 	successCard func() *Card // optional: if set, render this instead of card on success
 	prefix      string       // rendered before the first frame (e.g., comfy connector)
-	vanish      bool         // render an empty final frame on success (spinner clears itself)
 }
 
 func newCardSpinnerModel(card *Card, resultCh <-chan error) cardSpinnerModel {
@@ -1083,13 +1082,6 @@ func (m cardSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m cardSpinnerModel) View() tea.View {
 	if m.done {
-		if m.err == nil && m.vanish {
-			// Empty final frame: BubbleTea clears the spinner's render
-			// area (prefix included) on exit, leaving the cursor where
-			// the card began — no render-then-rewind flash for callers
-			// whose next output replaces this card entirely.
-			return tea.NewView("")
-		}
 		if m.err == nil && m.successCard != nil {
 			return tea.NewView(m.prefix + m.successCard().Render())
 		}
@@ -1152,7 +1144,7 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 		return fn()
 	}
 	if s := sessionActive(); s != nil {
-		_, err := sessionRunCard(s, card, fn, successCard, false)
+		_, err := sessionRunCard(s, card, fn, successCard)
 		return err
 	}
 
@@ -1229,7 +1221,7 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	card := NewCard(CardRunning, title)
 
 	if s := sessionActive(); s != nil {
-		_, err := sessionRunCard(s, card, fn, successCard, false)
+		_, err := sessionRunCard(s, card, fn, successCard)
 		return err
 	}
 
@@ -1275,98 +1267,6 @@ func RunCardRewindable(title string, fn func() error) (func(), error) {
 	return RunPreparedCardRewindable(NewCard(CardRunning, title), fn)
 }
 
-// RunCardMorph runs fn with spinCard animating; on success the same
-// BubbleTea program's final frame renders finalCard in place — no
-// program-boundary blank and no wrong-state ✓ flash — and the
-// returned rewind erases it later. Use when the spinner's successor
-// is known up front (e.g. a prompt header the spinner morphs into
-// while a huh form boots beneath it).
-//
-// finalCard nil means vanish: the final frame is empty, the spinner
-// area clears atomically on exit, and the rewind is a no-op spacer
-// restore. On failure the failed spinCard renders and stays; the
-// rewind is nil.
-func RunCardMorph(spinCard, finalCard *Card, fn func() error) (func(), error) {
-	if IsRaw() {
-		return func() {}, fn()
-	}
-	if s := sessionActive(); s != nil {
-		var successCard func() *Card
-		vanish := finalCard == nil
-		if !vanish {
-			successCard = func() *Card { return finalCard }
-		}
-		rec, err := sessionRunCard(s, spinCard, fn, successCard, vanish)
-		if err != nil {
-			return nil, err
-		}
-		return s.sessionRewind(rec), nil
-	}
-
-	spinCard.state = CardRunning
-
-	resultCh := make(chan error, 1)
-	go func() {
-		start := time.Now()
-		err := fn()
-		holdSpinner(start)
-		resultCh <- err
-	}()
-
-	prevSpacer := needsSpacer
-	prefix := spacerPrefix()
-
-	sm := newCardSpinnerModel(spinCard, resultCh)
-	sm.prefix = prefix
-	if finalCard != nil {
-		sm.successCard = func() *Card { return finalCard }
-	} else {
-		sm.vanish = true
-	}
-	p := tea.NewProgram(sm)
-	model, err := p.Run()
-
-	var taskErr error
-	if err != nil {
-		// Non-interactive fallback — wait for the result synchronously.
-		taskErr = <-resultCh
-		if taskErr != nil {
-			spinCard.state = CardFailed
-			spinCard.Subtitle(taskErr.Error())
-			spinCard.Print()
-		} else if finalCard != nil {
-			finalCard.Print()
-		}
-	} else {
-		taskErr = model.(cardSpinnerModel).err
-	}
-
-	if taskErr != nil {
-		// The failed spinCard is what stayed on screen.
-		recordCard(spinCard)
-		return nil, taskErr
-	}
-
-	if finalCard == nil {
-		// Nothing was left on screen; restore the spacer state the
-		// vanished prefix consumed so the next card's connector logic
-		// behaves as if this spinner never rendered.
-		needsSpacer = prevSpacer
-		return func() {}, nil
-	}
-
-	rendered := finalCard.Render()
-	totalLines := strings.Count(prefix+rendered, "\n")
-	rec := recordCard(finalCard)
-	return func() {
-		if totalLines > 0 {
-			fmt.Printf("\x1b[%dF\x1b[J", totalLines)
-		}
-		needsSpacer = prevSpacer
-		discardRecord(rec)
-	}, nil
-}
-
 // RunPreparedCardRewindable is RunCardRewindable taking a pre-built
 // card. The caller constructs the card with whatever Value /
 // Subtitle / AlignWidth they want visible on the spinner; the
@@ -1381,7 +1281,7 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 		return func() {}, err
 	}
 	if s := sessionActive(); s != nil {
-		rec, err := sessionRunCard(s, card, fn, nil, false)
+		rec, err := sessionRunCard(s, card, fn, nil)
 		if err != nil {
 			return nil, err
 		}

@@ -80,7 +80,7 @@ func TestStartStepWorkerQuitStopsBetweenSteps(t *testing.T) {
 // stepsModel drives cardStepsModel directly — the tea program itself
 // needs a TTY, but the model's Update/View are pure and carry all the
 // lifecycle logic worth locking.
-func stepsModel(successor func() *Card, rawSuccessor func() string, n int) (cardStepsModel, []*Card) {
+func stepsModel(successor func() *Card, n int) (cardStepsModel, []*Card) {
 	cards := make([]*Card, n)
 	steps := make([]CardStep, n)
 	for i := range steps {
@@ -88,7 +88,6 @@ func stepsModel(successor func() *Card, rawSuccessor func() string, n int) (card
 		steps[i] = CardStep{Card: cards[i], Run: func() error { return nil }}
 	}
 	m := newCardStepsModel(steps, successor, " ", make(chan error))
-	m.rawSuccessor = rawSuccessor
 	return m, cards
 }
 
@@ -98,7 +97,7 @@ func stepsModel(successor func() *Card, rawSuccessor func() string, n int) (card
 // contract the rewind math depends on).
 func TestCardStepsModelAdvancesToSuccessorFrame(t *testing.T) {
 	final := NewCard(CardSuccess, "done")
-	m, _ := stepsModel(func() *Card { return final }, nil, 2)
+	m, _ := stepsModel(func() *Card { return final }, 2)
 
 	next, _ := m.Update(cardStepDoneMsg{})
 	m = next.(cardStepsModel)
@@ -120,7 +119,7 @@ func TestCardStepsModelAdvancesToSuccessorFrame(t *testing.T) {
 // step's card flips to CardFailed with the error as subtitle and IS
 // the permanent final frame.
 func TestCardStepsModelFailureFrame(t *testing.T) {
-	m, cards := stepsModel(nil, nil, 2)
+	m, cards := stepsModel(nil, 2)
 
 	next, _ := m.Update(cardStepDoneMsg{err: errors.New("boom")})
 	m = next.(cardStepsModel)
@@ -140,7 +139,7 @@ func TestCardStepsModelFailureFrame(t *testing.T) {
 // CardRunning (regression: the final frame showed a forever-running
 // glyph above the cancellation output).
 func TestCardStepsModelInterruptFrame(t *testing.T) {
-	m, cards := stepsModel(nil, nil, 2)
+	m, cards := stepsModel(nil, 2)
 
 	// First step completes; the second is in flight when ctrl+c lands.
 	next, _ := m.Update(cardStepDoneMsg{})
@@ -226,47 +225,5 @@ func TestRunCardStepsRawPathSilentForInputSuccessor(t *testing.T) {
 	if evts := cap.Events(); len(evts) != 0 {
 		t.Errorf("expected no events for CardInput successor, got %d: %s",
 			len(evts), cap.Dump())
-	}
-}
-
-// TestRunCardStepsIntoRawPathCallsFinalView locks the fix for issue
-// #72: in raw mode RunCardStepsInto invokes the finalView closure for
-// its side effects even though no ANSI is painted. The callers' post-
-// call branches (applyDefaults, formGate state) rely on these side
-// effects.
-func TestRunCardStepsIntoRawPathCallsFinalView(t *testing.T) {
-	old := Default()
-	SetDefault(NewCaptureReporter())
-	t.Cleanup(func() { SetDefault(old) })
-
-	var sideEffectRan bool
-	steps := []CardStep{
-		{Card: NewCard(CardInfo, "step"), Run: func() error { return nil }},
-	}
-	finalView := func() string {
-		sideEffectRan = true
-		return "some ANSI frame\n"
-	}
-
-	if err := RunCardStepsInto(steps, finalView); err != nil {
-		t.Fatalf("RunCardStepsInto returned error: %v", err)
-	}
-	if !sideEffectRan {
-		t.Error("finalView was not called in raw mode (side effects skipped)")
-	}
-}
-
-// TestCardStepsModelRawSuccessorFrame locks RunCardStepsInto's
-// takeover contract: on success the final frame is finalView()'s
-// string verbatim, so the next program's first repaint is
-// byte-identical.
-func TestCardStepsModelRawSuccessorFrame(t *testing.T) {
-	const frame = "EXACT NEXT PROGRAM FRAME\nline two\n"
-	m, _ := stepsModel(nil, func() string { return frame }, 1)
-
-	next, _ := m.Update(cardStepDoneMsg{})
-	m = next.(cardStepsModel)
-	if got, want := m.View().Content, " "+frame; got != want {
-		t.Errorf("raw final frame = %q, want %q verbatim", got, want)
 	}
 }

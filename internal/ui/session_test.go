@@ -277,7 +277,7 @@ func TestRunSessionSpinnerAndSteps(t *testing.T) {
 		if err := RunCard("second task", func() error { return errors.New("kaput") }); err == nil {
 			return errors.New("expected the second task's error")
 		}
-		rewind, err := RunCardMorph(NewCard(CardRunning, "morph header"), NewCard(CardInput, "morph header"), func() error { return nil })
+		rewind, err := RunPreparedCardRewindable(NewCard(CardInput, "prompt header"), func() error { return nil })
 		if err != nil {
 			return err
 		}
@@ -408,8 +408,10 @@ func TestRunSessionStepFailureAndVanish(t *testing.T) {
 		if _, err := RunCardSteps(steps, nil); err == nil || err.Error() != "step exploded" {
 			return errors.New("expected the failing step's error")
 		}
-		// Vanish: nil final card, spinner area clears on success.
-		rewind, err := RunCardMorph(NewCard(CardRunning, "ghost"), nil, func() error { return nil })
+		// Vanish: a nil successor clears the spinner area on success.
+		rewind, err := RunCardSteps([]CardStep{
+			{Card: NewCard(CardRunning, "ghost"), Run: func() error { return nil }},
+		}, nil)
 		if err != nil {
 			return err
 		}
@@ -531,13 +533,6 @@ func TestRunSessionRoutedHelpers(t *testing.T) {
 		}
 		rewind()
 
-		// Steps-into fallback: final view becomes the open tail.
-		if err := RunCardStepsInto([]CardStep{
-			{Card: NewCard(CardRunning, "into step"), Run: func() error { return nil }},
-		}, func() string { return NewCard(CardSuccess, "into final").Render() }); err != nil {
-			return err
-		}
-
 		// Zero steps with a successor — the print-only path.
 		r2, err := RunCardSteps(nil, func() *Card { return NewCard(CardSuccess, "empty steps") })
 		if err != nil {
@@ -551,7 +546,7 @@ func TestRunSessionRoutedHelpers(t *testing.T) {
 	}
 
 	text := out.String()
-	for _, want := range []string{"muted line", "nothing here", "success line content", "bold heading", "widget", "Replaced", "Into Final"} {
+	for _, want := range []string{"muted line", "nothing here", "success line content", "bold heading", "widget", "Replaced"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -600,8 +595,7 @@ func TestSessionTightSuppressesConnector(t *testing.T) {
 		if err := RunCard("second", func() error { return nil }); err != nil {
 			return err
 		}
-		_, err := RunCardMorph(
-			NewCard(CardRunning, "morphing"),
+		_, err := RunPreparedCardRewindable(
 			NewCard(CardInput, "morphed").Tight(),
 			func() error { return nil },
 		)

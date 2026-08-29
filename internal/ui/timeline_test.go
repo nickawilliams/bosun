@@ -435,18 +435,18 @@ func TestRecordSnapshotsBothFormsAtPrintTime(t *testing.T) {
 	}
 }
 
-// TestRecordOpenCardAdoptsAnExternallyPaintedCard: RunCardStepsInto
-// paints a card as a raw final frame and hands the region over. When
-// the hand-off doesn't happen the caller owns a card the timeline has
-// never seen, and RecordOpenCard is how it says so — without it those
-// rows keep a blank gutter while the spine resumes below them.
-func TestRecordOpenCardAdoptsAnExternallyPaintedCard(t *testing.T) {
+// TestRecordCardAdoptsAnExternallyPaintedCard: a card can reach the
+// screen without going through Print — a BubbleTea program's final
+// frame is the standing case. The timeline has never seen it, so
+// recordCard is how it is told; without that, the card's rows keep a
+// blank gutter while the spine resumes below them.
+func TestRecordCardAdoptsAnExternallyPaintedCard(t *testing.T) {
 	resetTimeline(t)
 
 	painted := NewCard(CardSuccess, "pull requests").Muted("api · ready", "web · ready")
 	out := captureStdout(t, func() {
 		fmt.Print(painted.Render()) // stands in for the raw final frame
-		RecordOpenCard(painted)
+		recordCard(painted)
 		NewCard(CardSuccess, "base branch").Print()
 	})
 

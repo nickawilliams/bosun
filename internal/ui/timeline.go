@@ -87,21 +87,6 @@ func recordOpenCard(open, continuing string) *openCardRecord {
 	return openCard
 }
 
-// RecordOpenCard declares that c is what is currently painted at the
-// bottom of the timeline, so the next card printed rewrites it into
-// continuing form.
-//
-// For callers that put a card on screen without printing it through
-// this package — chiefly RunCardStepsInto, which paints a raw final
-// frame and hands the region to the caller. When that hand-off
-// doesn't happen (the form it was staging is gated off) the caller
-// still owns a card the timeline has never heard of, and without this
-// its body keeps a blank gutter while the spine resumes below it.
-//
-// c must render identically to what was painted; the cursor math
-// depends on it.
-func RecordOpenCard(c *Card) { recordCard(c) }
-
 // FinalizeOpenCard rewrites the timeline's open card into continuing
 // form right now, then forgets it. Non-card output that breaks the
 // cursor-position assumption — huh forms, raw blocks, anything that

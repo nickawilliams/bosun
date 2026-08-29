@@ -680,7 +680,7 @@ func (m *shellModel) View() tea.View {
 // animate card while fn runs, then resolve to the finalized card (or
 // successCard on success, or nothing when vanish). Returns the rewind
 // record (nil on failure or vanish) and fn's error.
-func sessionRunCard(s *session, card *Card, fn func() error, successCard func() *Card, vanish bool) (*sesOpenRec, error) {
+func sessionRunCard(s *session, card *Card, fn func() error, successCard func() *Card) (*sesOpenRec, error) {
 	prevSpacer := needsSpacer
 	prefix := sessionPrefix()
 	card.state = CardRunning
@@ -703,13 +703,6 @@ func sessionRunCard(s *session, card *Card, fn func() error, successCard func() 
 		card.Subtitle(err.Error())
 		s.spinnerFinish(prefix+card.Render(), prefix+card.renderContinuing(), false)
 		return nil, err
-	}
-	if vanish {
-		s.spinnerFinish("", "", true)
-		// Restore the spacer state the vanished prefix consumed, as
-		// RunCardMorph's vanish path does.
-		needsSpacer = prevSpacer
-		return nil, nil
 	}
 	final := card
 	final.state = CardSuccess
