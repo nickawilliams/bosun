@@ -1,5 +1,59 @@
 # Changelog
 
+## [v1.4.0](https://github.com/nickawilliams/bosun/compare/a1f690e0e1428d8131014d2a52d8f67191385b38...v1.4.0) - 2026-08-31
+
+### New Features
+
+- **CLI**
+  - Port preview to the session shell - ([a7cd197](https://github.com/nickawilliams/bosun/commit/a7cd197ae1f9b41f278cddb2c5633df79a2c66b3))
+  - Port release to the session shell - ([34e4718](https://github.com/nickawilliams/bosun/commit/34e4718bc97ac5d138b2324a42244dca828c611e))
+  - Port prerelease to the session shell - ([232a53e](https://github.com/nickawilliams/bosun/commit/232a53e7a614399c6b1f7a93bf1e5ab8eda28bd3))
+  - Port review to the session shell - ([2ebc43f](https://github.com/nickawilliams/bosun/commit/2ebc43ff40d5372ee5c5c1aa9c2e852c4f63c389))
+  - Port the remaining lifecycle commands to the session shell - ([b662051](https://github.com/nickawilliams/bosun/commit/b6620513a49c9a1e133cf861d1d5a814e82b6937))
+- **UI:** Add the single-program session shell - ([6dcce79](https://github.com/nickawilliams/bosun/commit/6dcce797407237427c230799b5fddfb904619862))
+- **Config**
+  - Reshape the schema into capability blocks - ([a1f690e](https://github.com/nickawilliams/bosun/commit/a1f690e0e1428d8131014d2a52d8f67191385b38))
+  - Report unknown keys in bosun config check - ([6fe45ce](https://github.com/nickawilliams/bosun/commit/6fe45ce168d354024073ca09bbf3918289f88364))
+  - Read a per-repo .bosun.yaml as a third config layer - ([9be2716](https://github.com/nickawilliams/bosun/commit/9be2716b3fe853a838f9f3ce70a7e046fbb7888d))
+  - Declare and enforce which layers may set each config key - ([6f5fc75](https://github.com/nickawilliams/bosun/commit/6f5fc75cd4a8d5413fc09057cb9b2ccf4cf89af3))
+  - Give every template one vocabulary, namespaced by subject - ([5d34fad](https://github.com/nickawilliams/bosun/commit/5d34fad454068987aa913715e1a9788b13864963))
+- **Preview**
+  - Let a provider report its own readiness per operation - ([bc27e3d](https://github.com/nickawilliams/bosun/commit/bc27e3df15b7754aaf8a8ebed0230fc72bb60abf))
+  - Rename the URL template's {{.Name}} to {{.Preview.Name}} - ([cc803bc](https://github.com/nickawilliams/bosun/commit/cc803bc7124d67eee8fdeee444901f7acac493aa))
+- **Release**
+  - Resolve services and deploy targets per repository - ([10d185e](https://github.com/nickawilliams/bosun/commit/10d185ed44dd9c1cafdfb681df798cd751508bbc))
+  - Name the dispatch destination when it isn't the local repo - ([4394f26](https://github.com/nickawilliams/bosun/commit/4394f269338cf5ce7ddb71bb0141b9b4a4931dab))
+- **Review:** Resolve pull-request policy per repository - ([020ca8b](https://github.com/nickawilliams/bosun/commit/020ca8bad78e0914cf247ceb10c25319b573b744))
+
+### Improvements
+
+- **CLI:** Drop prerelease's unreachable already-current arm - ([cc55878](https://github.com/nickawilliams/bosun/commit/cc55878fd1f75dc99a0f046a575fd169244057c8))
+- **UI:** Delete the takeover primitives the shell made dead - ([9226704](https://github.com/nickawilliams/bosun/commit/9226704446c11a12617a7a701b0add22cbf9456c))
+- **Config:** Drop Scope.String, which nothing calls - ([e95c1d8](https://github.com/nickawilliams/bosun/commit/e95c1d82610a03ebf40497f01c4224d785dfee28))
+- **Notify:** Stop the template-to-content copy drifting silently - ([e79ce58](https://github.com/nickawilliams/bosun/commit/e79ce583a9f22afa3201e78d027bc4dc92081e66))
+- **Preview:** Memoize workflow-target resolution per sub-stage - ([31292af](https://github.com/nickawilliams/bosun/commit/31292af55667081382a068ae1198b32c140da448))
+
+### Fixes
+
+- **CLI**
+  - Read issue, project and workspace only from the environment - ([26a10b7](https://github.com/nickawilliams/bosun/commit/26a10b7f0cc44157c7e173b500aa4970a4b47837))
+  - Sort the service names read from a map descriptor - ([5e2ea78](https://github.com/nickawilliams/bosun/commit/5e2ea78bcea9f790afb2fb85434a89b0d6dc6679))
+  - Don't plan an announcement prerelease can't send - ([78a5e5e](https://github.com/nickawilliams/bosun/commit/78a5e5e5d841864286ae746916223ab302a27555))
+- **UI:** Close four session-shell failure paths (review follow-up) - ([00bc3d2](https://github.com/nickawilliams/bosun/commit/00bc3d2b7f014470c506c8843120221a1b145300))
+- **Cleanup:** Ask the preview provider whether it can tear down - ([0d0d478](https://github.com/nickawilliams/bosun/commit/0d0d478ef39d1de8fc2374a72e3b68d87543cf4c))
+- **Config**
+  - Never prompt for keys whose unset state is meaningful - ([a059ec1](https://github.com/nickawilliams/bosun/commit/a059ec1df14cf78dd2c20fbaaf555d40a0b7a0f8))
+  - Match the check group filter by prefix - ([ed7bc1a](https://github.com/nickawilliams/bosun/commit/ed7bc1a7848a46d1326083b47ad762b8d03f54dd))
+  - Stop reporting the descriptor's services map form as misplaced - ([6be54e8](https://github.com/nickawilliams/bosun/commit/6be54e894906b07a9d7bc4d1e11d2b6cc61a7d44))
+  - Close three holes in the template migration (review follow-up) - ([e1e11ea](https://github.com/nickawilliams/bosun/commit/e1e11ea887e8ae475d3ffc3284d9a4afc589e7cd))
+- **Init:** Ask for notification channels again - ([39c822b](https://github.com/nickawilliams/bosun/commit/39c822b2e4f7833fb4303321e88f01f980a0afd4))
+- **Preview**
+  - Drop the services deploy filter from the adapter too - ([e15b627](https://github.com/nickawilliams/bosun/commit/e15b62795a24280a2d3b111f5657104b2662c701))
+  - Ask the preview provider, not CI/CD, whether it can deploy - ([d7de57b](https://github.com/nickawilliams/bosun/commit/d7de57b772ebf9dfbaf68908d1a3571ad6213c20))
+  - Close three gaps in the readiness gate (review follow-up) - ([f5c8f0e](https://github.com/nickawilliams/bosun/commit/f5c8f0e8f2524e4d94cf5a5d32a57b9c707e5c03))
+- **Release:** Annotate a deploy target only on a proven cross-repo match - ([2ea0642](https://github.com/nickawilliams/bosun/commit/2ea0642fd41a4433204c2388aa06ad1eae501af2))
+- **Review:** Pin a shared reviewer prompt only when it was actually answered - ([1ee9c7e](https://github.com/nickawilliams/bosun/commit/1ee9c7e97deb94848e07f1e8ab54185d1871d963))
+
 ## [v1.3.0](https://github.com/nickawilliams/bosun/compare/6fbbcc6e99448343d31a276aaf42560b39957a33...v1.3.0) - 2026-08-24
 
 ### New Features
