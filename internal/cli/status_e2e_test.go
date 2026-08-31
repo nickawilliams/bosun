@@ -235,7 +235,7 @@ func startStatusWorkspace(t *testing.T, h *testharness.Harness, key, title, slug
 	if err := h.Run(args...); err != nil {
 		t.Fatalf("start %s: %v", key, err)
 	}
-	return "story/" + key + "_" + slug
+	return key + "-" + slug
 }
 
 // statusCallCount returns how many times name appears in calls.

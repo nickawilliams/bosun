@@ -30,7 +30,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 )
 
-const previewBranch = "story/EX-1_feature"
+const previewBranch = "EX-1-feature"
 
 // previewConfigf renders the project config for a preview scenario.
 // The single %s is the base URL of the scenario's env server, which

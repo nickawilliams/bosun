@@ -38,7 +38,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/ui"
 )
 
-const releaseBranch = "story/EX-1_feature"
+const releaseBranch = "EX-1-feature"
 
 // releaseConfigf renders a scenario's project config around its
 // cicd.workflows.release.target block (the one %s), which is what

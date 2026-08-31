@@ -254,10 +254,10 @@ notification:
 
 vcs:
   branch:
-    template: "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"
-    categories:                 # keyed by the tracker's issue types
-      story: feature
-      bug: fix
+    template: "{{.Issue.Key}}-{{.Issue.Slug}}"
+    categories:                 # keyed by the tracker's issue types,
+      story: feature            # used by templates that reference
+      bug: fix                  # {{.Category}}
       task: chore
 
 ui:

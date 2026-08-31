@@ -499,7 +499,7 @@ issue_tracker:
 	if err := h.Run("start", "--issue", "EX-9", "--slug", "reuse-me", "--approve"); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	original := "story/EX-9_reuse-me"
+	original := "EX-9-reuse-me"
 	wt := h.WorktreePath(original, "api")
 
 	gitRun := func(args ...string) {
