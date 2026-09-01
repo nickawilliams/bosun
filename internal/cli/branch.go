@@ -20,7 +20,7 @@ type branchData struct {
 
 var (
 	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
-	defaultPattern = "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"
+	defaultPattern = "{{.Issue.Key}}-{{.Issue.Slug}}"
 )
 
 // buildBranchName generates a branch name from the configured pattern

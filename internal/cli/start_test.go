@@ -44,7 +44,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		branch := "story/EX-1_provider-lookup"
+		branch := "EX-1-provider-lookup"
 		if !api.HasBranch(branch) {
 			t.Errorf("expected branch %q in api repo; got branches missing", branch)
 		}
@@ -78,7 +78,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("dry-run error = %v, want contains \"cancelled\"", err)
 		}
 
-		branch := "story/EX-2_audit-log"
+		branch := "EX-2-audit-log"
 		if api.HasBranch(branch) {
 			t.Errorf("dry-run created branch %q; should not have mutated", branch)
 		}
@@ -105,7 +105,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		branch := "story/EX-3_wire-upload"
+		branch := "EX-3-wire-upload"
 		if !api.HasBranch(branch) {
 			t.Errorf("expected branch %q in api repo", branch)
 		}
@@ -122,7 +122,7 @@ func TestStart(t *testing.T) {
 			Key: "EX-4", Title: "Add retry policy", Type: "Story",
 		})
 
-		branch := "story/EX-4_retry-policy"
+		branch := "EX-4-retry-policy"
 
 		// First run creates the branch + worktree + sets status.
 		if err := h.Run("start", "--issue", "EX-4", "--slug", "retry-policy", "--approve"); err != nil {
@@ -171,7 +171,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		want := "bug/EX-5_investigate-slow-endpoint"
+		want := "EX-5-investigate-slow-endpoint"
 		if !api.HasBranch(want) {
 			t.Errorf("expected branch %q derived from issue title; got missing", want)
 		}
@@ -199,7 +199,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		branch := "story/EX-11_both"
+		branch := "EX-11-both"
 		if !api.HasBranch(branch) {
 			t.Errorf("expected branch %q in api", branch)
 		}
@@ -228,8 +228,8 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		if !api.HasBranch("story/EX-7_export") {
-			t.Errorf("expected branch story/EX-7_export to exist")
+		if !api.HasBranch("EX-7-export") {
+			t.Errorf("expected branch EX-7-export to exist")
 		}
 	})
 
@@ -252,7 +252,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("error = %v, want contains \"cancelled\"", err)
 		}
 
-		if api.HasBranch("story/EX-8_report") {
+		if api.HasBranch("EX-8-report") {
 			t.Errorf("cancelled run created branch; should not have")
 		}
 		got, _ := h.Tracker.Issue("EX-8")
@@ -296,8 +296,8 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		if !api.HasBranch("story/EX-10_env-resolved") {
-			t.Errorf("expected branch story/EX-10_env-resolved")
+		if !api.HasBranch("EX-10-env-resolved") {
+			t.Errorf("expected branch EX-10-env-resolved")
 		}
 	})
 
@@ -331,7 +331,7 @@ func TestStart(t *testing.T) {
 			t.Fatalf("start: %v", err)
 		}
 
-		expect := filepath.Join(h.Workspace.Dir, "workspaces", "story/EX-6_x", "api")
+		expect := filepath.Join(h.Workspace.Dir, "workspaces", "EX-6-x", "api")
 		if _, err := os.Stat(expect); err != nil {
 			t.Errorf("worktree path %q missing: %v", expect, err)
 		}

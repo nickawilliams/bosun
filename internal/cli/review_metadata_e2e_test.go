@@ -33,7 +33,7 @@ issue_tracker:
     review: "Review"
 `
 
-const reviewBranch = "story/EX-1_feature"
+const reviewBranch = "EX-1-feature"
 
 // startReviewWorkspace builds a harness with the named repos, starts a
 // workspace on reviewBranch, and pushes each repo's branch — a branch

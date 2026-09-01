@@ -177,7 +177,7 @@ var configSchema = map[string]ConfigGroup{
 			// splitting them makes it unrecoverable on resume. A future
 			// workspace.name_template is additive.
 			Keys: []ConfigKey{
-				{Key: "template", Label: "branch template", Default: "{{.Category}}/{{.Issue.Key}}_{{.Issue.Slug}}"},
+				{Key: "template", Label: "branch template", Default: "{{.Issue.Key}}-{{.Issue.Slug}}"},
 			},
 
 			Groups: []ConfigGroup{{

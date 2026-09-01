@@ -85,15 +85,14 @@ func TestBuildBranchName(t *testing.T) {
 func TestBuildBranchNameDefaultPattern(t *testing.T) {
 	viper.Reset()
 	// No pattern configured — should use default.
-	viper.Set("vcs.branch.categories.story", "feature")
 	t.Cleanup(func() { viper.Reset() })
 
 	got, err := buildBranchName(issue.Issue{Key: "PROJ-1", Type: "Story", Title: "Test"}, "")
 	if err != nil {
 		t.Fatalf("buildBranchName() error: %v", err)
 	}
-	if got != "feature/PROJ-1_test" {
-		t.Errorf("buildBranchName() = %q, want %q", got, "feature/PROJ-1_test")
+	if got != "PROJ-1-test" {
+		t.Errorf("buildBranchName() = %q, want %q", got, "PROJ-1-test")
 	}
 }
 

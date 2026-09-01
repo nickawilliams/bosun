@@ -46,7 +46,7 @@ issue_tracker:
     done: "Done"
 `
 
-const cleanupBranch = "story/EX-1_feature"
+const cleanupBranch = "EX-1-feature"
 
 // startCleanupWorkspace builds a harness with the named repos and a
 // started workspace on cleanupBranch — the baseline every cleanup
@@ -286,7 +286,7 @@ func TestCleanup(t *testing.T) {
 		api := repos[0]
 		markMerged(t, h, api)
 
-		const otherBranch = "story/EX-2_other"
+		const otherBranch = "EX-2-other"
 		h.Tracker.SeedIssue(issue.Issue{
 			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
 		})

@@ -40,7 +40,7 @@ notification:
     prerelease: "releases"
 `
 
-const prereleaseBranch = "story/EX-1_feature"
+const prereleaseBranch = "EX-1-feature"
 
 // startPrereleaseWorkspace builds a harness with one repo and a
 // started workspace on prereleaseBranch — the baseline every
