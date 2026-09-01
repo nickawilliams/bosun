@@ -212,9 +212,9 @@ const gatherFrameChrome = 5
 // collapsing it to nothing.
 const minSelectHeight = 3
 
-// fittedSelectHeight returns the height a gather's selection list
-// should be given: its full length, unless that would paint a frame
-// taller than the terminal.
+// fittedSelectHeight returns the height a selection list (a gather's
+// or a picker's) should be given: its full length, unless that would
+// paint a frame taller than the terminal.
 //
 // Full height is the wanted default — the submitted form is replaced
 // by a record card listing the same rows, so matching the two makes
@@ -360,8 +360,12 @@ func promptIntegrationGate(label string, providerKey ConfigKey) (provider string
 	choice := "" // Default-select Skip via the empty sentinel.
 
 	rewind := ui.NewCard(ui.CardInput, label).AccentBody().Tight().PrintRewindable()
+	// Capped for the same reason as pickOrPromptWorkspace's select.
 	formErr := runForm(
-		huh.NewSelect[string]().Options(opts...).Value(&choice),
+		huh.NewSelect[string]().
+			Options(opts...).
+			Height(fittedSelectHeight(len(opts))).
+			Value(&choice),
 	)
 
 	if formErr != nil {

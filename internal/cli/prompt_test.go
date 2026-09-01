@@ -93,6 +93,41 @@ func TestFittedSelectHeightFitsTheFrame(t *testing.T) {
 	}
 }
 
+// TestFittedSelectHeightFitsThePickerFrame is the same measurement
+// for the picker shape — a single-select beneath a slot's Tight
+// input-card header (pickOrPromptWorkspace, pickOrPromptIssue) —
+// since huh.Select's chrome isn't guaranteed to match MultiSelect's.
+// An unbounded picker frame taller than the screen leaves rows the
+// inline renderer never tracked, so the post-submit erase strands a
+// truncated copy of the list in scrollback (#98).
+func TestFittedSelectHeightFitsThePickerFrame(t *testing.T) {
+	bufferedTerm(t)
+
+	const options = 500 // far more than any terminal holds
+	opts := make([]huh.Option[string], options)
+	for i := range opts {
+		opts[i] = huh.NewOption("feature/EX-"+strconv.Itoa(i)+"_workspace", strconv.Itoa(i))
+	}
+	var picked string
+	frame := formFirstFrame(
+		huh.NewSelect[string]().
+			Options(opts...).
+			Height(fittedSelectHeight(options)).
+			Value(&picked),
+	)
+	if !strings.HasSuffix(frame, "\n") {
+		frame += "\n"
+	}
+
+	header := ui.NewCard(ui.CardInput, "select workspace").Tight().Render()
+	rows := 1 + strings.Count(header, "\n") + strings.Count(frame, "\n")
+
+	if rows > ui.TermHeight() {
+		t.Errorf("fitted picker frame is %d rows on a %d-row terminal — gatherFrameChrome (%d) doesn't cover huh.Select's chrome",
+			rows, ui.TermHeight(), gatherFrameChrome)
+	}
+}
+
 func TestTransformFieldTitle(t *testing.T) {
 	cases := []struct {
 		name  string

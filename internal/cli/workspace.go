@@ -63,9 +63,14 @@ func pickOrPromptWorkspace() string {
 	var selected string
 	slot := ui.NewSlot()
 	slot.Show(ui.NewCard(ui.CardInput, "select workspace").Tight())
+	// fittedSelectHeight caps the list to the terminal — a frame
+	// taller than the screen leaves untracked rows in scrollback that
+	// the post-submit erase can't reach, stranding a truncated copy of
+	// the options above the command's output.
 	if err := runForm(
 		huh.NewSelect[string]().
 			Options(opts...).
+			Height(fittedSelectHeight(len(opts))).
 			Value(&selected),
 	); err != nil {
 		return ""
@@ -126,9 +131,11 @@ func pickWorkspaceReposDiff(ctx context.Context, mgr *workspace.Manager, name st
 
 	repositorySlot := ui.NewSlot()
 	repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
+	// Capped for the same reason as pickOrPromptWorkspace's select.
 	if err := runForm(
 		huh.NewMultiSelect[string]().
 			Options(opts...).
+			Height(fittedSelectHeight(len(opts))).
 			Value(&selected),
 	); err != nil {
 		return reposDiff{}, err
