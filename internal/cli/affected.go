@@ -763,10 +763,7 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		// rather than an expand/collapse. fittedSelectHeight caps it to
 		// the terminal — a frame taller than the screen breaks the
 		// takeover below rather than just overflowing.
-		msField = huh.NewMultiSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(len(opts))).
-			Value(&picked)
+		msField = fittedMultiSelect(opts, &picked)
 	}
 
 	// Run the gather; its final card is the tail the next phase builds

@@ -72,12 +72,7 @@ func TestFittedSelectHeightFitsTheFrame(t *testing.T) {
 		opts[i] = huh.NewOption("repository · service-"+strconv.Itoa(i), strconv.Itoa(i))
 	}
 	var picked []string
-	frame := formFirstFrame(
-		huh.NewMultiSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(options)).
-			Value(&picked),
-	)
+	frame := formFirstFrame(fittedMultiSelect(opts, &picked))
 	if !strings.HasSuffix(frame, "\n") {
 		frame += "\n"
 	}
@@ -109,12 +104,7 @@ func TestFittedSelectHeightFitsThePickerFrame(t *testing.T) {
 		opts[i] = huh.NewOption("feature/EX-"+strconv.Itoa(i)+"_workspace", strconv.Itoa(i))
 	}
 	var picked string
-	frame := formFirstFrame(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(options)).
-			Value(&picked),
-	)
+	frame := formFirstFrame(fittedSelect(opts, &picked))
 	if !strings.HasSuffix(frame, "\n") {
 		frame += "\n"
 	}

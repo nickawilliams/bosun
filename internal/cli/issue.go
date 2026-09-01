@@ -179,15 +179,7 @@ func pickAssignedIssue() (string, error) {
 
 	var selected string
 	slot.Show(ui.NewCard(ui.CardInput, "select issue").Tight())
-	// Capped for the same reason as pickOrPromptWorkspace's select: a
-	// frame taller than the screen strands truncated residue the
-	// post-submit erase can't reach.
-	if err := runForm(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(len(opts))).
-			Value(&selected),
-	); err != nil {
+	if err := runForm(fittedSelect(opts, &selected)); err != nil {
 		return "", err
 	}
 	slot.Clear()

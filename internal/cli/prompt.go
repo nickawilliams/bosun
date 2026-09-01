@@ -238,6 +238,28 @@ func fittedSelectHeight(options int) int {
 	return min(options, fit)
 }
 
+// fittedSelect builds the app's standard data-driven single-select:
+// options, the terminal-height cap, and the value binding. Every
+// select whose option list scales with data (workspaces, issues,
+// providers) must be built through here or fittedMultiSelect — the cap
+// lives in the constructor precisely so a call site can't forget it
+// and reintroduce the oversized-frame corruption (#69, #98). Chain
+// further setters on the result as needed.
+func fittedSelect[T comparable](opts []huh.Option[T], value *T) *huh.Select[T] {
+	return huh.NewSelect[T]().
+		Options(opts...).
+		Height(fittedSelectHeight(len(opts))).
+		Value(value)
+}
+
+// fittedMultiSelect — see fittedSelect.
+func fittedMultiSelect[T comparable](opts []huh.Option[T], value *[]T) *huh.MultiSelect[T] {
+	return huh.NewMultiSelect[T]().
+		Options(opts...).
+		Height(fittedSelectHeight(len(opts))).
+		Value(value)
+}
+
 // buildForm constructs a huh.Form with the app's theme, layout,
 // help, and I/O bindings. Single source of truth so any change to
 // the form's chrome (theme, layout, help, width) flows to every
@@ -360,13 +382,7 @@ func promptIntegrationGate(label string, providerKey ConfigKey) (provider string
 	choice := "" // Default-select Skip via the empty sentinel.
 
 	rewind := ui.NewCard(ui.CardInput, label).AccentBody().Tight().PrintRewindable()
-	// Capped for the same reason as pickOrPromptWorkspace's select.
-	formErr := runForm(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(len(opts))).
-			Value(&choice),
-	)
+	formErr := runForm(fittedSelect(opts, &choice))
 
 	if formErr != nil {
 		ui.RequestSpacer()
