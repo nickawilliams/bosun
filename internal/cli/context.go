@@ -111,8 +111,9 @@ func (cc *CommandContext) RequireIssue() error {
 // A workspace obtained here arrives after the silent issue chain ran
 // (it saw an empty workspace and derived nothing), so stage 3 of that
 // chain is mirrored: an issue key carried by the selected name fills a
-// still-empty cc.Issue. Flag and env values are untouched — they
-// resolved earlier and left cc.Issue non-empty.
+// still-empty cc.Issue. Any value an earlier stage did resolve — flag,
+// env, or the CWD/branch fallbacks — is preserved, even where the
+// silent chain itself would have ranked workspace derivation above it.
 func (cc *CommandContext) RequireWorkspace() error {
 	if cc.Workspace != "" {
 		return nil
