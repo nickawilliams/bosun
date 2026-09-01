@@ -308,6 +308,42 @@ func TestCleanup(t *testing.T) {
 		}
 	})
 
+	t.Run("filter/no_workspace_flag_prompts_picker", func(t *testing.T) {
+		// With no --workspace flag, no env, and a CWD outside any
+		// workspace, RequireWorkspace falls back to the interactive
+		// picker — and two workspaces make that the select list rather
+		// than the single-workspace shortcut. Accepting the first entry
+		// (EX-1-feature; List walks the root in sorted order) scopes
+		// cleanup to that workspace and leaves the sibling untouched.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		const otherBranch = "EX-2-other"
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+		otherWorktree := h.WorktreePath(otherBranch, api.Name)
+
+		// Accept the picker's first entry.
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--issue", "EX-1", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		if !api.WorktreeExists(otherWorktree) {
+			t.Errorf("sibling workspace's worktree was removed")
+		}
+		if !api.HasBranch(otherBranch) {
+			t.Errorf("sibling workspace's branch %s was deleted", otherBranch)
+		}
+	})
+
 	t.Run("preview/teardown_destroys_env", func(t *testing.T) {
 		// An env is bound to the issue, so the plan leads with the
 		// teardown row and apply destroys it before any local
