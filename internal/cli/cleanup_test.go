@@ -364,6 +364,48 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceGone(t, h, api)
 	})
 
+	t.Run("preview/picker_selection_derives_issue_for_teardown", func(t *testing.T) {
+		// The path issue #100 reported: no --workspace, no --issue, CWD
+		// outside any workspace. The silent issue chain runs at pre-run
+		// time against a still-empty workspace and derives nothing; the
+		// picker then fills the workspace, and RequireWorkspace must
+		// re-derive the issue from the selected name. Without that,
+		// cc.Issue stays empty — the teardown action is gated off and a
+		// bound env is silently left running while the worktrees and
+		// branches are destroyed, and the preamble renders its degraded
+		// keyless card.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon"})
+
+		// A second workspace forces the select list rather than the
+		// single-workspace shortcut — the reported scenario.
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+
+		// Accept the picker's first entry (EX-1-feature; List walks
+		// the root in sorted order).
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		want := []string{"EX-1|brave-falcon"}
+		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want[0] {
+			t.Errorf("destroyed = %v, want %v (env skipped: issue not derived from picked workspace)", got, want)
+		}
+		if strings.Contains(h.Stdout(), "title unavailable") {
+			t.Errorf("preamble rendered its degraded card; the picked workspace's issue key never reached it\n%s", h.Stdout())
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
 	t.Run("preview/no_env_skips_teardown", func(t *testing.T) {
 		// No env bound: the teardown row still appears in the plan but
 		// assesses as already-done, so Destroy is never called.
