@@ -539,3 +539,12 @@ tool (
 	github.com/goreleaser/goreleaser/v2
 	github.com/jandelgado/gcov2lcov
 )
+
+// Pin ultraviolet to the snapshot bubbletea v2.0.2 pairs with. The
+// goreleaser/golangci-lint tool directives drag a newer snapshot in
+// through MVS (no bubbletea release pairs with it), and that snapshot
+// regresses the inline renderer: when the live tail shrinks (a form
+// resolving into a shorter card), the repaint strands the old frame's
+// top rows in scrollback. See issue #94. Drop the pin once a bubbletea
+// release pairs with a fixed ultraviolet.
+replace github.com/charmbracelet/ultraviolet => github.com/charmbracelet/ultraviolet v0.0.0-20260205113103-524a6607adb8
