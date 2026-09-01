@@ -107,12 +107,22 @@ func (cc *CommandContext) RequireIssue() error {
 // did not resolve a workspace, runs the interactive picker as a last
 // resort. Returns an error if the workspace is still empty after all
 // attempts.
+//
+// A workspace obtained here arrives after the silent issue chain ran
+// (it saw an empty workspace and derived nothing), so stage 3 of that
+// chain is mirrored: an issue key carried by the selected name fills a
+// still-empty cc.Issue. Any value an earlier stage did resolve — flag,
+// env, or the CWD/branch fallbacks — is preserved, even where the
+// silent chain itself would have ranked workspace derivation above it.
 func (cc *CommandContext) RequireWorkspace() error {
 	if cc.Workspace != "" {
 		return nil
 	}
 	if ws := pickOrPromptWorkspace(); ws != "" {
 		cc.Workspace = ws
+		if cc.Issue == "" {
+			cc.Issue = extractIssue(ws)
+		}
 		return nil
 	}
 	return fmt.Errorf(

@@ -364,6 +364,90 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceGone(t, h, api)
 	})
 
+	t.Run("preview/picker_selection_derives_issue_for_teardown", func(t *testing.T) {
+		// The path issue #100 reported: no --workspace, no --issue, CWD
+		// outside any workspace. The silent issue chain runs at pre-run
+		// time against a still-empty workspace and derives nothing; the
+		// picker then fills the workspace, and RequireWorkspace must
+		// re-derive the issue from the selected name. Without that,
+		// cc.Issue stays empty — the teardown action is gated off and a
+		// bound env is silently left running while the worktrees and
+		// branches are destroyed. (The same empty key also degrades the
+		// preamble card, but that card is unobservable here: the
+		// harness's raw-mode reporter suppresses RunCardReplace output,
+		// so the teardown is the consequence this test can lock.)
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon"})
+
+		// A second workspace forces the select list rather than the
+		// single-workspace shortcut — the reported scenario.
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+
+		// Accept the picker's first entry (EX-1-feature; List walks
+		// the root in sorted order).
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		want := []string{"EX-1|brave-falcon"}
+		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want[0] {
+			t.Errorf("destroyed = %v, want %v (env skipped: issue not derived from picked workspace)", got, want)
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("preview/issue_flag_beats_picker_derivation", func(t *testing.T) {
+		// The counterpart guard: derivation only fills a still-empty
+		// issue. With --issue set, the flag's key must survive the
+		// picker even when the selected workspace name carries a
+		// different one — the teardown targets the flag's env, and the
+		// env bound to the derivable key is left alone. An
+		// unconditional overwrite after the picker would pass the test
+		// above and fail here.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "calm-otter"})
+		h.Preview.SeedEnv("EX-2", preview.Environment{Name: "brave-falcon"})
+
+		// A second workspace forces the select list.
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+		// start transitioned EX-2 to In Progress; put it back in a
+		// done-like status so the readiness gate judges the flag's
+		// issue clean.
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+
+		// Accept the picker's first entry (EX-1-feature) while the
+		// flag names EX-2.
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--issue", "EX-2", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		want := []string{"EX-2|brave-falcon"}
+		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want[0] {
+			t.Errorf("destroyed = %v, want %v (the flag's issue, not the picked workspace's)", got, want)
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
 	t.Run("preview/no_env_skips_teardown", func(t *testing.T) {
 		// No env bound: the teardown row still appears in the plan but
 		// assesses as already-done, so Destroy is never called.
