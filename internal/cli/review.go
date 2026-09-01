@@ -321,10 +321,7 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 		// Full height whenever it fits, capped to the terminal: a frame
 		// taller than the screen breaks the takeover below rather than
 		// just overflowing.
-		msField = huh.NewMultiSelect[string]().
-			Options(opts...).
-			Height(fittedSelectHeight(len(opts))).
-			Value(&picked)
+		msField = fittedMultiSelect(opts, &picked)
 	}
 
 	// Run the gather; its final card is the tail the next phase builds

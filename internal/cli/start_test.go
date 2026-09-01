@@ -301,6 +301,31 @@ func TestStart(t *testing.T) {
 		}
 	})
 
+	t.Run("issue_resolution/interactive_picker", func(t *testing.T) {
+		// With no --issue, no env, and no workspace context, the silent
+		// chain comes up empty and RequireIssue falls back to the
+		// assigned-issue picker. Accepting the first entry (the one
+		// seeded issue; "Enter manually..." trails the list) resolves
+		// the issue the rest of the run builds on.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(startConfig)
+		api := h.Workspace.AddRepo("api")
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-12", Title: "Picker-resolved", Type: "Story",
+		})
+
+		// Accept the picker's first entry.
+		h.Type("\r")
+
+		if err := h.Run("start", "--slug", "picked", "--approve"); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+
+		if !api.HasBranch("EX-12-picked") {
+			t.Errorf("expected branch EX-12-picked")
+		}
+	})
+
 	t.Run("errors/issue_not_found", func(t *testing.T) {
 		h := testharness.New(t)
 		h.Workspace.WriteConfig(startConfig)

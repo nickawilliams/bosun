@@ -183,11 +183,7 @@ func newStartCmd() *cobra.Command {
 				var selected []string
 				repositorySlot := ui.NewSlot()
 				repositorySlot.Show(ui.NewCard(ui.CardInput, "repositories").Tight())
-				if err := runForm(
-					huh.NewMultiSelect[string]().
-						Options(opts...).
-						Value(&selected),
-				); err != nil {
+				if err := runForm(fittedMultiSelect(opts, &selected)); err != nil {
 					return err
 				}
 				repositorySlot.Clear()

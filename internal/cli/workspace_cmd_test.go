@@ -50,6 +50,34 @@ func TestWorkspaceReposRm(t *testing.T) {
 		}
 	})
 
+	t.Run("no_args_prompts_picker", func(t *testing.T) {
+		// With no repo names, rm falls back to the interactive picker
+		// over the workspace's members (two members make it a select
+		// rather than the single-repo shortcut). Toggling the first
+		// entry (api; statuses walk the workspace dir in sorted order)
+		// removes exactly that repo.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		api := h.Workspace.AddRepo("api")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-d", "api", "web"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		h.Type(multiSelect(keyToggle))
+
+		if err := h.Run("workspace", "repos", "rm", "--workspace", "ws-d", "--approve"); err != nil {
+			t.Fatalf("rm: %v", err)
+		}
+		if api.WorktreeExists(h.WorktreePath("ws-d", "api")) {
+			t.Errorf("api worktree survived its selected removal")
+		}
+		if !web.WorktreeExists(h.WorktreePath("ws-d", "web")) {
+			t.Errorf("web worktree removed despite not being selected")
+		}
+	})
+
 	t.Run("unmatched repo name errors", func(t *testing.T) {
 		h := testharness.New(t)
 		h.Workspace.WriteConfig(workspaceConfig)
@@ -116,6 +144,35 @@ func TestWorkspaceReposAdd(t *testing.T) {
 		}
 		if !web.WorktreeExists(h.WorktreePath("ws-e", "web")) {
 			t.Errorf("web worktree not created after repos add")
+		}
+	})
+
+	t.Run("no_args_prompts_picker", func(t *testing.T) {
+		// With no repo names, add falls back to the interactive picker
+		// over the configured repos not yet in the workspace (two
+		// available make it a select rather than the single-repo
+		// shortcut). Toggling the first entry (docs; resolution follows
+		// the config's sorted glob expansion) adds exactly that repo.
+		h := testharness.New(t)
+		h.Workspace.WriteConfig(workspaceConfig)
+		h.Workspace.AddRepo("api")
+		docs := h.Workspace.AddRepo("docs")
+		web := h.Workspace.AddRepo("web")
+
+		if err := h.Run("workspace", "create", "ws-f", "api"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		h.Type(multiSelect(keyToggle))
+
+		if err := h.Run("workspace", "repos", "add", "--workspace", "ws-f"); err != nil {
+			t.Fatalf("repos add: %v", err)
+		}
+		if !docs.WorktreeExists(h.WorktreePath("ws-f", "docs")) {
+			t.Errorf("docs worktree not created after its selected add")
+		}
+		if web.WorktreeExists(h.WorktreePath("ws-f", "web")) {
+			t.Errorf("web worktree created despite not being selected")
 		}
 	})
 }

@@ -179,11 +179,7 @@ func pickAssignedIssue() (string, error) {
 
 	var selected string
 	slot.Show(ui.NewCard(ui.CardInput, "select issue").Tight())
-	if err := runForm(
-		huh.NewSelect[string]().
-			Options(opts...).
-			Value(&selected),
-	); err != nil {
+	if err := runForm(fittedSelect(opts, &selected)); err != nil {
 		return "", err
 	}
 	slot.Clear()

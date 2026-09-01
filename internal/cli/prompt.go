@@ -212,9 +212,9 @@ const gatherFrameChrome = 5
 // collapsing it to nothing.
 const minSelectHeight = 3
 
-// fittedSelectHeight returns the height a gather's selection list
-// should be given: its full length, unless that would paint a frame
-// taller than the terminal.
+// fittedSelectHeight returns the height a selection list (a gather's
+// or a picker's) should be given: its full length, unless that would
+// paint a frame taller than the terminal.
 //
 // Full height is the wanted default — the submitted form is replaced
 // by a record card listing the same rows, so matching the two makes
@@ -236,6 +236,28 @@ func fittedSelectHeight(options int) int {
 		fit = minSelectHeight
 	}
 	return min(options, fit)
+}
+
+// fittedSelect builds the app's standard data-driven single-select:
+// options, the terminal-height cap, and the value binding. Every
+// select whose option list scales with data (workspaces, issues,
+// providers) must be built through here or fittedMultiSelect — the cap
+// lives in the constructor precisely so a call site can't forget it
+// and reintroduce the oversized-frame corruption (#69, #98). Chain
+// further setters on the result as needed.
+func fittedSelect[T comparable](opts []huh.Option[T], value *T) *huh.Select[T] {
+	return huh.NewSelect[T]().
+		Options(opts...).
+		Height(fittedSelectHeight(len(opts))).
+		Value(value)
+}
+
+// fittedMultiSelect — see fittedSelect.
+func fittedMultiSelect[T comparable](opts []huh.Option[T], value *[]T) *huh.MultiSelect[T] {
+	return huh.NewMultiSelect[T]().
+		Options(opts...).
+		Height(fittedSelectHeight(len(opts))).
+		Value(value)
 }
 
 // buildForm constructs a huh.Form with the app's theme, layout,
@@ -360,9 +382,7 @@ func promptIntegrationGate(label string, providerKey ConfigKey) (provider string
 	choice := "" // Default-select Skip via the empty sentinel.
 
 	rewind := ui.NewCard(ui.CardInput, label).AccentBody().Tight().PrintRewindable()
-	formErr := runForm(
-		huh.NewSelect[string]().Options(opts...).Value(&choice),
-	)
+	formErr := runForm(fittedSelect(opts, &choice))
 
 	if formErr != nil {
 		ui.RequestSpacer()
