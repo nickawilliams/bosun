@@ -71,7 +71,11 @@ const probeQuery = "\x1bP+q524742\x1b\\" + "\x1bP+q5463\x1b\\" + "\x1b[c"
 // detection reaches the same answer (the help-styling caveat in
 // cli.FangColorScheme; fang exposes no way to inject the pinned
 // profile, but it does read the environment we now know to be
-// under-advertised).
+// under-advertised). The export only helps invocations that
+// bootstrap eagerly — usage and error rendering, and bare `bosun`;
+// explicitly help-like argv (--help, help, completion) skips
+// Bootstrap entirely and never probes, so that help stays
+// env-detected.
 //
 // Hard limit, per the issue: a terminal that renders truecolor but
 // implements neither COLORTERM nor XTGETTCAP is indistinguishable

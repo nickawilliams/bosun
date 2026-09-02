@@ -13,10 +13,19 @@ import (
 
 // probeTimeout bounds the whole exchange for terminals that answer
 // neither XTGETTCAP nor DA1. Locally the round-trip is
-// sub-millisecond; over SSH it is one network RTT. Only a terminal
-// that ignores DA1 entirely — vanishingly rare — pays the full
-// timeout.
-const probeTimeout = 500 * time.Millisecond
+// sub-millisecond; over SSH it is one network RTT — and the timeout
+// must comfortably exceed the worst plausible RTT, not just the
+// typical one: a reply that arrives *after* the probe gave up and
+// restored the terminal lands in the input queue as if typed,
+// echoed at the prompt and delivered to the next reader. One second
+// clears even satellite-grade links (~600ms RTT), and only a
+// terminal that ignores DA1 entirely — vanishingly rare — ever pays
+// the full wait. The residual hazard is inherent to probing from a
+// short-lived process: a bounded post-timeout drain cannot outlast
+// an unboundedly late reply, and holding stdin open in the
+// background would steal keystrokes from the forms that run next
+// (the InputHandoff scar tissue).
+const probeTimeout = time.Second
 
 // probeTerminal performs the raw-mode query exchange against a real
 // terminal. Raw mode turns off echo and line buffering so the reply
@@ -24,6 +33,14 @@ const probeTimeout = 500 * time.Millisecond
 // restored before returning. Reports a positive XTGETTCAP answer.
 func probeTerminal(in, out *os.File) bool {
 	fd := int(in.Fd())
+	// The query goes to out and the reply arrives on in; when they
+	// are different terminals (stdout redirected to another tty),
+	// the reply would land in the *other* terminal's input queue —
+	// injected at whatever prompt owns it. Only interrogate a
+	// terminal we can hear answer.
+	if !sameTerminal(fd, int(out.Fd())) {
+		return false
+	}
 	prev, err := term.MakeRaw(fd)
 	if err != nil {
 		return false
@@ -69,11 +86,31 @@ func probeExchange(fd int, deadline time.Time) bool {
 	}
 }
 
+// sameTerminal reports whether both fds refer to the same underlying
+// character device.
+func sameTerminal(fd1, fd2 int) bool {
+	var st1, st2 unix.Stat_t
+	if err := unix.Fstat(fd1, &st1); err != nil {
+		return false
+	}
+	if err := unix.Fstat(fd2, &st2); err != nil {
+		return false
+	}
+	return st1.Rdev == st2.Rdev
+}
+
 // waitReadable blocks until fd has readable data or the deadline
 // passes. select(2) rather than poll(2): macOS's poll historically
 // misreports character devices, and the probe's fds (stdin, test
 // pipes) sit well below FD_SETSIZE.
 func waitReadable(fd int, deadline time.Time) bool {
+	// FdSet.Set indexes past its bitmap — a panic — at or beyond
+	// FD_SETSIZE. Production fds are 0/1 by the time the gates
+	// pass; refuse anything a select set cannot hold rather than
+	// trusting that forever.
+	if fd < 0 || fd >= 1024 {
+		return false
+	}
 	for {
 		d := time.Until(deadline)
 		if d <= 0 {
