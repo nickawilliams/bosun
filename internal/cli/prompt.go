@@ -183,13 +183,11 @@ func snapshotForm(fields ...huh.Field) {
 	_, _ = fmt.Fprint(ui.Output(), "\n\n")
 }
 
-// formFirstFrame renders the exact first frame runForm's program will
-// paint for fields — buildForm + Init + View, the same construction
-// path — for seamless-takeover flows: paint this as the previous
-// program's final frame, cursor-up over it, and huh's first repaint is
-// byte-identical (no flash). Deterministic for cursor-less fields
-// (selects, multi-selects); text inputs blink a cursor, so takeover
-// callers should stick to select-shaped forms.
+// formFirstFrame renders the exact first frame runForm's program
+// would paint for fields — buildForm + Init + View, the same
+// construction path. Used by snapshotForm to keep the demo command's
+// captures in visual parity with a live run, and by the frame-height
+// test that pins gatherFrameChrome against huh's real chrome.
 func formFirstFrame(fields ...huh.Field) string {
 	f := buildForm(fields)
 	_ = f.Init()
@@ -221,15 +219,13 @@ const minSelectHeight = 3
 // the swap read as in-place rather than an expand/collapse. But an
 // oversized frame isn't merely ugly, it's broken: bubbletea's inline
 // renderer drops the top of a frame taller than the screen, so the
-// header and the first options never paint, and the cursor-up that
-// hands the frame over to huh (formFirstFrame's takeover) then moves
-// against rows that aren't there — the repaint lands offset and the
-// post-submit erase eats real output above. Capping trades the
-// in-place swap for a scrolling viewport (huh's own, first-class)
-// exactly when the in-place swap was unachievable anyway.
+// header and the first options never paint, and any cursor math over
+// the frame runs against rows that aren't there — erases land offset
+// and eat real output above. Capping trades the in-place swap for a
+// scrolling viewport (huh's own, first-class) exactly when the
+// in-place swap was unachievable anyway.
 //
-// Inert whenever the list fits: the frame, and every byte of the
-// takeover arithmetic, is unchanged.
+// Inert whenever the list fits: the frame is unchanged.
 func fittedSelectHeight(options int) int {
 	fit := ui.TermHeight() - gatherFrameChrome
 	if fit < minSelectHeight {

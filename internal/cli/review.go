@@ -318,9 +318,10 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 			}
 			opts[j] = huh.NewOption(label, strconv.Itoa(i)).Selected(rc.preselect())
 		}
-		// Full height whenever it fits, capped to the terminal: a frame
-		// taller than the screen breaks the takeover below rather than
-		// just overflowing.
+		// Full height whenever it fits, capped to the terminal: the
+		// inline renderer drops the top of a frame taller than the
+		// screen, so an overtall form loses its header and first
+		// options rather than just overflowing (#69, #98).
 		msField = fittedMultiSelect(opts, &picked)
 	}
 
@@ -363,9 +364,10 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 
 	// The submitted form has resolved; erase the input header (a tail
 	// drop under the session shell) and put the selection-adjusted
-	// record card in its place.
+	// record card in its place. The drop re-arms the connector the
+	// header consumed — no ClearSpacer here, or the record card prints
+	// squished against the card above (#102).
 	rewind()
-	ui.ClearSpacer()
 	buildReviewTargetsCard(resolved).Print()
 	return nil
 }

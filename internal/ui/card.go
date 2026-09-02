@@ -1124,21 +1124,12 @@ func RunCardThen(title string, fn func() error, successCard func() *Card) error 
 	return runCardWithFinalizer(NewCard(CardRunning, title).PreserveCase(), fn, successCard)
 }
 
-// runSquishedCard is the squish-mode counterpart to runCardWith.
-// It runs fn while animating a spinner glyph in the LAST segment
-// of the previously-printed root card's breadcrumb (with the
-// passed card's title appended). On success, if successCard is
-// non-nil, its title and glyph replace the running title in the
-// breadcrumb (and its subtitle/body render below). On failure the
-// spinner frame is replaced with the failed glyph and the running
-// title stays in the breadcrumb.
-//
-// successCard may be nil — in that case the running title remains
-// in the breadcrumb with a ✓ glyph on success.
-// runCardWith is the inner implementation of RunCard that takes a
-// pre-built card so callers can configure indent / tight before the
+// runCardWithFinalizer is the inner implementation of RunCard that
+// takes a pre-built card so callers can preconfigure it (RunCardThen
+// skips the title-case transform via PreserveCase) before the
 // spinner runs. The card's state is mutated to its final value
-// before printing.
+// before printing. On success, a non-nil successCard replaces the
+// running card as the final frame (see RunCardThen).
 func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card) error {
 	if IsRaw() {
 		return fn()

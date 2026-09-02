@@ -44,7 +44,9 @@ type CardStep struct {
 // successor whose render differs between calls erases the wrong
 // number of lines. A nil successor vanishes: empty final frame,
 // no-op rewind. On success the returned rewind erases the successor
-// block (same contract as RunCardMorph).
+// block and restores the pending-spacer state, leaving the terminal
+// as if the successor had never printed (raw mode, which emits
+// through the reporter instead, returns a no-op rewind).
 func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	if IsRaw() {
 		for _, s := range steps {

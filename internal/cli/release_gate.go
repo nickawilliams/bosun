@@ -450,9 +450,10 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			}
 			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(preselect(st)))
 		}
-		// Full height whenever it fits, capped to the terminal: a frame
-		// taller than the screen breaks the takeover below rather than
-		// just overflowing.
+		// Full height whenever it fits, capped to the terminal: the
+		// inline renderer drops the top of a frame taller than the
+		// screen, so an overtall form loses its header and first
+		// options rather than just overflowing (#69, #98).
 		msField = fittedMultiSelect(opts, &picked)
 	}
 
@@ -500,9 +501,10 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 
 	// The submitted form has resolved; erase the input header (a tail
 	// drop under the session shell) and put the selection-adjusted
-	// record card in its place.
+	// record card in its place. The drop re-arms the connector the
+	// header consumed — no ClearSpacer here, or the record card prints
+	// squished against the card above (#102).
 	rewind()
-	ui.ClearSpacer()
 	buildDeployTargetsCard(states).Print()
 	return states, nil
 }
