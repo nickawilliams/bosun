@@ -1125,10 +1125,11 @@ func RunCardThen(title string, fn func() error, successCard func() *Card) error 
 }
 
 // runCardWithFinalizer is the inner implementation of RunCard that
-// takes a pre-built card so callers can configure indent / tight
-// before the spinner runs. The card's state is mutated to its final
-// value before printing. On success, a non-nil successCard replaces
-// the running card as the final frame (see RunCardThen).
+// takes a pre-built card so callers can preconfigure it (RunCardThen
+// skips the title-case transform via PreserveCase) before the
+// spinner runs. The card's state is mutated to its final value
+// before printing. On success, a non-nil successCard replaces the
+// running card as the final frame (see RunCardThen).
 func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card) error {
 	if IsRaw() {
 		return fn()
