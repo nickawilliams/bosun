@@ -27,7 +27,11 @@ func FangColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
 		Comment:        ui.Palette.Muted,
 		Flag:           ui.Palette.Accent,
 		FlagDefault:    ui.Palette.Muted,
-		ErrorHeader:    [2]color.Color{lipgloss.Color("#FFFDF5"), lipgloss.Color("#FF4672")},
-		ErrorDetails:   ui.Palette.NormalFg,
+		// Foreground on background: the button foreground on the
+		// palette error red. Derived from the palette (not literals)
+		// so help output downsamples with the run's color profile
+		// like every other surface.
+		ErrorHeader:  [2]color.Color{ui.Palette.ButtonFg, ui.Palette.Error},
+		ErrorDetails: ui.Palette.NormalFg,
 	}
 }

@@ -393,7 +393,7 @@ var configSchema = map[string]ConfigGroup{
 		// compact in the other two — still a property of the
 		// rendering, not of a provider that would select it.
 		Keys: []ConfigKey{
-			{Key: "color", Label: "color mode", Options: []string{"truecolor", "ansi", "none"}, Default: "truecolor"},
+			{Key: "color", Label: "color mode", Options: []string{"auto", "truecolor", "ansi", "none"}, Default: "auto"},
 			{Key: "compact_header", Label: "compact header", Default: "false"},
 		},
 	},

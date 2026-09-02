@@ -267,6 +267,15 @@ func fittedMultiSelect[T comparable](opts []huh.Option[T], value *[]T) *huh.Mult
 // case and otherwise crashes inside textinput on a 0-width slice.
 func buildForm(fields []huh.Field) *huh.Form {
 	return huh.NewForm(huh.NewGroup(fields...)).
+		// Pin the standalone-form program to the run's color profile
+		// so a form outside the session shell can't downsample what
+		// the surrounding timeline didn't (see ui/profile.go). The
+		// embedded session path ignores this — the session's own
+		// pinned program hosts the form. Must come FIRST in the
+		// chain: WithProgramOptions REPLACES the option slice that
+		// WithInput/WithOutput below append to, so a later call would
+		// silently drop the form's stream wiring.
+		WithProgramOptions(ui.TeaColorProfile()).
 		WithTheme(formTheme).
 		WithLayout(ui.NewTimelineLayout()).
 		WithShowHelp(true).
