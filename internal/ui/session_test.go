@@ -393,6 +393,54 @@ func TestRunSessionFormSubmitAndAbort(t *testing.T) {
 	}
 }
 
+// TestSessionFormSeamKeepsConnector locks the gather → form → record
+// seam the cli selection flows share (#102): the gather ends on a
+// Tight input header, the form submits beneath it, and the header's
+// rewind must re-arm the connector its block consumed — the record
+// card printed in its place carries a leading connector row. The
+// regression this pins: a stray ClearSpacer between the rewind and
+// the print squishes the record card against the card above.
+func TestSessionFormSeamKeepsConnector(t *testing.T) {
+	_, pw := sessionTestStreams(t)
+
+	var tail string
+	err := RunSession(func() error {
+		NewCard(CardSuccess, "readiness").Print()
+		rewind, err := RunCardSteps([]CardStep{
+			{Card: NewCard(CardRunning, "gather"), Run: func() error { return nil }},
+		}, func() *Card { return NewCard(CardInput, "picker").Tight() })
+		if err != nil {
+			return err
+		}
+		ok := true
+		f := buildTestForm(huh.NewConfirm().Value(&ok))
+		go func() {
+			time.Sleep(400 * time.Millisecond)
+			_, _ = pw.Write([]byte{'\r'})
+		}()
+		if err := SessionForm(f, false); err != nil {
+			return err
+		}
+		rewind()
+		NewCard(CardSuccess, "record").Print()
+		if s := sessionActive(); s != nil && s.open != nil {
+			tail = s.open.open
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+
+	first, rest, found := strings.Cut(tail, "\n")
+	if !found || !strings.Contains(first, cardConnector) {
+		t.Errorf("record tail's first line = %q, want the connector row (squished against the card above; see #102)", first)
+	}
+	if !strings.Contains(rest, "Record") {
+		t.Errorf("record tail missing the record card below the connector: %q", tail)
+	}
+}
+
 // TestRunSessionStepFailureAndVanish locks two resolution shapes: a
 // failing step resolves the tail into the failed card (halting the
 // sequence), and a vanishing morph leaves nothing behind.
