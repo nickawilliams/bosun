@@ -145,6 +145,11 @@ func Bootstrap(cmd *cobra.Command) error {
 	case !ui.IsTerminal():
 		ui.SetDefault(ui.NewPlainReporter())
 	default:
+		// Interactive card rendering: before the first styled byte,
+		// ask the terminal itself whether it can do better than the
+		// environment advertised (see ui/probe.go). Only this branch
+		// probes — raw and plain output must never see query bytes.
+		ui.ProbeTruecolorUpgrade()
 		ui.SetCompactHeader(viper.GetBool("ui.compact_header"))
 		ui.BeginTimeline()
 	}
