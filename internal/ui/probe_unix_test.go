@@ -92,9 +92,59 @@ func TestProbeExchangeEOF(t *testing.T) {
 	}
 }
 
+func TestProbeTerminalNonTTY(t *testing.T) {
+	// probeTerminal's first act is the raw-mode toggle; on a
+	// non-terminal fd it must fail closed — no upgrade, no query
+	// bytes written, and a prompt return rather than a timeout wait.
+	r, w := pipePair(t)
+	start := time.Now()
+	if probeTerminal(r, w) {
+		t.Error("probeTerminal = true on a pipe, want false")
+	}
+	if elapsed := time.Since(start); elapsed > probeTimeout/2 {
+		t.Errorf("took %v, want prompt failure before the read loop", elapsed)
+	}
+}
+
 func TestWaitReadableExpiredDeadline(t *testing.T) {
 	r, _ := pipePair(t)
 	if waitReadable(int(r.Fd()), time.Now().Add(-time.Second)) {
 		t.Error("waitReadable = true on an already-expired deadline, want false")
 	}
+}
+
+func TestWaitReadableRejectsOutOfRangeFd(t *testing.T) {
+	// FdSet.Set panics at or beyond FD_SETSIZE; waitReadable must
+	// refuse such fds instead of crashing the process at startup.
+	if waitReadable(4096, time.Now().Add(time.Second)) {
+		t.Error("waitReadable = true for an out-of-range fd, want false")
+	}
+	if waitReadable(-1, time.Now().Add(time.Second)) {
+		t.Error("waitReadable = true for a negative fd, want false")
+	}
+}
+
+func TestSameTerminal(t *testing.T) {
+	r, w := pipePair(t)
+	if !sameTerminal(int(r.Fd()), int(r.Fd())) {
+		t.Error("sameTerminal = false for one fd twice, want true")
+	}
+	// Two pipe ends share an Rdev of 0, so the mismatch case needs a
+	// real character device on one side.
+	devnull, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devnull.Close() })
+	if sameTerminal(int(r.Fd()), int(devnull.Fd())) {
+		t.Error("sameTerminal = true for a pipe vs /dev/null, want false")
+	}
+	// An invalid fd on either side must fail closed.
+	if sameTerminal(int(r.Fd()), -1) {
+		t.Error("sameTerminal = true with an invalid second fd, want false")
+	}
+	if sameTerminal(-1, int(r.Fd())) {
+		t.Error("sameTerminal = true with an invalid first fd, want false")
+	}
+	_ = w
 }

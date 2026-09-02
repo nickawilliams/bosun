@@ -75,6 +75,22 @@ func TestProbeParser(t *testing.T) {
 			done:      true,
 		},
 		{
+			name: "ESC ESC before the response",
+			// A doubled ESC (queued partial escape) must leave the
+			// second ESC live as the response's opener.
+			input:     "\x1b\x1bP1+r5463\x1b\\" + da1,
+			truecolor: true,
+			done:      true,
+		},
+		{
+			name: "C0 control inside CSI is ignored",
+			// A stray C0 byte (here BEL) inside the DA1 response must
+			// not abort the sequence or corrupt its payload.
+			input:     "\x1b[?62;\x0722c",
+			truecolor: false,
+			done:      true,
+		},
+		{
 			name: "CSI aborted by ESC mid-sequence",
 			// An unterminated CSI (queued garbage) cut off by the
 			// response's own ESC: the opener must not be lost.

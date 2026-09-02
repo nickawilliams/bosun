@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/colorprofile"
 	"golang.org/x/sys/unix"
@@ -132,6 +133,54 @@ func TestProbeTruecolorUpgradeEndToEnd(t *testing.T) {
 	if got := os.Getenv("COLORTERM"); got != "truecolor" {
 		t.Errorf("COLORTERM = %q, want %q exported on upgrade", got, "truecolor")
 	}
+}
+
+func TestProbeTerminalWriteFailure(t *testing.T) {
+	// Raw mode succeeds on the slave, but the query write fails: the
+	// probe must fail closed without entering the read loop. The
+	// broken stdout is the same terminal device opened read-only, so
+	// the same-terminal gate passes and the failure is the write's.
+	_, slave := openPTYPair(t)
+	brokenOut, err := os.OpenFile(slave.Name(), os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = brokenOut.Close() })
+	start := time.Now()
+	if probeTerminal(slave, brokenOut) {
+		t.Error("probeTerminal = true with a broken output, want false")
+	}
+	if elapsed := time.Since(start); elapsed > probeTimeout/2 {
+		t.Errorf("took %v, want prompt failure before the read loop", elapsed)
+	}
+}
+
+func TestProbeTerminalDifferentTerminals(t *testing.T) {
+	// Stdin and stdout on two different terminals: querying one and
+	// listening on the other would inject the reply at whatever
+	// prompt owns the queried terminal. The probe must refuse fast,
+	// before writing a byte.
+	_, slave1 := openPTYPair(t)
+	master2, slave2 := openPTYPair(t)
+
+	start := time.Now()
+	if probeTerminal(slave1, slave2) {
+		t.Error("probeTerminal = true across two terminals, want false")
+	}
+	if elapsed := time.Since(start); elapsed > probeTimeout/2 {
+		t.Errorf("took %v, want prompt refusal before the read loop", elapsed)
+	}
+	// Nothing may have been written to the queried terminal.
+	if n, err := waitReadableBytes(master2); err == nil && n > 0 {
+		t.Errorf("%d query bytes reached the other terminal, want none", n)
+	}
+}
+
+// waitReadableBytes reports how many bytes are immediately readable
+// from f without blocking.
+func waitReadableBytes(f *os.File) (int, error) {
+	n, err := unix.IoctlGetInt(int(f.Fd()), unix.TIOCINQ)
+	return n, err
 }
 
 func TestProbeTruecolorUpgradeMuteTerminal(t *testing.T) {
