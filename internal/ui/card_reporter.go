@@ -194,7 +194,7 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	fmt.Print(spacerPrefix())
 
 	model := newGroupModel(title, indentLevel, msgCh)
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(model, TeaColorProfile())
 	final, err := p.Run()
 
 	if err != nil {

@@ -108,7 +108,7 @@ func RunCardSteps(steps []CardStep, successor func() *Card) (func(), error) {
 	resultCh, quit := startStepWorker(steps)
 
 	sm := newCardStepsModel(steps, successor, prefix, resultCh)
-	p := tea.NewProgram(sm)
+	p := tea.NewProgram(sm, TeaColorProfile())
 	model, err := p.Run()
 
 	var stepErr error

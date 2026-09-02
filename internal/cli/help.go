@@ -27,7 +27,17 @@ func FangColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
 		Comment:        ui.Palette.Muted,
 		Flag:           ui.Palette.Accent,
 		FlagDefault:    ui.Palette.Muted,
-		ErrorHeader:    [2]color.Color{lipgloss.Color("#FFFDF5"), lipgloss.Color("#FF4672")},
-		ErrorDetails:   ui.Palette.NormalFg,
+		// Foreground on background: the button foreground on the
+		// palette error red. Derived from the palette (not literals)
+		// so help colors quantize with the rest of the app in auto
+		// mode. Caveat: fang wraps its output in its own
+		// colorprofile writer with its own env detection and exposes
+		// no way to inject bosun's pinned profile, so under an
+		// explicit truecolor override in a terminal that doesn't
+		// advertise it, help alone still downsamples. Fixing that
+		// needs fang to accept a profile (or the capability probe
+		// follow-up making detection agree); see issue #104.
+		ErrorHeader:  [2]color.Color{ui.Palette.ButtonFg, ui.Palette.Error},
+		ErrorDetails: ui.Palette.NormalFg,
 	}
 }

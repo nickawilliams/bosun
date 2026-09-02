@@ -8,6 +8,7 @@ import (
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // palette holds the canonical color values for the entire application.
@@ -212,21 +213,24 @@ func spacerPrefix() string {
 }
 
 // lerpColors returns n colors interpolated linearly from a to b.
-// For n <= 1, returns []color.Color{a}.
+// For n <= 1, returns []color.Color{a}. Each step is converted
+// through OutputProfile: the endpoints come from the (already
+// converted) palette, but interpolation synthesizes fresh truecolor
+// values that would otherwise bypass the pinned profile.
 func lerpColors(a, b color.Color, n int) []color.Color {
 	if n <= 1 {
-		return []color.Color{a}
+		return []color.Color{convertColor(a)}
 	}
 	ar, ag, ab, _ := a.RGBA()
 	br, bg, bb, _ := b.RGBA()
 	colors := make([]color.Color, n)
 	for i := range n {
 		t := float64(i) / float64(n-1)
-		colors[i] = lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
+		colors[i] = convertColor(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
 			uint8(float64(ar>>8)*(1-t)+float64(br>>8)*t),
 			uint8(float64(ag>>8)*(1-t)+float64(bg>>8)*t),
 			uint8(float64(ab>>8)*(1-t)+float64(bb>>8)*t),
-		))
+		)))
 	}
 	return colors
 }
@@ -243,12 +247,20 @@ func defaultPalette() palette {
 		Success:    lipgloss.Color("#02BF87"), // Green
 		Error:      lipgloss.Color("#ED567A"), // Red
 		Warning:    lipgloss.Color("#FFA500"), // Orange
-		Muted:      lipgloss.Color("243"),     // Gray
-		NormalFg:   lipgloss.Color("252"),
-		Recessed:   lipgloss.Color("237"),
-		Border:     lipgloss.Color("238"),
-		Subtle:     lipgloss.Color("239"),
-		ButtonFg:   lipgloss.Color("#FFFDF5"),
+		// The grays are hex like the brand colors — not ANSI-256
+		// indices — so the default palette is uniformly truecolor
+		// and immune to terminal 256-palette theming. Values are the
+		// standard xterm grayscale entries the indices used to name
+		// (243, 252, 237, 238, 239), so profile conversion quantizes
+		// them straight back to the same indices on 256-color
+		// terminals. Terminal-adaptive rendering is the ansi mode's
+		// job, not the default palette's.
+		Muted:    lipgloss.Color("#767676"), // Gray (xterm 243)
+		NormalFg: lipgloss.Color("#D0D0D0"), // xterm 252
+		Recessed: lipgloss.Color("#3A3A3A"), // xterm 237
+		Border:   lipgloss.Color("#444444"), // xterm 238
+		Subtle:   lipgloss.Color("#4E4E4E"), // xterm 239
+		ButtonFg: lipgloss.Color("#FFFDF5"),
 	}
 	applyRoleAliases(&p)
 	applyUnicodeSymbols(&p)
@@ -327,26 +339,74 @@ func applyRoleAliases(p *palette) {
 	p.Keyword = p.Primary
 }
 
-// ApplyColorMode sets the active palette based on the given mode string
-// and rebuilds all cached package-level styles. Must be called after
-// config loads and before any rendering (i.e. in PersistentPreRunE).
+// ApplyColorMode sets the active palette and output color profile
+// based on the given mode string and rebuilds all cached
+// package-level styles. Must be called after config loads and before
+// any rendering (i.e. in PersistentPreRunE) — the profile is pinned
+// for the whole run; see profile.go for why it can never change
+// mid-run.
+//
+// Modes: "auto" (and the unset default) detects the terminal's
+// capability and downsamples the default palette to it; "truecolor"
+// forces the full-fidelity palette regardless of what the terminal
+// advertises — the escape hatch for environments that support
+// truecolor without advertising it (tmux without Tc/RGB overrides,
+// SSH without COLORTERM forwarding); "ansi" and "none" force those
+// palettes as before.
 func ApplyColorMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+
 	// NO_COLOR env var (https://no-color.org) acts as implicit "none"
-	// unless the user explicitly configured a color mode.
-	if _, noColor := os.LookupEnv("NO_COLOR"); noColor && mode == "" {
+	// for the unset default and for explicit auto — both mean
+	// "respect the environment", and NO_COLOR is part of it. The
+	// forcing modes (truecolor/ansi/none) override the env var, as
+	// explicit user config should.
+	if _, noColor := os.LookupEnv("NO_COLOR"); noColor && (mode == "" || mode == "auto") {
 		mode = "none"
 	}
 
-	switch strings.ToLower(strings.TrimSpace(mode)) {
+	switch mode {
 	case "ansi":
 		Palette = ansiPalette()
+		OutputProfile = colorprofile.ANSI
 	case "none":
 		Palette = noColorPalette()
-	default:
+		OutputProfile = colorprofile.Ascii
+	case "truecolor":
 		Palette = defaultPalette()
+		OutputProfile = colorprofile.TrueColor
+	default: // "auto" and the unset ""
+		applyDetectedProfile(resolveProfile())
 	}
 
 	rebuildStyles()
+}
+
+// applyDetectedProfile maps a detected terminal capability onto a
+// palette + profile pair, for the auto color mode. Split from
+// ApplyColorMode so tests (and a future startup capability probe)
+// can force a detection result.
+//
+// A 16-color detection uses the hand-tuned ansi palette rather than
+// machine-quantizing the hex palette down to 16 colors — the curated
+// mapping is the better degradation. Detections at or below Ascii
+// (NO_COLOR under an explicit auto mode, exotic TERMs) fall back to
+// the colorless palette; colorprofile.Convert answers nil for every
+// color at those profiles, so converting the default palette there
+// would be meaningless anyway.
+func applyDetectedProfile(detected colorprofile.Profile) {
+	switch {
+	case detected <= colorprofile.Ascii:
+		Palette = noColorPalette()
+		OutputProfile = colorprofile.Ascii
+	case detected == colorprofile.ANSI:
+		Palette = ansiPalette()
+		OutputProfile = colorprofile.ANSI
+	default:
+		Palette = defaultPalette()
+		OutputProfile = detected
+		convertPalette(&Palette, detected)
+	}
 }
 
 // rebuildStyles refreshes every package-level style var that captured

@@ -1153,7 +1153,7 @@ func runCardWithFinalizer(card *Card, fn func() error, successCard func() *Card)
 	model := newCardSpinnerModel(card, resultCh)
 	model.prefix = spacerPrefix()
 	model.successCard = successCard
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(model, TeaColorProfile())
 	result, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for the task and print final card.
@@ -1227,7 +1227,7 @@ func RunCardReplace(title string, fn func() error, successCard func() *Card) err
 	sm := newCardSpinnerModel(card, resultCh)
 	sm.prefix = spacerPrefix()
 	sm.successCard = successCard
-	p := tea.NewProgram(sm)
+	p := tea.NewProgram(sm, TeaColorProfile())
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback.
@@ -1294,7 +1294,7 @@ func RunPreparedCardRewindable(card *Card, fn func() error) (func(), error) {
 
 	sm := newCardSpinnerModel(card, resultCh)
 	sm.prefix = prefix
-	p := tea.NewProgram(sm)
+	p := tea.NewProgram(sm, TeaColorProfile())
 	model, err := p.Run()
 
 	// Determine the task result regardless of how BubbleTea exited.

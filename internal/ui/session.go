@@ -172,7 +172,7 @@ func RunSession(fn func() error) error {
 	FinalizeOpenCard()
 
 	m := newShellModel()
-	opts := []tea.ProgramOption{tea.WithInput(defaultInput), tea.WithOutput(defaultOutput)}
+	opts := []tea.ProgramOption{tea.WithInput(defaultInput), tea.WithOutput(defaultOutput), TeaColorProfile()}
 	if !IsTerminalWriter(defaultOutput) {
 		// A non-TTY output (injected buffers) can't answer the size
 		// query, and a zero-size renderer paints nothing. Real TTYs
