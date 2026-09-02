@@ -40,20 +40,33 @@ func newStatusCmd() *cobra.Command {
 				return fmt.Errorf("not inside a bosun project (no .bosun/ directory found)")
 			}
 
+			query, err := resolveWorkspaceQuery(cmd)
+			if err != nil {
+				return err
+			}
+			// Status reads at the widest scope its context allows for
+			// free, so project scope is implicit outside a workspace;
+			// --all makes it explicit (the only way to get the project
+			// view from inside a workspace).
+			projectScope, err := resolveWorkspaceScope(cmd, cc.Workspace == "", query)
+			if err != nil {
+				return err
+			}
+
 			mgr, err := newWorkspaceManager()
 			if err != nil {
 				return err
 			}
 
-			if cc.Workspace != "" {
+			if !projectScope {
 				return runStatusWorkspace(ctx, cc, mgr)
 			}
-			return runStatusProject(ctx)
+			return runStatusProject(ctx, query)
 		}),
 	}
 
 	setTitleResolver(cmd, func(cc CommandContext) string {
-		if cc.Workspace != "" {
+		if all, _ := cmd.Flags().GetBool("all"); !all && cc.Workspace != "" {
 			return "Workspace Status"
 		}
 		return "Project Status"
@@ -62,6 +75,8 @@ func newStatusCmd() *cobra.Command {
 	addProjectFlag(cmd)
 	addWorkspaceFlag(cmd)
 	addIssueFlag(cmd)
+	addAllFlag(cmd)
+	addWorkspaceFilterFlags(cmd)
 
 	return cmd
 }
@@ -166,7 +181,9 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 // runStatusProject renders the project-scope output — project
 // header card with KV body (Repos columnar list), then one card
 // per workspace (sorted by lifecycle position) with body rows for
-// Status and the Repos rollup, then a summary recap.
+// Status and the Repos rollup, then a summary recap. An active query
+// narrows the cards to matching workspaces; workspaces the query
+// can't evaluate are reported as skips rather than silently dropped.
 //
 // Loading strategy diverges from workspace scope: project uses a
 // single overall spinner during a parallel fetch of all workspaces,
@@ -175,7 +192,7 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 // sorting since rendering would happen in fetch order. The trade
 // is intentional — at project scope the user wants a sorted triage
 // overview more than progressive per-workspace disclosure.
-func runStatusProject(ctx context.Context) error {
+func runStatusProject(ctx context.Context, query workspaceQuery) error {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return err
@@ -197,19 +214,13 @@ func runStatusProject(ctx context.Context) error {
 	// Parallel fetch of all workspaces during a single overall
 	// spinner. Empty success-card title means no new breadcrumb
 	// segment; success-card body carries the project's Repos KV.
-	results := make([]workspaceState, len(wsNames))
+	var results []workspaceState
 	g := git.New()
 	if len(wsNames) > 0 {
 		_ = ui.RunCardReplace("", func() error {
-			var wg sync.WaitGroup
-			for i, name := range wsNames {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					results[i] = fetchWorkspaceState(ctx, mgr, g, host, tracker, name)
-				}()
-			}
-			wg.Wait()
+			results = observeWorkspaces(ctx, wsNames, func(ctx context.Context, name string) workspaceState {
+				return fetchWorkspaceState(ctx, mgr, g, host, tracker, name)
+			})
 			return nil
 		}, func() *ui.Card {
 			card := ui.NewCard(ui.CardSuccess, "")
@@ -229,6 +240,17 @@ func runStatusProject(ctx context.Context) error {
 		card.Print()
 		ui.Skip("no workspaces found in project")
 		return nil
+	}
+
+	// Narrow to the query's matches (unevaluable workspaces surface
+	// as skips inside filterWorkspaces).
+	observed := len(results)
+	if query.active() {
+		results = filterWorkspaces(results, query)
+		if len(results) == 0 {
+			ui.Skip("no workspaces match the filter")
+			return nil
+		}
 	}
 
 	// Sort by lifecycle position using the canonical bosun lifecycle
@@ -257,6 +279,9 @@ func runStatusProject(ctx context.Context) error {
 	}
 
 	renderProjectSummary(results)
+	if query.active() && len(results) < observed {
+		ui.Info("showing %d of %d workspaces", len(results), observed)
+	}
 
 	return nil
 }
@@ -286,11 +311,15 @@ type workspaceRepoCounts struct {
 	done, ready, blocked, pending, broken int
 }
 
-// fetchWorkspaceState gathers everything needed to render one
-// workspace card at project scope: its issue, its repos, the per-
-// repo state, and the aggregate rollup. Errors are swallowed —
-// partial fetch leaves fields zero so the row still renders.
-func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
+// fetchWorkspaceIssueState is the issue-only observation of one
+// workspace: its name, the issue key derived from the name, and the
+// tracker's detail for it. It is what a workspaceQuery needs to
+// evaluate a workspace and nothing more — cleanup's bulk filter
+// observes with this instead of the full fetch so filtering doesn't
+// fan out per-repo host calls it never uses. Errors are swallowed:
+// a failed tracker fetch leaves issue zero, which the query reports
+// as unevaluable rather than treating as a non-match.
+func fetchWorkspaceIssueState(ctx context.Context, tracker issuepkg.Tracker, wsName string) workspaceState {
 	ws := workspaceState{name: wsName}
 
 	// Issue key from workspace name (e.g., "feature/EX-30434_foo" →
@@ -308,6 +337,16 @@ func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS,
 			ws.issueURL = detail.URL
 		}
 	}
+
+	return ws
+}
+
+// fetchWorkspaceState gathers everything needed to render one
+// workspace card at project scope: its issue, its repos, the per-
+// repo state, and the aggregate rollup. Errors are swallowed —
+// partial fetch leaves fields zero so the row still renders.
+func fetchWorkspaceState(ctx context.Context, mgr *workspace.Manager, g vcs.VCS, host code.Host, tracker issuepkg.Tracker, wsName string) workspaceState {
+	ws := fetchWorkspaceIssueState(ctx, tracker, wsName)
 
 	// Preview-env binding. ErrNoEnvironment is the empty-state signal;
 	// ProbeError carries a partial Environment we still want to render.
