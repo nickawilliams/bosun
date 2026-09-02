@@ -192,6 +192,17 @@ func TestConvertPaletteSkipsNilFields(t *testing.T) {
 	}
 }
 
+func TestConvertColorNilInNilOut(t *testing.T) {
+	resetColorState(t)
+
+	// A nil color (a caller bug, but a conceivable one) must come
+	// back nil under the passthrough profile rather than being
+	// invented into a value.
+	if got := convertColor(nil); got != nil {
+		t.Errorf("convertColor(nil) = %v, want nil", got)
+	}
+}
+
 func TestConvertColorStripsBelowANSI(t *testing.T) {
 	resetColorState(t)
 	OutputProfile = colorprofile.Ascii
