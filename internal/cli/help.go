@@ -35,8 +35,13 @@ func FangColorScheme(_ lipgloss.LightDarkFunc) fang.ColorScheme {
 		// no way to inject bosun's pinned profile, so under an
 		// explicit truecolor override in a terminal that doesn't
 		// advertise it, help alone still downsamples. Fixing that
-		// needs fang to accept a profile (or the capability probe
-		// follow-up making detection agree); see issue #104.
+		// needs fang to accept a profile; see issue #104. The
+		// startup probe (issue #106) narrows the auto-mode case:
+		// a probe-confirmed upgrade exports COLORTERM=truecolor,
+		// which fang's own detection picks up — but only on
+		// invocations that bootstrap eagerly (usage/error
+		// rendering, bare `bosun`); help-like argv skips Bootstrap
+		// and never probes, so explicit --help stays env-detected.
 		ErrorHeader:  [2]color.Color{ui.Palette.ButtonFg, ui.Palette.Error},
 		ErrorDetails: ui.Palette.NormalFg,
 	}

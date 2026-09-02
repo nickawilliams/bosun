@@ -365,6 +365,10 @@ func ApplyColorMode(mode string) {
 		mode = "none"
 	}
 
+	// The startup probe (probe.go) may only refine a profile that
+	// detection resolved; forced modes record ineligibility here.
+	autoColorMode = false
+
 	switch mode {
 	case "ansi":
 		Palette = ansiPalette()
@@ -376,6 +380,7 @@ func ApplyColorMode(mode string) {
 		Palette = defaultPalette()
 		OutputProfile = colorprofile.TrueColor
 	default: // "auto" and the unset ""
+		autoColorMode = true
 		applyDetectedProfile(resolveProfile())
 	}
 
