@@ -343,7 +343,7 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 
 	fmt.Print(spacerPrefix())
 
-	p := tea.NewProgram(newPlanCardSpinnerModel(pc, resultCh))
+	p := tea.NewProgram(newPlanCardSpinnerModel(pc, resultCh), TeaColorProfile())
 	model, err := p.Run()
 	if err != nil {
 		// Non-interactive fallback — wait for result synchronously.
