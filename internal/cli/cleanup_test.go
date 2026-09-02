@@ -86,12 +86,19 @@ func startCleanupWorkspace(t *testing.T, repoNames ...string) (*testharness.Harn
 // scenarios that deliberately skip it.
 func markMerged(t *testing.T, h *testharness.Harness, r *testharness.Repo) {
 	t.Helper()
+	markMergedBranch(t, h, r, "EX-1", "Add feature", cleanupBranch)
+}
+
+// markMergedBranch is markMerged for an arbitrary issue/branch pair —
+// the bulk scenarios run several workspaces side by side.
+func markMergedBranch(t *testing.T, h *testharness.Harness, r *testharness.Repo, key, title, branch string) {
+	t.Helper()
 	h.Tracker.SeedIssue(issue.Issue{
-		Key: "EX-1", Title: "Add feature", Type: "Story", Status: "Done",
+		Key: key, Title: title, Type: "Story", Status: "Done",
 	})
-	wt := h.WorktreePath(cleanupBranch, r.Name)
+	wt := h.WorktreePath(branch, r.Name)
 	sha := testharness.Git(t, wt, "rev-parse", "HEAD")
-	h.Host.SeedPR(r.Owner, r.Name, cleanupBranch, code.PullRequest{
+	h.Host.SeedPR(r.Owner, r.Name, branch, code.PullRequest{
 		Number: 7, State: "merged", HeadSHA: sha,
 	})
 }
@@ -173,16 +180,18 @@ func hasRemoteBranch(t *testing.T, r *testharness.Repo, branch string) bool {
 // runs cleanup, and asserts on what survived.
 //
 // The tree adapts the planned scenarios to the command as built.
-// Cleanup takes no --repository or --all flag: it is scoped to exactly
-// one workspace's worktrees, so "filter by repository" and "process
-// every workspace" have no implementation to exercise; the scoping
-// that does exist (--workspace picks which workspace dies, and every
-// repo in it goes) is covered by filter/ instead. Unmerged and dirty
-// worktrees BLOCK with an error rather than being skipped with a
-// message — cleanup is all-or-nothing per workspace. And cleanup makes
-// no tracker status transition, so the harness README's SetStatusErr
-// apply-failure case has no seam here; errors/ covers the failure
-// modes cleanup actually has instead.
+// Cleanup takes no --repository flag: within one workspace it is
+// all-or-nothing across that workspace's worktrees (--workspace picks
+// which workspace dies, and every repo in it goes — covered by
+// filter/). Project scope is explicit: --all sweeps every workspace,
+// narrowed by the shared filter flags (--status), with sweep
+// semantics — a blocked workspace is excluded and reported while its
+// siblings proceed (TestCleanupBulk), where the single-workspace
+// scenarios here BLOCK with an error, because an explicitly named
+// target aborting and a criteria-selected set sweeping are different
+// promises. And cleanup makes no tracker status transition, so the
+// harness README's SetStatusErr apply-failure case has no seam here;
+// errors/ covers the failure modes cleanup actually has instead.
 func TestCleanup(t *testing.T) {
 	t.Run("merged_branch/removes_branch_and_worktree", func(t *testing.T) {
 		// The whole safety matrix reads SAFE: done-like issue, merged
@@ -509,11 +518,11 @@ func TestCleanup(t *testing.T) {
 		// the sibling rows still apply, because cleanup's local
 		// destruction has nothing to do with the preview backend.
 		//
-		// The workspace DIRECTORY survives, and deliberately so: it is
-		// removed after runActions returns, and a non-nil return
-		// short-circuits it. That is cleanup's existing posture for any
-		// failed row, not something readiness introduced — a run that
-		// could not finish leaves the directory behind as the signal.
+		// The workspace DIRECTORY survives, and deliberately so: its
+		// removal is a gated plan row (RequiresPriorSuccess, scoped to
+		// this workspace's group), and the ✗ readiness row closes that
+		// gate. A run that could not finish leaves the directory
+		// behind as the signal.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -734,10 +743,68 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceIntact(t, h, api)
 	})
 
+	t.Run("cwd/escapes_the_removed_workspace", func(t *testing.T) {
+		// Run from inside the workspace being destroyed: the
+		// directory-removal action moves the process to the project
+		// root first (the escape hatch workspace delete already had)
+		// and the run says so, instead of leaving the shell stranded
+		// in a deleted directory with no hint.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		t.Chdir(h.WorktreePath(cleanupBranch, api.Name))
+
+		if err := h.Run("cleanup", "--issue", "EX-1", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		var hinted bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureInfo) {
+			if strings.Contains(ev.Label, "removed directory") {
+				hinted = true
+			}
+		}
+		if !hinted {
+			t.Errorf("no cd-back hint was reported\n%s", h.Reporter.Dump())
+		}
+		if cwd, err := os.Getwd(); err != nil {
+			t.Errorf("the process was left in a deleted directory: %v", err)
+		} else if strings.Contains(cwd, cleanupBranch) {
+			t.Errorf("cwd = %s, still inside the removed workspace", cwd)
+		}
+	})
+
+	t.Run("cwd/nested_workspace_prunes_empty_parents", func(t *testing.T) {
+		// A workspace named with a path segment ("epic/scratch")
+		// leaves its parent directory behind once removed; the
+		// directory action prunes junk-only parents up to the
+		// workspace root — behavior that moved into the plan with the
+		// directory row and must survive the move.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		if err := h.Run("workspace", "create", "epic/scratch", "api"); err != nil {
+			t.Fatalf("workspace create: %v", err)
+		}
+
+		if err := h.Run("cleanup", "--workspace", "epic/scratch", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		parent := filepath.Join(filepath.Dir(filepath.Dir(h.WorktreePath("epic/scratch", "any"))))
+		if _, err := os.Stat(parent); !os.IsNotExist(err) {
+			t.Errorf("empty parent %s survived (stat err = %v)", parent, err)
+		}
+		// The sibling workspace and the workspace root itself are
+		// untouched.
+		assertWorkspaceIntact(t, h, api)
+	})
+
 	t.Run("errors/stray_files_block_workspace_removal", func(t *testing.T) {
-		// Cleanup's post-apply RemoveAll would destroy anything sitting
-		// in the workspace directory alongside the worktrees, so an
-		// untracked file there is a BLOCK of its own.
+		// Cleanup's workspace-directory removal would destroy anything
+		// sitting in the workspace directory alongside the worktrees,
+		// so an untracked file there is a BLOCK of its own.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -846,13 +913,12 @@ func TestCleanup(t *testing.T) {
 		// deliberate — a stranded preview env is
 		// a remote-side loose end the user can chase from the error,
 		// and holding the worktrees hostage to it would leave the
-		// workspace half-cleaned on every provider hiccup. (Only an
-		// action marked RequiresPriorSuccess is withheld behind a
-		// failure; cleanup queues none.) The
-		// post-apply workspace-directory removal is the one step that
-		// doesn't run: it sits past the runActions error return, so a
-		// failed apply leaves the directory behind as the visible sign
-		// the run didn't finish.
+		// workspace half-cleaned on every provider hiccup. The
+		// workspace-directory row is the one step that doesn't run:
+		// it is the only gated action cleanup queues
+		// (RequiresPriorSuccess within the workspace's group), so a
+		// failed apply skips it and leaves the directory behind as
+		// the visible sign the run didn't finish.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -887,6 +953,342 @@ func TestCleanup(t *testing.T) {
 		if _, err := os.Stat(workspaceDir(h)); err != nil {
 			t.Errorf("workspace directory removed despite the failed apply: %v", err)
 		}
+	})
+}
+
+// startSecondCleanupWorkspace lays down an additional workspace next
+// to startCleanupWorkspace's EX-1 baseline: seeds the issue (In
+// Progress, as start leaves it) and runs `bosun start`. Returns the
+// workspace/branch name.
+func startSecondCleanupWorkspace(t *testing.T, h *testharness.Harness, key, title, slug string) string {
+	t.Helper()
+	h.Tracker.SeedIssue(issue.Issue{Key: key, Title: title, Type: "Story"})
+	if err := h.Run("start", "--issue", key, "--slug", slug, "--approve"); err != nil {
+		t.Fatalf("start %s: %v", key, err)
+	}
+	return key + "-" + slug
+}
+
+// assertBranchWorkspaceGone / assertBranchWorkspaceIntact are the
+// branch-parameterized versions of the EX-1 assertions above, for the
+// bulk scenarios' sibling workspaces.
+func assertBranchWorkspaceGone(t *testing.T, h *testharness.Harness, r *testharness.Repo, branch string) {
+	t.Helper()
+	if r.WorktreeExists(h.WorktreePath(branch, r.Name)) {
+		t.Errorf("%s: worktree for %s still registered", r.Name, branch)
+	}
+	if r.HasBranch(branch) {
+		t.Errorf("%s: local branch %s survived", r.Name, branch)
+	}
+	if _, err := os.Stat(filepath.Dir(h.WorktreePath(branch, "any"))); !os.IsNotExist(err) {
+		t.Errorf("workspace directory for %s survived (stat err = %v)", branch, err)
+	}
+}
+
+func assertBranchWorkspaceIntact(t *testing.T, h *testharness.Harness, r *testharness.Repo, branch string) {
+	t.Helper()
+	if !r.WorktreeExists(h.WorktreePath(branch, r.Name)) {
+		t.Errorf("%s: worktree for %s was removed", r.Name, branch)
+	}
+	if !r.HasBranch(branch) {
+		t.Errorf("%s: local branch %s was deleted", r.Name, branch)
+	}
+}
+
+// TestCleanupBulk exercises `bosun cleanup --all` end-to-end: the
+// scope grammar, the --status filter over observed issue states, the
+// exclude-and-report sweep semantics for blocked workspaces, and the
+// combined multi-workspace plan with per-workspace failure isolation.
+func TestCleanupBulk(t *testing.T) {
+	t.Run("filter/status_done_cleans_only_matching_workspaces", func(t *testing.T) {
+		// Two workspaces: EX-1 done + merged, EX-2 still In Progress.
+		// The filter selects EX-1 alone; EX-2 is an evaluated
+		// non-match — deselected without ceremony, not an error.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --all --status done: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, other)
+	})
+
+	t.Run("filter/all_without_filters_sweeps_every_workspace", func(t *testing.T) {
+		// --all with no filter is the whole project: both workspaces
+		// are safe (done + merged) and both go, under one plan and one
+		// approval.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+
+		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceGone(t, h, api, other)
+	})
+
+	t.Run("readiness/blocked_workspace_excluded_while_sweep_proceeds", func(t *testing.T) {
+		// Both workspaces match the filter, but EX-2's worktree is
+		// dirty — a BLOCK. Sweep semantics: EX-2 is excluded and
+		// reported while EX-1 proceeds, and the run still exits 0.
+		// (The single-workspace command aborts on the same finding —
+		// an explicitly named target and a criteria-selected set make
+		// different promises.)
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+		scratch := filepath.Join(h.WorktreePath(other, api.Name), "scratch.txt")
+		if err := os.WriteFile(scratch, []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, other)
+		if _, err := os.Stat(scratch); err != nil {
+			t.Errorf("the excluded workspace's uncommitted file was destroyed: %v", err)
+		}
+		// The exclusion is reported, not silent: the readiness row
+		// names the workspace and says it was excluded.
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureFail) {
+			if strings.Contains(ev.Value, "excluded") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("no readiness row reported the exclusion\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("readiness/force_includes_blocked_workspaces", func(t *testing.T) {
+		// Same shape with --force: the blocked workspace is included,
+		// the findings route through the Continue/Cancel dialog, and
+		// "y" acknowledges them — both workspaces go, dirty file and
+		// all.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+		scratch := filepath.Join(h.WorktreePath(other, api.Name), "scratch.txt")
+		if err := os.WriteFile(scratch, []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+		h.Type("y")
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--force", "--approve"); err != nil {
+			t.Fatalf("cleanup --all --force: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceGone(t, h, api, other)
+	})
+
+	t.Run("filter/unevaluable_workspace_reported_and_left_alone", func(t *testing.T) {
+		// A workspace whose name carries no issue key can't be judged
+		// by --status. It must not be swept, and it must not vanish
+		// silently from the run either — it surfaces as a skip with
+		// the reason.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		if err := h.Run("workspace", "create", "scratch", "api"); err != nil {
+			t.Fatalf("workspace create: %v", err)
+		}
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, "scratch")
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no issue key") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the unevaluable workspace was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("readiness/warning_prompt_cancel_aborts_sweep", func(t *testing.T) {
+		// An included workspace carries a WARN (the code host is
+		// unreachable, so the PR probe silently didn't run). The
+		// sweep's findings collapse into one Continue/Cancel dialog;
+		// "n" declines and nothing anywhere is destroyed.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Host.GetPRErr = errStubErr("github API 503: service unavailable")
+		h.Type("n")
+
+		err := h.Run("cleanup", "--all", "--status", "done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("err = %v, want the declined warning gate", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("filter/no_matches_is_explicit_and_clean", func(t *testing.T) {
+		// Nothing is done-like: the sweep says so and exits 0 —
+		// nothing matched is a valid outcome, not an error, but it
+		// must never be silent.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		// EX-1 stays In Progress (as start left it).
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces match the filter") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("empty filter result was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("readiness/everything_blocked_leaves_nothing_to_sweep", func(t *testing.T) {
+		// The only matching workspace is blocked (dirty): it is
+		// excluded, the sweep has nothing left, and the run reports
+		// that and exits 0.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		wt := h.WorktreePath(cleanupBranch, api.Name)
+		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+
+		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces passed cleanup readiness") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty sweep was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("errors/unmatched_repo_excludes_workspace_from_sweep", func(t *testing.T) {
+		// The single-workspace command refuses outright when a
+		// workspace repo falls outside the project's repositories
+		// globs (git with an empty Dir would aim at the caller's
+		// cwd). In a sweep the same hazard excludes that workspace
+		// with its reason — and it is NOT force-includable, since
+		// it's a correctness hazard rather than an acknowledged data
+		// risk.
+		h, repos := startCleanupWorkspace(t, "api", "web")
+		api, web := repos[0], repos[1]
+		markMerged(t, h, api)
+		markMerged(t, h, web)
+		h.Workspace.WriteConfig(strings.Replace(
+			cleanupConfig, `  - "repos/*"`, `  - "repos/api"`, 1))
+
+		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		assertWorkspaceIntact(t, h, web)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "web") && strings.Contains(ev.Label, "not matched") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the unmatched-repo exclusion was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("plan_confirmation/dry_run_previews_the_sweep", func(t *testing.T) {
+		// Dry-run renders the combined destroy plan and applies
+		// nothing anywhere.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+
+		err := h.Run("cleanup", "--all", "--dry-run")
+		if err == nil || !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("dry-run error = %v, want contains \"cancelled\"", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, other)
+	})
+
+	t.Run("errors/all_conflicts_with_workspace_flag", func(t *testing.T) {
+		// The scope grammar: --all and --workspace name different
+		// scopes, and guessing which one wins would make the flag mean
+		// different things on different invocations.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "--all", "--workspace", cleanupBranch, "--approve")
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("err = %v, want the mutual-exclusion refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("errors/filter_requires_all", func(t *testing.T) {
+		// A filter names a population, and cleanup's default scope is
+		// one workspace — the filter without --all is ambiguous, and
+		// the error teaches the grammar rather than guessing.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "--status", "done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "--all") {
+			t.Fatalf("err = %v, want the pass---all guidance", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("errors/unknown_status_key_refused_up_front", func(t *testing.T) {
+		// Validation happens before anything is observed: a typo'd key
+		// errors immediately instead of matching nothing.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "--all", "--status", "Done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "unknown status key") {
+			t.Fatalf("err = %v, want the unknown-key rejection", err)
+		}
+		assertWorkspaceIntact(t, h, api)
 	})
 }
 

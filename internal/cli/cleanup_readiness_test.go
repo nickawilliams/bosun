@@ -591,3 +591,141 @@ func equalStringSlices(a, b []string) bool {
 	}
 	return true
 }
+
+// TestWorstFindingMessage pins the bulk row summary: the most severe
+// finding wins (repo findings carry their repo name), and additional
+// findings are counted rather than listed.
+func TestWorstFindingMessage(t *testing.T) {
+	t.Run("no findings summarizes to nothing", func(t *testing.T) {
+		c := bulkCleanupCandidate{}
+		if got := c.worstFindingMessage(); got != "" {
+			t.Errorf("message = %q, want empty", got)
+		}
+	})
+
+	t.Run("workspace finding renders bare", func(t *testing.T) {
+		c := bulkCleanupCandidate{
+			wsFindings: []cleanupFinding{{severity: findingBlock, code: "stray-files", message: "2 untracked file(s)"}},
+		}
+		if got := c.worstFindingMessage(); got != "2 untracked file(s)" {
+			t.Errorf("message = %q, want the bare workspace finding", got)
+		}
+	})
+
+	t.Run("repo finding carries the repo name", func(t *testing.T) {
+		c := bulkCleanupCandidate{
+			repoResults: []repoCleanup{{
+				repo:     Repository{Name: "api"},
+				findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+			}},
+		}
+		if got := c.worstFindingMessage(); got != "api: uncommitted changes in worktree" {
+			t.Errorf("message = %q, want the repo-prefixed finding", got)
+		}
+	})
+
+	t.Run("worst severity wins and the rest are counted", func(t *testing.T) {
+		c := bulkCleanupCandidate{
+			wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
+			repoResults: []repoCleanup{{
+				repo: Repository{Name: "api"},
+				findings: []cleanupFinding{
+					{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"},
+					{severity: findingWarn, code: "open-pr", message: "PR #4 is open"},
+				},
+			}},
+		}
+		got := c.worstFindingMessage()
+		if !strings.HasPrefix(got, "api: uncommitted changes in worktree") {
+			t.Errorf("message = %q, want it led by the BLOCK finding", got)
+		}
+		if !strings.Contains(got, "(+2 more)") {
+			t.Errorf("message = %q, want the remaining findings counted", got)
+		}
+	})
+}
+
+// TestBuildBulkCleanupReadinessCard covers the raw-mode bulk card:
+// one row per workspace with the severity glyph mapping, exclusion
+// annotated when --force is absent, and worst-first ordering.
+func TestBuildBulkCleanupReadinessCard(t *testing.T) {
+	safe := bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}
+	warned := bulkCleanupCandidate{
+		target:     cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
+		worst:      findingWarn,
+	}
+	blocked := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-3-blocked"},
+		repoResults: []repoCleanup{{
+			repo:     Repository{Name: "api"},
+			findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+		}},
+		worst: findingBlock,
+	}
+
+	t.Run("severity glyphs and exclusion annotation", func(t *testing.T) {
+		card := buildBulkCleanupReadinessCard([]bulkCleanupCandidate{safe, warned, blocked}, false)
+		lines := strings.Split(strings.TrimRight(stripANSI(card.Render()), "\n"), "\n")
+
+		row := findRowContaining(t, lines, "EX-1-safe")
+		if !strings.Contains(row, ui.Palette.Check) {
+			t.Errorf("safe row = %q, want the check glyph", row)
+		}
+		row = findRowContaining(t, lines, "EX-2-warned")
+		if !strings.Contains(row, ui.Palette.Attention) || !strings.Contains(row, "issue is In Progress") {
+			t.Errorf("warn row = %q, want the warn glyph and message", row)
+		}
+		row = findRowContaining(t, lines, "EX-3-blocked")
+		if !strings.Contains(row, ui.Palette.Cross) || !strings.Contains(row, "excluded") {
+			t.Errorf("block row = %q, want the block glyph and the exclusion annotation", row)
+		}
+
+		// Worst-first: the blocked workspace's row renders above the
+		// safe one's.
+		var blockedIdx, safeIdx int
+		for i, l := range lines {
+			if strings.Contains(l, "EX-3-blocked") {
+				blockedIdx = i
+			}
+			if strings.Contains(l, "EX-1-safe") {
+				safeIdx = i
+			}
+		}
+		if blockedIdx > safeIdx {
+			t.Errorf("blocked row at %d renders below safe row at %d, want worst-first", blockedIdx, safeIdx)
+		}
+	})
+
+	t.Run("force drops the exclusion annotation", func(t *testing.T) {
+		card := buildBulkCleanupReadinessCard([]bulkCleanupCandidate{blocked}, true)
+		out := stripANSI(card.Render())
+		if strings.Contains(out, "excluded") {
+			t.Errorf("card = %q, says excluded but --force includes it", out)
+		}
+	})
+}
+
+// TestIncludeBulkCandidates pins the sweep's exclusion rule.
+func TestIncludeBulkCandidates(t *testing.T) {
+	candidates := []bulkCleanupCandidate{
+		{target: cleanupTarget{workspace: "safe"}},
+		{target: cleanupTarget{workspace: "warned"}, worst: findingWarn},
+		{target: cleanupTarget{workspace: "blocked"}, worst: findingBlock},
+	}
+
+	names := func(in []bulkCleanupCandidate) []string {
+		var out []string
+		for _, c := range in {
+			out = append(out, c.target.workspace)
+		}
+		return out
+	}
+
+	if got := names(includeBulkCandidates(candidates, false)); !equalStringSlices(got, []string{"safe", "warned"}) {
+		t.Errorf("without force = %v, want blocked excluded", got)
+	}
+	if got := names(includeBulkCandidates(candidates, true)); !equalStringSlices(got, []string{"safe", "warned", "blocked"}) {
+		t.Errorf("with force = %v, want everything included", got)
+	}
+}

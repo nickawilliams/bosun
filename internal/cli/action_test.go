@@ -233,6 +233,67 @@ func TestRunActionsGatedActionRunsOnCleanPlan(t *testing.T) {
 	}
 }
 
+// TestRunActionsGroupScopedPriorFailureSeed pins the group-aware half
+// of the PriorFailure seed: an assess failure in one group closes the
+// gate for that group's later gated actions but not for a sibling
+// group's — the seed mirrors the runner's group-scoped gate.
+func TestRunActionsGroupScopedPriorFailureSeed(t *testing.T) {
+	prev := ui.IsRaw()
+	ui.SetDefault(ui.NewRawReporter())
+	defer func() {
+		if !prev {
+			ui.SetDefault(ui.NewCardReporter())
+		}
+	}()
+
+	cmd := &cobra.Command{Use: "t"}
+	cmd.Flags().Bool("approve", true, "")
+	cmd.Flags().Bool("dry-run", false, "")
+
+	removedA, removedB := false, false
+	actions := []Action{
+		{
+			Op: ui.PlanDestroy, Action: "worktree", Type: "repo", Name: "api", Group: "ws-a",
+			Assess: func(context.Context) (ActionState, string, error) {
+				return 0, "", errors.New("stat failed")
+			},
+		},
+		{
+			Op: ui.PlanDestroy, Action: "directory", Type: "workspace", Name: "ws-a", Group: "ws-a",
+			RequiresPriorSuccess: true,
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "", nil
+			},
+			Apply: func(context.Context) error {
+				removedA = true
+				return nil
+			},
+		},
+		{
+			Op: ui.PlanDestroy, Action: "directory", Type: "workspace", Name: "ws-b", Group: "ws-b",
+			RequiresPriorSuccess: true,
+			Assess: func(context.Context) (ActionState, string, error) {
+				return ActionNeeded, "", nil
+			},
+			Apply: func(context.Context) error {
+				removedB = true
+				return nil
+			},
+		},
+	}
+
+	err := runActions(cmd, context.Background(), actions)
+	if err == nil || !strings.Contains(err.Error(), "stat failed") {
+		t.Errorf("err = %v, want the assess failure surfaced", err)
+	}
+	if removedA {
+		t.Error("ws-a's directory was removed behind its own group's assess failure")
+	}
+	if !removedB {
+		t.Error("ws-b's directory removal was withheld by a sibling group's failure")
+	}
+}
+
 // TestRunActionsAllAssessFailedReturnsError covers the all-failed
 // shape: nothing to apply, no PlanVerified misread, aggregate error.
 func TestRunActionsAllAssessFailedReturnsError(t *testing.T) {
