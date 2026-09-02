@@ -859,9 +859,11 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		// The submitted form has resolved; erase the input header (a
 		// tail drop under the session shell) and put the
 		// selection-adjusted Services card in its place. The no-form
-		// path's final card is already the tail — nothing to do.
+		// path's final card is already the tail — nothing to do. The
+		// drop re-arms the connector the header consumed — no
+		// ClearSpacer here, or the Services card prints squished
+		// against the card above (#102).
 		rewind()
-		ui.ClearSpacer()
 		buildServicesCard(sources, detFails, withPRs).Print()
 	}
 

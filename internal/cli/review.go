@@ -363,9 +363,10 @@ func selectReviewTargets(ctx context.Context, cmd *cobra.Command, host code.Host
 
 	// The submitted form has resolved; erase the input header (a tail
 	// drop under the session shell) and put the selection-adjusted
-	// record card in its place.
+	// record card in its place. The drop re-arms the connector the
+	// header consumed — no ClearSpacer here, or the record card prints
+	// squished against the card above (#102).
 	rewind()
-	ui.ClearSpacer()
 	buildReviewTargetsCard(resolved).Print()
 	return nil
 }
