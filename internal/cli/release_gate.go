@@ -450,9 +450,10 @@ func selectServiceDeploys(ctx context.Context, cmd *cobra.Command, host code.Hos
 			}
 			opts = append(opts, huh.NewOption(label, strconv.Itoa(i)).Selected(preselect(st)))
 		}
-		// Full height whenever it fits, capped to the terminal: a frame
-		// taller than the screen breaks the takeover below rather than
-		// just overflowing.
+		// Full height whenever it fits, capped to the terminal: the
+		// inline renderer drops the top of a frame taller than the
+		// screen, so an overtall form loses its header and first
+		// options rather than just overflowing (#69, #98).
 		msField = fittedMultiSelect(opts, &picked)
 	}
 

@@ -1000,9 +1000,10 @@ func selectReleaseTargets(ctx context.Context, cmd *cobra.Command, host code.Hos
 			key := fmt.Sprintf("%d.%d", row.repoIdx, row.serviceIdx)
 			opts[k] = huh.NewOption(label, key).Selected(row.preselect)
 		}
-		// Full height whenever it fits, capped to the terminal: a frame
-		// taller than the screen breaks the takeover below rather than
-		// just overflowing.
+		// Full height whenever it fits, capped to the terminal: the
+		// inline renderer drops the top of a frame taller than the
+		// screen, so an overtall form loses its header and first
+		// options rather than just overflowing (#69, #98).
 		msField = fittedMultiSelect(opts, &picked)
 	}
 

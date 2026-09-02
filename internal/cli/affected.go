@@ -553,7 +553,7 @@ func resolveDeploymentSource(ctx context.Context, g vcs.VCS, host code.Host, rep
 // that precedes the deploy plan, in three phases:
 //
 //  1. Detection + PR lookup. All repos run as steps of ONE spinner
-//     program (RunCardStepsInto) whose cards accumulate: each step
+//     program (RunCardSteps) whose cards accumulate: each step
 //     carries the rows resolved so far plus a pending row for the
 //     in-flight repo, so the Services list materializes in place and
 //     the program's final frame hands straight off to phase 2's form
@@ -761,8 +761,9 @@ func emitDeploymentSources(ctx context.Context, cmd *cobra.Command, g vcs.VCS, r
 		// by the final Services card listing the same rows, so matching
 		// the form's height to the list makes the swap read as in-place
 		// rather than an expand/collapse. fittedSelectHeight caps it to
-		// the terminal — a frame taller than the screen breaks the
-		// takeover below rather than just overflowing.
+		// the terminal — the inline renderer drops the top of a frame
+		// taller than the screen, so an overtall form loses its header
+		// and first options rather than just overflowing (#69, #98).
 		msField = fittedMultiSelect(opts, &picked)
 	}
 
