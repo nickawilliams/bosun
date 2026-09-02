@@ -2,8 +2,10 @@ package ui
 
 import (
 	"bytes"
+	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -58,6 +60,23 @@ func TestApplyDetectedProfile(t *testing.T) {
 		if Palette.RoleDone != Palette.Primary {
 			t.Errorf("RoleDone = %v, want Primary %v", Palette.RoleDone, Palette.Primary)
 		}
+		// Completeness: every color field of the palette — present
+		// and future — must be quantized. An unconverted straggler
+		// would render truecolor beside 256-color siblings, the
+		// exact split issue #104 closed.
+		colorType := reflect.TypeOf((*color.Color)(nil)).Elem()
+		v := reflect.ValueOf(&Palette).Elem()
+		for i := range v.NumField() {
+			f := v.Field(i)
+			if f.Type() != colorType || f.IsNil() {
+				continue
+			}
+			c := f.Interface().(color.Color)
+			if quantized := colorprofile.ANSI256.Convert(c); c != quantized {
+				t.Errorf("palette field %s = %v escaped quantization (want %v)",
+					v.Type().Field(i).Name, c, quantized)
+			}
+		}
 	})
 
 	t.Run("ansi uses the hand-tuned palette", func(t *testing.T) {
@@ -85,6 +104,13 @@ func TestApplyDetectedProfile(t *testing.T) {
 
 func TestApplyColorModeProfiles(t *testing.T) {
 	resetColorState(t)
+	// The invoking environment may export NO_COLOR (it remaps the
+	// unset and auto modes); Setenv registers restoration, Unsetenv
+	// clears it for the assertions below.
+	t.Setenv("NO_COLOR", "")
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		mode string
@@ -115,13 +141,17 @@ func TestApplyColorModeNoColorEnv(t *testing.T) {
 	resetColorState(t)
 	t.Setenv("NO_COLOR", "1")
 
-	// Unset mode: NO_COLOR wins.
-	ApplyColorMode("")
-	if OutputProfile != colorprofile.Ascii {
-		t.Errorf("unset mode under NO_COLOR: OutputProfile = %v, want Ascii", OutputProfile)
-	}
-	if Palette.Primary != (lipgloss.NoColor{}) {
-		t.Errorf("unset mode under NO_COLOR: Primary = %v, want NoColor", Palette.Primary)
+	// Unset and explicit auto both mean "respect the environment",
+	// so NO_COLOR wins for either — including on non-TTY output,
+	// where auto's detection short-circuit would never consult it.
+	for _, mode := range []string{"", "auto"} {
+		ApplyColorMode(mode)
+		if OutputProfile != colorprofile.Ascii {
+			t.Errorf("mode %q under NO_COLOR: OutputProfile = %v, want Ascii", mode, OutputProfile)
+		}
+		if Palette.Primary != (lipgloss.NoColor{}) {
+			t.Errorf("mode %q under NO_COLOR: Primary = %v, want NoColor", mode, Palette.Primary)
+		}
 	}
 
 	// Explicit truecolor: user config wins over the env var.
@@ -162,13 +192,16 @@ func TestConvertPaletteSkipsNilFields(t *testing.T) {
 	}
 }
 
-func TestConvertColorPreservesOnNilAnswer(t *testing.T) {
+func TestConvertColorStripsBelowANSI(t *testing.T) {
 	resetColorState(t)
 	OutputProfile = colorprofile.Ascii
 
+	// Colors synthesized at render time (lerp gradient steps) exist
+	// even when the palette is colorless; below ANSI they must strip
+	// to NoColor, never pass through as truecolor SGR.
 	c := lipgloss.Color("#7571F9")
-	if got := convertColor(c); got != c {
-		t.Errorf("Ascii profile: convertColor = %v, want input preserved", got)
+	if got := convertColor(c); got != (lipgloss.NoColor{}) {
+		t.Errorf("Ascii profile: convertColor = %v, want NoColor", got)
 	}
 }
 

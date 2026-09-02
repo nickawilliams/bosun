@@ -26,15 +26,17 @@ package ui
 import (
 	"image/color"
 	"os"
+	"reflect"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 )
 
 // OutputProfile is the color profile every output pipeline encodes
 // against. Set by ApplyColorMode before any rendering occurs; read
 // freely afterward (single-goroutine init, same contract as
-// Palette). The TrueColor zero state means "no conversion", which
+// Palette). The TrueColor initial value means "no conversion", which
 // keeps pre-ApplyColorMode rendering (unit tests that touch styles
 // directly) at full fidelity.
 var OutputProfile = colorprofile.TrueColor
@@ -61,38 +63,42 @@ func TeaColorProfile() tea.ProgramOption {
 	return tea.WithColorProfile(OutputProfile)
 }
 
-// convertColor downsamples c through OutputProfile, preserving c
-// when conversion is a no-op or undefined. Profiles at or below
-// Ascii convert every color to nil (colorprofile's "no color"
-// answer); callers on those profiles already hold the NoColor
-// palette, so nil is mapped back to the input rather than letting a
-// nil Foreground reach lipgloss.
+// convertColor downsamples c through OutputProfile. Profiles at or
+// below Ascii carry no colors at all, so the answer there is NoColor
+// — not the input: this path handles colors synthesized at render
+// time (lerpColors gradient steps), which exist even when the active
+// palette is already colorless, and passing them through would leak
+// truecolor SGR into no-color output. On quantizing profiles a nil
+// Convert answer (only possible for a nil input) maps back to the
+// input rather than letting a nil Foreground reach lipgloss.
 func convertColor(c color.Color) color.Color {
+	if OutputProfile <= colorprofile.Ascii {
+		return lipgloss.NoColor{}
+	}
 	if cc := OutputProfile.Convert(c); cc != nil {
 		return cc
 	}
 	return c
 }
 
-// convertPalette downsamples every color in p through prof, in
-// place. Called only for profiles that quantize (ANSI256): basic-
-// color palettes (ansi mode) and NoColor palettes never need it,
-// and TrueColor passes through.
+// convertPalette downsamples every color.Color field in p through
+// prof, in place. Called only for profiles that quantize (ANSI256):
+// basic-color palettes (ansi mode) and NoColor palettes never need
+// it, and TrueColor passes through. The walk is reflective so a
+// future palette field cannot be silently skipped — a hand-kept
+// field list that missed one would leave that color truecolor while
+// the rest quantized, quietly recreating the split this file exists
+// to close.
 func convertPalette(p *palette, prof colorprofile.Profile) {
-	fields := []*color.Color{
-		&p.Primary, &p.Secondary, &p.Brand, &p.LogoTop, &p.LogoBottom,
-		&p.Accent, &p.Info, &p.Success, &p.Error, &p.Warning,
-		&p.Muted, &p.NormalFg,
-		&p.RoleOpen, &p.RoleDone, &p.RoleClosed, &p.RoleAttention,
-		&p.RoleInFlight, &p.RoleNeutral, &p.Keyword,
-		&p.Recessed, &p.Border, &p.Subtle, &p.ButtonFg,
-	}
-	for _, f := range fields {
-		if *f == nil {
+	colorType := reflect.TypeOf((*color.Color)(nil)).Elem()
+	v := reflect.ValueOf(p).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Type() != colorType || f.IsNil() {
 			continue
 		}
-		if cc := prof.Convert(*f); cc != nil {
-			*f = cc
+		if cc := prof.Convert(f.Interface().(color.Color)); cc != nil {
+			f.Set(reflect.ValueOf(cc))
 		}
 	}
 }

@@ -354,13 +354,18 @@ func applyRoleAliases(p *palette) {
 // SSH without COLORTERM forwarding); "ansi" and "none" force those
 // palettes as before.
 func ApplyColorMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+
 	// NO_COLOR env var (https://no-color.org) acts as implicit "none"
-	// unless the user explicitly configured a color mode.
-	if _, noColor := os.LookupEnv("NO_COLOR"); noColor && mode == "" {
+	// for the unset default and for explicit auto — both mean
+	// "respect the environment", and NO_COLOR is part of it. The
+	// forcing modes (truecolor/ansi/none) override the env var, as
+	// explicit user config should.
+	if _, noColor := os.LookupEnv("NO_COLOR"); noColor && (mode == "" || mode == "auto") {
 		mode = "none"
 	}
 
-	switch strings.ToLower(strings.TrimSpace(mode)) {
+	switch mode {
 	case "ansi":
 		Palette = ansiPalette()
 		OutputProfile = colorprofile.ANSI
