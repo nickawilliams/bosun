@@ -40,6 +40,10 @@ func TestProviderMetadata(t *testing.T) {
 		code.ConfigGroup,
 		notify.ConfigGroup,
 		cicd.ConfigGroup,
+		// The one group with several providers registered, and so the
+		// only one that exercises the "no answer to prefill" branch
+		// below rather than the sole-provider one.
+		preview.ConfigGroup,
 	}
 
 	for _, group := range groups {
@@ -56,13 +60,13 @@ func TestProviderMetadata(t *testing.T) {
 			if HasProvider(group, "definitely-not-a-provider") {
 				t.Errorf("HasProvider(%q, …) accepted an unknown name", group)
 			}
-			if len(names) == 1 && SoleProvider(group) != names[0] {
-				t.Errorf("SoleProvider(%q) = %q, want %q",
-					group, SoleProvider(group), names[0])
+			if len(names) == 1 && DefaultProvider(group) != names[0] {
+				t.Errorf("DefaultProvider(%q) = %q, want %q",
+					group, DefaultProvider(group), names[0])
 			}
-			if len(names) > 1 && SoleProvider(group) != "" {
-				t.Errorf("SoleProvider(%q) = %q, want empty with several registered",
-					group, SoleProvider(group))
+			if len(names) > 1 && DefaultProvider(group) != "" {
+				t.Errorf("DefaultProvider(%q) = %q, want empty with several registered",
+					group, DefaultProvider(group))
 			}
 		})
 	}
@@ -77,8 +81,8 @@ func TestProviderMetadata(t *testing.T) {
 		if HasProvider("workspace", "jira") {
 			t.Error("HasProvider(workspace, jira) = true")
 		}
-		if got := SoleProvider("workspace"); got != "" {
-			t.Errorf("SoleProvider(workspace) = %q, want empty", got)
+		if got := DefaultProvider("workspace"); got != "" {
+			t.Errorf("DefaultProvider(workspace) = %q, want empty", got)
 		}
 	})
 

@@ -38,12 +38,6 @@ func TestDescriptor(t *testing.T) {
 	if d.Name != "ephemeral" {
 		t.Errorf("Name = %q, want ephemeral", d.Name)
 	}
-	// The cicd adapter is the default; this one is opt-in, so every
-	// config written before it existed keeps selecting cicd.
-	if d.Default {
-		t.Error("Default = true; the HTTP adapter must be opt-in")
-	}
-
 	var sawBaseURL bool
 	for _, ck := range d.Keys {
 		// Keys are relative to the group — the config layer prefixes

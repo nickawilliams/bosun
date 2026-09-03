@@ -527,10 +527,9 @@ func resolveSchemaGroup(name string, group ConfigGroup) ConfigGroup {
 			out.Keys = append(out.Keys, keys...)
 		case "provider":
 			ck.Options = names
-			// Show what an unset key resolves to. Only a capability that
-			// declares a default has one — with several providers and no
-			// default there is nothing honest to prefill, and with a
-			// single provider the registry reports it either way.
+			// Show what an unset key resolves to. Only a capability with
+			// a single provider has one — with several there is nothing
+			// honest to prefill, because the key is a real choice.
 			ck.Default = services.DefaultProvider(name)
 			out.Keys = append(out.Keys, ck)
 		default:
@@ -543,15 +542,14 @@ func resolveSchemaGroup(name string, group ConfigGroup) ConfigGroup {
 // schemaProvider returns the provider whose keys a group should show:
 // the configured one, or — when config hasn't said yet — whichever one
 // an unset key resolves to, since hiding its keys would leave `bosun
-// init` and `doctor` with nothing to ask for. With several registered,
-// none chosen, and no declared default, no provider keys appear until
-// the user picks one.
+// init` and `doctor` with nothing to ask for. With several registered
+// and none chosen (preview, today), no provider keys appear until the
+// user picks one.
 //
 // This deliberately asks the same question the construction path asks
-// (services.DefaultProvider, which covers both the sole-provider and
-// declared-default cases). Falling back to the sole provider here while
-// the registry falls back to a declared default would show one
-// provider's keys and then build a different provider.
+// (services.DefaultProvider). Falling back to a guess here while the
+// registry refuses to guess would show one provider's keys and then
+// build nothing at all.
 func schemaProvider(group string) string {
 	if name := viper.GetString(group + ".provider"); name != "" {
 		return name

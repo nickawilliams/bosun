@@ -104,7 +104,6 @@ func previewRegistry(deps preview.Deps) *registry[preview.Provider] {
 			return entry[preview.Provider]{
 				name: d.Name,
 				keys: d.Keys,
-				dflt: d.Default,
 				new: func(cfg provider.Config) (preview.Provider, error) {
 					return d.New(cfg, deps)
 				},
@@ -237,24 +236,15 @@ func HasProvider(group, name string) bool {
 }
 
 // DefaultProvider returns the provider a group falls back to when its
-// "provider" key is unset: the descriptor-declared default, or the sole
-// registered provider. Returns "" for an unknown group, or one with
-// several providers and no declared default — there the key is a real
-// choice with no answer to prefill.
+// "provider" key is unset: the sole registered one. Returns "" for an
+// unknown group, or one with several providers — there the key is a
+// real choice, and there is no answer to prefill.
+//
+// This asks exactly the question the construction path asks
+// (registry.configured's fallback), so the keys `bosun init` and
+// `doctor` show for an unset group belong to the provider that group
+// would actually build.
 func DefaultProvider(group string) string {
-	c, ok := catalogs[group]
-	if !ok {
-		return ""
-	}
-	return c.defaultName()
-}
-
-// SoleProvider returns the only provider registered for a group, or ""
-// when the group has none or more than one. The config layer uses it to
-// decide which provider's keys to show before the user has picked one:
-// with a single choice there is nothing to pick, so its keys are shown
-// straight away.
-func SoleProvider(group string) string {
 	c, ok := catalogs[group]
 	if !ok {
 		return ""
@@ -269,10 +259,6 @@ func SoleProvider(group string) string {
 type entry[T any] struct {
 	name string
 	keys []provider.ConfigKey
-	// dflt marks the provider an unset config key selects. Only
-	// capabilities that gained a second provider after shipping need one
-	// — with a single provider the sole() fallback already answers.
-	dflt bool
 	new  func(provider.Config) (T, error)
 }
 
@@ -295,9 +281,6 @@ type registry[T any] struct {
 	// providerKey is the config key that selects a provider
 	// ("issue_tracker.provider").
 	providerKey string
-	// dflt is the provider an unset providerKey selects, or "" when the
-	// capability declares none.
-	dflt string
 
 	order   []string
 	entries map[string]entry[T]
@@ -312,9 +295,6 @@ func newRegistry[T any](label, group string, entries ...entry[T]) *registry[T] {
 	for _, e := range entries {
 		r.order = append(r.order, e.name)
 		r.entries[e.name] = e
-		if e.dflt {
-			r.dflt = e.name
-		}
 	}
 	return r
 }
@@ -339,25 +319,16 @@ func (r *registry[T]) build(cfg provider.Config, name string) (T, error) {
 }
 
 // configured returns the provider named in config, falling back to the
-// capability's declared default and then to the sole registered
-// provider when config is silent.
+// sole registered provider when config is silent.
+//
+// There is deliberately no declared-default tier between the two. A
+// capability with several providers and an unset key has not been
+// configured, and answering with one of them anyway builds a provider
+// the user never named — silently, since every later error then
+// describes that provider rather than the missing choice.
 func (r *registry[T]) configured(cfg provider.Config) string {
 	if name := cfg.Get(r.providerKey); name != "" {
 		return name
-	}
-	if r.dflt != "" {
-		return r.dflt
-	}
-	return r.sole()
-}
-
-// defaultName returns the provider an unset providerKey selects — the
-// declared default, or the sole provider when there is only one. The
-// config layer renders it as the provider key's Default so `config
-// check` and `bosun init` show what an unset key resolves to.
-func (r *registry[T]) defaultName() string {
-	if r.dflt != "" {
-		return r.dflt
 	}
 	return r.sole()
 }
@@ -394,5 +365,4 @@ type catalog interface {
 	keys(name string) []provider.ConfigKey
 	has(name string) bool
 	sole() string
-	defaultName() string
 }

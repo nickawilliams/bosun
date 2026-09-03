@@ -323,8 +323,11 @@ environment half-built, so bosun always deploys the whole set and pins
 per-service image tags through `image-overrides` instead.
 
 Two adapters implement the preview capability, selected by
-`preview.provider`. Unset means `cicd`, so a config written before this key
-existed keeps working.
+`preview.provider`. The key is required when previews are used: with two
+adapters registered there is no honest fallback, and picking one silently
+would report every later failure against a provider nobody named. Leaving
+it unset is how a project says it doesn't deploy previews — `bosun doctor`
+reads it that way and never gates on the capability.
 
 - **`cicd`** dispatches the workflows configured above, then probes
   `url_template` over HTTP to decide whether an env is up. A probe answers

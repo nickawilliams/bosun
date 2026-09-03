@@ -377,14 +377,6 @@ type ProviderDescriptor struct {
 	// e.g. "cicd".
 	Name string
 
-	// Default marks the provider chosen when preview.provider is unset.
-	// Exactly one descriptor should set it. It exists because preview
-	// gained a second provider after the first had shipped: falling back
-	// to "whichever is the only one" (how the other capabilities behave)
-	// stops working the moment there are two, and every existing config
-	// omits the key.
-	Default bool
-
 	// Keys are the provider-specific config keys under the "preview"
 	// group, relative to it (e.g. "api.base_url"). They are spliced into
 	// bosun's config schema so init, doctor, and `config check` cover

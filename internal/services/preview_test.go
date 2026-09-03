@@ -12,24 +12,40 @@ import (
 
 // TestPreviewProvider covers the selection this capability exists to
 // make: preview is the one capability with two providers, so it is the
-// one where an unset config key has to resolve to something.
+// one where an unset config key has no answer to fall back on.
 func TestPreviewProvider(t *testing.T) {
-	t.Run("unset falls back to the declared default", func(t *testing.T) {
-		// The dispatch adapter shipped first and every config written
-		// before the HTTP one omits the key. Falling back to "whichever
-		// is the only one" — how the other capabilities behave — returns
-		// "" here and would break all of them.
-		p, err := PreviewProvider(cfg(nil), preview.Deps{})
+	t.Run("unset is refused rather than guessed", func(t *testing.T) {
+		// Two adapters and no declared default: an unset key is a choice
+		// the user has not made. Building one anyway would report every
+		// later failure against a provider they never named.
+		_, err := PreviewProvider(cfg(nil), preview.Deps{})
+		if err == nil {
+			t.Fatal("PreviewProvider succeeded with no provider configured")
+		}
+		// The refusal has to name the options, since it is the whole
+		// instruction the user gets.
+		for _, want := range []string{"cicd", "ephemeral"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to offer %q", err, want)
+			}
+		}
+	})
+
+	t.Run("cicd is selectable by name", func(t *testing.T) {
+		c := cfg(map[string]string{preview.ConfigGroup + ".provider": "cicd"})
+		p, err := PreviewProvider(c, preview.Deps{})
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
-		}
-		if p == nil {
-			t.Fatal("PreviewProvider returned nil with no provider configured")
 		}
 		// It is the dispatch adapter: with no pipeline wired it reports
 		// the pipeline missing, which the HTTP adapter has no notion of.
 		if _, err := p.Create(context.Background(), preview.Claim{Name: "brave-falcon"}); !errors.Is(err, preview.ErrNotConfigured) {
 			t.Errorf("Create = %v, want a not-configured report from the cicd adapter", err)
+		}
+		// And it cannot enumerate a fleet — the property that tells the
+		// two adapters apart, asserted from both sides.
+		if _, ok := p.(preview.Lister); ok {
+			t.Error("configured cicd but got a provider that can list")
 		}
 	})
 
@@ -91,7 +107,8 @@ func TestPreviewDepsReachTheAdapter(t *testing.T) {
 			},
 		},
 	}
-	p, err := PreviewProvider(cfg(nil), deps)
+	c := cfg(map[string]string{preview.ConfigGroup + ".provider": "cicd"})
+	p, err := PreviewProvider(c, deps)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -104,13 +121,13 @@ func TestPreviewDepsReachTheAdapter(t *testing.T) {
 }
 
 // TestPreviewDefaultProvider pins what the config layer renders as the
-// provider key's Default.
+// provider key's Default: nothing, because preview has two providers
+// and picking between them is the user's job.
 func TestPreviewDefaultProvider(t *testing.T) {
-	if got := DefaultProvider(preview.ConfigGroup); got != "cicd" {
-		t.Errorf("DefaultProvider(preview) = %q, want cicd", got)
+	if got := DefaultProvider(preview.ConfigGroup); got != "" {
+		t.Errorf("DefaultProvider(preview) = %q, want empty with two providers", got)
 	}
-	// A capability with one provider and no declared default still has
-	// an answer: the sole one.
+	// A capability with one provider still has an answer: the sole one.
 	if got := DefaultProvider("issue_tracker"); got == "" {
 		t.Error("DefaultProvider(issue_tracker) = \"\", want the sole tracker")
 	}
@@ -119,39 +136,33 @@ func TestPreviewDefaultProvider(t *testing.T) {
 	}
 }
 
-// TestDefaultNameWithoutADeclaredDefault covers the branch no shipped
-// registry has: several providers, none flagged. There is nothing
-// honest to prefill, so the key stays a real choice.
-func TestDefaultNameWithoutADeclaredDefault(t *testing.T) {
+// TestConfiguredFallsBackOnlyToASoleProvider pins the one fallback the
+// registry has left. Built from a local registry rather than the
+// package's so both sizes are covered regardless of what ships.
+func TestConfiguredFallsBackOnlyToASoleProvider(t *testing.T) {
 	several := newRegistry("test capability", "test",
 		entry[string]{name: "alpha"},
 		entry[string]{name: "beta"},
 	)
-	if got := several.defaultName(); got != "" {
-		t.Errorf("defaultName() = %q, want empty with no declared default", got)
-	}
 	if got := several.configured(cfg(nil)); got != "" {
-		t.Errorf("configured() = %q, want empty with no declared default", got)
+		t.Errorf("configured() = %q, want empty with several registered", got)
+	}
+	// Config still resolves when there is no sole provider to fall back
+	// on — the fallback is the only part that goes silent.
+	if got := several.configured(cfg(map[string]string{"test.provider": "alpha"})); got != "alpha" {
+		t.Errorf("configured() = %q, want alpha", got)
 	}
 
-	flagged := newRegistry("test capability", "test",
-		entry[string]{name: "alpha"},
-		entry[string]{name: "beta", dflt: true},
-	)
-	if got := flagged.defaultName(); got != "beta" {
-		t.Errorf("defaultName() = %q, want beta", got)
-	}
-	// Config still wins over the default.
-	if got := flagged.configured(cfg(map[string]string{"test.provider": "alpha"})); got != "alpha" {
-		t.Errorf("configured() = %q, want alpha", got)
+	one := newRegistry("test capability", "test", entry[string]{name: "alpha"})
+	if got := one.configured(cfg(nil)); got != "alpha" {
+		t.Errorf("configured() = %q, want the sole provider", got)
 	}
 }
 
 // TestEveryPreviewProviderIsSelectable guards the registration a
 // compiler can't: a descriptor with no name is unreachable through
-// config, and two defaults means the fallback depends on list order.
+// config.
 func TestEveryPreviewProviderIsSelectable(t *testing.T) {
-	var defaults int
 	for _, d := range previewDescriptors {
 		if d.Name == "" {
 			t.Error("a preview descriptor has no name; nothing can select it")
@@ -162,12 +173,6 @@ func TestEveryPreviewProviderIsSelectable(t *testing.T) {
 		if !HasProvider(preview.ConfigGroup, d.Name) {
 			t.Errorf("preview provider %q is not registered in the catalog", d.Name)
 		}
-		if d.Default {
-			defaults++
-		}
-	}
-	if defaults != 1 {
-		t.Errorf("%d preview descriptors are marked default, want exactly 1", defaults)
 	}
 }
 
