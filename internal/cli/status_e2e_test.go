@@ -312,6 +312,39 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
+	t.Run("workspace_scope/pinned_by_env", func(t *testing.T) {
+		// The #110 repro, verbatim: BOSUN_WORKSPACE is the documented
+		// alternative to --workspace, and it shares its name with the
+		// `workspace:` config block. Under viper's AutomaticEnv the
+		// variable shadowed the block, so workspace.root read back
+		// empty and this run died on "workspaces not configured"
+		// against a config file that plainly sets it. The pin has to
+		// select the workspace AND leave the block readable, so the
+		// assertions cover both halves: the run succeeds (the block
+		// resolved) and it resolved to the pinned workspace rather
+		// than falling through to project scope.
+		h, previews := newStatusHarness(t, "api")
+		branch := startStatusWorkspace(t, h, "EX-9", "Pin by env", "envpin")
+		p := markStatus(h, previews)
+
+		t.Setenv("BOSUN_WORKSPACE", branch)
+
+		if err := h.Run("status"); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-9"}) {
+			t.Errorf("issue keys fetched = %v, want [EX-9] (derived from the env-pinned workspace)", got)
+		}
+		if got := p.workspacesAsked(); !equalStrings(got, []string{branch}) {
+			t.Errorf("preview provider built for %v, want [%s]", got, branch)
+		}
+		if got, want := statusSummary(t, h), "1 repository · 1 pending"; got != want {
+			t.Errorf("summary = %q, want %q", got, want)
+		}
+		assertStatusReadOnly(t, p)
+	})
+
 	t.Run("workspace_scope/multi_repo_mixed_states", func(t *testing.T) {
 		// Two repos in one workspace, in different states: api has an
 		// open PR, web has none. Both must be probed — a fan-in that
