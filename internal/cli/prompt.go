@@ -73,10 +73,42 @@ func newSelect[T comparable](title string) *huh.Select[T] {
 	return huh.NewSelect[T]().Title(transformFieldTitle(title))
 }
 
+// promptsSuppressed disables just-in-time config prompting for the
+// duration of a command that must not ask for anything. See
+// suppressPrompts.
+var promptsSuppressed bool
+
+// suppressPrompts turns every prompt gate off until the returned
+// function restores it. Callers defer the restore.
+//
+// It exists for read-only commands, and `bosun doctor` is the one that
+// needs it. A diagnostic that stops to collect a value has answered its
+// own question — and requireConfig's completion path does not merely
+// ask, it PERSISTS what it collects (resolveConfigKey → setConfigValue),
+// so a report would edit the project's config file as a side effect of
+// being run.
+//
+// The gate has to sit here rather than at each check because the prompt
+// is transitive: a check reaches a provider factory, which requires a
+// config group, which resolves a missing key. checkPreview reaches two
+// factories whose errors it discards outright, so the value collected
+// would be thrown away — a prompt for nothing, drawn underneath a
+// running spinner.
+//
+// A package-level flag is safe here for the same reason the services
+// factories are: one command runs per process, and the harness forbids
+// t.Parallel for tests that touch this state.
+func suppressPrompts() func() {
+	prev := promptsSuppressed
+	promptsSuppressed = true
+	return func() { promptsSuppressed = prev }
+}
+
 // isInteractive returns true when the current input stream supports
-// prompting (real TTY stdin or an injected reader in tests).
+// prompting (real TTY stdin or an injected reader in tests) and the
+// running command has not suppressed prompting outright.
 func isInteractive() bool {
-	return ui.Interactive()
+	return !promptsSuppressed && ui.Interactive()
 }
 
 // forceInteractive returns true if the user passed --interactive and
