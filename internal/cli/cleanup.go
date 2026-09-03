@@ -293,8 +293,12 @@ type movedShell struct {
 
 // emit prints the cd-back hint when the shell was moved. Runs after
 // runActions regardless of its error: a bulk sweep can move the shell
-// for one workspace and fail on another, and the hint matters most
-// exactly then.
+// for one workspace and fail on another, and the hint still applies.
+// The move only happens inside the directory action, so a workspace
+// whose own failure gates that action off strands the shell with no
+// hint — the directory it stood in is gone, but nothing here can tell
+// that apart from a run that never destroyed it (a cancelled plan,
+// say) without plumbing per-worktree outcomes through.
 func (m *movedShell) emit() {
 	if m.from != "" {
 		ui.Info("shell is in a removed directory (%s); cd to %s", m.from, m.to)
@@ -395,13 +399,15 @@ func buildCleanupActions(ctx context.Context, g vcs.VCS, target cleanupTarget, a
 	// gated by the readiness check; by the time this applies they've
 	// been explicitly acknowledged (--force) and are destroyed.
 	//
-	// Whether the process is standing inside this workspace is
-	// detected NOW, not at apply time: the worktree rows apply first,
-	// and once they delete the CWD out from under the process,
-	// os.Getwd can no longer answer the question. The chdir itself
-	// still waits for the apply (an unapproved plan must not move the
-	// shell).
+	// Whether the process is standing inside this workspace — and
+	// where the project root is — is detected NOW, not at apply time:
+	// the worktree rows apply first, and once they delete the CWD out
+	// from under the process, neither os.Getwd nor the CWD-walking
+	// FindProjectRoot can answer (Linux getcwd errors outright on a
+	// deleted directory). The chdir itself still waits for the apply;
+	// an unapproved plan must not move the shell.
 	var escapeFrom string
+	escapeTo := config.FindProjectRoot()
 	if detected, _ := detectWorkspaceFromCWD(); detected == workspace {
 		escapeFrom, _ = os.Getwd()
 	}
@@ -421,7 +427,7 @@ func buildCleanupActions(ctx context.Context, g vcs.VCS, target cleanupTarget, a
 			return ActionNeeded, "", nil
 		},
 		Apply: func(_ context.Context) error {
-			return removeWorkspaceDir(wsPath, wsRoot, escapeFrom, moved)
+			return removeWorkspaceDir(wsPath, wsRoot, escapeFrom, escapeTo, moved)
 		},
 	})
 
@@ -431,17 +437,17 @@ func buildCleanupActions(ctx context.Context, g vcs.VCS, target cleanupTarget, a
 // removeWorkspaceDir removes the workspace directory and any junk-only
 // (or empty) parents up to the workspace root — e.g. "epic/" once the
 // last EX-* workspace under it is cleaned. escapeFrom, when non-empty,
-// is the CWD the process was standing in inside this workspace
-// (captured before the worktrees were removed): the process moves to
-// the project root first — the same escape hatch workspace delete
-// uses — and the move is recorded for the post-plan hint.
-func removeWorkspaceDir(wsPath, wsRoot, escapeFrom string, moved *movedShell) error {
-	projectRoot := config.FindProjectRoot()
-	if escapeFrom != "" && projectRoot != "" {
-		if err := os.Chdir(projectRoot); err != nil {
+// is the CWD the process was standing in inside this workspace, and
+// escapeTo the project root — both captured before the worktrees were
+// removed: the process moves to the project root first (the same
+// escape hatch workspace delete uses) and the move is recorded for
+// the post-plan hint.
+func removeWorkspaceDir(wsPath, wsRoot, escapeFrom, escapeTo string, moved *movedShell) error {
+	if escapeFrom != "" && escapeTo != "" {
+		if err := os.Chdir(escapeTo); err != nil {
 			return fmt.Errorf("moving to project root: %w", err)
 		}
-		moved.from, moved.to = escapeFrom, projectRoot
+		moved.from, moved.to = escapeFrom, escapeTo
 	}
 
 	if err := os.RemoveAll(wsPath); err != nil && !os.IsNotExist(err) {
