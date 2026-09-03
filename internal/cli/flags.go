@@ -20,3 +20,13 @@ func addWorkspaceFlag(cmd *cobra.Command) {
 func addIssueFlag(cmd *cobra.Command) {
 	cmd.Flags().StringP("issue", "i", "", "issue identifier (e.g. PROJ-123)")
 }
+
+// addAllFlag registers --all on a command, declaring that it can
+// operate at explicit project scope — across every workspace in the
+// project rather than one resolved workspace. Scope grammar (enforced
+// by resolveWorkspaceScope): --all is mutually exclusive with the
+// single-workspace targeting flags, and the workspace filter flags
+// require project scope.
+func addAllFlag(cmd *cobra.Command) {
+	cmd.Flags().Bool("all", false, "operate across all workspaces in the project")
+}

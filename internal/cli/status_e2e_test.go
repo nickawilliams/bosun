@@ -455,6 +455,121 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
+	t.Run("project_scope/all_flag_forces_project_view_from_workspace_context", func(t *testing.T) {
+		// Inside a workspace (here: CWD inside its worktree) status is
+		// locked to workspace scope — --all is the explicit door to
+		// the project view from anywhere, and before it existed there
+		// was none.
+		h, previews := newStatusHarness(t, "api")
+		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
+		_ = startStatusWorkspace(t, h, "EX-6", "Second", "second")
+		t.Chdir(h.WorktreePath(first, "api"))
+
+		// Without --all the workspace context pins the scope: one
+		// issue fetched, the resolved workspace's own.
+		p := markStatus(h, previews)
+		if err := h.Run("status"); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5"}) {
+			t.Errorf("workspace scope fetched %v, want [EX-5]", got)
+		}
+
+		// --all overrides it: the full project fan-out.
+		p = markStatus(h, previews)
+		if err := h.Run("status", "--all"); err != nil {
+			t.Fatalf("status --all: %v", err)
+		}
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5", "EX-6"}) {
+			t.Errorf("--all fetched %v, want [EX-5 EX-6]", got)
+		}
+		assertStatusReadOnly(t, p)
+	})
+
+	t.Run("project_scope/status_filter_narrows_the_cards", func(t *testing.T) {
+		// --status narrows what renders, not what is observed: the
+		// filter evaluates fetched state, so both workspaces are
+		// consulted, but only the matching one reaches the recap —
+		// and the narrowing is disclosed.
+		h, previews := newStatusHarness(t, "api")
+		_ = startStatusWorkspace(t, h, "EX-5", "First", "first")
+		_ = startStatusWorkspace(t, h, "EX-6", "Second", "second")
+		// start left both In Progress; move EX-5 to a done-like status.
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-5", Title: "First", Type: "Story", Status: "Done",
+		})
+		p := markStatus(h, previews)
+
+		if err := h.Run("status", "--status", "done"); err != nil {
+			t.Fatalf("status --status done: %v", err)
+		}
+
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5", "EX-6"}) {
+			t.Errorf("issue keys fetched = %v, want both (filtering narrows rendering, not observation)", got)
+		}
+		if got := statusSummary(t, h); !strings.HasPrefix(got, "1 workspace ·") {
+			t.Errorf("summary = %q, want it scoped to the 1 matching workspace", got)
+		}
+		var disclosed bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureInfo) {
+			if strings.Contains(ev.Label, "1 of 2") {
+				disclosed = true
+			}
+		}
+		if !disclosed {
+			t.Errorf("the narrowing was not disclosed\n%s", h.Reporter.Dump())
+		}
+		assertStatusReadOnly(t, p)
+	})
+
+	t.Run("project_scope/no_filter_matches_is_explicit", func(t *testing.T) {
+		// A filter that matches nothing says so rather than rendering
+		// an empty project view that looks like a bug.
+		h, previews := newStatusHarness(t, "api")
+		_ = startStatusWorkspace(t, h, "EX-5", "First", "first")
+		p := markStatus(h, previews)
+
+		if err := h.Run("status", "--status", "ready_for_release"); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces match the filter") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("empty filter result was not reported\n%s", h.Reporter.Dump())
+		}
+		assertStatusReadOnly(t, p)
+	})
+
+	t.Run("project_scope/unknown_status_key_refused", func(t *testing.T) {
+		// The vocabulary validation is shared with cleanup; pin that
+		// status routes through it too.
+		h, _ := newStatusHarness(t, "api")
+
+		err := h.Run("status", "--status", "bogus")
+		if err == nil || !strings.Contains(err.Error(), "unknown status key") {
+			t.Fatalf("err = %v, want the unknown-key rejection", err)
+		}
+	})
+
+	t.Run("workspace_scope/filter_requires_project_scope", func(t *testing.T) {
+		// Inside a workspace, --status without --all is refused with
+		// the grammar's guidance — the same rule cleanup applies, so
+		// the flags mean the same thing on both commands.
+		h, _ := newStatusHarness(t, "api")
+		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
+		t.Chdir(h.WorktreePath(first, "api"))
+
+		err := h.Run("status", "--status", "done")
+		if err == nil || !strings.Contains(err.Error(), "--all") {
+			t.Fatalf("err = %v, want the pass---all guidance", err)
+		}
+	})
+
 	t.Run("issue_not_found/continues_without_issue_detail", func(t *testing.T) {
 		// The tracker rejects the key (deleted issue, typo'd workspace
 		// name). Status renders the degraded issue card and carries on —

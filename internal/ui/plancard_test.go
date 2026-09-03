@@ -333,6 +333,90 @@ func TestPlanCard_ApplyActions_Gating(t *testing.T) {
 	})
 }
 
+// TestPlanCard_ApplyActions_GroupScopedGating covers the group-scoped
+// variant of the gate: a grouped gated action answers only for its own
+// group's subject (bulk cleanup's per-workspace directory removal), so
+// a sibling group's failure must not withhold it — while its own
+// group's failure, and any failure for an ungrouped gated action,
+// still does.
+func TestPlanCard_ApplyActions_GroupScopedGating(t *testing.T) {
+	record := func(ran *[]string, name, group string, err error, gated bool) (PlanAction, *SkipRef) {
+		skip := &SkipRef{}
+		return PlanAction{
+			Run: func() error {
+				*ran = append(*ran, name)
+				return err
+			},
+			RequiresPriorSuccess: gated,
+			Group:                group,
+			Skip:                 skip,
+		}, skip
+	}
+
+	t.Run("a sibling group's failure does not close the gate", func(t *testing.T) {
+		var ran []string
+		failA, _ := record(&ran, "worktree-a", "ws-a", errSentinel, false)
+		dirB, dirBSkip := record(&ran, "directory-b", "ws-b", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanDestroy, "worktree", "repo", "api", "ws-a").
+			Add(PlanDestroy, "directory", "workspace", "ws-b", ""))
+		got := pc.applyActions([]PlanAction{failA, dirB})
+
+		if !slices.Contains(ran, "directory-b") {
+			t.Errorf("a sibling workspace's failure withheld this one's removal; ran = %v", ran)
+		}
+		if dirBSkip.Get() {
+			t.Error("skip ref marked by a failure in another group")
+		}
+		if got.succeeded != 1 || got.failed != 1 || got.skipped != 0 {
+			t.Errorf("result = %+v, want 1 failed, 1 applied, 0 skipped", got)
+		}
+	})
+
+	t.Run("its own group's failure closes the gate", func(t *testing.T) {
+		var ran []string
+		failA, _ := record(&ran, "worktree-a", "ws-a", errSentinel, false)
+		dirA, dirASkip := record(&ran, "directory-a", "ws-a", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanDestroy, "worktree", "repo", "api", "ws-a").
+			Add(PlanDestroy, "directory", "workspace", "ws-a", ""))
+		got := pc.applyActions([]PlanAction{failA, dirA})
+
+		if slices.Contains(ran, "directory-a") {
+			t.Errorf("gated action ran behind its own group's failure; ran = %v", ran)
+		}
+		if !dirASkip.Get() {
+			t.Error("skip ref not marked; the plan row would still read as applied")
+		}
+		if got.skipped != 1 || got.failed != 1 {
+			t.Errorf("result = %+v, want 1 failed, 1 skipped", got)
+		}
+	})
+
+	t.Run("an ungrouped gate still closes on a grouped failure", func(t *testing.T) {
+		var ran []string
+		failA, _ := record(&ran, "worktree-a", "ws-a", errSentinel, false)
+		status, statusSkip := record(&ran, "status", "", nil, true)
+
+		pc := NewPlanCard(NewPlan().
+			Add(PlanDestroy, "worktree", "repo", "api", "ws-a").
+			Add(PlanModify, "status", "issue", "EX-1", ""))
+		got := pc.applyActions([]PlanAction{failA, status})
+
+		if slices.Contains(ran, "status") {
+			t.Errorf("run-wide gate ignored a grouped failure; ran = %v", ran)
+		}
+		if !statusSkip.Get() {
+			t.Error("skip ref not marked")
+		}
+		if got.skipped != 1 {
+			t.Errorf("result = %+v, want 1 skipped", got)
+		}
+	})
+}
+
 // TestPlan_SkippedRowRendering checks that a marked row stops
 // advertising the change it never made.
 func TestPlan_SkippedRowRendering(t *testing.T) {

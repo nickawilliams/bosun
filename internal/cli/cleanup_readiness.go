@@ -374,6 +374,232 @@ func emitCleanupReadiness(
 	return repoResults, wsFindings, nil
 }
 
+// bulkCleanupCandidate pairs one bulk-cleanup target with its gathered
+// probes and the classification derived from them. probes carry the
+// actual branch each worktree is on (the same reuse single-workspace
+// cleanup makes of its readiness results).
+type bulkCleanupCandidate struct {
+	target      cleanupTarget
+	probes      []repoCleanupProbe
+	repoResults []repoCleanup
+	wsFindings  []cleanupFinding
+	worst       findingSeverity
+}
+
+// gatherBulkCandidate runs the full probe + classify pass for one
+// workspace. The per-repo probes fan out internally (gatherRepoProbe);
+// workspaces are gathered one at a time so the interactive group's
+// per-workspace spinner reflects what is actually being probed.
+func gatherBulkCandidate(ctx context.Context, g vcs.VCS, host code.Host, tracker issue.Tracker, t cleanupTarget) bulkCleanupCandidate {
+	probes := make([]repoCleanupProbe, len(t.repos))
+	for i, r := range t.repos {
+		probes[i] = gatherRepoProbe(ctx, g, host, r)
+	}
+	wsProbe := gatherWorkspaceProbe(ctx, tracker, t.repos, t.wsPath, t.issueKey)
+	repoResults, wsFindings, worst := classifyAll(probes, wsProbe)
+	return bulkCleanupCandidate{
+		target:      t,
+		probes:      probes,
+		repoResults: repoResults,
+		wsFindings:  wsFindings,
+		worst:       worst,
+	}
+}
+
+// worstFindingMessage summarizes a candidate for its one-row rendering
+// in the bulk readiness card: the most severe finding's message (repo
+// findings carry the repo name), with a count of what else fired.
+// Empty when the candidate is fully SAFE.
+func (c bulkCleanupCandidate) worstFindingMessage() string {
+	type labeled struct {
+		severity findingSeverity
+		text     string
+	}
+	var all []labeled
+	for _, f := range c.wsFindings {
+		all = append(all, labeled{f.severity, f.message})
+	}
+	for _, rc := range c.repoResults {
+		for _, f := range rc.findings {
+			all = append(all, labeled{f.severity, rc.repo.Name + ": " + f.message})
+		}
+	}
+	if len(all) == 0 {
+		return ""
+	}
+	best := all[0]
+	for _, l := range all[1:] {
+		if l.severity > best.severity {
+			best = l
+		}
+	}
+	if len(all) > 1 {
+		return fmt.Sprintf("%s (+%d more)", best.text, len(all)-1)
+	}
+	return best.text
+}
+
+// emitBulkCleanupReadiness runs the readiness pass across every bulk
+// candidate and returns the ones the sweep should proceed with.
+//
+// Sweep semantics — deliberately different from the single-workspace
+// gate, where an explicitly named target aborts on any BLOCK: a
+// criteria-selected workspace with BLOCK findings is excluded and
+// reported while its siblings proceed. --force includes blocked
+// workspaces. WARN findings on included workspaces collapse into one
+// Continue/Cancel prompt for the whole sweep (interactively), or
+// error without --force when there's nobody to answer it.
+func emitBulkCleanupReadiness(
+	ctx context.Context,
+	g vcs.VCS,
+	host code.Host,
+	tracker issue.Tracker,
+	targets []cleanupTarget,
+	force bool,
+) ([]bulkCleanupCandidate, error) {
+	candidates := make([]bulkCleanupCandidate, len(targets))
+
+	// Raw / non-interactive mode: no group, no spinners. Gather,
+	// print the static per-workspace summary card, and gate: blocked
+	// candidates are excluded (that's the sweep's posture, not an
+	// error), but WARN findings on what remains still need the
+	// acknowledgement a prompt would collect — --force is the
+	// non-interactive stand-in, exactly as in single mode.
+	if !isInteractive() {
+		for i, t := range targets {
+			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
+		}
+		buildBulkCleanupReadinessCard(candidates, force).Print()
+		included := includeBulkCandidates(candidates, force)
+		if !force && anyCandidateAtOrAbove(included, findingWarn) {
+			return nil, fmt.Errorf("cleanup readiness: warnings present and no prompt available; re-run with --force to proceed")
+		}
+		return included, nil
+	}
+
+	// Interactive: one outer card, a child spinner per workspace that
+	// resolves to its one-row summary when the probe finishes.
+	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
+		for i := range targets {
+			t := targets[i]
+			_ = grp.Spinner(ui.PreserveCase(t.workspace), func() error {
+				candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
+				return nil
+			})
+			emitBulkCandidateRow(grp, candidates[i], force)
+		}
+	})
+
+	included := includeBulkCandidates(candidates, force)
+	if !anyCandidateAtOrAbove(included, findingWarn) {
+		return included, nil
+	}
+
+	// WARN findings (or --force-included BLOCKs) → one Continue /
+	// Cancel prompt for the sweep. The readiness card stays as the
+	// durable record of what was checked.
+	confirmed, err := NewDialog("Warning").
+		Description("Not all readiness checks passed, continue anyway?").
+		Affirmative("Continue").
+		Negative("Cancel").
+		Default(false).
+		Show()
+	if err != nil {
+		return nil, err
+	}
+	if !confirmed {
+		return nil, ErrCancelled
+	}
+	return included, nil
+}
+
+// includeBulkCandidates applies the sweep's exclusion rule: BLOCK
+// candidates drop unless --force.
+func includeBulkCandidates(candidates []bulkCleanupCandidate, force bool) []bulkCleanupCandidate {
+	var out []bulkCleanupCandidate
+	for _, c := range candidates {
+		if c.worst == findingBlock && !force {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// anyCandidateAtOrAbove reports whether any candidate's worst finding
+// reaches the given severity.
+func anyCandidateAtOrAbove(candidates []bulkCleanupCandidate, severity findingSeverity) bool {
+	for _, c := range candidates {
+		if c.worst >= severity {
+			return true
+		}
+	}
+	return false
+}
+
+// emitBulkCandidateRow renders one workspace's readiness summary row
+// under the interactive group: ✓ for SAFE, ▲ with the worst finding
+// for WARN, ✗ for BLOCK — annotated as excluded when the sweep will
+// drop it (no --force).
+func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate, force bool) {
+	label := ui.PreserveCase(c.target.workspace)
+	switch {
+	case c.worst == findingBlock && !force:
+		grp.FailValue(label, c.worstFindingMessage()+" — excluded (re-run with --force to include)")
+	case c.worst == findingBlock:
+		grp.FailValue(label, c.worstFindingMessage())
+	case c.worst == findingWarn:
+		grp.SkipValue(label, c.worstFindingMessage())
+	default:
+		grp.Complete(label)
+	}
+}
+
+// buildBulkCleanupReadinessCard renders the bulk Cleanup Readiness
+// card for raw mode: one row per workspace (worst-first, stable
+// within severity), mirroring emitBulkCandidateRow's glyph mapping.
+func buildBulkCleanupReadinessCard(candidates []bulkCleanupCandidate, force bool) *ui.Card {
+	wsStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	glyphBlock := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
+
+	sorted := append([]bulkCleanupCandidate{}, candidates...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].worst > sorted[j].worst })
+
+	state := ui.CardSuccess
+	for _, c := range sorted {
+		if c.worst == findingBlock {
+			state = ui.CardFailed
+			break
+		}
+		if c.worst == findingWarn {
+			state = ui.CardSkipped
+		}
+	}
+
+	card := ui.NewCard(state, "cleanup readiness")
+	for _, c := range sorted {
+		glyph := glyphOK
+		content := wsStyle.Render(c.target.workspace)
+		switch c.worst {
+		case findingBlock:
+			glyph = glyphBlock
+			msg := c.worstFindingMessage()
+			if !force {
+				msg += " — excluded (re-run with --force to include)"
+			}
+			content += muted.Render(" · " + msg)
+		case findingWarn:
+			glyph = glyphWarn
+			content += muted.Render(" · " + c.worstFindingMessage())
+		}
+		card.Item(glyph, content)
+	}
+	return card
+}
+
 // emitProbeRows renders one row per finding (or a single ✓ row if
 // none) under a parent group. The row's severity drives the reporter
 // method: BLOCK → FailValue (✗), WARN → SkipValue (▲), anything else

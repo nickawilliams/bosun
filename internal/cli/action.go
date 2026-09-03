@@ -51,6 +51,13 @@ type Action struct {
 	// Per-target actions stay best-effort — see runActions.
 	RequiresPriorSuccess bool
 
+	// Group scopes the gate for plans that span independent subjects.
+	// A gated action with a Group is withheld only behind failures in
+	// the same group (bulk cleanup: one group per workspace, so a
+	// sibling workspace's failure doesn't withhold this one's
+	// directory removal). Empty keeps the run-wide gate.
+	Group string
+
 	// DetailRef, when set, lets Apply supersede the assessed detail on
 	// the plan row after it runs — the assessed detail carries a
 	// "known after apply" placeholder, Apply fills the ref with the
@@ -86,6 +93,7 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 	var pending []PlanAction
 	var assessErr error
 	assessFailures := 0
+	groupAssessFailures := map[string]int{}
 
 	// Show a spinner while assessing actions (may involve API calls).
 	rewind, spinErr := ui.RunCardRewindable("assessing", func() error {
@@ -98,6 +106,9 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 					assessErr = err
 				}
 				assessFailures++
+				if a.Group != "" {
+					groupAssessFailures[a.Group]++
+				}
 				continue
 			}
 			switch state {
@@ -112,15 +123,22 @@ func runActions(cmd *cobra.Command, ctx context.Context, actions []Action) error
 				plan.AddWithRefs(a.op(), a.Action, a.Type, a.Name, detail, a.DetailRef, skipRef)
 				if a.op() != ui.PlanDetail {
 					apply := a.Apply
+					// Assess failures never reach the queue, so seed
+					// the gate with the ones that happened before this
+					// action was queued. Later ones are not "prior"
+					// and must not close it. A grouped action seeds
+					// from its own group's failures only, mirroring
+					// the runner's group-scoped gate.
+					prior := assessFailures > 0
+					if a.Group != "" {
+						prior = groupAssessFailures[a.Group] > 0
+					}
 					pending = append(pending, PlanAction{
 						Run:                  func() error { return apply(ctx) },
 						RequiresPriorSuccess: a.RequiresPriorSuccess,
-						// Assess failures never reach the queue, so
-						// seed the gate with the ones that happened
-						// before this action was queued. Later ones
-						// are not "prior" and must not close it.
-						PriorFailure: assessFailures > 0,
-						Skip:         skipRef,
+						PriorFailure:         prior,
+						Group:                a.Group,
+						Skip:                 skipRef,
 					})
 				}
 			case ActionCompleted:

@@ -57,6 +57,15 @@ type PlanAction struct {
 	// lookup failed withhold a transition for work that succeeded.
 	PriorFailure bool
 
+	// Group scopes the gate. A gated action with a Group is withheld
+	// only behind failures in the same group; an ungrouped gated
+	// action keeps the run-wide gate. The motivating case is a bulk
+	// plan spanning several workspaces: each workspace's directory
+	// removal asserts "this workspace fully cleaned", so a failure in
+	// a sibling workspace must not withhold it, while a failure in
+	// its own must.
+	Group string
+
 	// Skip, when set, is marked instead of running whenever the gate
 	// closes, so the plan row renders as skipped rather than as the
 	// change it planned.
@@ -373,15 +382,24 @@ func (pc *PlanCard) RunApply(actions []PlanAction) error {
 // reason not to publish a run-wide claim as an apply that blew up —
 // but only if it came first.
 //
+// Group narrows what counts as a failure for a gated action: a grouped
+// action consults only its own group's earlier failures, an ungrouped
+// one consults every earlier failure regardless of group.
+//
 // Only RequiresPriorSuccess actions consult any of this; everything
 // else runs regardless, preserving the best-effort contract the
 // independent per-target actions were written against.
 func (pc *PlanCard) applyActions(actions []PlanAction) planApplyResult {
 	var result planApplyResult
 	anyFailed := false
+	failedGroups := map[string]bool{}
 
 	for _, action := range actions {
-		if action.RequiresPriorSuccess && (anyFailed || action.PriorFailure) {
+		priorFailed := anyFailed
+		if action.Group != "" {
+			priorFailed = failedGroups[action.Group]
+		}
+		if action.RequiresPriorSuccess && (priorFailed || action.PriorFailure) {
 			result.skipped++
 			if action.Skip != nil {
 				action.Skip.Set()
@@ -390,6 +408,9 @@ func (pc *PlanCard) applyActions(actions []PlanAction) planApplyResult {
 		}
 		if err := action.Run(); err != nil {
 			anyFailed = true
+			if action.Group != "" {
+				failedGroups[action.Group] = true
+			}
 			result.failed++
 			if result.err == nil {
 				result.err = err
