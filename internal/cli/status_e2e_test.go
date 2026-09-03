@@ -545,6 +545,17 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
+	t.Run("project_scope/unknown_status_key_refused", func(t *testing.T) {
+		// The vocabulary validation is shared with cleanup; pin that
+		// status routes through it too.
+		h, _ := newStatusHarness(t, "api")
+
+		err := h.Run("status", "--status", "bogus")
+		if err == nil || !strings.Contains(err.Error(), "unknown status key") {
+			t.Fatalf("err = %v, want the unknown-key rejection", err)
+		}
+	})
+
 	t.Run("workspace_scope/filter_requires_project_scope", func(t *testing.T) {
 		// Inside a workspace, --status without --all is refused with
 		// the grammar's guidance — the same rule cleanup applies, so

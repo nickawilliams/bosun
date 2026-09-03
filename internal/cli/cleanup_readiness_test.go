@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
+	"github.com/nickawilliams/bosun/internal/vcs/git"
 )
 
 // findRowContaining returns the single rendered line carrying want,
@@ -702,6 +706,64 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 		out := stripANSI(card.Render())
 		if strings.Contains(out, "excluded") {
 			t.Errorf("card = %q, says excluded but --force includes it", out)
+		}
+	})
+}
+
+// TestEmitBulkCleanupReadinessNonInteractive drives the raw-mode bulk
+// readiness path directly. Plain unit tests run with go test's
+// non-TTY stdin, so isInteractive() is false here — the same posture
+// a piped/CI bosun run has, which the interactive e2e harness (whose
+// injected readers always read as interactive) structurally can't
+// exercise.
+//
+// The candidate states are built from real probes against fabricated
+// disk state: a stray file in the workspace dir is a BLOCK, an empty
+// dir is SAFE, and a repo path that isn't a git repository yields the
+// probe-integrity WARN (nothing could be verified).
+func TestEmitBulkCleanupReadinessNonInteractive(t *testing.T) {
+	if isInteractive() {
+		t.Fatal("test requires go test's non-TTY stdin; the raw-mode branch is the subject")
+	}
+	ctx := context.Background()
+	g := git.New()
+
+	blockedDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(blockedDir, "notes.md"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatalf("write stray file: %v", err)
+	}
+	blocked := cleanupTarget{workspace: "EX-1-blocked", wsPath: blockedDir}
+	safe := cleanupTarget{workspace: "EX-2-safe", wsPath: t.TempDir()}
+	warned := cleanupTarget{
+		workspace: "EX-3-warned",
+		wsPath:    t.TempDir(),
+		repos:     []Repository{{Name: "api", Path: t.TempDir()}}, // not a git repo → unverified WARN
+	}
+
+	t.Run("warnings error without force", func(t *testing.T) {
+		_, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
+		if err == nil || !strings.Contains(err.Error(), "--force") {
+			t.Errorf("err = %v, want the warnings-need---force refusal", err)
+		}
+	})
+
+	t.Run("blocked is excluded and the clean rest proceed", func(t *testing.T) {
+		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe}, false)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (exclusion is the sweep's posture, not an error)", err)
+		}
+		if len(included) != 1 || included[0].target.workspace != "EX-2-safe" {
+			t.Errorf("included = %+v, want just the safe workspace", included)
+		}
+	})
+
+	t.Run("force includes blocks and acknowledges warns", func(t *testing.T) {
+		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, warned}, true)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (--force is the non-interactive acknowledgement)", err)
+		}
+		if len(included) != 2 {
+			t.Errorf("included = %d candidates, want both", len(included))
 		}
 	})
 }

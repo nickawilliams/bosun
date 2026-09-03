@@ -801,6 +801,33 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceIntact(t, h, api)
 	})
 
+	t.Run("cwd/parent_with_sibling_workspace_survives", func(t *testing.T) {
+		// The counterpart guard to parent pruning: two workspaces
+		// share a parent ("epic/"), one is cleaned, and the parent —
+		// which still holds the sibling — must survive. The only
+		// thing standing between the prune loop and the sibling is
+		// the meaningful-entries check, so this is the test that
+		// keeps it honest.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		if err := h.Run("workspace", "create", "epic/one", "api"); err != nil {
+			t.Fatalf("workspace create epic/one: %v", err)
+		}
+		if err := h.Run("workspace", "create", "epic/two", "api"); err != nil {
+			t.Fatalf("workspace create epic/two: %v", err)
+		}
+
+		if err := h.Run("cleanup", "--workspace", "epic/one", "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Dir(h.WorktreePath("epic/one", "any"))); !os.IsNotExist(err) {
+			t.Errorf("cleaned workspace directory survived (stat err = %v)", err)
+		}
+		assertBranchWorkspaceIntact(t, h, api, "epic/two")
+	})
+
 	t.Run("errors/stray_files_block_workspace_removal", func(t *testing.T) {
 		// Cleanup's workspace-directory removal would destroy anything
 		// sitting in the workspace directory alongside the worktrees,
@@ -899,6 +926,26 @@ func TestCleanup(t *testing.T) {
 		want := "EX-1|brave-falcon"
 		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want {
 			t.Errorf("destroyed = %v, want [%s]", got, want)
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("errors/preview_probe_failure_without_name_still_tears_down", func(t *testing.T) {
+		// The probe fails AND carries no environment name (nothing was
+		// seeded). The teardown row still fails open — Destroy runs
+		// with an empty name for the provider to resolve, while the
+		// plan detail shows the "(unknown)" placeholder.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Preview.GetErr = errStubErr("probing preview: timeout")
+
+		if err := runCleanup(h, "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != "EX-1|" {
+			t.Errorf("destroyed = %v, want [EX-1|] (empty name passed through for the provider to resolve)", got)
 		}
 		assertWorkspaceGone(t, h, api)
 	})
@@ -1245,6 +1292,48 @@ func TestCleanupBulk(t *testing.T) {
 
 		assertWorkspaceIntact(t, h, api)
 		assertBranchWorkspaceIntact(t, h, api, other)
+	})
+
+	t.Run("filter/empty_project_reports_no_workspaces", func(t *testing.T) {
+		// --all in a project with no workspaces at all: nothing to
+		// observe, nothing to filter — said explicitly, exit 0.
+		h := testharness.New(t)
+		h.InstallPreview()
+		h.Workspace.WriteConfig(cleanupConfig)
+		h.Workspace.AddRepo("api")
+
+		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces found in project") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty project was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("errors/missing_repositories_config_fails_the_sweep", func(t *testing.T) {
+		// The project's repositories globs vanished from config after
+		// the workspace was created. Unlike a single unmatched repo
+		// (excluded per workspace), no repo index at all means no
+		// workspace could ever resolve — a config error worth failing
+		// on, not sweeping past.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Workspace.WriteConfig(strings.Replace(
+			cleanupConfig, "  repositories:\n    - \"repos/*\"\n", "", 1))
+
+		err := h.Run("cleanup", "--all", "--status", "done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "no repository patterns configured") {
+			t.Fatalf("err = %v, want the missing-config refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
 	})
 
 	t.Run("errors/all_conflicts_with_workspace_flag", func(t *testing.T) {
