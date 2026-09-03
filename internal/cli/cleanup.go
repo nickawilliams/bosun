@@ -11,6 +11,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/fsutil"
 	"github.com/nickawilliams/bosun/internal/preview"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -324,8 +325,15 @@ func buildCleanupActions(ctx context.Context, g vcs.VCS, target cleanupTarget, a
 	// base URL fails routinely when it isn't set, and cleanup
 	// would then destroy the worktrees and leave the env
 	// running with nothing said about it.
+	//
+	// A project that selects no provider is the one case with nothing
+	// to say: it deploys no previews, so no environment can be
+	// stranded, and the refusal it would otherwise report reads as an
+	// instruction to configure a capability it declined.
 	provider, providerErr := newPreviewProvider(workspace)
 	switch {
+	case errors.Is(providerErr, services.ErrProviderNotSelected):
+		// Not configured — nothing to tear down and nothing to say.
 	case providerErr != nil:
 		ui.Skip(fmt.Sprintf("preview teardown: %v", providerErr))
 	case provider != nil && target.issueKey != "":

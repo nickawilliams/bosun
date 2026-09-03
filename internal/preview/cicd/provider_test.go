@@ -15,11 +15,6 @@ func TestDescriptor(t *testing.T) {
 	if d.Name != "cicd" {
 		t.Errorf("Name = %q, want cicd", d.Name)
 	}
-	// Every config written before preview had a second provider omits
-	// preview.provider, and those configs must keep selecting this one.
-	if !d.Default {
-		t.Error("Default = false; the adapter that shipped first must be the fallback")
-	}
 	// Its config lives under the CI/CD group, where it has always been.
 	// Declaring the same keys here would prompt for them twice and
 	// invite a second, divergent copy.

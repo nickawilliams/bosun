@@ -16,6 +16,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/notify"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
@@ -110,7 +111,7 @@ func (o checkOutcome) gates(level string) bool {
 // resolves its service on the run context and starts the probe clock
 // at the network boundary.
 //
-// The run timeout remains the hard cap: with four integration checks
+// The run timeout remains the hard cap: with five integration checks
 // these do not multiply out to fit inside it, so enough simultaneously
 // unreachable hosts can still exhaust the run budget before the last
 // check runs. Bounding the total is the property that matters more,
@@ -157,6 +158,13 @@ func newDoctorCmd() *cobra.Command {
 
 			r := ui.Default()
 
+			// doctor reports; it never asks. Several checks reach a
+			// provider factory that would otherwise resolve a missing
+			// key by prompting and writing it to the project config —
+			// see suppressPrompts. An incomplete group is what this
+			// command exists to NAME.
+			defer suppressPrompts()()
+
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorRunTimeout)
 			defer cancel()
 
@@ -176,6 +184,7 @@ func newDoctorCmd() *cobra.Command {
 					codeHostChecks(),
 					notificationChecks(),
 					cicdChecks(),
+					previewChecks(),
 				)},
 			}
 
@@ -610,4 +619,203 @@ func checkCICD(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth failed: %w", err)
 	}
 	return result, nil
+}
+
+func previewChecks() []healthCheck {
+	return []healthCheck{
+		{Name: "preview", Check: checkPreview},
+	}
+}
+
+// checkPreview verifies the preview capability end to end: a provider
+// is chosen and registered, its required config is present, it
+// constructs, both halves of the lifecycle are wired, and — for a
+// provider with a backend of its own — that backend answers. The result
+// rolls into one row: the provider on the first line, each lifecycle
+// half on its own continuation line, and the fleet size when a probe
+// ran. Failures render in the error color, the way the notification
+// row's channels do.
+//
+// It runs at project scope and never resolves a workspace, so `bosun
+// doctor` reports the same thing from any directory. The one question
+// that costs is the dispatch adapter's per-repo target intersection,
+// which is a per-workspace fact by construction — previewStageNote
+// substitutes a structural check for it rather than guessing at a
+// workspace or reporting a healthy project as broken.
+func checkPreview(ctx context.Context) (string, error) {
+	name := viper.GetString(preview.ConfigGroup + ".provider")
+	if name == "" {
+		return "", errNotConfigured
+	}
+	if !services.HasProvider(preview.ConfigGroup, name) {
+		return "", fmt.Errorf("unsupported: %q", name)
+	}
+
+	// Completeness before construction, as the tracker check does. The
+	// group's keys include whatever the configured provider contributes,
+	// so a missing base URL is reported here rather than resolved by
+	// prompting — which would charge the user's typing to a diagnostic
+	// whose whole job is to name the gap.
+	if group, ok := lookupGroup(preview.ConfigGroup); ok {
+		if missing := checkGroupCompleteness(preview.ConfigGroup, group); len(missing) > 0 {
+			return "", fmt.Errorf("missing: %s", strings.Join(missing, ", "))
+		}
+	}
+
+	// Construction proves the URL template renders, not just parses —
+	// see stageURLTemplate. It stays on the run context because it reads
+	// config and may shell out, neither of which is a connectivity
+	// measurement.
+	p, err := newPreviewProvider("")
+	if err != nil {
+		return "", err
+	}
+
+	errorStyle := lipgloss.NewStyle().Foreground(ui.Palette.Error)
+	lines := []string{name}
+	var failed int
+
+	for _, stage := range []struct {
+		label string
+		op    preview.Operation
+	}{
+		{"up", preview.OpCreate},
+		{"down", preview.OpDestroy},
+	} {
+		note, ok := previewStageNote(ctx, p, stage.op)
+		line := stage.label + ": " + note
+		if !ok {
+			failed++
+			line = errorStyle.Render(line)
+		}
+		lines = append(lines, line)
+	}
+
+	// Connectivity, for a provider that has a backend to reach. The
+	// dispatch adapter implements no Lister and is deliberately not
+	// probed: its network half is the CI/CD pipeline, which the row
+	// above it already reports, and probing it here would fail two rows
+	// over one revoked token.
+	if lister, ok := p.(preview.Lister); ok {
+		probeCtx, cancel := probeContext(ctx)
+		defer cancel()
+
+		envs, err := lister.List(probeCtx)
+		if err != nil {
+			failed++
+			lines = append(lines, errorStyle.Render("fleet: "+previewReason(err)))
+		} else {
+			lines = append(lines, fmt.Sprintf("%d %s",
+				len(envs), pluralize(len(envs), "environment", "environments")))
+		}
+	}
+
+	value := strings.Join(lines, "\n")
+	if failed > 0 {
+		return value, fmt.Errorf("%d preview %s failed",
+			failed, pluralize(failed, "check", "checks"))
+	}
+	return value, nil
+}
+
+// previewStageNote answers for one half of the preview lifecycle,
+// returning the note to render and whether it counts as healthy.
+//
+// A provider that reports ErrNotConfigured here is NOT the absent
+// integration errNotConfigured stands for: the user named a provider,
+// so this half being unwired is a gap in a setup they opted into, and
+// it warns. The absent case was settled before this ran, by the unset
+// provider key.
+func previewStageNote(ctx context.Context, p preview.Provider, op preview.Operation) (string, bool) {
+	err := p.Ready(ctx, op)
+	if err == nil {
+		return "ready", true
+	}
+
+	// Per-repo workflow config is answerable only against a workspace,
+	// which a project-scoped run does not have. The wiring is present,
+	// so this is not a failure — it is a question deferred to the
+	// commands that run inside a workspace, with the part that IS
+	// answerable here checked instead.
+	var perRepo *workspaceRequiredError
+	if errors.As(err, &perRepo) {
+		return previewPerRepoNote(perRepo, op)
+	}
+
+	return previewReason(err), false
+}
+
+// previewPerRepoNote reports what a project-scoped run can still tell
+// about a per-repo workflow config: that it names repositories, that
+// every name it uses is one the project declares, and — for a teardown
+// — that the input its dispatch is refused without is configured. The
+// workspace intersection that decides which of those repositories are
+// actually deployed is left to the commands that have a workspace.
+//
+// A name matching no configured repository is the first failure worth
+// catching here. In a workspace it would silently contribute no target
+// — the intersection just drops it — so a typo'd repo key is invisible
+// at exactly the moment a deploy quietly covers one repo fewer.
+//
+// The teardown input is the second, and it is checked here rather than
+// left to the provider because the provider cannot reach it: Ready
+// resolves targets before it consults the name input, so in per-repo
+// mode it returns this sentinel and never gets there. Without this the
+// row would report a green teardown on a project where `bosun cleanup`
+// cannot tear anything down — and would do so ONLY in per-repo mode,
+// making one row mean two different things depending on config shape.
+// It re-applies the adapter's rule rather than observing it, which is
+// the cost of substituting for a check that could not run; the input
+// name is read through the same stageInputName the adapter is handed,
+// so the two cannot drift apart on where the value comes from.
+func previewPerRepoNote(e *workspaceRequiredError, op preview.Operation) (string, bool) {
+	if len(e.Repos) == 0 {
+		return "per-repo · no repositories configured", false
+	}
+
+	note := fmt.Sprintf("per-repo · %d %s",
+		len(e.Repos), pluralize(len(e.Repos), "repo", "repos"))
+
+	var problems []string
+
+	// An unreadable repository set is not this row's failure to report;
+	// the project group's own repositories check already has it.
+	if declared, err := resolveRepositories(nil); err == nil {
+		known := make(map[string]bool, len(declared))
+		for _, r := range declared {
+			known[r.Name] = true
+		}
+		var unknown []string
+		for _, name := range e.Repos {
+			if !known[name] {
+				unknown = append(unknown, name)
+			}
+		}
+		if len(unknown) > 0 {
+			problems = append(problems, "unknown: "+strings.Join(unknown, ", "))
+		}
+	}
+
+	// The sub-stage comes off the sentinel's own key rather than being
+	// re-derived from the operation, so this cannot name a stage
+	// different from the one that failed to resolve.
+	if op == preview.OpDestroy {
+		subStage := strings.TrimSuffix(e.Key, ".workflow")
+		if stageInputName(subStage, "name") == "" {
+			problems = append(problems, "no name input configured")
+		}
+	}
+
+	if len(problems) > 0 {
+		return note + " · " + strings.Join(problems, " · "), false
+	}
+	return note, true
+}
+
+// previewReason renders a provider error as a row note. The adapters
+// prefix their messages with "preview: " because they are printed
+// standalone by the preview and cleanup commands; inside a row already
+// named "preview" that prefix reads as a stutter.
+func previewReason(err error) string {
+	return strings.TrimPrefix(err.Error(), preview.ConfigGroup+": ")
 }

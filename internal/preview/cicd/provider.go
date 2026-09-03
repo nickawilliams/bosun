@@ -20,13 +20,13 @@ const providerName = "cicd"
 // means intersecting workflow config with the active workspace's
 // repositories, which is the CLI's knowledge rather than an adapter's.
 //
-// Default is set because this is the adapter that shipped first: every
-// config written before the HTTP adapter existed omits
-// preview.provider, and those configs must keep working.
+// It claims no default. With two adapters registered, an unset
+// preview.provider is a choice the user has not made yet, and guessing
+// one silently builds a provider they never named — the whole reason
+// `bosun doctor` could not say whether previews were configured.
 func Descriptor() preview.ProviderDescriptor {
 	return preview.ProviderDescriptor{
-		Name:    providerName,
-		Default: true,
+		Name: providerName,
 		New: func(_ provider.Config, deps preview.Deps) (preview.Provider, error) {
 			return New(Options{
 				Pipeline:    deps.Workflow.Pipeline,
