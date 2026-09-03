@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/config"
 	issuepkg "github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/preview"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/nickawilliams/bosun/internal/vcs"
 	"github.com/nickawilliams/bosun/internal/vcs/git"
@@ -119,8 +121,14 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 		// A failed provider construction renders "(unavailable)" via
 		// previewErr — "(none)" would misread a misconfigured provider
 		// as "no env bound".
+		//
+		// A project that selects no provider is not misconfigured
+		// though, and must not be reported as unavailable: it deploys
+		// no previews, so "no env bound" is the true answer rather than
+		// a degraded one.
 		previewProvider, provErr := newPreviewProvider(wsName)
-		if previewProvider == nil && provErr != nil {
+		if previewProvider == nil && provErr != nil &&
+			!errors.Is(provErr, services.ErrProviderNotSelected) {
 			previewErr = provErr
 		}
 		_, _ = emitWorkspaceIssuePreamble(ctx, issueKey, func() {

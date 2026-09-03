@@ -118,8 +118,9 @@ func TestParseIssueIdentifier(t *testing.T) {
 	t.Run("unset provider falls back to the sole registered one", func(t *testing.T) {
 		// The fallback is what keeps an unconfigured project's breadcrumb
 		// working. Guarded on the registry actually having one tracker
-		// rather than derived from SoleProvider, so that a broken
-		// SoleProvider can't quietly satisfy both sides of the assertion.
+		// rather than derived from DefaultProvider, so that a broken
+		// DefaultProvider can't quietly satisfy both sides of the
+		// assertion.
 		if n := len(ProviderNames(issue.ConfigGroup)); n != 1 {
 			t.Skipf("fallback only applies with one registered tracker; have %d", n)
 		}

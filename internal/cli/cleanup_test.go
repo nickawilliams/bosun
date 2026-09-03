@@ -20,6 +20,7 @@ import (
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/issue"
 	"github.com/nickawilliams/bosun/internal/preview"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
@@ -587,6 +588,38 @@ func TestCleanup(t *testing.T) {
 		}
 		// The local destruction still happens — an unreachable provider
 		// is a reason to say something, not to refuse the command.
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("preview/an_unselected_provider_says_nothing", func(t *testing.T) {
+		// The other side of the scenario above. A project that names no
+		// preview provider deploys no previews, so no environment can be
+		// stranded behind the worktrees this destroys — there is nothing
+		// to warn about. Reporting the construction refusal here would
+		// tell a user who declined the capability to go configure it, on
+		// every cleanup they ever run.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		prev := cli.GetServices()
+		next := *prev
+		next.PreviewProvider = func(string) (preview.Provider, error) {
+			return nil, services.ErrProviderNotSelected
+		}
+		cli.SetServices(&next)
+		t.Cleanup(func() { cli.SetServices(prev) })
+
+		if err := runCleanup(h, "--approve"); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(strings.ToLower(ev.Label), "preview") {
+				t.Errorf("cleanup mentioned preview for a project that configures none: %q\n%s",
+					ev.Label, h.Reporter.Dump())
+			}
+		}
 		assertWorkspaceGone(t, h, api)
 	})
 

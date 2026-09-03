@@ -926,6 +926,56 @@ issue_tracker:
 		assertWarned(t, h, rowRepositories, "no repository patterns configured")
 	})
 
+	t.Run("preview_per_repo/a_teardown_without_its_name_input_still_warns", func(t *testing.T) {
+		// The adapter's Ready cannot reach this: it resolves targets
+		// first, and in per-repo mode that returns the workspace-required
+		// sentinel before the name input is ever consulted. Without
+		// doctor making the check itself, a project whose teardown
+		// cannot dispatch would report green — and only in per-repo
+		// mode, so one row would mean two different things depending on
+		// the shape of the config.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  up:
+    workflow:
+      api: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow:
+      api: "acme/infra/.github/workflows/down.yml"
+`))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "down: per-repo · 1 repo · no name input configured")
+		// Deploy is wired and stays clean: the teardown's gap is not
+		// allowed to smear across the half that works.
+		assertWarned(t, h, rowPreview, "up: per-repo · 1 repo\n")
+	})
+
+	t.Run("preview_failing/a_malformed_base_url_is_a_fault_not_an_absence", func(t *testing.T) {
+		// base_url is set, so it passes the completeness check and the
+		// provider builds; the adapter then reports it as unusable.
+		// This runs the REAL ephemeral adapter — Ready never touches the
+		// network, and List refuses at URL resolution before it reaches
+		// a request or shells out for a token.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t,
+			"preview:\n  provider: \"ephemeral\"\n  base_url: \"not-a-url\"\n"))
+
+		runDoctor(t, h)
+
+		// A typo in a URL the user did set is not an absent dependency,
+		// so it must not read as one — the row warns and names the key.
+		assertWarned(t, h, rowPreview, "base_url")
+		ev := doctorRow(t, h, rowPreview)
+		if ev.Value == notConfigured {
+			t.Error("a malformed base_url read as an absent integration")
+		}
+	})
+
 	t.Run("preview_configured/reports_the_fleet_a_backed_provider_can_see", func(t *testing.T) {
 		// A provider with a backend of its own gets a real probe, and
 		// the fleet size is what proves the credentials and base URL
@@ -1152,6 +1202,46 @@ issue_tracker:
 
 		assertNotGated(t, h, err)
 		assertNotConfigured(t, h, rowNotification)
+	})
+
+	t.Run("never_prompts/an_incomplete_group_is_named_rather_than_collected", func(t *testing.T) {
+		// doctor reaches provider factories transitively — checkPreview
+		// builds a provider over the tracker and the pipeline, and
+		// discards both errors — and the just-in-time config path does
+		// not merely ask for a missing value, it WRITES it to the
+		// project config. A read-only diagnostic that rewrites the file
+		// it is reporting on is the failure this pins, and the prompt it
+		// would have drawn sits under a running spinner for a value
+		// nobody reads.
+		h := newDoctorProject(t)
+		h.WriteGlobalConfig("# bosun global config\n")
+
+		// The real tracker factory: the fake never requires config, so
+		// it cannot exercise the path in question. The harness restores
+		// the whole service set on cleanup.
+		next := *cli.GetServices()
+		next.IssueTracker = cli.DefaultServices().IssueTracker
+		cli.SetServices(&next)
+
+		// jira named with its credentials absent — the exact state that
+		// triggers completion, and the one the tracker row reports.
+		h.Workspace.WriteConfig(strings.Replace(doctorConfig,
+			`issue_tracker:
+  provider: "jira"
+  base_url: "https://acme.atlassian.net"
+  email: "dev@acme.test"
+  token: "jira-token"
+  project: "EX"`,
+			"issue_tracker:\n  provider: \"jira\"", 1))
+
+		before := h.Workspace.ReadConfig()
+		runDoctor(t, h)
+
+		if after := h.Workspace.ReadConfig(); after != before {
+			t.Errorf("doctor rewrote the project config.\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+		// And it still did its job: the gap is reported, not filled.
+		assertWarned(t, h, rowTracker, "missing:")
 	})
 
 	t.Run("exit_code/an_unconfigured_preview_does_not_gate", func(t *testing.T) {

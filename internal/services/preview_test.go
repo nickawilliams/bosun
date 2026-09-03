@@ -22,6 +22,13 @@ func TestPreviewProvider(t *testing.T) {
 		if err == nil {
 			t.Fatal("PreviewProvider succeeded with no provider configured")
 		}
+		// Callers that merely consult the capability degrade silently on
+		// this one — `bosun cleanup` must not tell a project that
+		// deploys no previews to go configure some — so the refusal has
+		// to be classifiable, not just a message.
+		if !errors.Is(err, ErrProviderNotSelected) {
+			t.Errorf("error = %v, want one matching ErrProviderNotSelected", err)
+		}
 		// The refusal has to name the options, since it is the whole
 		// instruction the user gets.
 		for _, want := range []string{"cicd", "ephemeral"} {

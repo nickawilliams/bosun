@@ -23,6 +23,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -158,10 +159,11 @@ func CICD(cfg provider.Config) (cicd.CICD, error) {
 
 // PreviewProvider builds the configured preview provider over deps.
 //
-// An unset provider falls back to the descriptor marked default rather
-// than prompting: preview gained a second provider after the first had
-// shipped, so every config written before now omits the key and must
-// keep selecting the adapter it was written against.
+// An unset provider is refused rather than guessed at: preview is the
+// one capability with two adapters, so there is no sole provider to
+// fall back on and no default is declared. Leaving the key unset is how
+// a project says it does not deploy previews, and building one anyway
+// would report every later failure against an adapter nobody named.
 func PreviewProvider(cfg provider.Config, deps preview.Deps) (preview.Provider, error) {
 	r := previewRegistry(deps)
 	return r.build(cfg, r.configured(cfg))
@@ -299,6 +301,27 @@ func newRegistry[T any](label, group string, entries ...entry[T]) *registry[T] {
 	return r
 }
 
+// ErrProviderNotSelected reports that a capability's provider key is
+// unset and the registry has no sole provider to fall back on — the
+// state preview is in whenever a project doesn't deploy previews.
+//
+// It is deliberately distinct from an unsupported provider name and
+// from a named provider that fails to build. Those are faults and must
+// be reported; this one is a project declining a capability, and a
+// command that reports it tells the user to go configure something they
+// chose not to use. Callers that merely consult the capability match on
+// it and degrade silently.
+var ErrProviderNotSelected = errors.New("provider not selected")
+
+// notSelectedError carries the message naming the key and the valid
+// values while answering to ErrProviderNotSelected. A `%w` wrap would
+// prefix every one of these with the sentinel's own text, and this
+// message is what the user reads when a command DOES need the provider.
+type notSelectedError struct{ msg string }
+
+func (e notSelectedError) Error() string { return e.msg }
+func (notSelectedError) Unwrap() error   { return ErrProviderNotSelected }
+
 // build constructs the named provider, or reports it as unsupported.
 //
 // An empty name means the caller's fallback had nothing to fall back on
@@ -310,8 +333,9 @@ func (r *registry[T]) build(cfg provider.Config, name string) (T, error) {
 	if !ok {
 		var zero T
 		if name == "" {
-			return zero, fmt.Errorf("%s not configured: set %s to one of %s",
-				r.label, r.providerKey, strings.Join(r.order, ", "))
+			return zero, notSelectedError{fmt.Sprintf(
+				"%s not configured: set %s to one of %s",
+				r.label, r.providerKey, strings.Join(r.order, ", "))}
 		}
 		return zero, fmt.Errorf("unsupported %s: %q", r.label, name)
 	}
