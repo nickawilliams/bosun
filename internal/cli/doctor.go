@@ -111,7 +111,7 @@ func (o checkOutcome) gates(level string) bool {
 // resolves its service on the run context and starts the probe clock
 // at the network boundary.
 //
-// The run timeout remains the hard cap: with four integration checks
+// The run timeout remains the hard cap: with five integration checks
 // these do not multiply out to fit inside it, so enough simultaneously
 // unreachable hosts can still exhaust the run budget before the last
 // check runs. Bounding the total is the property that matters more,
@@ -157,6 +157,13 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			r := ui.Default()
+
+			// doctor reports; it never asks. Several checks reach a
+			// provider factory that would otherwise resolve a missing
+			// key by prompting and writing it to the project config —
+			// see suppressPrompts. An incomplete group is what this
+			// command exists to NAME.
+			defer suppressPrompts()()
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorRunTimeout)
 			defer cancel()
@@ -732,23 +739,36 @@ func previewStageNote(ctx context.Context, p preview.Provider, op preview.Operat
 	// answerable here checked instead.
 	var perRepo *workspaceRequiredError
 	if errors.As(err, &perRepo) {
-		return previewPerRepoNote(perRepo)
+		return previewPerRepoNote(perRepo, op)
 	}
 
 	return previewReason(err), false
 }
 
 // previewPerRepoNote reports what a project-scoped run can still tell
-// about a per-repo workflow config: that it names repositories, and
-// that every name it uses is one the project declares. The workspace
-// intersection that decides which of them are actually deployed is left
-// to the commands that have a workspace.
+// about a per-repo workflow config: that it names repositories, that
+// every name it uses is one the project declares, and — for a teardown
+// — that the input its dispatch is refused without is configured. The
+// workspace intersection that decides which of those repositories are
+// actually deployed is left to the commands that have a workspace.
 //
-// A name matching no configured repository is the failure worth
+// A name matching no configured repository is the first failure worth
 // catching here. In a workspace it would silently contribute no target
 // — the intersection just drops it — so a typo'd repo key is invisible
 // at exactly the moment a deploy quietly covers one repo fewer.
-func previewPerRepoNote(e *workspaceRequiredError) (string, bool) {
+//
+// The teardown input is the second, and it is checked here rather than
+// left to the provider because the provider cannot reach it: Ready
+// resolves targets before it consults the name input, so in per-repo
+// mode it returns this sentinel and never gets there. Without this the
+// row would report a green teardown on a project where `bosun cleanup`
+// cannot tear anything down — and would do so ONLY in per-repo mode,
+// making one row mean two different things depending on config shape.
+// It re-applies the adapter's rule rather than observing it, which is
+// the cost of substituting for a check that could not run; the input
+// name is read through the same stageInputName the adapter is handed,
+// so the two cannot drift apart on where the value comes from.
+func previewPerRepoNote(e *workspaceRequiredError, op preview.Operation) (string, bool) {
 	if len(e.Repos) == 0 {
 		return "per-repo · no repositories configured", false
 	}
@@ -756,25 +776,38 @@ func previewPerRepoNote(e *workspaceRequiredError) (string, bool) {
 	note := fmt.Sprintf("per-repo · %d %s",
 		len(e.Repos), pluralize(len(e.Repos), "repo", "repos"))
 
+	var problems []string
+
 	// An unreadable repository set is not this row's failure to report;
 	// the project group's own repositories check already has it.
-	declared, err := resolveRepositories(nil)
-	if err != nil {
-		return note, true
-	}
-	known := make(map[string]bool, len(declared))
-	for _, r := range declared {
-		known[r.Name] = true
-	}
-
-	var unknown []string
-	for _, name := range e.Repos {
-		if !known[name] {
-			unknown = append(unknown, name)
+	if declared, err := resolveRepositories(nil); err == nil {
+		known := make(map[string]bool, len(declared))
+		for _, r := range declared {
+			known[r.Name] = true
+		}
+		var unknown []string
+		for _, name := range e.Repos {
+			if !known[name] {
+				unknown = append(unknown, name)
+			}
+		}
+		if len(unknown) > 0 {
+			problems = append(problems, "unknown: "+strings.Join(unknown, ", "))
 		}
 	}
-	if len(unknown) > 0 {
-		return note + " · unknown: " + strings.Join(unknown, ", "), false
+
+	// The sub-stage comes off the sentinel's own key rather than being
+	// re-derived from the operation, so this cannot name a stage
+	// different from the one that failed to resolve.
+	if op == preview.OpDestroy {
+		subStage := strings.TrimSuffix(e.Key, ".workflow")
+		if stageInputName(subStage, "name") == "" {
+			problems = append(problems, "no name input configured")
+		}
+	}
+
+	if len(problems) > 0 {
+		return note + " · " + strings.Join(problems, " · "), false
 	}
 	return note, true
 }

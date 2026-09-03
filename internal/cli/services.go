@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -735,17 +736,6 @@ func (e *workspaceRequiredError) Error() string {
 	return fmt.Sprintf("%s is keyed by repository; resolving it needs a workspace", e.Key)
 }
 
-// sortedMapKeys returns m's keys in a stable order. Go randomizes map
-// iteration, and these names reach rendered output.
-func sortedMapKeys(m map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
 type WorkflowTarget struct {
 	Owner    string // GitHub owner (e.g., "ExtrackerInc").
@@ -821,7 +811,7 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, subStage stri
 	// workspace it never named would otherwise surface as a workspace
 	// manager error and read as broken preview config.
 	if workspace == "" {
-		return nil, &workspaceRequiredError{Key: key, Repos: sortedMapKeys(m)}
+		return nil, &workspaceRequiredError{Key: key, Repos: slices.Sorted(maps.Keys(m))}
 	}
 
 	// Build repo name → Repository lookup from active workspace.

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/spf13/viper"
 )
 
@@ -107,7 +108,7 @@ func TestPreviewPerRepoNoteRefusesAnEmptyMap(t *testing.T) {
 		t.Fatalf("Repos = %v, want none", needsWorkspace.Repos)
 	}
 
-	note, healthy := previewPerRepoNote(needsWorkspace)
+	note, healthy := previewPerRepoNote(needsWorkspace, preview.OpCreate)
 	if healthy {
 		t.Error("an empty per-repo map reported healthy; it dispatches nowhere")
 	}
@@ -121,7 +122,6 @@ func TestResolveWorkflowTargetsUnconfiguredStageIsNotAnError(t *testing.T) {
 	// into its own not-configured report. Answering with an error would
 	// make an unconfigured half indistinguishable from a broken one.
 	setWorkflowConfig(t, nil)
-	viper.Set("preview.up.workflow", nil)
 
 	targets, err := resolveWorkflowTargets(context.Background(), "", "preview.up")
 	if err != nil || targets != nil {
