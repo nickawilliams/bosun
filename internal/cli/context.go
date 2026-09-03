@@ -141,9 +141,12 @@ func resolveIssueSilent(cmd *cobra.Command, workspace string) string {
 	}
 
 	// (2) Env. Read from the environment directly, not through viper:
-	// AutomaticEnv would also match an `issue:` key in a config file,
-	// and a file that pins one issue silently pins every command to it.
-	// This is a per-invocation override, so a file is never its home.
+	// a viper env layer would also match an `issue:` key in a config
+	// file, and a file that pins one issue silently pins every command
+	// to it. This is a per-invocation override, so a file is never its
+	// home. (config.Load enables no such layer today — that is what
+	// stopped BOSUN_WORKSPACE shadowing the `workspace:` block, #110 —
+	// so this read is now the only path, not merely the safe one.)
 	if issue := os.Getenv("BOSUN_ISSUE"); issue != "" {
 		return issue
 	}

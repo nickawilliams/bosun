@@ -64,10 +64,11 @@ func TestResolveCommandContext(t *testing.T) {
 		}
 	})
 
+	// As in issue_test.go's "from env var": no viper env layer is
+	// configured, because production has none (#110). The precedence
+	// under test is the chain's own, resting on an os.Getenv read.
 	t.Run("issue from env takes precedence over workspace derivation", func(t *testing.T) {
 		viper.Reset()
-		viper.SetEnvPrefix("BOSUN")
-		viper.AutomaticEnv()
 		t.Setenv("BOSUN_ISSUE", "ENV-123")
 		t.Cleanup(viper.Reset)
 

@@ -102,7 +102,10 @@ When adding a new command, use these as models:
 - **Idempotent actions.** Commands should be safe to re-run.
 - **Multi-repository fan-out.** Lifecycle commands operate on all configured repositories.
 - **Config resolution.** Global config merges under project config. Env vars
-  with `BOSUN_` prefix override both via Viper.
+  with a `BOSUN_` prefix override both — but *not* through Viper: `config.Load`
+  deliberately enables no Viper env layer (`AutomaticEnv` shadowed whole config
+  blocks; see the comment there), so the `BOSUN_*` mapping is bosun's own, in
+  `effectiveEnvValue`. Do not add `AutomaticEnv` back.
 
 ## GitHub Conventions
 

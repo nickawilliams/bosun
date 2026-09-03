@@ -40,10 +40,13 @@ func TestResolveIssueSilent(t *testing.T) {
 		}
 	})
 
+	// No viper env layer is configured here, matching production:
+	// config.Load enables none (#110). The chain reads BOSUN_ISSUE
+	// with os.Getenv, so this passes on the strength of that read
+	// alone — and would fail if someone replaced it with a viper
+	// lookup.
 	t.Run("from env var", func(t *testing.T) {
 		viper.Reset()
-		viper.SetEnvPrefix("BOSUN")
-		viper.AutomaticEnv()
 
 		t.Setenv("BOSUN_ISSUE", "PROJ-789")
 		t.Cleanup(func() {
