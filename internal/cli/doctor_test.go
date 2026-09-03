@@ -41,6 +41,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nickawilliams/bosun/internal/cli"
+	"github.com/nickawilliams/bosun/internal/preview"
 	"github.com/nickawilliams/bosun/internal/testharness"
 	"github.com/nickawilliams/bosun/internal/ui"
 )
@@ -48,7 +49,7 @@ import (
 // doctorConfig is a fully-configured project: every capability
 // doctor probes has its provider (and the keys that provider's schema
 // marks required) set, so the baseline run reports success on all
-// four integrations. Scenarios that want one capability absent
+// five integrations. Scenarios that want one capability absent
 // rewrite the config without that block.
 const doctorConfig = `
 workspace:
@@ -72,6 +73,34 @@ notification:
     prerelease: "releases"
 cicd:
   provider: "github_actions"
+preview:
+  provider: "cicd"
+  up:
+    workflow: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`
+
+// previewConfig is doctorConfig's preview block, as the snippet
+// withoutConfig removes to produce the unconfigured scenario. Kept
+// whole rather than dropping only the provider line: an unset provider
+// under a still-wired block is a different state (one doctor now
+// refuses to guess at), and the absent-integration scenarios want the
+// integration genuinely absent.
+const previewConfig = `preview:
+  provider: "cicd"
+  up:
+    workflow: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
 `
 
 // trackerAuthResult / cicdAuthResult are what the fakes report from
@@ -97,6 +126,7 @@ const (
 	rowCodeHost       = "code host"
 	rowNotification   = "notification"
 	rowCICD           = "CI/CD"
+	rowPreview        = "preview"
 )
 
 // notConfigured is the reason doctor renders for an integration whose
@@ -117,25 +147,45 @@ func withoutConfig(t *testing.T, snippet string) string {
 	return strings.Replace(doctorConfig, snippet, "", 1)
 }
 
+// withPreviewConfig returns doctorConfig with its preview block swapped
+// for block — how the preview scenarios vary one capability's wiring
+// without restating the other four. Appending rather than substituting
+// in place is safe because a YAML document's top-level blocks have no
+// order to preserve.
+func withPreviewConfig(t *testing.T, block string) string {
+	t.Helper()
+	return withoutConfig(t, previewConfig) + block
+}
+
 // newDoctorProject sets up the project every scenario shares: a
 // fully-configured project with one repo, the CI/CD fake installed, and
 // the two provider-owned auth results seeded. It deliberately stops
 // short of the global config, which is the one Required check a fixture
 // can break.
+//
+// Preview runs against the REAL adapter rather than the fake, which is
+// the opposite of the choice the other capabilities make here and is
+// deliberate. The claim the preview row rests on is that a
+// project-scoped run — no workspace, anywhere on disk — can still
+// settle whether the lifecycle is wired. A fake answers Ready from a
+// field and would confirm only that doctor calls it. Scenarios that
+// need a forced error, or the Lister branch the dispatch adapter does
+// not implement, install the fake over the top via InstallPreview.
 func newDoctorProject(t *testing.T) *testharness.Harness {
 	t.Helper()
 	h := testharness.New(t)
 	h.Workspace.WriteConfig(doctorConfig)
 	h.Workspace.AddRepo("api")
 	h.InstallCICD()
+	h.InstallPreviewAdapter()
 	h.Tracker.AuthResult = trackerAuthResult
 	h.CICD.AuthResult = cicdAuthResult
 	return h
 }
 
 // newDoctorHarness builds the healthy baseline every scenario starts
-// from: the shared project plus a global config on disk, so all ten
-// checks pass and nothing gates.
+// from: the shared project plus a global config on disk, so every
+// check passes and nothing gates.
 func newDoctorHarness(t *testing.T) *testharness.Harness {
 	t.Helper()
 	h := newDoctorProject(t)
@@ -264,7 +314,7 @@ func assertHealthyExcept(t *testing.T, h *testharness.Harness, except ...string)
 	for _, name := range except {
 		skip[name] = true
 	}
-	for _, name := range []string{rowTracker, rowCodeHost, rowNotification, rowCICD} {
+	for _, name := range []string{rowTracker, rowCodeHost, rowNotification, rowCICD, rowPreview} {
 		if skip[name] {
 			continue
 		}
@@ -340,6 +390,7 @@ func TestDoctor(t *testing.T) {
 			rowCodeHost:       "integrations",
 			rowNotification:   "integrations",
 			rowCICD:           "integrations",
+			rowPreview:        "integrations",
 		}
 		for name, group := range want {
 			if got := doctorRow(t, h, name).Group; got != group {
@@ -377,8 +428,8 @@ func TestDoctor(t *testing.T) {
 		runDoctor(t, h)
 
 		passed, warned, failed := doctorSummary(t, h)
-		if passed != 10 || warned != 0 || failed != 0 {
-			t.Errorf("summary = %d passed, %d warned, %d failed; want 10/0/0\n%s",
+		if passed != 11 || warned != 0 || failed != 0 {
+			t.Errorf("summary = %d passed, %d warned, %d failed; want 11/0/0\n%s",
 				passed, warned, failed, h.Reporter.Dump())
 		}
 	})
@@ -632,7 +683,279 @@ issue_tracker:
 		runDoctor(t, h)
 
 		assertWarned(t, h, rowCICD, "cannot initialize: no workflows configured")
-		assertHealthyExcept(t, h, rowCICD)
+		// Preview goes with it, and that is the honest answer rather
+		// than a leaked failure: this project dispatches previews
+		// THROUGH the pipeline, so a pipeline that will not construct
+		// leaves both halves of the preview lifecycle with nothing to
+		// dispatch to. Reporting preview as healthy here would promise a
+		// `bosun preview` that cannot run.
+		assertWarned(t, h, rowPreview, "up: no CI/CD pipeline configured")
+		assertHealthyExcept(t, h, rowCICD, rowPreview)
+	})
+
+	t.Run("preview_configured/reports_both_lifecycle_halves", func(t *testing.T) {
+		// The row names the selected adapter and then answers for each
+		// half separately. Both halves matter and they fail
+		// independently — a project can deploy previews it cannot tear
+		// down — so a single "preview: ok" would hide the state cleanup
+		// depends on.
+		h := newDoctorHarness(t)
+
+		runDoctor(t, h)
+
+		assertPassed(t, h, rowPreview, "cicd")
+		assertPassed(t, h, rowPreview, "up: ready")
+		assertPassed(t, h, rowPreview, "down: ready")
+	})
+
+	t.Run("preview_unconfigured/reports_preview_warning_only", func(t *testing.T) {
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withoutConfig(t, previewConfig))
+
+		runDoctor(t, h)
+
+		assertNotConfigured(t, h, rowPreview)
+		assertHealthyExcept(t, h, rowPreview)
+	})
+
+	t.Run("preview_unconfigured/unsupported_provider_names_it", func(t *testing.T) {
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, "preview:\n  provider: \"carrier-pigeon\"\n"))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, `unsupported: "carrier-pigeon"`)
+	})
+
+	t.Run("preview_incomplete/names_the_missing_provider_key", func(t *testing.T) {
+		// The ephemeral adapter needs a base URL and has no default for
+		// it. Reported as a missing key rather than resolved by
+		// prompting: doctor's job is to name the gap, and a diagnostic
+		// that stops to ask for the value has answered its own question.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, "preview:\n  provider: \"ephemeral\"\n"))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "missing: base_url")
+	})
+
+	t.Run("preview_failing/an_unwired_teardown_warns_on_its_own_line", func(t *testing.T) {
+		// Deploy wired, teardown missing the input its dispatch is
+		// refused without. This is the asymmetry the per-half rows
+		// exist for: `bosun preview` works and `bosun cleanup` silently
+		// leaves environments running.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  up:
+    workflow: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow: "acme/infra/.github/workflows/down.yml"
+`))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "up: ready")
+		assertWarned(t, h, rowPreview, "down: preview.down workflow has no name input configured")
+	})
+
+	t.Run("preview_failing/an_unwired_provider_warns_rather_than_reading_as_absent", func(t *testing.T) {
+		// A named provider with nothing wired under it is NOT the
+		// absent-integration case: the user opted into previews, so the
+		// empty block is a gap in their setup rather than a capability
+		// they declined. assertWarned plus the exact-match
+		// assertNotConfigured contract is what keeps the two apart.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, "preview:\n  provider: \"cicd\"\n"))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "up: no workflow configured for stage")
+		assertWarned(t, h, rowPreview, "down: no workflow configured for stage")
+	})
+
+	t.Run("preview_failing/a_stale_url_template_is_caught_at_construction", func(t *testing.T) {
+		// {{.Name}} was this template's spelling before the vocabulary
+		// was unified. It still parses, so nothing rejects it until it
+		// renders — and the adapters render it deep inside Get and
+		// Inspect, where a failure becomes an empty URL rather than a
+		// report. doctor builds the provider, which is the one place
+		// the template is proven before anything depends on it.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  url_template: "https://{{.Name}}.preview.acme.test"
+  up:
+    workflow: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`))
+
+		runDoctor(t, h)
+
+		// The row names the key at fault and the migration, which is
+		// the whole repair — without them the user has a render error
+		// and no indication which config value produced it.
+		assertWarned(t, h, rowPreview, "preview.url_template")
+		assertWarned(t, h, rowPreview, "{{.Name}} is now {{.Preview.Name}}")
+	})
+
+	t.Run("preview_per_repo/reports_what_project_scope_can_settle", func(t *testing.T) {
+		// Per-repo workflow config resolves against a workspace, which
+		// doctor deliberately does not have. The row says so and
+		// reports the repository count rather than failing a project
+		// that is wired correctly — and rather than making the answer
+		// depend on which directory doctor was run from.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  up:
+    workflow:
+      api: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow:
+      api: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`))
+
+		runDoctor(t, h)
+
+		assertPassed(t, h, rowPreview, "up: per-repo · 1 repo")
+		assertPassed(t, h, rowPreview, "down: per-repo · 1 repo")
+	})
+
+	t.Run("preview_per_repo/an_unknown_repository_is_flagged", func(t *testing.T) {
+		// The check project scope CAN still make. In a workspace this
+		// key would contribute no target — the intersection just drops
+		// it — so a typo'd repository name is invisible at exactly the
+		// moment a deploy quietly covers one repo fewer.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  up:
+    workflow:
+      web: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow:
+      api: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`))
+
+		runDoctor(t, h)
+
+		// Asserted whole rather than by substring: the point is that
+		// the flag is per sub-stage, and "down" carrying the clean note
+		// is only visible if nothing else was appended to it.
+		ev := doctorRow(t, h, rowPreview)
+		const want = "configured but failing — cicd\n" +
+			"up: per-repo · 1 repo · unknown: web\n" +
+			"down: per-repo · 1 repo"
+		if ev.Kind != ui.CaptureSkip || ev.Value != want {
+			t.Errorf("preview row = %q (%s),\nwant %q (%s)",
+				ev.Value, ev.Kind, want, ui.CaptureSkip)
+		}
+	})
+
+	t.Run("preview_per_repo/an_empty_map_reads_as_unwired", func(t *testing.T) {
+		// An empty mapping does not survive the config load as a map —
+		// viper reports the key as absent — so this lands on the
+		// unwired arm rather than the per-repo one. Pinned because the
+		// two arms report differently and which one an empty block
+		// takes is not obvious from the config.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, `preview:
+  provider: "cicd"
+  up:
+    workflow: {}
+    inputs:
+      name: "env-name"
+  down:
+    workflow: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`))
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "up: no workflow configured for stage")
+		assertWarned(t, h, rowPreview, "down: ready")
+	})
+
+	t.Run("preview_per_repo/unreadable_repositories_do_not_compound", func(t *testing.T) {
+		// With no repository patterns configured there is nothing to
+		// validate the map's keys against. That is the repositories
+		// row's failure to report, and preview says what it can rather
+		// than restating the same root cause as a second broken
+		// integration.
+		h := newDoctorHarness(t)
+		noRepos := strings.Replace(doctorConfig,
+			"  repositories:\n    - \"repos/*\"\n", "", 1)
+		if noRepos == doctorConfig {
+			t.Fatal("doctorConfig no longer declares repository patterns")
+		}
+		h.Workspace.WriteConfig(strings.Replace(noRepos, previewConfig, `preview:
+  provider: "cicd"
+  up:
+    workflow:
+      api: "acme/infra/.github/workflows/up.yml"
+    inputs:
+      name: "env-name"
+  down:
+    workflow:
+      api: "acme/infra/.github/workflows/down.yml"
+    inputs:
+      name: "env-name"
+`, 1))
+
+		runDoctor(t, h)
+
+		assertPassed(t, h, rowPreview, "up: per-repo · 1 repo")
+		assertWarned(t, h, rowRepositories, "no repository patterns configured")
+	})
+
+	t.Run("preview_configured/reports_the_fleet_a_backed_provider_can_see", func(t *testing.T) {
+		// A provider with a backend of its own gets a real probe, and
+		// the fleet size is what proves the credentials and base URL
+		// reached it. The dispatch adapter implements no Lister and is
+		// deliberately not probed — its network half is the pipeline,
+		// which the CI/CD row already covers.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t,
+			"preview:\n  provider: \"ephemeral\"\n  base_url: \"https://preview.acme.test\"\n"))
+		h.InstallPreview().SeedFleet(
+			preview.Environment{Name: "brave-falcon"},
+			preview.Environment{Name: "calm-otter"},
+		)
+
+		runDoctor(t, h)
+
+		assertPassed(t, h, rowPreview, "ephemeral")
+		assertPassed(t, h, rowPreview, "2 environments")
+	})
+
+	t.Run("preview_failing/an_unreachable_backend_warns", func(t *testing.T) {
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t,
+			"preview:\n  provider: \"ephemeral\"\n  base_url: \"https://preview.acme.test\"\n"))
+		p := h.InstallPreview()
+		p.ListErr = errors.New("401 Unauthorized")
+
+		runDoctor(t, h)
+
+		assertWarned(t, h, rowPreview, "fleet: 401 Unauthorized")
 	})
 
 	t.Run("multiple_failures/reports_each_independently", func(t *testing.T) {
@@ -655,8 +978,8 @@ issue_tracker:
 		assertPassed(t, h, rowCICD, cicdAuthResult)
 
 		passed, warned, failed := doctorSummary(t, h)
-		if passed != 7 || warned != 3 || failed != 0 {
-			t.Errorf("summary = %d passed, %d warned, %d failed; want 7/3/0\n%s",
+		if passed != 8 || warned != 3 || failed != 0 {
+			t.Errorf("summary = %d passed, %d warned, %d failed; want 8/3/0\n%s",
 				passed, warned, failed, h.Reporter.Dump())
 		}
 	})
@@ -829,6 +1152,37 @@ issue_tracker:
 
 		assertNotGated(t, h, err)
 		assertNotConfigured(t, h, rowNotification)
+	})
+
+	t.Run("exit_code/an_unconfigured_preview_does_not_gate", func(t *testing.T) {
+		// Preview is the capability where "absent" and "broken" are
+		// easiest to conflate, because an unset provider key used to
+		// resolve to an adapter anyway. A project that doesn't deploy
+		// previews must still exit zero under the strictest level.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withoutConfig(t, previewConfig))
+
+		err := h.Run("doctor", "--require", "all")
+
+		assertNotGated(t, h, err)
+		assertNotConfigured(t, h, rowPreview)
+	})
+
+	t.Run("exit_code/a_named_but_unwired_preview_gates_only_the_strict_level", func(t *testing.T) {
+		// The other side of the same distinction: the user asked for
+		// previews and wired nothing, which is a real gap. It gates
+		// under `all` and not under `required`, exactly like every
+		// other broken integration — preview earns no special status
+		// for being the newest one.
+		h := newDoctorHarness(t)
+		h.Workspace.WriteConfig(withPreviewConfig(t, "preview:\n  provider: \"cicd\"\n"))
+
+		assertGated(t, h, h.Run("doctor", "--require", "all"))
+
+		h2 := newDoctorHarness(t)
+		h2.Workspace.WriteConfig(withPreviewConfig(t, "preview:\n  provider: \"cicd\"\n"))
+
+		assertNotGated(t, h2, h2.Run("doctor", "--require", "required"))
 	})
 
 	t.Run("exit_code/rejects_an_unknown_require_level", func(t *testing.T) {

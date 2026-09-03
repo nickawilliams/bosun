@@ -713,6 +713,39 @@ func memoizedWorkflowTargets(workspace string) func(context.Context, string) ([]
 	}
 }
 
+// workspaceRequiredError reports that a workflow config is in per-repo
+// mode, so resolving it needs a workspace the caller did not supply.
+//
+// It exists so a project-scoped caller can tell that case apart from a
+// broken config. `bosun doctor` is the caller that must: the wiring IS
+// present, and the only reason it cannot be resolved is that which
+// repositories it covers is a per-workspace question. Reported as an
+// ordinary error it would render as a failing preview integration on a
+// project that is configured correctly.
+//
+// Repos carries the repository names the map is keyed by, so a caller
+// that cannot do the workspace intersection can still check them
+// against what the project declares.
+type workspaceRequiredError struct {
+	Key   string   // config key, e.g. "preview.up.workflow"
+	Repos []string // repository names the map is keyed by, sorted
+}
+
+func (e *workspaceRequiredError) Error() string {
+	return fmt.Sprintf("%s is keyed by repository; resolving it needs a workspace", e.Key)
+}
+
+// sortedMapKeys returns m's keys in a stable order. Go randomizes map
+// iteration, and these names reach rendered output.
+func sortedMapKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // WorkflowTarget represents a resolved GitHub Actions workflow to trigger.
 type WorkflowTarget struct {
 	Owner    string // GitHub owner (e.g., "ExtrackerInc").
@@ -755,6 +788,9 @@ func parseWorkflowPath(path string) (WorkflowTarget, error) {
 //
 // Relative paths (starting with ".github/") are resolved to absolute paths
 // using the local repo's git remote.
+//
+// A per-repo config asked for at project scope (empty workspace) yields
+// a *workspaceRequiredError rather than targets; see that type.
 func resolveWorkflowTargets(ctx context.Context, workspace string, subStage string) ([]WorkflowTarget, error) {
 	key := subStage + ".workflow"
 
@@ -775,6 +811,17 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, subStage stri
 	m, ok := raw.(map[string]any)
 	if !ok {
 		return nil, nil
+	}
+
+	// Per-repo mode is only answerable inside a workspace: the map is
+	// keyed by local repo name and means "the workflow for each of THIS
+	// workspace's repos", so the answer legitimately differs between
+	// workspaces. A project-scoped caller gets that stated, along with
+	// the names it would have intersected — resolving against a
+	// workspace it never named would otherwise surface as a workspace
+	// manager error and read as broken preview config.
+	if workspace == "" {
+		return nil, &workspaceRequiredError{Key: key, Repos: sortedMapKeys(m)}
 	}
 
 	// Build repo name → Repository lookup from active workspace.
