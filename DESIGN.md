@@ -202,14 +202,25 @@ repository and configures nothing.
 Environment variables name a key as `BOSUN_` + the key path uppercased with
 dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
 `issue_tracker.token`. **This works for schema-mediated reads, not for every
-key.** Viper is configured with `AutomaticEnv` and no key replacer, so it
-never maps a dotted key to that name on its own; the mapping is bosun's,
-applied by `effectiveEnvValue` — which is what `config check`, `config show`,
-`bosun init` and every provider `Require` go through. A key read with a bare
-`viper.GetString` (`vcs.branch.template`, `ui.color`, `workspace.root`) does
-not see it, and `config show` will report the env value as live even though
-nothing reads it. Treat the env layer as reliable for credentials and provider
-selection, and as not yet universal for the rest.
+key.** Viper has no env layer at all — `config.Load` deliberately calls
+neither `AutomaticEnv` nor `SetEnvKeyReplacer` — so the mapping is entirely
+bosun's, applied by `effectiveEnvValue`, which is what `config check`,
+`config show`, `bosun init` and every provider `Require` go through. A key
+read with a bare `viper.GetString` (`vcs.branch.template`, `ui.color`,
+`workspace.root`) does not see it, and `config show` will report the env value
+as live even though nothing reads it. Treat the env layer as reliable for
+credentials and provider selection, and as not yet universal for the rest.
+
+`AutomaticEnv` is off rather than merely redundant. Without a key replacer it
+computed `BOSUN_ISSUE_TRACKER.TOKEN` for `issue_tracker.token`, so it never
+resolved a dotted key in the first place — but it did *shadow* them: viper
+treats an env var matching a key path's first segment as covering everything
+beneath it and returns nil for the nested read. That put every top-level block
+one exported variable away from vanishing, and `BOSUN_WORKSPACE` — the
+documented way to pin a workspace — was exactly that variable. Exporting it
+emptied `workspace.root` and `workspace.repositories`, and every command that
+reads them failed with `workspaces not configured` against a config file that
+plainly set it.
 
 The schema is organized on one axis: **every top-level block is a
 capability**, and a block earns root level only if that capability exists in
@@ -222,7 +233,11 @@ reports any key the schema doesn't recognize.
 Three keys are deliberately absent from the schema and readable **only** from
 the environment: `BOSUN_ISSUE`, `BOSUN_PROJECT`, `BOSUN_WORKSPACE`. They are
 per-invocation alternatives to `--issue` / `--project` / `--workspace`, and a
-config file that pinned one would pin every command in the project to it.
+config file that pinned one would pin every command in the project to it. Each
+is read with `os.Getenv` directly (`resolveIssueSilent`, `resolveProject`,
+`resolveWorkspaceName`) for the same reason, so none of them depends on the
+viper env layer the section above turns off — and with that layer gone, none
+of them can collide with a block of the same name either.
 
 **Global config** (`~/.config/bosun/config.yaml`) — providers, credentials,
 and anything that isn't specific to one project:
