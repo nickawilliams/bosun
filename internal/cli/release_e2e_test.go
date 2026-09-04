@@ -551,13 +551,37 @@ func TestRelease(t *testing.T) {
 		f := setupRelease(t, releaseSingleTarget)
 		f.h.Type("n")
 
+		// The issue card precedes the gate (#115), so the question is
+		// asked with the issue it concerns already on screen. The card
+		// renders through RunCardReplace and leaves no Reporter event,
+		// but its tracker fetch is observable. Count the delta rather
+		// than presence: setup runs `start`, which fetches through the
+		// same preamble, so Calls() is already non-empty here. On a
+		// declined run the preamble is the only thing that fetches, so
+		// this goes to zero if the gate is moved back above the card.
+		fetches := func() int {
+			n := 0
+			for _, c := range f.h.Tracker.Calls() {
+				if c == "GetIssue" {
+					n++
+				}
+			}
+			return n
+		}
+		before := fetches()
+
 		if err := f.run("--service", "api", "--approve"); err != nil {
 			t.Fatalf("release: %v", err)
 		}
 
+		if got := fetches() - before; got != 1 {
+			t.Errorf("issue fetches during declined run = %d, want 1 (card renders before the gate)", got)
+		}
 		if n := len(f.triggers()); n != 0 {
 			t.Errorf("dispatches = %d, want 0 (migrations not confirmed)", n)
 		}
+		// Deploy classification still sits behind the gate: a declined
+		// run must not touch production, card or no card.
 		if slices.Contains(f.h.Host.Calls(), "GetLatestDeployment") {
 			t.Errorf("declined run still classified deploys; calls=%v", f.h.Host.Calls())
 		}

@@ -46,7 +46,18 @@ func runRelease(cmd *cobra.Command) error {
 
 	ctx := cmd.Context()
 
+	// --- Resolve ---
+
+	detail, _ := emitLifecyclePreamble(ctx, issue)
+	currentStatus := detail.Status
+
 	// --- Pre-flight: migration confirmation ---
+	//
+	// Follows the issue card rather than preceding it, so the question
+	// is asked with the issue it concerns already on screen — and so
+	// release opens the way every other lifecycle command does. The
+	// gate still runs ahead of deploy classification, which is what
+	// keeps a declined run from looking at production at all.
 	migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
 	if !migrationsDone {
 		if !isInteractive() {
@@ -67,11 +78,6 @@ func runRelease(cmd *cobra.Command) error {
 	} else {
 		ui.Saved("migrations confirmed", "--migrations-done")
 	}
-
-	// --- Resolve ---
-
-	detail, _ := emitLifecyclePreamble(ctx, issue)
-	currentStatus := detail.Status
 
 	pipeline, pipelineErr := newCICD()
 	if pipelineErr != nil {
