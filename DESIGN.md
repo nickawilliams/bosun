@@ -202,7 +202,7 @@ repository and configures nothing.
 Environment variables name a key as `BOSUN_` + the key path uppercased with
 dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
 `issue_tracker.token`. **This works for schema-mediated reads, not for every
-key.** Viper has no env layer at all — `config.Load` deliberately calls
+key.** Viper's automatic env layer is off — `config.Load` deliberately calls
 neither `AutomaticEnv` nor `SetEnvKeyReplacer` — so the mapping is entirely
 bosun's, applied by `effectiveEnvValue`, which is what `config check`,
 `config show`, `bosun init` and every provider `Require` go through. A key
@@ -222,6 +222,14 @@ emptied `workspace.root` and `workspace.repositories`, and every command that
 reads them failed with `workspaces not configured` against a config file that
 plainly set it.
 
+Binding keys explicitly is the open direction, and not a reversal of this.
+Registering each schema key with `viper.BindEnv` maps the same `BOSUN_*`
+names through viper itself, and cannot shadow a block: a binding names one
+exact key, so a bare block name never becomes a lookup target. That is what
+would make the mapping universal and retire `effectiveEnvValue` — see #114.
+`AutomaticEnv` stays off either way; it and `BindEnv` do not compose, because
+the shadow check runs before viper consults its bound names.
+
 The schema is organized on one axis: **every top-level block is a
 capability**, and a block earns root level only if that capability exists in
 code, registered or not. That is why `preview` is a root block (an interface
@@ -236,8 +244,8 @@ per-invocation alternatives to `--issue` / `--project` / `--workspace`, and a
 config file that pinned one would pin every command in the project to it. Each
 is read with `os.Getenv` directly (`resolveIssueSilent`, `resolveProject`,
 `resolveWorkspaceName`) for the same reason, so none of them depends on the
-viper env layer the section above turns off — and with that layer gone, none
-of them can collide with a block of the same name either.
+automatic env layer the section above turns off — and with that layer gone,
+none of them can collide with a block of the same name either.
 
 **Global config** (`~/.config/bosun/config.yaml`) — providers, credentials,
 and anything that isn't specific to one project:

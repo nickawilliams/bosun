@@ -103,9 +103,11 @@ When adding a new command, use these as models:
 - **Multi-repository fan-out.** Lifecycle commands operate on all configured repositories.
 - **Config resolution.** Global config merges under project config. Env vars
   with a `BOSUN_` prefix override both — but *not* through Viper: `config.Load`
-  deliberately enables no Viper env layer (`AutomaticEnv` shadowed whole config
-  blocks; see the comment there), so the `BOSUN_*` mapping is bosun's own, in
-  `effectiveEnvValue`. Do not add `AutomaticEnv` back.
+  deliberately enables no automatic Viper env layer (`AutomaticEnv` shadowed
+  whole config blocks; see the comment there), so the `BOSUN_*` mapping is
+  bosun's own, in `effectiveEnvValue`, and reaches only schema-mediated reads.
+  Do not add `AutomaticEnv` back. Explicit per-key `viper.BindEnv` is the
+  supported way to widen this (#114); it cannot shadow a block.
 
 ## GitHub Conventions
 
