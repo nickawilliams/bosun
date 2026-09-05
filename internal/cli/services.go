@@ -272,7 +272,9 @@ func resolveWorkspaceName(cmd *cobra.Command) (string, error) {
 	// resolveIssueSilent. A bare `workspace:` key in a config file
 	// would otherwise pin every command to one workspace, and it would
 	// collide with the `workspace:` block that holds root and
-	// repositories.
+	// repositories. That collision was not hypothetical: viper's
+	// AutomaticEnv let this variable shadow the block outright, which
+	// is why config.Load now enables no env layer at all (#110).
 	if name := os.Getenv("BOSUN_WORKSPACE"); name != "" {
 		return name, nil
 	}

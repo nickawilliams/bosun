@@ -22,9 +22,9 @@ func resolveProject(cmd *cobra.Command) (string, error) {
 	}
 
 	// (2) Env. Read directly rather than through viper — see
-	// resolveIssueSilent: AutomaticEnv would also match a `project:`
-	// key in a config file, which is not where a per-invocation
-	// override belongs.
+	// resolveIssueSilent: a viper env layer would also match a
+	// `project:` key in a config file, which is not where a
+	// per-invocation override belongs.
 	if v := strings.TrimSpace(os.Getenv("BOSUN_PROJECT")); v != "" {
 		return v, nil
 	}
