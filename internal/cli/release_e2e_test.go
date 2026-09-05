@@ -551,31 +551,28 @@ func TestRelease(t *testing.T) {
 		f := setupRelease(t, releaseSingleTarget)
 		f.h.Type("n")
 
-		// The issue card precedes the gate (#115), so the question is
-		// asked with the issue it concerns already on screen. The card
-		// renders through RunCardReplace and leaves no Reporter event,
-		// but its tracker fetch is observable. Count the delta rather
-		// than presence: setup runs `start`, which fetches through the
-		// same preamble, so Calls() is already non-empty here. On a
-		// declined run the preamble is the only thing that fetches, so
-		// this goes to zero if the gate is moved back above the card.
-		fetches := func() int {
-			n := 0
-			for _, c := range f.h.Tracker.Calls() {
-				if c == "GetIssue" {
-					n++
-				}
-			}
-			return n
-		}
-		before := fetches()
+		// The preamble runs before the gate (#115), so the question is
+		// asked with the issue it concerns already resolved. What is
+		// observable here is the preamble's tracker fetch, not the card
+		// itself: under the CaptureReporter IsRaw() holds, so
+		// RunCardReplace skips straight to the fetch and draws nothing.
+		// Ordering against the dialog is not reachable through this
+		// harness — the fetch happening at all on a declined run is the
+		// proxy, and it goes to zero if the gate moves back on top.
+		//
+		// Take the delta rather than presence: setup runs `start`, which
+		// fetches through the same preamble, so the list is non-empty
+		// before this run. Assert the key too, so a preamble that
+		// fetches the wrong issue fails here rather than silently
+		// counting.
+		before := len(f.h.Tracker.GetIssueKeys())
 
 		if err := f.run("--service", "api", "--approve"); err != nil {
 			t.Fatalf("release: %v", err)
 		}
 
-		if got := fetches() - before; got != 1 {
-			t.Errorf("issue fetches during declined run = %d, want 1 (card renders before the gate)", got)
+		if got := f.h.Tracker.GetIssueKeys()[before:]; !slices.Equal(got, []string{"EX-1"}) {
+			t.Errorf("issue fetches during declined run = %v, want [EX-1] (preamble runs before the gate)", got)
 		}
 		if n := len(f.triggers()); n != 0 {
 			t.Errorf("dispatches = %d, want 0 (migrations not confirmed)", n)
