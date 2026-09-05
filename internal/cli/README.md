@@ -134,11 +134,11 @@ Application: bosun
 |       +-- Task.Action: send release notification
 |
 +-- Command.Lifecycle: release                       -- trigger production release
-|   +-- Phase: confirm prerequisites
-|   |   +-- Task: confirm migrations done
 |   +-- Phase: gather issue context
 |   |   +-- Task: identify issue
 |   |   +-- Task: fetch issue details
+|   +-- Phase: confirm prerequisites
+|   |   +-- Task: confirm migrations done
 |   +-- Phase.Plan: deploy to production
 |       +-- Task.Action: trigger production workflow
 |       +-- Task.Action: transition issue status
