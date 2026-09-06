@@ -590,6 +590,37 @@ func TestRelease(t *testing.T) {
 		}
 	})
 
+	t.Run("migration_gate/non_interactive_refuses_before_the_card", func(t *testing.T) {
+		// With no flag and no TTY there is nothing to ask, so release
+		// refuses. The refusal sits deliberately ABOVE the issue card
+		// (#115) while the interactive question sits below it: a non-TTY
+		// session never draws a card — RunCardReplace returns fn()
+		// straight away under IsRaw() — so resolving first would spend a
+		// tracker round trip on a run whose entire output is this error,
+		// and delay the error by that fetch when the tracker is slow.
+		//
+		// Zero fetches is what pins the ordering. Moving the refusal
+		// below the preamble makes this one.
+		f := setupRelease(t, releaseSingleTarget)
+		f.h.NonInteractive()
+
+		before := len(f.h.Tracker.GetIssueKeys())
+
+		err := f.run("--service", "api", "--approve")
+		if err == nil {
+			t.Fatal("release succeeded with no --migrations-done and no TTY; the gate did not refuse")
+		}
+		if !strings.Contains(err.Error(), "--migrations-done") {
+			t.Errorf("err = %q, want it to name --migrations-done", err)
+		}
+		if got := f.h.Tracker.GetIssueKeys()[before:]; len(got) != 0 {
+			t.Errorf("issue fetches on the refused run = %v, want none (refusal precedes the card)", got)
+		}
+		if n := len(f.triggers()); n != 0 {
+			t.Errorf("dispatches = %d, want 0 (refused before anything ran)", n)
+		}
+	})
+
 	t.Run("migration_gate/passes_with_flag", func(t *testing.T) {
 		// --migrations-done records the confirmation as coming from the
 		// flag (no dialog) and the deploy proceeds.

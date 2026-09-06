@@ -75,6 +75,11 @@ type Harness struct {
 	stdin  *chunkReader
 	stdout *syncBuffer
 	stderr *syncBuffer
+
+	// stdinFile, when set by NonInteractive, replaces stdin as the
+	// command's input so ui.Interactive() reports false. See that
+	// method for why a *os.File is the lever.
+	stdinFile *os.File
 }
 
 // syncBuffer is a mutex-guarded bytes.Buffer. Run wires the same
@@ -344,6 +349,35 @@ func (h *Harness) Type(s string) {
 	h.stdin.append(s)
 }
 
+// NonInteractive makes every subsequent Run present a real *os.File as
+// the command's stdin, so commands take their non-interactive arms —
+// the refusals and hard errors that a session with no TTY produces
+// instead of a prompt.
+//
+// A harness run is interactive by default, and deliberately so: Run
+// wires the injected chunkReader, cli.Bootstrap hands that to
+// ui.SetStreams, and ui.Interactive() counts any non-*os.File reader as
+// interactive precisely to enable that injection. Two consequences
+// follow, and both are why this method exists rather than a test doing
+// it itself. Calling ui.SetStreams before a run does not survive, since
+// Bootstrap re-derives the streams from the cobra input inside
+// Execute. And cli.suppressPrompts is unexported, so package cli_test
+// cannot reach it while the workspace fixtures it would need live
+// here. Substituting an *os.File that is not a terminal is the only
+// lever available from outside the ui and cli packages.
+//
+// Input queued with Type is inert afterwards: the command reads
+// /dev/null. A test wanting both shapes should use separate harnesses.
+func (h *Harness) NonInteractive() {
+	h.t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		h.t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	h.t.Cleanup(func() { _ = f.Close() })
+	h.stdinFile = f
+}
+
 // Run executes the bosun command tree with the given args. The
 // workspace path is injected as --project so commands resolve config
 // from the temp dir without depending on the test's CWD — unless the
@@ -383,7 +417,11 @@ func (h *Harness) Run(args ...string) error {
 	h.stdin.beginRun()
 
 	cmd := cli.NewRootCmd("test")
-	cmd.SetIn(h.stdin)
+	if h.stdinFile != nil {
+		cmd.SetIn(h.stdinFile)
+	} else {
+		cmd.SetIn(h.stdin)
+	}
 	cmd.SetOut(h.stdout)
 	cmd.SetErr(h.stderr)
 
