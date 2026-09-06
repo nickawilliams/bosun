@@ -46,12 +46,36 @@ func runRelease(cmd *cobra.Command) error {
 
 	ctx := cmd.Context()
 
-	// --- Pre-flight: migration confirmation ---
+	// --- Pre-flight: the non-interactive refusal ---
+	//
+	// This arm stays above the issue card while the question below it
+	// sits underneath. The card is the only reason the preamble fetches,
+	// and a non-TTY session never draws one — RunCardReplace returns
+	// fn() straight away under IsRaw(). Leaving the refusal below would
+	// spend a tracker round trip on a run whose entire output is this
+	// error, and delay the error by the length of that fetch when the
+	// tracker is slow.
 	migrationsDone, _ := cmd.Flags().GetBool("migrations-done")
+	if !migrationsDone && !isInteractive() {
+		return fmt.Errorf("use --migrations-done to confirm migrations have been run")
+	}
+
+	// --- Resolve ---
+
+	detail, _ := emitLifecyclePreamble(ctx, issue)
+	currentStatus := detail.Status
+
+	// --- Pre-flight: migration confirmation ---
+	//
+	// The question follows the issue card rather than preceding it, so
+	// it is asked with the issue it concerns already on screen — and so
+	// release opens the way every other lifecycle command does. The
+	// gate still runs ahead of deploy classification, which is what
+	// keeps a declined run from looking at production at all.
+	//
+	// isInteractive() is necessarily true here: the arm above returned
+	// for every other case.
 	if !migrationsDone {
-		if !isInteractive() {
-			return fmt.Errorf("use --migrations-done to confirm migrations have been run")
-		}
 		confirmed, err := NewDialog("Database Migrations").
 			Description("Have any required database migrations been run?").
 			Default(false).
@@ -67,11 +91,6 @@ func runRelease(cmd *cobra.Command) error {
 	} else {
 		ui.Saved("migrations confirmed", "--migrations-done")
 	}
-
-	// --- Resolve ---
-
-	detail, _ := emitLifecyclePreamble(ctx, issue)
-	currentStatus := detail.Status
 
 	pipeline, pipelineErr := newCICD()
 	if pipelineErr != nil {

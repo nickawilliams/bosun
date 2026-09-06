@@ -551,13 +551,34 @@ func TestRelease(t *testing.T) {
 		f := setupRelease(t, releaseSingleTarget)
 		f.h.Type("n")
 
+		// The preamble runs before the gate (#115), so the question is
+		// asked with the issue it concerns already resolved. What is
+		// observable here is the preamble's tracker fetch, not the card
+		// itself: under the CaptureReporter IsRaw() holds, so
+		// RunCardReplace skips straight to the fetch and draws nothing.
+		// Ordering against the dialog is not reachable through this
+		// harness — the fetch happening at all on a declined run is the
+		// proxy, and it goes to zero if the gate moves back on top.
+		//
+		// Take the delta rather than presence: setup runs `start`, which
+		// fetches through the same preamble, so the list is non-empty
+		// before this run. Assert the key too, so a preamble that
+		// fetches the wrong issue fails here rather than silently
+		// counting.
+		before := len(f.h.Tracker.GetIssueKeys())
+
 		if err := f.run("--service", "api", "--approve"); err != nil {
 			t.Fatalf("release: %v", err)
 		}
 
+		if got := f.h.Tracker.GetIssueKeys()[before:]; !slices.Equal(got, []string{"EX-1"}) {
+			t.Errorf("issue fetches during declined run = %v, want [EX-1] (preamble runs before the gate)", got)
+		}
 		if n := len(f.triggers()); n != 0 {
 			t.Errorf("dispatches = %d, want 0 (migrations not confirmed)", n)
 		}
+		// Deploy classification still sits behind the gate: a declined
+		// run must not touch production, card or no card.
 		if slices.Contains(f.h.Host.Calls(), "GetLatestDeployment") {
 			t.Errorf("declined run still classified deploys; calls=%v", f.h.Host.Calls())
 		}
@@ -566,6 +587,37 @@ func TestRelease(t *testing.T) {
 		}
 		if got := f.status(t); got != "In Progress" {
 			t.Errorf("issue status = %q, want %q", got, "In Progress")
+		}
+	})
+
+	t.Run("migration_gate/non_interactive_refuses_before_the_card", func(t *testing.T) {
+		// With no flag and no TTY there is nothing to ask, so release
+		// refuses. The refusal sits deliberately ABOVE the issue card
+		// (#115) while the interactive question sits below it: a non-TTY
+		// session never draws a card — RunCardReplace returns fn()
+		// straight away under IsRaw() — so resolving first would spend a
+		// tracker round trip on a run whose entire output is this error,
+		// and delay the error by that fetch when the tracker is slow.
+		//
+		// Zero fetches is what pins the ordering. Moving the refusal
+		// below the preamble makes this one.
+		f := setupRelease(t, releaseSingleTarget)
+		f.h.NonInteractive()
+
+		before := len(f.h.Tracker.GetIssueKeys())
+
+		err := f.run("--service", "api", "--approve")
+		if err == nil {
+			t.Fatal("release succeeded with no --migrations-done and no TTY; the gate did not refuse")
+		}
+		if !strings.Contains(err.Error(), "--migrations-done") {
+			t.Errorf("err = %q, want it to name --migrations-done", err)
+		}
+		if got := f.h.Tracker.GetIssueKeys()[before:]; len(got) != 0 {
+			t.Errorf("issue fetches on the refused run = %v, want none (refusal precedes the card)", got)
+		}
+		if n := len(f.triggers()); n != 0 {
+			t.Errorf("dispatches = %d, want 0 (refused before anything ran)", n)
 		}
 	})
 
