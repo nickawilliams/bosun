@@ -104,11 +104,14 @@ When adding a new command, use these as models:
 - **Config resolution.** Global config merges under project config. Env vars
   with a `BOSUN_` prefix (or a key's explicit `EnvVar`, e.g. `GITHUB_TOKEN`)
   override both, through explicit per-key `viper.BindEnv` registration:
-  `bindSchemaEnv` (cli layer) registers every schema key right after
+  `bindSchemaEnv` (cli layer) registers every scalar schema key right after
   `config.Load`, so a bare `viper.Get*` resolves env → project → global →
-  default. Map-shaped groups bind at the group key and take the whole map as
-  JSON. Do not add `AutomaticEnv` back — it shadowed whole config blocks (see
-  the comment in `config.Load`) and does not compose with `BindEnv`.
+  default. Map-shaped groups are addressed at the group key and take the
+  whole map as JSON, decoded by `mapGroupValues` rather than registered with
+  viper (a bound name shadows the group's children in `AllKeys`, which the
+  display path renders from). Do not add `AutomaticEnv` back — it shadowed
+  whole config blocks (see the comment in `config.Load`) and does not compose
+  with `BindEnv`.
 
 ## GitHub Conventions
 

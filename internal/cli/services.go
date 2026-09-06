@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -548,13 +549,20 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 
 	// One read of the map-shaped group answers both config shapes at
 	// once — `notification.templates` is a single map-typed key (its
-	// env binding supplies the whole map as JSON, a file supplies it
+	// env variable supplies the whole map as JSON, a file supplies it
 	// as a block), and the entry's dynamic type expresses the
 	// string-or-map union this function used to probe viper twice
 	// for. A child-path read would miss the env form entirely: env
-	// values land at the bound key and are never decomposed into
-	// child paths.
-	entry := viper.GetStringMap("notification.templates")[notifType]
+	// supplies the whole map at one key, and nothing decomposes it
+	// into child paths.
+	//
+	// The env decode is explicit rather than a viper binding, same as
+	// mapGroupValues and for the same AllKeys-shadowing reason (see
+	// bindSchemaEnv) — this group's entries nest, so it decodes to
+	// map[string]any itself. Env overrides the block wholesale;
+	// undecodable JSON falls back to the file rather than silently
+	// discarding it.
+	entry := notifyTemplates()[notifType]
 
 	// A string entry is a plain-text template.
 	if s, ok := entry.(string); ok && s != "" {
@@ -618,6 +626,23 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		c.Preview = &ref
 	}
 	return c
+}
+
+// notifyTemplates returns the effective notification.templates map:
+// the env-supplied JSON when the group's variable is set and decodes,
+// the file's block otherwise. The nested-map counterpart of
+// mapGroupValues (this group's entries may themselves be maps, so the
+// flat string-map accessor can't serve it); no defaults overlay,
+// because the built-in template defaults are per-type fallbacks the
+// caller resolves, not schema keys.
+func notifyTemplates() map[string]any {
+	if raw := boundEnvValue("notification.templates"); raw != "" {
+		var out map[string]any
+		if err := json.Unmarshal([]byte(raw), &out); err == nil {
+			return out
+		}
+	}
+	return viper.GetStringMap("notification.templates")
 }
 
 // renderNotifyTemplate parses and executes a Go text/template. Returns

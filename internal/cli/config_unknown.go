@@ -34,10 +34,9 @@ var unknownKeyExempt = map[string]bool{}
 // subtree is its business), is a map-shaped group's own path or sits
 // beneath one, or belongs to an exempt block. Everything else is
 // reported. The exact-path arm exists because a map-shaped group IS a
-// config key — one key of map type, env-bound at that path — and
-// viper.AllKeys lists every bound key, set or not, so the walk sees
-// the path itself and must not report the schema's own bindings as
-// strangers.
+// config key — one key of map type, addressed at that path — and
+// viper.AllKeys lists every bound scalar key, set or not, so the walk
+// must not report the schema's own surface as strangers.
 //
 // That third rule is deliberately looser than "beneath a key that takes
 // a map": nothing marks which keys those are, so it admits

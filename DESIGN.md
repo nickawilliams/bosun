@@ -204,21 +204,28 @@ dots turned into underscores, so `BOSUN_ISSUE_TRACKER_TOKEN` addresses
 `issue_tracker.token`; keys that declare an explicit `EnvVar` (like
 `GITHUB_TOKEN`) answer to that name first. **This is universal for schema
 keys, and it goes through viper itself**: right after `config.Load`, the cli
-layer registers every schema key with `viper.BindEnv` and every schema
-default with `viper.SetDefault` (`bindSchemaEnv`), so a single bare
+layer registers every scalar schema key with `viper.BindEnv` and every
+schema default with `viper.SetDefault` (`bindSchemaEnv`), so a single bare
 `viper.Get*` resolves env → project → global → default. `config check`,
 `config show`, `bosun init`, every provider `Require`, and every bare read in
 the command layer all share that one ladder — there is no separate
 schema-mediated path to fall out of sync with.
 
 Map-shaped groups (`issue_tracker.statuses`, `vcs.branch.categories`,
-`notification.templates`, the `inputs` maps, `services`) bind at the *group*
-key: the stable outer path is the config key and its value is the map, so
-`BOSUN_ISSUE_TRACKER_STATUSES='{"ready":"Backlog"}'` overrides the block
-wholesale. Their members are not independent env targets — env supplies a
-value at the bound key and nothing decomposes it into child paths — which is
-why every consumer of a map-shaped key reads through its map accessor
-(`mapGroupValues`) rather than a concatenated child path.
+`notification.templates`, the `inputs` maps, `services`) are addressed at
+the *group* key: the stable outer path is the config key and its value is
+the map, so `BOSUN_ISSUE_TRACKER_STATUSES='{"ready":"Backlog"}'` overrides
+the block wholesale. Their members are not independent env targets — env
+supplies the whole map at one key and nothing decomposes it into child
+paths — which is why every consumer of a map-shaped key reads through its
+map accessor (`mapGroupValues`) rather than a concatenated child path. The
+group key is deliberately *not* registered with `viper.BindEnv`: the
+accessor decodes the variable itself (from the same `schemaEnvBindings`
+table), because a bound name shadows everything beneath it in viper's
+`AllKeys` enumeration — the surface `config show` and `config get` render —
+and would hide the group's per-child defaults from display while reads
+still resolved them. Resolution through `Get` is unaffected by a binding;
+the enumeration is not, and the display path lives on the enumeration.
 
 `AutomaticEnv` is off rather than merely redundant. Without a key replacer it
 computed `BOSUN_ISSUE_TRACKER.TOKEN` for `issue_tracker.token`, so it never
@@ -227,9 +234,10 @@ treats an env var matching a key path's first segment as covering everything
 beneath it and returns nil for the nested read. That put every top-level block
 one exported variable away from vanishing, and `BOSUN_WORKSPACE` — the
 documented way to pin a workspace — was exactly that variable (#110).
-`BindEnv` cannot shadow a block — a binding names one exact key — and it does
-not compose with `AutomaticEnv`, whose shadow check runs before viper
-consults the bound names. `AutomaticEnv` stays off.
+A `BindEnv` binding cannot shadow a *resolved read* of a block — `Get` on a
+key beneath a bound name still resolves — and it does not compose with
+`AutomaticEnv`, whose shadow check runs before viper consults the bound
+names. `AutomaticEnv` stays off.
 
 The schema is organized on one axis: **every top-level block is a
 capability**, and a block earns root level only if that capability exists in

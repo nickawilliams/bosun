@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/nickawilliams/bosun/internal/services"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -104,10 +105,71 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// effectiveSettings returns the settings map the display commands
+// render: viper's merged view (files, bound env, registered defaults)
+// with the two values viper deliberately doesn't hold folded in on
+// top —
+//
+//   - each map-shaped group whose env variable is set, replaced by its
+//     effective map (the same mapGroupValues every consumer reads), so
+//     `config show` and `config get` describe what the commands will
+//     actually use rather than the file children the env override
+//     displaced;
+//   - each unset provider key's computed default (the sole registered
+//     provider), so the display keeps saying what an unset key builds
+//     even though the value stays out of viper's default layer for
+//     doctor's sake (see bindSchemaEnv).
+//
+// Both injections source from the exact authority the corresponding
+// read path uses, which is what keeps display and resolution in
+// agreement without a registered binding.
+func effectiveSettings() map[string]any {
+	settings := viper.AllSettings()
+
+	for path := range mapGroupPaths() {
+		if mapGroupEnvValue(path) == nil {
+			continue
+		}
+		effective := make(map[string]any)
+		for k, v := range mapGroupValues(path) {
+			effective[k] = v
+		}
+		setNestedKey(settings, path, effective)
+	}
+
+	for groupName := range configSchema {
+		if services.DefaultProvider(groupName) == "" {
+			continue
+		}
+		fk := groupName + ".provider"
+		if viper.GetString(fk) == "" {
+			setNestedKey(settings, fk, services.DefaultProvider(groupName))
+		}
+	}
+
+	return settings
+}
+
+// setNestedKey writes a value into a nested map at a dot-separated
+// path, creating intermediate maps as needed. For "statuses.ready"
+// it sets m["statuses"]["ready"] = val.
+func setNestedKey(m map[string]any, key string, val any) {
+	parts := strings.Split(key, ".")
+	current := m
+	for _, p := range parts[:len(parts)-1] {
+		next, ok := current[p].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			current[p] = next
+		}
+		current = next
+	}
+	current[parts[len(parts)-1]] = val
+}
+
 // isKnownConfigGroup reports whether name is a top-level group `config
-// show` will accept: a key present in the effective viper settings
-// (which include schema defaults and bound env values, courtesy of
-// bindSchemaEnv), or a top-level group the schema declares.
+// show` will accept: a key present in the effective settings, or a
+// top-level group the schema declares.
 //
 // The schema arm matters for groups that are entirely optional — every
 // key example-only, no defaults — which inject nothing and so appear in
@@ -117,7 +179,7 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 // doesn't exist. Dotted schema names (issue_tracker.statuses) are
 // sub-groups, not top-level, so they don't qualify.
 func isKnownConfigGroup(name string) bool {
-	settings := viper.AllSettings()
+	settings := effectiveSettings()
 	if _, ok := settings[name]; ok {
 		return true
 	}
@@ -131,11 +193,12 @@ func isKnownConfigGroup(name string) bool {
 func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui.Tree {
 	tree := ui.NewTree()
 
-	// Default view shows the effective config: viper's merged result,
-	// which includes the schema defaults and bound env values
-	// bindSchemaEnv registered, so unset-but-known keys still render.
-	// `-g` narrows the view to what's literally in the global config
-	// file — no project, no env, no defaults.
+	// Default view shows the effective config: viper's merged result
+	// (schema defaults and bound env values included, courtesy of
+	// bindSchemaEnv) plus the display-side injections effectiveSettings
+	// documents, so unset-but-known keys still render. `-g` narrows the
+	// view to what's literally in the global config file — no project,
+	// no env, no defaults.
 	var allSettings map[string]any
 	if globalOnly {
 		if cs.global == nil {
@@ -143,7 +206,7 @@ func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui
 		}
 		allSettings = cs.global.AllSettings()
 	} else {
-		allSettings = viper.AllSettings()
+		allSettings = effectiveSettings()
 	}
 
 	topLevel := make(map[string]bool) // true = group, false = leaf
@@ -231,7 +294,26 @@ func buildLeafNode(cs *configSources, key string) *ui.TreeNode {
 
 // resolveKeyWithSchema resolves a fully-qualified key, using schema
 // metadata if available, falling back to raw source resolution.
+//
+// Members of an env-overridden map-shaped group are handled first:
+// the override replaces the block wholesale, so a member the env map
+// names is env-sourced and every other member falls back to its
+// schema default — never to the file children the override displaced.
+// Without this arm the per-member ladder would attribute the file
+// value the commands no longer read.
 func resolveKeyWithSchema(cs *configSources, key string) (value, source string) {
+	if i := strings.LastIndex(key, "."); i > 0 {
+		groupPath, member := key[:i], key[i+1:]
+		if env := mapGroupEnvValue(groupPath); env != nil {
+			if v, ok := env[member]; ok {
+				return v, sourceEnv
+			}
+			if ck, _, ok := findConfigKey(key); ok && ck.Default != "" {
+				return ck.Default, sourceDefault
+			}
+			return "", ""
+		}
+	}
 	if ck, gn, ok := findConfigKey(key); ok {
 		return cs.resolveSource(gn, ck)
 	}
@@ -470,14 +552,13 @@ func maskSecrets(settings map[string]any) {
 }
 
 // getSettings returns the settings map for the requested scope.
-// Effective scope is viper's merged view, schema defaults and bound
-// env values included (bindSchemaEnv registered both, so AllSettings
-// carries them). Global scope reads only the global config file;
-// ok=false when no global file is present so callers can branch on
-// "scope unreachable".
+// Effective scope is viper's merged view plus the display injections
+// effectiveSettings documents. Global scope reads only the global
+// config file; ok=false when no global file is present so callers can
+// branch on "scope unreachable".
 func getSettings(globalOnly bool) (settings map[string]any, ok bool) {
 	if !globalOnly {
-		return viper.AllSettings(), true
+		return effectiveSettings(), true
 	}
 	cs := loadConfigSources()
 	if cs.global == nil {
