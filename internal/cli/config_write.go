@@ -167,8 +167,11 @@ func newConfigEditCmd() *cobra.Command {
 			// type a second command. A YAML-parse failure here is
 			// surfaced as the command's error — the file was saved
 			// but bosun can't load it, which the user needs to know.
+			// loadConfig, not bare config.Load: the Reset just wiped
+			// the schema's env bindings and defaults along with the
+			// stale file state, and the check below reads through them.
 			viper.Reset()
-			if err := config.Load(); err != nil {
+			if err := loadConfig(); err != nil {
 				return fmt.Errorf("re-reading config after edit: %w", err)
 			}
 			return runConfigCheck(nil)

@@ -31,8 +31,13 @@ var unknownKeyExempt = map[string]bool{}
 //
 // A key is accounted for when it is declared, sits beneath a declared
 // key (cicd.workflows.release.target takes a per-repo map, so its own
-// subtree is its business), sits beneath a map-shaped group, or belongs
-// to an exempt block. Everything else is reported.
+// subtree is its business), is a map-shaped group's own path or sits
+// beneath one, or belongs to an exempt block. Everything else is
+// reported. The exact-path arm exists because a map-shaped group IS a
+// config key — one key of map type, env-bound at that path — and
+// viper.AllKeys lists every bound key, set or not, so the walk sees
+// the path itself and must not report the schema's own bindings as
+// strangers.
 //
 // That third rule is deliberately looser than "beneath a key that takes
 // a map": nothing marks which keys those are, so it admits
@@ -52,7 +57,7 @@ func unknownConfigKeys(groupFilter string) []string {
 		if unknownKeyExempt[topLevelSegment(key)] {
 			continue
 		}
-		if declared[key] || hasPrefixIn(key, declared) || hasPrefixIn(key, mapPrefixes) {
+		if declared[key] || mapPrefixes[key] || hasPrefixIn(key, declared) || hasPrefixIn(key, mapPrefixes) {
 			continue
 		}
 		out = append(out, key)

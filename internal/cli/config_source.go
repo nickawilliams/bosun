@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -54,7 +53,7 @@ func loadConfigSources() *configSources {
 func (cs *configSources) resolveSource(groupName string, ck ConfigKey) (value, source string) {
 	fk := fullKey(groupName, ck)
 
-	if v := effectiveEnvValue(groupName, ck); v != "" {
+	if v := boundEnvValue(fk); v != "" {
 		return v, sourceEnv
 	}
 
@@ -76,43 +75,15 @@ func (cs *configSources) resolveSource(groupName string, ck ConfigKey) (value, s
 	return "", ""
 }
 
-// effectiveEnvValue returns the value provided via the schema's
-// explicit EnvVar (e.g., GITHUB_TOKEN) or the automatic BOSUN_*
-// computed name for the key, whichever resolves first. Returns ""
-// when neither is set. Shared by resolveSource (source attribution)
-// and resolveConfigValue (validation) so both honor the same env-var
-// resolution order — fixing the longstanding gap where viper's
-// AutomaticEnv missed dotted keys (no SetEnvKeyReplacer for `.`→`_`)
-// and the schema's explicit EnvVar was never consulted at all.
-func effectiveEnvValue(groupName string, ck ConfigKey) string {
-	if ck.EnvVar != "" {
-		if v := os.Getenv(ck.EnvVar); v != "" {
-			return v
-		}
-	}
-	return os.Getenv(envVarForKey(fullKey(groupName, ck)))
-}
-
-// resolveConfigValue returns the effective string value for a schema
-// key without the source label — env (explicit or automatic) →
-// merged viper (project + global) → schema default. Use this in
-// validation paths so env-provided values aren't reported as
-// "missing".
-func resolveConfigValue(groupName string, ck ConfigKey) string {
-	if v := effectiveEnvValue(groupName, ck); v != "" {
-		return v
-	}
-	if v := viper.GetString(fullKey(groupName, ck)); v != "" {
-		return v
-	}
-	return ck.Default
-}
-
 // resolveKeySource determines where an arbitrary viper key's
 // effective value comes from (no schema metadata available).
 func (cs *configSources) resolveKeySource(key string) (value, source string) {
-	// 1. Automatic BOSUN_* env var.
-	if v := os.Getenv(envVarForKey(key)); v != "" {
+	// 1. The environment — but only for keys the schema binds
+	// (boundEnvValue answers "" for the rest). A key nothing binds is
+	// a key no read resolves from the environment, so attributing a
+	// same-named variable as its live source would report influence
+	// that doesn't exist — the exact mismatch #114 closed.
+	if v := boundEnvValue(key); v != "" {
 		return v, sourceEnv
 	}
 

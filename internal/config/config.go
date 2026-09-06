@@ -56,40 +56,31 @@ func Load() error {
 		}
 	}
 
-	// No viper env layer, deliberately. bosun's env vars name a key as
+	// No AutomaticEnv, deliberately. bosun's env vars name a key as
 	// BOSUN_ + the key path uppercased with dots turned into
 	// underscores (BOSUN_ISSUE_TRACKER_TOKEN → issue_tracker.token),
 	// and AutomaticEnv cannot produce that mapping: it joins the key
 	// path with viper's delimiter and only uppercases, so it looks for
-	// BOSUN_ISSUE_TRACKER.TOKEN — a name no shell exports. The mapping
-	// that works is bosun's own, applied in the cli layer by
-	// effectiveEnvValue, which is what `config check`, `config show`,
-	// `bosun init` and every provider Require go through.
+	// BOSUN_ISSUE_TRACKER.TOKEN — a name no shell exports. What it did
+	// do was shadow dotted keys: viper treats an env var matching a
+	// key path's FIRST segment as covering everything beneath it and
+	// returns nil for the nested read, which is how exporting
+	// BOSUN_WORKSPACE emptied workspace.root and broke every command
+	// reading it (#110). The context vars (BOSUN_ISSUE, BOSUN_PROJECT,
+	// BOSUN_WORKSPACE) are per-invocation overrides, not config, and
+	// are read with os.Getenv directly.
 	//
-	// So AutomaticEnv never resolved a dotted key. What it did do was
-	// shadow them: viper treats an env var matching a key path's FIRST
-	// segment as covering everything beneath it and returns nil for
-	// the nested read. That leaves every top-level block one exported
-	// variable away from vanishing — and BOSUN_WORKSPACE, the
-	// documented way to pin a workspace, is exactly that variable.
-	// Exporting it emptied workspace.root and workspace.repositories,
-	// so every command reading them failed with "workspaces not
-	// configured" against a perfectly good config file (#110).
-	//
-	// BOSUN_ISSUE and BOSUN_PROJECT are the same shape and would
-	// collide the day an `issue:` or `project:` block is added.
-	// Dropping the layer retires the class rather than the instance:
-	// all three are read with os.Getenv directly
-	// (resolveWorkspaceName, resolveIssueSilent, resolveProject),
-	// precisely because a config file is never the home for a
-	// per-invocation override, so nothing about their intended
-	// function passed through viper anyway.
-	//
-	// The cost is that a key read with a bare viper.GetString
-	// (workspace.root, ui.color, vcs.branch.template) has no env
-	// override. It never had one — AutomaticEnv could not name it — so
-	// nothing that worked stops working. Binding those keys explicitly
-	// is an additive follow-up, not what stops the shadowing.
+	// The env layer that IS on is explicit per-key registration: the
+	// cli layer calls viper.BindEnv for every schema key right after
+	// this load (see cli's bindSchemaEnv), mapping the BOSUN_* names —
+	// and each key's explicit EnvVar like GITHUB_TOKEN — through viper
+	// itself, so a bare viper.Get* resolves env → project → global →
+	// default. Registration can't live here: the schema belongs to the
+	// cli layer, which splices in provider-contributed keys this
+	// package must not know about. BindEnv cannot shadow a block (a
+	// binding names one exact key), and it does not compose with
+	// AutomaticEnv — viper's shadow check runs before it consults the
+	// bound names — so AutomaticEnv stays off either way.
 
 	return nil
 }

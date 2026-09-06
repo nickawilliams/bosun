@@ -385,7 +385,7 @@ code_host:
 
 // TestConfigGetMasksSecrets locks the machine-format masking: Secret-
 // typed keys render masked in every -f dump — including env-derived
-// values that injectSchemaDefaults pulls into the settings map — while
+// values that the schema's env bindings pull into AllSettings — while
 // an exact-key raw get stays the deliberate escape hatch for scripts.
 func TestConfigGetMasksSecrets(t *testing.T) {
 	const fileSecret = "filesecret123"

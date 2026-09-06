@@ -106,8 +106,8 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 
 // isKnownConfigGroup reports whether name is a top-level group `config
 // show` will accept: a key present in the effective viper settings
-// (including the defaults and env values injectSchemaDefaults folds in),
-// or a top-level group the schema declares.
+// (which include schema defaults and bound env values, courtesy of
+// bindSchemaEnv), or a top-level group the schema declares.
 //
 // The schema arm matters for groups that are entirely optional — every
 // key example-only, no defaults — which inject nothing and so appear in
@@ -118,7 +118,6 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 // sub-groups, not top-level, so they don't qualify.
 func isKnownConfigGroup(name string) bool {
 	settings := viper.AllSettings()
-	injectSchemaDefaults(settings)
 	if _, ok := settings[name]; ok {
 		return true
 	}
@@ -132,10 +131,11 @@ func isKnownConfigGroup(name string) bool {
 func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui.Tree {
 	tree := ui.NewTree()
 
-	// Default view shows the effective config: viper's merged result
-	// with schema defaults injected so unset-but-known keys still
-	// render. `-g` narrows the view to what's literally in the global
-	// config file — no project, no env, no defaults.
+	// Default view shows the effective config: viper's merged result,
+	// which includes the schema defaults and bound env values
+	// bindSchemaEnv registered, so unset-but-known keys still render.
+	// `-g` narrows the view to what's literally in the global config
+	// file — no project, no env, no defaults.
 	var allSettings map[string]any
 	if globalOnly {
 		if cs.global == nil {
@@ -144,7 +144,6 @@ func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui
 		allSettings = cs.global.AllSettings()
 	} else {
 		allSettings = viper.AllSettings()
-		injectSchemaDefaults(allSettings)
 	}
 
 	topLevel := make(map[string]bool) // true = group, false = leaf
@@ -176,91 +175,6 @@ func buildConfigTree(cs *configSources, groupFilter string, globalOnly bool) *ui
 	}
 
 	return tree
-}
-
-// injectSchemaDefaults adds schema keys into the settings map when
-// they aren't already present but have an effective value (a default
-// or a set env var), so the tree reflects the full effective config.
-func injectSchemaDefaults(settings map[string]any) {
-	for groupName, group := range schemaGroups() {
-		for _, ck := range group.Keys {
-			// Determine the effective value for missing keys.
-			val := ck.Default
-			if val == "" && ck.EnvVar != "" {
-				if v := os.Getenv(ck.EnvVar); v != "" {
-					val = v
-				}
-			}
-			if val == "" {
-				// Also check automatic BOSUN_* env var.
-				fk := fullKey(groupName, ck)
-				if v := os.Getenv(envVarForKey(fk)); v != "" {
-					val = v
-				}
-			}
-			if val == "" {
-				continue
-			}
-
-			fk := fullKey(groupName, ck)
-			parts := strings.SplitN(fk, ".", 2)
-			if len(parts) == 1 {
-				if _, exists := settings[fk]; !exists {
-					settings[fk] = val
-				}
-			} else {
-				parent := parts[0]
-				child := parts[1]
-				sub, ok := settings[parent].(map[string]any)
-				if !ok {
-					sub = make(map[string]any)
-					settings[parent] = sub
-				}
-				if !nestedKeyExists(sub, child) {
-					setNestedKey(sub, child, val)
-				}
-			}
-		}
-	}
-}
-
-// setNestedKey writes a value into a nested map at a dot-separated
-// path, creating intermediate maps as needed. For "statuses.ready"
-// it sets m["statuses"]["ready"] = val.
-func setNestedKey(m map[string]any, key string, val any) {
-	parts := strings.Split(key, ".")
-	current := m
-	for _, p := range parts[:len(parts)-1] {
-		next, ok := current[p].(map[string]any)
-		if !ok {
-			next = make(map[string]any)
-			current[p] = next
-		}
-		current = next
-	}
-	current[parts[len(parts)-1]] = val
-}
-
-// nestedKeyExists checks whether a dot-separated key already exists
-// in a nested map. For "categories.bug" it walks m["categories"]["bug"].
-func nestedKeyExists(m map[string]any, key string) bool {
-	parts := strings.Split(key, ".")
-	current := m
-	for i, p := range parts {
-		v, ok := current[p]
-		if !ok {
-			return false
-		}
-		if i == len(parts)-1 {
-			return true
-		}
-		next, ok := v.(map[string]any)
-		if !ok {
-			return false
-		}
-		current = next
-	}
-	return false
 }
 
 func buildGroupChildren(cs *configSources, groupKey string, m map[string]any) []*ui.TreeNode {
@@ -362,7 +276,7 @@ func renderSourcesHint(cs *configSources, globalOnly bool) string {
 		if cs.projectPath != "" {
 			parts = append(parts, glyphFor(ui.Palette.Success, glyphProject)+" "+labelStyle.Render(shortPath(cs.projectPath)))
 		}
-		if envCount := countEnvSources(cs); envCount > 0 {
+		if envCount := countEnvSources(); envCount > 0 {
 			label := fmt.Sprintf("%d var", envCount)
 			if envCount != 1 {
 				label += "s"
@@ -397,29 +311,22 @@ func formatValue(v string) string {
 	return v
 }
 
-// countEnvSources counts how many env vars contribute to the config.
-func countEnvSources(cs *configSources) int {
+// countEnvSources counts how many distinct env vars contribute to the
+// config: the set variables among everything the schema binds. Walking
+// the bindings table rather than the environment keeps the footer's
+// count in agreement with the tree's env glyphs — an exported BOSUN_*
+// name that binds no key (BOSUN_WORKSPACE, a typo'd variable) supplies
+// no config value, so counting it would advertise influence the
+// resolution doesn't have.
+func countEnvSources() int {
 	seen := make(map[string]bool)
-
-	// Count BOSUN_* env vars.
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "BOSUN_") {
-			name := env[:strings.IndexByte(env, '=')]
-			seen[name] = true
-		}
-	}
-
-	// Count schema-specific env vars (e.g., GITHUB_TOKEN).
-	for _, group := range schemaGroups() {
-		for _, ck := range group.Keys {
-			if ck.EnvVar != "" && !strings.HasPrefix(ck.EnvVar, "BOSUN_") {
-				if os.Getenv(ck.EnvVar) != "" {
-					seen[ck.EnvVar] = true
-				}
+	for _, names := range schemaEnvBindings() {
+		for _, name := range names {
+			if os.Getenv(name) != "" {
+				seen[name] = true
 			}
 		}
 	}
-
 	return len(seen)
 }
 
@@ -532,10 +439,11 @@ const secretMask = "••••••••"
 // maskSecrets replaces every Secret-typed schema key's value in
 // settings with the mask, in place. The machine formats land in pipes,
 // logs, and CI output — exactly where a leaked token does the most
-// damage — and injectSchemaDefaults pulls env-var tokens into the map,
-// so values that were never written to any config file would otherwise
-// print verbatim. An exact-key `config get` in raw format remains the
-// deliberate escape hatch for scripts that need the real value.
+// damage — and AllSettings carries env-bound tokens (bindSchemaEnv
+// registers GITHUB_TOKEN and friends), so values that were never
+// written to any config file would otherwise print verbatim. An
+// exact-key `config get` in raw format remains the deliberate escape
+// hatch for scripts that need the real value.
 func maskSecrets(settings map[string]any) {
 	for key := range secretKeys() {
 		parts := strings.Split(key, ".")
@@ -562,14 +470,14 @@ func maskSecrets(settings map[string]any) {
 }
 
 // getSettings returns the settings map for the requested scope.
-// Effective scope is viper's merged view with schema defaults applied.
-// Global scope reads only the global config file; ok=false when no
-// global file is present so callers can branch on "scope unreachable".
+// Effective scope is viper's merged view, schema defaults and bound
+// env values included (bindSchemaEnv registered both, so AllSettings
+// carries them). Global scope reads only the global config file;
+// ok=false when no global file is present so callers can branch on
+// "scope unreachable".
 func getSettings(globalOnly bool) (settings map[string]any, ok bool) {
 	if !globalOnly {
-		s := viper.AllSettings()
-		injectSchemaDefaults(s)
-		return s, true
+		return viper.AllSettings(), true
 	}
 	cs := loadConfigSources()
 	if cs.global == nil {
@@ -657,15 +565,23 @@ type configIssue struct {
 func validateGroup(groupName string, group ConfigGroup) []configIssue {
 	var issues []configIssue
 	for _, ck := range group.Keys {
-		// resolveConfigValue honors env vars (explicit EnvVar +
-		// automatic BOSUN_*) in addition to viper's merged file
-		// state. Previously this used bare viper.GetString, which
-		// missed both the explicit-EnvVar tier and the BOSUN_*
-		// computed names (viper's AutomaticEnv has no
-		// `.`→`_` key replacer, so BOSUN_JIRA_TOKEN never
-		// matched `jira.token`). A schema-required value provided
-		// via env was therefore reported as "missing".
-		value := resolveConfigValue(groupName, ck)
+		// A bare read resolves the full ladder — env (explicit EnvVar
+		// and computed BOSUN_* names), files, then the schema default —
+		// because bindSchemaEnv registered all of it with viper. This
+		// used to route through a hand-rolled resolveConfigValue so
+		// env-provided values weren't reported as "missing"; the
+		// registration made that ladder viper's own.
+		//
+		// The ck.Default fallback is load-bearing for exactly one key
+		// shape: `provider`, whose computed Default (the sole
+		// registered provider) deliberately stays out of viper so
+		// "unset" remains observable — see bindSchemaEnv. Validation
+		// still counts it as satisfied, since that is what an unset
+		// key builds.
+		value := viper.GetString(fullKey(groupName, ck))
+		if value == "" {
+			value = ck.Default
+		}
 
 		if ck.Required && value == "" {
 			issues = append(issues, configIssue{
@@ -885,16 +801,20 @@ func runConfigCheck(args []string) error {
 }
 
 // checkGroupCompleteness returns the names of missing required keys
-// in a config group. Uses resolveConfigValue so env-provided values
-// (explicit EnvVar or automatic BOSUN_*) count as "set" — same fix
-// as validateGroup; doctor uses this for issue-tracker completeness.
+// in a config group. A bare viper read suffices — env-provided values
+// (explicit EnvVar or automatic BOSUN_*) count as "set" because
+// bindSchemaEnv registered them; doctor uses this for issue-tracker
+// completeness.
 func checkGroupCompleteness(groupName string, group ConfigGroup) []string {
 	var missing []string
 	for _, ck := range group.Keys {
 		if !ck.Required {
 			continue
 		}
-		if resolveConfigValue(groupName, ck) == "" {
+		// ck.Default backstops the provider key, whose computed
+		// default stays out of viper's default layer — same rule as
+		// validateGroup.
+		if viper.GetString(fullKey(groupName, ck)) == "" && ck.Default == "" {
 			missing = append(missing, ck.Key)
 		}
 	}
@@ -978,7 +898,6 @@ func printEnv(settings map[string]any) {
 	sort.Strings(keys)
 
 	for _, k := range keys {
-		envKey := "BOSUN_" + strings.ToUpper(strings.ReplaceAll(k, ".", "_"))
-		fmt.Printf("%s=%s\n", envKey, flat[k])
+		fmt.Printf("%s=%s\n", envVarForKey(k), flat[k])
 	}
 }

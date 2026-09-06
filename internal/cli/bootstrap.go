@@ -122,7 +122,7 @@ func Bootstrap(cmd *cobra.Command) error {
 		}
 	}
 
-	if err := config.Load(); err != nil {
+	if err := loadConfig(); err != nil {
 		return err
 	}
 	ui.ApplyColorMode(viper.GetString("ui.color"))
