@@ -178,6 +178,10 @@ func newConfigEditCmd() *cobra.Command {
 		},
 	}
 
+	// --project, like every sibling config subcommand: edit resolves
+	// which file to open from the project root, so pinning the project
+	// has to be possible here too.
+	addProjectFlag(cmd)
 	cmd.Flags().BoolP("global", "g", false, "edit global config instead of project config")
 
 	return cmd
