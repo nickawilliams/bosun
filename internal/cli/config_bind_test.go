@@ -275,6 +275,40 @@ func TestResolveKeyWithSchemaEnvActiveMapGroup(t *testing.T) {
 	if v, src := resolveKeyWithSchema(cs, "issue_tracker.statuses.done"); v != "Done" || src != sourceDefault {
 		t.Errorf("done = (%q, %q), want the displaced file value replaced by the schema default", v, src)
 	}
+	// A member the override doesn't name and the schema doesn't
+	// default resolves to nothing at all — never to a file value the
+	// wholesale override displaced.
+	if v, src := resolveKeyWithSchema(cs, "issue_tracker.statuses.triage"); v != "" || src != "" {
+		t.Errorf("triage = (%q, %q), want empty under a wholesale override", v, src)
+	}
+}
+
+// TestEffectiveSettingsInjectsEnvOverriddenMapGroup pins the display
+// half of the env-override semantics: while the group's variable is
+// set, the settings the show/get commands render carry the effective
+// map — env members over schema defaults — not the file children the
+// override displaced.
+func TestEffectiveSettingsInjectsEnvOverriddenMapGroup(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	_ = viper.MergeConfigMap(map[string]any{
+		"issue_tracker": map[string]any{
+			"statuses": map[string]any{"ready": "To Do"},
+		},
+	})
+	t.Setenv("BOSUN_ISSUE_TRACKER_STATUSES", `{"ready":"Backlog"}`)
+	bindSchemaEnv()
+
+	sub, _ := lookupNested(effectiveSettings(), "issue_tracker.statuses").(map[string]any)
+	if sub == nil {
+		t.Fatal("statuses subtree missing from effective settings")
+	}
+	if got := sub["ready"]; got != "Backlog" {
+		t.Errorf("ready = %v, want the env override displayed over the file value", got)
+	}
+	if got := sub["done"]; got != "Done" {
+		t.Errorf("done = %v, want the schema default backstop displayed", got)
+	}
 }
 
 // TestBindSchemaEnvLeavesMapGroupsOutOfViper guards the AllKeys
