@@ -38,11 +38,24 @@ func TestBuildBranchName(t *testing.T) {
 			want:      "fix/PROJ-456_fix-broken-auth",
 		},
 		{
-			name:      "unmapped type falls back to lowercase",
+			// Task is deliberately NOT set in the fixture: the schema
+			// declares task → chore, and the map accessor applies that
+			// default. `config show` always displayed it as the
+			// effective value; since #114 the read agrees.
+			name:      "unset type resolves to its schema default",
 			issueKey:  "PROJ-789",
 			issueType: "Task",
 			title:     "Update docs",
-			want:      "task/PROJ-789_update-docs",
+			want:      "chore/PROJ-789_update-docs",
+		},
+		{
+			// Epic has no schema default and no fixture entry, so it is
+			// genuinely unmapped and falls back to the lowercase type.
+			name:      "unmapped type falls back to lowercase",
+			issueKey:  "PROJ-790",
+			issueType: "Epic",
+			title:     "Update docs",
+			want:      "epic/PROJ-790_update-docs",
 		},
 		{
 			name:      "special characters in title",
