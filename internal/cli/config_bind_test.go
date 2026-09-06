@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"io"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/viper"
 )
 
@@ -231,10 +234,168 @@ func TestBuildNotifyContentHonorsEnvBinding(t *testing.T) {
 	})
 }
 
+// TestMapGroupValuesSurvivesMalformedEnv pins the failure posture for
+// an operator's typo: JSON that doesn't decode is treated as unset, so
+// the file's own mappings stay in force instead of the whole group
+// silently reverting to defaults.
+func TestMapGroupValuesSurvivesMalformedEnv(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	_ = viper.MergeConfigMap(map[string]any{
+		"issue_tracker": map[string]any{
+			"statuses": map[string]any{"ready": "To Do"},
+		},
+	})
+	t.Setenv("BOSUN_ISSUE_TRACKER_STATUSES", `{not json`)
+
+	if got := mapGroupValues("issue_tracker.statuses")["ready"]; got != "To Do" {
+		t.Errorf("ready = %q, want the file value to survive a malformed env override", got)
+	}
+}
+
+// TestResolveKeyWithSchemaEnvActiveMapGroup pins the attribution of a
+// map group's members while its env override is active: the override
+// replaces the block wholesale, so a member the env map names is
+// env-sourced and every other member falls back to its schema default
+// — never to the file value the override displaced.
+func TestResolveKeyWithSchemaEnvActiveMapGroup(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	_ = viper.MergeConfigMap(map[string]any{
+		"issue_tracker": map[string]any{
+			"statuses": map[string]any{"done": "Shipped"},
+		},
+	})
+	t.Setenv("BOSUN_ISSUE_TRACKER_STATUSES", `{"ready":"Backlog"}`)
+
+	cs := &configSources{}
+	if v, src := resolveKeyWithSchema(cs, "issue_tracker.statuses.ready"); v != "Backlog" || src != sourceEnv {
+		t.Errorf("ready = (%q, %q), want the env member attributed to env", v, src)
+	}
+	if v, src := resolveKeyWithSchema(cs, "issue_tracker.statuses.done"); v != "Done" || src != sourceDefault {
+		t.Errorf("done = (%q, %q), want the displaced file value replaced by the schema default", v, src)
+	}
+}
+
+// TestBindSchemaEnvLeavesMapGroupsOutOfViper guards the AllKeys
+// surface the display renders from: registering a map group's path
+// with viper makes AllKeys treat it as a flat key and stop descending,
+// which hides the group's per-child defaults from AllSettings while
+// direct reads still resolve them — display and resolution disagreeing
+// over exactly the keys this PR set out to unify. The group's env form
+// is decoded by mapGroupValues instead, so a config file setting one
+// status must leave the other defaults visible to display reads.
+func TestBindSchemaEnvLeavesMapGroupsOutOfViper(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	_ = viper.MergeConfigMap(map[string]any{
+		"issue_tracker": map[string]any{
+			"statuses": map[string]any{"ready": "To Do"},
+		},
+	})
+	bindSchemaEnv()
+
+	if got := viper.GetString("issue_tracker.statuses.in_progress"); got != "In Progress" {
+		t.Errorf("in_progress = %q, want the schema default visible to a bare read", got)
+	}
+	settings := effectiveSettings()
+	sub, _ := lookupNested(settings, "issue_tracker.statuses").(map[string]any)
+	if sub == nil {
+		t.Fatal("statuses subtree missing from effective settings")
+	}
+	if got := sub["in_progress"]; got != "In Progress" {
+		t.Errorf("settings in_progress = %v, want the default alongside the file's partial map", got)
+	}
+	if got := sub["ready"]; got != "To Do" {
+		t.Errorf("settings ready = %v, want the file value", got)
+	}
+}
+
+// TestEffectiveSettingsShowsComputedProviderDefault keeps `config
+// show`/`config get` saying what an unset provider key builds, even
+// though the computed default deliberately stays out of viper's
+// default layer (doctor needs "unset" observable — see bindSchemaEnv).
+func TestEffectiveSettingsShowsComputedProviderDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	bindSchemaEnv()
+
+	settings := effectiveSettings()
+	if got := lookupNested(settings, "notification.provider"); got != "slack" {
+		t.Errorf("notification.provider = %v, want the sole registered provider displayed", got)
+	}
+	// And viper itself still reports it unset — the doctor contract.
+	if got := viper.GetString("notification.provider"); got != "" {
+		t.Errorf("viper.GetString(notification.provider) = %q, want unset", got)
+	}
+}
+
+// TestRequireConfigSkipsPromptForEnvSuppliedKey pins the fast path in
+// requireConfig: a schema key whose value arrives through its env
+// binding is already satisfied, so an interactive session must not
+// prompt for it. The injected reader holds a single ctrl+c, so a
+// prompt that should not happen surfaces as ErrCancelled rather than
+// a hang.
+func TestRequireConfigSkipsPromptForEnvSuppliedKey(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	ui.SetStreams(strings.NewReader("\x03"), io.Discard, io.Discard)
+	t.Cleanup(ui.ResetStreams)
+	t.Setenv("GITHUB_TOKEN", "tok-from-env")
+	bindSchemaEnv()
+
+	if err := requireConfig("code_host.token"); err != nil {
+		t.Fatalf("requireConfig prompted despite the env-supplied value: %v", err)
+	}
+}
+
+// TestValidateGroupAcceptsComputedProviderDefault pins the ck.Default
+// backstop in validateGroup: the provider key's computed default stays
+// out of viper (see bindSchemaEnv), so validation must count it as
+// satisfied itself — an unset sole-provider group is not a "missing
+// provider" failure, because that is exactly what an unset key builds.
+func TestValidateGroupAcceptsComputedProviderDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	bindSchemaEnv()
+
+	group, ok := lookupGroup("issue_tracker")
+	if !ok {
+		t.Fatal("issue_tracker group missing from the schema")
+	}
+	for _, iss := range validateGroup("issue_tracker", group) {
+		if iss.Key == "provider" {
+			t.Errorf("unset sole-provider key reported as %s", iss.Category)
+		}
+	}
+}
+
+// TestCheckGroupCompletenessBackstopsProvider is the same contract for
+// the completeness walk doctor uses: provider is never "missing" for a
+// sole-provider group, while genuinely absent required keys still are.
+func TestCheckGroupCompletenessBackstopsProvider(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	bindSchemaEnv()
+
+	group, ok := lookupGroup("issue_tracker")
+	if !ok {
+		t.Fatal("issue_tracker group missing from the schema")
+	}
+	missing := checkGroupCompleteness("issue_tracker", group)
+	if slices.Contains(missing, "provider") {
+		t.Errorf("provider reported missing despite its computed default: %v", missing)
+	}
+	if !slices.Contains(missing, "token") {
+		t.Errorf("token not reported missing — the walk found nothing at all: %v", missing)
+	}
+}
+
 // TestUnknownKeysAcceptBoundGroupPaths guards the unknown-key walk
-// against the walk's own bindings: viper.AllKeys lists every bound key
-// whether or not its variable is set, so the map-shaped group paths —
-// now bound — must read as the schema's own keys, not as strangers.
+// against the schema's own registration: viper.AllKeys lists every
+// bound scalar key whether or not its variable is set, and a
+// map-shaped group's own path is a legitimate config key either way —
+// none of it may read as a stranger.
 func TestUnknownKeysAcceptBoundGroupPaths(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
