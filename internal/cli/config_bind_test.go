@@ -58,6 +58,40 @@ func TestSchemaEnvBindings(t *testing.T) {
 	})
 }
 
+// TestAppendMissingDedupes pins the guard that keeps the bindings
+// table free of repeated names: today's schema happens to produce no
+// duplicates, so the branch is unreachable through schemaEnvBindings —
+// but the moment two providers contribute the same key, or a key's
+// EnvVar collides with its computed name, this is what keeps the
+// registration from consulting the same variable twice.
+func TestAppendMissingDedupes(t *testing.T) {
+	got := appendMissing([]string{"GITHUB_TOKEN"}, "GITHUB_TOKEN")
+	if len(got) != 1 {
+		t.Errorf("appendMissing duplicated an existing name: %v", got)
+	}
+	got = appendMissing(got, "BOSUN_CODE_HOST_TOKEN")
+	if len(got) != 2 {
+		t.Errorf("appendMissing dropped a new name: %v", got)
+	}
+}
+
+// TestResolveKeySourceAttributesBoundGroupEnv covers the attribution
+// path a map-shaped group's own key takes: findConfigKey knows only
+// leaf keys, so the group path falls through to resolveKeySource,
+// which must still report the environment as the source when the
+// group's binding is what supplies the value.
+func TestResolveKeySourceAttributesBoundGroupEnv(t *testing.T) {
+	t.Setenv("BOSUN_ISSUE_TRACKER_STATUSES", `{"ready":"Backlog"}`)
+
+	value, source := (&configSources{}).resolveKeySource("issue_tracker.statuses")
+	if source != sourceEnv {
+		t.Errorf("source = %q, want %q", source, sourceEnv)
+	}
+	if value != `{"ready":"Backlog"}` {
+		t.Errorf("value = %q, want the raw env payload", value)
+	}
+}
+
 // TestBoundEnvValueIgnoresUnboundKeys locks the attribution side of
 // the registry: a variable that matches a key nothing binds supplies
 // no value, so `config show` cannot report influence the resolution

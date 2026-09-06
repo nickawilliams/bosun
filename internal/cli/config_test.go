@@ -715,3 +715,28 @@ preview:
 		}
 	})
 }
+
+// TestConfigEditSurfacesReloadFailure covers the reload half of
+// `config edit`: the editor session succeeds, but what it saved no
+// longer parses, and the user has to hear that from the command
+// rather than from the next one they run. The fake $EDITOR corrupts
+// the file it is handed, so the exec half passes and the failure is
+// exactly the re-read.
+func TestConfigEditSurfacesReloadFailure(t *testing.T) {
+	h := testharness.New(t)
+	h.Workspace.WriteConfig(baseConfig)
+
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' 'workspace: [unclosed' > \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", script)
+
+	err := h.Run("config", "edit")
+	if err == nil {
+		t.Fatal("config edit succeeded after the editor corrupted the file")
+	}
+	if !strings.Contains(err.Error(), "re-reading config after edit") {
+		t.Errorf("err = %v, want the reload failure surfaced", err)
+	}
+}
