@@ -1,5 +1,51 @@
 # Changelog
 
+## [v1.5.0](https://github.com/nickawilliams/bosun/compare/1da5fc3d4da2f073ccda8c5fce64048a2ce2707f...v1.5.0) - 2026-09-07
+
+### New Features
+
+- **CLI**
+  - Route forms, help, and the color config through the profile - ([15afb9c](https://github.com/nickawilliams/bosun/commit/15afb9c8e6d8ddd2c36c92a097069586e977ab80))
+  - Run the truecolor probe on the interactive bootstrap path - ([45c4640](https://github.com/nickawilliams/bosun/commit/45c46405f58e29dba84aa5377f9842266e3d9a81))
+  - Add the shared workspace filter and scope grammar - ([a3f729f](https://github.com/nickawilliams/bosun/commit/a3f729f5e3ccd1ca129a9f891de32128f8491072))
+- **UI**
+  - Pin one color profile across every output pipeline - ([1cf92c5](https://github.com/nickawilliams/bosun/commit/1cf92c5629754c3e8ee49f91295777d414e153ad))
+  - Probe the terminal for truecolor support at startup - ([dff2ec8](https://github.com/nickawilliams/bosun/commit/dff2ec85e0fe07aa43e6c1885796d53ebc8173d8))
+  - Scope the plan-apply gate by action group - ([daeafcd](https://github.com/nickawilliams/bosun/commit/daeafcda0925be9d4cc45753964ac8bd2d44fe02))
+- **Cleanup:** Add bulk cleanup with --all and sweep semantics - ([0d20a8f](https://github.com/nickawilliams/bosun/commit/0d20a8fdfb7ed7fe91b322e4a005bf711c036f4b))
+- **Config:** Simplify the default branch template to key and slug - ([1da5fc3](https://github.com/nickawilliams/bosun/commit/1da5fc3d4da2f073ccda8c5fce64048a2ce2707f))
+- **Doctor:** Check the configured preview provider - ([501db8e](https://github.com/nickawilliams/bosun/commit/501db8e5327402a1edde7478bb48089a2b9e27e7))
+- **Status:** Support --all and workspace filters at project scope - ([15f4890](https://github.com/nickawilliams/bosun/commit/15f48902eedf6484cd56569f25c7420c70dab475))
+
+### Improvements
+
+- **Preview:** Require an explicit preview provider - ([e2aa352](https://github.com/nickawilliams/bosun/commit/e2aa352646b8304bc25e8d2710251af452673440))
+
+### Fixes
+
+- **CLI**
+  - Cap the picker select lists to the terminal height - ([c4635ad](https://github.com/nickawilliams/bosun/commit/c4635adc1ccc66fb900436dfed70a15d9d5e7cb7))
+  - Route every data-driven select through a fitted constructor (review follow-up) - ([28ef7e6](https://github.com/nickawilliams/bosun/commit/28ef7e6ee63881aaf7f08af6cb094e39966a6989))
+  - Re-derive the issue key after the workspace picker - ([612c5fc](https://github.com/nickawilliams/bosun/commit/612c5fc410142665156b7e1238e817f358e3958f))
+  - Keep the record card's connector after selection forms - ([8b0219c](https://github.com/nickawilliams/bosun/commit/8b0219c51b4273a9f2093f3890a257043be552fd))
+  - Keep an unselected preview provider quiet outside doctor (review follow-up) - ([f39b4ab](https://github.com/nickawilliams/bosun/commit/f39b4abfed20517503fc2eec0499a82c8b944b99))
+  - Render the issue card before release's migration gate - ([bf50362](https://github.com/nickawilliams/bosun/commit/bf50362ddd70d40bb06dc8a7a4de235ff52dae49))
+  - Keep the non-interactive release refusal above the card (review follow-up) - ([60e7749](https://github.com/nickawilliams/bosun/commit/60e7749055c670b15de684fc515c471b92151f83))
+  - Read map-shaped config groups through one map accessor - ([88ef315](https://github.com/nickawilliams/bosun/commit/88ef3152441f05912eeb160c1d442f3ef28e5fe8))
+  - Give config edit the --project flag its siblings have - ([177b2b3](https://github.com/nickawilliams/bosun/commit/177b2b38a35ca7c0c9c46e75b88f7f5fa255d852))
+- **UI**
+  - Close three review findings on the pinned profile - ([194298e](https://github.com/nickawilliams/bosun/commit/194298e3e4c477bb477000fb232d5a3c2a7358e5))
+  - Harden the probe against late and cross-terminal replies (review follow-up) - ([b326ae9](https://github.com/nickawilliams/bosun/commit/b326ae9efb154c877d48d9ccad9c9617e3433b60))
+- **Cleanup:** Capture the escape hatch's project root before apply (review follow-up) - ([1850ee5](https://github.com/nickawilliams/bosun/commit/1850ee5af642760530b188799b7136d41923283e))
+- **Config**
+  - Drop viper's env layer so BOSUN_WORKSPACE stops shadowing - ([7f350e7](https://github.com/nickawilliams/bosun/commit/7f350e73f520b03a10ae38f9574af8810267a1b8))
+  - Bind schema keys to environment variables through viper - ([164f92c](https://github.com/nickawilliams/bosun/commit/164f92cf5d26d5c5f9265ece78c4abe5a429818e))
+  - Decode map-group env overrides outside viper's key surface (review follow-up) - ([d348180](https://github.com/nickawilliams/bosun/commit/d348180319b6efa5fb3294fa0992d0581c5f35ef))
+- **Deps:** Pin ultraviolet to the bubbletea-paired snapshot - ([166d7c4](https://github.com/nickawilliams/bosun/commit/166d7c4790a3a355d90d1978d1084c8432e4f129))
+- **Doctor**
+  - Stop the diagnostic prompting for the config it reports (review follow-up) - ([a121710](https://github.com/nickawilliams/bosun/commit/a121710c737a88c8f97fb5f635049d49b9debf72))
+  - Flag a per-repo teardown missing its name input (review follow-up) - ([4fcfc17](https://github.com/nickawilliams/bosun/commit/4fcfc17a45d3cc92c48b38854d8f40900ed247fd))
+
 ## [v1.4.0](https://github.com/nickawilliams/bosun/compare/a1f690e0e1428d8131014d2a52d8f67191385b38...v1.4.0) - 2026-08-31
 
 ### New Features
