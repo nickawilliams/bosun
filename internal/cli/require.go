@@ -27,7 +27,12 @@ func requireConfig(keys ...string) error {
 		}
 
 		if ck, groupName, ok := findConfigKey(key); ok {
-			if ensureConfigValue(groupName, ck) {
+			// One bare read answers "already set": bindSchemaEnv
+			// registered the env bindings and schema defaults, so
+			// viper resolves env → files → default itself — no
+			// materialization step, and downstream bare reads (the
+			// provider factories) see exactly what this check saw.
+			if viper.GetString(fullKey(groupName, ck)) != "" {
 				continue
 			}
 			if err := resolveConfigKey(groupName, ck, false); err != nil {
@@ -58,27 +63,6 @@ func requireConfig(keys ...string) error {
 	}
 
 	return nil
-}
-
-// ensureConfigValue reports whether a schema key already has an
-// effective value: viper (config file), or an env var — the key's
-// explicit EnvVar or the automatic BOSUN_* name. Env-only values are
-// materialized into viper so downstream bare viper.GetString reads
-// (the provider factories) see exactly what this check saw. Bare
-// viper misses both env forms for schema keys (no SetEnvKeyReplacer;
-// explicit EnvVar names like GITHUB_TOKEN aren't bound at all), which
-// used to make `config check` report a group green while the same
-// group's requireConfig re-prompted for the token.
-func ensureConfigValue(groupName string, ck ConfigKey) bool {
-	fk := fullKey(groupName, ck)
-	if viper.GetString(fk) != "" {
-		return true
-	}
-	if v := effectiveEnvValue(groupName, ck); v != "" {
-		viper.Set(fk, v)
-		return true
-	}
-	return false
 }
 
 // resolveGroup ensures all required keys in a config group are populated.
@@ -215,9 +199,12 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt, silent b
 			continue
 		}
 
-		// Already set — config file, or an env var materialized into
-		// viper by ensureConfigValue?
-		if !forcePrompt && ensureConfigValue(groupName, ck) {
+		// Already set — a config file, an env binding, or a schema
+		// default; viper resolves all three now that bindSchemaEnv has
+		// registered them. Defaulted keys therefore read as set, which
+		// also covers what the old "apply default without prompting"
+		// arm did — for every key, not only optional ones.
+		if !forcePrompt && viper.GetString(fk) != "" {
 			continue
 		}
 
@@ -235,12 +222,6 @@ func resolveGroupMode(groupName string, group ConfigGroup, forcePrompt, silent b
 			if !ck.Required {
 				continue
 			}
-		}
-
-		// Apply default for optional keys without prompting (JIT only).
-		if !forcePrompt && ck.Default != "" && !ck.Required {
-			viper.Set(fk, ck.Default)
-			continue
 		}
 
 		// Need to resolve (prompt or error).

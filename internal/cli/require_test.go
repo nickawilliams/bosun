@@ -11,41 +11,73 @@ import (
 	"github.com/spf13/viper"
 )
 
-// TestEnsureConfigValue locks the env-var awareness of the JIT config
-// gate: values supplied via the key's explicit EnvVar or the automatic
-// BOSUN_* name count as configured AND are materialized into viper so
-// the provider factories' bare viper reads agree with the gate
+// TestBoundEnvReachesBareReads locks what replaced the materialization
+// dance: bindSchemaEnv registers every schema key's env names with
+// viper, so a bare viper.GetString — the read shape the provider
+// factories and the whole command layer use — resolves the key's
+// explicit EnvVar and the automatic BOSUN_* name directly. No
+// intermediate ensureConfigValue/viper.Set step exists to skip
 // (regression: config check honored env vars while requireConfig
-// re-prompted for the same token).
-func TestEnsureConfigValue(t *testing.T) {
-	t.Run("explicit EnvVar materializes into viper", func(t *testing.T) {
-		ck := ConfigKey{Key: "token", EnvVar: "BOSUN_TEST_ECV_EXPLICIT"}
-		t.Setenv("BOSUN_TEST_ECV_EXPLICIT", "sekrit")
+// re-prompted for the same token, and 58 bare reads saw neither).
+func TestBoundEnvReachesBareReads(t *testing.T) {
+	t.Run("explicit EnvVar", func(t *testing.T) {
+		t.Cleanup(viper.Reset)
+		viper.Reset()
+		t.Setenv("GITHUB_TOKEN", "sekrit")
+		bindSchemaEnv()
 
-		if !ensureConfigValue("testgroup_ecv1", ck) {
-			t.Fatal("ensureConfigValue() = false, want true for explicit EnvVar")
-		}
-		if got := viper.GetString("testgroup_ecv1.token"); got != "sekrit" {
-			t.Errorf("viper value = %q, want the env value materialized", got)
-		}
-	})
-
-	t.Run("automatic BOSUN_* var materializes into viper", func(t *testing.T) {
-		ck := ConfigKey{Key: "base_url"}
-		t.Setenv("BOSUN_TESTGROUP_ECV2_BASE_URL", "https://x.example")
-
-		if !ensureConfigValue("testgroup_ecv2", ck) {
-			t.Fatal("ensureConfigValue() = false, want true for automatic env var")
-		}
-		if got := viper.GetString("testgroup_ecv2.base_url"); got != "https://x.example" {
-			t.Errorf("viper value = %q, want the env value materialized", got)
+		if got := viper.GetString("code_host.token"); got != "sekrit" {
+			t.Errorf("code_host.token = %q, want the GITHUB_TOKEN value", got)
 		}
 	})
 
-	t.Run("absent everywhere is not configured", func(t *testing.T) {
-		ck := ConfigKey{Key: "token", EnvVar: "BOSUN_TEST_ECV_ABSENT"}
-		if ensureConfigValue("testgroup_ecv3", ck) {
-			t.Error("ensureConfigValue() = true for a value set nowhere")
+	t.Run("automatic BOSUN_* name", func(t *testing.T) {
+		t.Cleanup(viper.Reset)
+		viper.Reset()
+		t.Setenv("BOSUN_ISSUE_TRACKER_BASE_URL", "https://x.example")
+		bindSchemaEnv()
+
+		if got := viper.GetString("issue_tracker.base_url"); got != "https://x.example" {
+			t.Errorf("issue_tracker.base_url = %q, want the env value", got)
+		}
+	})
+
+	t.Run("explicit EnvVar wins over the computed name", func(t *testing.T) {
+		t.Cleanup(viper.Reset)
+		viper.Reset()
+		t.Setenv("GITHUB_TOKEN", "explicit")
+		t.Setenv("BOSUN_CODE_HOST_TOKEN", "computed")
+		bindSchemaEnv()
+
+		if got := viper.GetString("code_host.token"); got != "explicit" {
+			t.Errorf("code_host.token = %q, want the explicit EnvVar to win", got)
+		}
+	})
+
+	t.Run("env beats the config file", func(t *testing.T) {
+		t.Cleanup(viper.Reset)
+		viper.Reset()
+		// The file layer, loaded the way config.Load loads it —
+		// viper.Set would land in the override layer, which outranks
+		// env and would test the wrong rung.
+		_ = viper.MergeConfigMap(map[string]any{
+			"issue_tracker": map[string]any{"base_url": "https://file.example"},
+		})
+		t.Setenv("BOSUN_ISSUE_TRACKER_BASE_URL", "https://env.example")
+		bindSchemaEnv()
+
+		if got := viper.GetString("issue_tracker.base_url"); got != "https://env.example" {
+			t.Errorf("issue_tracker.base_url = %q, want env to outrank the file", got)
+		}
+	})
+
+	t.Run("schema default backstops the ladder", func(t *testing.T) {
+		t.Cleanup(viper.Reset)
+		viper.Reset()
+		bindSchemaEnv()
+
+		if got := viper.GetString("code_host.merge_method"); got != "squash" {
+			t.Errorf("code_host.merge_method = %q, want the schema default", got)
 		}
 	})
 }

@@ -69,11 +69,12 @@ func buildBranchName(detail issue.Issue, slug string) (string, error) {
 }
 
 // resolveCategory maps an issue type name (from the tracker) to a branch
-// category using the vcs.branch.categories config. Falls back to lowercase
-// issue type if no mapping is found.
+// category using the vcs.branch.categories config — a map-shaped group,
+// read through its accessor so the schema defaults and the group's env
+// binding both apply. Falls back to lowercase issue type if no mapping
+// is found.
 func resolveCategory(issueType string) string {
-	key := "vcs.branch.categories." + strings.ToLower(issueType)
-	if cat := viper.GetString(key); cat != "" {
+	if cat := mapGroupValues("vcs.branch.categories")[strings.ToLower(issueType)]; cat != "" {
 		return cat
 	}
 	return strings.ToLower(issueType)

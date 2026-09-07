@@ -239,7 +239,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// required keys.
 	if isInteractive() {
 		// Reload config so resolveGroup can read/write the new file.
-		if err := config.Load(); err != nil {
+		if err := loadConfig(); err != nil {
 			return err
 		}
 

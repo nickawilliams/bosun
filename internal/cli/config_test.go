@@ -385,7 +385,7 @@ code_host:
 
 // TestConfigGetMasksSecrets locks the machine-format masking: Secret-
 // typed keys render masked in every -f dump — including env-derived
-// values that injectSchemaDefaults pulls into the settings map — while
+// values that the schema's env bindings pull into AllSettings — while
 // an exact-key raw get stays the deliberate escape hatch for scripts.
 func TestConfigGetMasksSecrets(t *testing.T) {
 	const fileSecret = "filesecret123"
@@ -714,4 +714,57 @@ preview:
 			t.Errorf("check vcs validated nothing; got:\n%s", out)
 		}
 	})
+}
+
+// TestConfigShowCountsBoundEnvSources pins the show command's env
+// surface end to end: a bound variable's value renders as the
+// effective config, and the sources footer counts it. The count walks
+// the bindings table, not the environment, so this is also the guard
+// that a set-but-bound variable still registers there (an unbound
+// BOSUN_* name must not — countEnvSources' whole reason to exist).
+func TestConfigShowCountsBoundEnvSources(t *testing.T) {
+	h := testharness.New(t)
+	h.Workspace.WriteConfig(baseConfig)
+	// Neutralize bound variables the developer's shell might export, so
+	// the count below is exactly the one this test sets.
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("BOSUN_JIRA_TOKEN", "")
+	t.Setenv("BOSUN_SLACK_TOKEN", "")
+	t.Setenv("BOSUN_WORKSPACE_ROOT", "env-root")
+
+	if err := h.Run("config", "show"); err != nil {
+		t.Fatal(err)
+	}
+	out := ansi.Strip(h.Stdout())
+	if !strings.Contains(out, "env-root") {
+		t.Errorf("env-supplied workspace.root missing from show output:\n%s", out)
+	}
+	if !strings.Contains(out, "1 var") {
+		t.Errorf("sources footer did not count exactly the bound env var:\n%s", out)
+	}
+}
+
+// TestConfigEditSurfacesReloadFailure covers the reload half of
+// `config edit`: the editor session succeeds, but what it saved no
+// longer parses, and the user has to hear that from the command
+// rather than from the next one they run. The fake $EDITOR corrupts
+// the file it is handed, so the exec half passes and the failure is
+// exactly the re-read.
+func TestConfigEditSurfacesReloadFailure(t *testing.T) {
+	h := testharness.New(t)
+	h.Workspace.WriteConfig(baseConfig)
+
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' 'workspace: [unclosed' > \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", script)
+
+	err := h.Run("config", "edit")
+	if err == nil {
+		t.Fatal("config edit succeeded after the editor corrupted the file")
+	}
+	if !strings.Contains(err.Error(), "re-reading config after edit") {
+		t.Errorf("err = %v, want the reload failure surfaced", err)
+	}
 }

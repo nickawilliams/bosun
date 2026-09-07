@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -336,21 +337,16 @@ func repositoryNames(repositories []Repository) string {
 // resolveStatus maps a bosun lifecycle status key (e.g., "in_progress") to
 // the provider-specific status name from config (e.g., "In Progress").
 // Falls back to schema defaults if not set in config.
+//
+// The read goes through the group's map accessor rather than a
+// string-concatenated child key: `issue_tracker.statuses` is one
+// map-shaped config key, and its env binding supplies the whole map at
+// that key — a child-path read would silently ignore an operator's
+// BOSUN_ISSUE_TRACKER_STATUSES override.
 func resolveStatus(key string) (string, error) {
-	name := viper.GetString("issue_tracker.statuses." + key)
-	if name != "" {
+	if name := mapGroupValues("issue_tracker.statuses")[key]; name != "" {
 		return name, nil
 	}
-
-	// Check schema defaults.
-	if group, ok := lookupGroup("issue_tracker.statuses"); ok {
-		for _, ck := range group.Keys {
-			if ck.Key == key && ck.Default != "" {
-				return ck.Default, nil
-			}
-		}
-	}
-
 	return "", fmt.Errorf("status %q not mapped in config statuses section", key)
 }
 
@@ -551,22 +547,44 @@ var defaultTextNotifyTemplates = map[string]string{
 func buildNotifyContent(notifType string, data notifyTemplateData) notify.Content {
 	key := "notification.templates." + notifType
 
-	// Check if it's a simple string template.
-	if s := viper.GetString(key); s != "" {
+	// One read of the map-shaped group answers both config shapes at
+	// once — `notification.templates` is a single map-typed key (its
+	// env variable supplies the whole map as JSON, a file supplies it
+	// as a block), and the entry's dynamic type expresses the
+	// string-or-map union this function used to probe viper twice
+	// for. A child-path read would miss the env form entirely: env
+	// supplies the whole map at one key, and nothing decomposes it
+	// into child paths.
+	//
+	// The env decode is explicit rather than a viper binding, same as
+	// mapGroupValues and for the same AllKeys-shadowing reason (see
+	// bindSchemaEnv) — this group's entries nest, so it decodes to
+	// map[string]any itself. Env overrides the block wholesale;
+	// undecodable JSON falls back to the file rather than silently
+	// discarding it.
+	entry := notifyTemplates()[notifType]
+
+	// A string entry is a plain-text template.
+	if s, ok := entry.(string); ok && s != "" {
 		return notify.Content{Text: renderNotifyTemplate(key, s, data)}
+	}
+
+	// A map entry holds structured override fields.
+	sub := make(map[string]string)
+	if m, ok := entry.(map[string]any); ok {
+		for k, v := range m {
+			sub[k] = fmt.Sprintf("%v", v)
+		}
 	}
 
 	// Built-in text default — overridden by a map config for this type.
 	// The empty key is what stops a failing built-in from being
 	// reported against a config key the user never set.
-	if s, ok := defaultTextNotifyTemplates[notifType]; ok {
-		if sub := viper.GetStringMapString(key); len(sub) == 0 {
-			return notify.Content{Text: renderNotifyTemplate("", s, data)}
-		}
+	if s, ok := defaultTextNotifyTemplates[notifType]; ok && len(sub) == 0 {
+		return notify.Content{Text: renderNotifyTemplate("", s, data)}
 	}
 
-	// Structured path: a map of override fields, falling back to defaults.
-	sub := viper.GetStringMapString(key)
+	// Structured path: the override fields, falling back to defaults.
 	defaults := defaultNotifyTemplates[notifType]
 	// get returns the pattern and the key to blame for it — the user's
 	// when they supplied an override, none when the built-in default
@@ -608,6 +626,23 @@ func buildNotifyContent(notifType string, data notifyTemplateData) notify.Conten
 		c.Preview = &ref
 	}
 	return c
+}
+
+// notifyTemplates returns the effective notification.templates map:
+// the env-supplied JSON when the group's variable is set and decodes,
+// the file's block otherwise. The nested-map counterpart of
+// mapGroupValues (this group's entries may themselves be maps, so the
+// flat string-map accessor can't serve it); no defaults overlay,
+// because the built-in template defaults are per-type fallbacks the
+// caller resolves, not schema keys.
+func notifyTemplates() map[string]any {
+	if raw := boundEnvValue("notification.templates"); raw != "" {
+		var out map[string]any
+		if err := json.Unmarshal([]byte(raw), &out); err == nil {
+			return out
+		}
+	}
+	return viper.GetStringMap("notification.templates")
 }
 
 // renderNotifyTemplate parses and executes a Go text/template. Returns
@@ -876,9 +911,11 @@ func resolveWorkflowTargets(ctx context.Context, workspace string, subStage stri
 const defaultReleaseVersionInput = "version"
 
 // releaseVersionInput returns the configured version input name, or the
-// default "version".
+// default "version". Read through the inputs group's map accessor —
+// the group is map-shaped (keyed by concept), so its env binding
+// carries the whole map at the group key.
 func releaseVersionInput() string {
-	if v := viper.GetString("cicd.workflows.release.inputs.version"); v != "" {
+	if v := mapGroupValues("cicd.workflows.release.inputs")["version"]; v != "" {
 		return v
 	}
 	return defaultReleaseVersionInput
@@ -1125,9 +1162,11 @@ func resolveRepoServiceNames(r Repository) []string {
 // ("preview.up", "preview.down"). Returns empty string if not
 // configured, signaling callers to skip.
 //
-// Config path: <sub-stage>.inputs.<concept>
+// Config path: <sub-stage>.inputs, a map-shaped group keyed by
+// concept — read through its map accessor so the group's env binding
+// (the whole map, at the group key) is honored.
 func stageInputName(subStage, concept string) string {
-	return viper.GetString(subStage + ".inputs." + concept)
+	return mapGroupValues(subStage + ".inputs")[concept]
 }
 
 // stageURLLegacyFields is the retirement the shared map cannot claim
