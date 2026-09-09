@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -54,7 +55,7 @@ func TestGroupAggregate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := &group{counts: tt.counts}
+			g := &group{counts: &tt.counts, countsMu: &sync.Mutex{}}
 			if got := g.aggregate(); got != tt.want {
 				t.Errorf("aggregate() = %v, want %v", got, tt.want)
 			}

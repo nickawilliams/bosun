@@ -459,16 +459,18 @@ func emitBulkCleanupReadiness(
 ) ([]bulkCleanupCandidate, error) {
 	candidates := make([]bulkCleanupCandidate, len(targets))
 
-	// Raw / non-interactive mode: no group, no spinners. Gather,
-	// print the static per-workspace summary card, and gate: blocked
-	// candidates are excluded (that's the sweep's posture, not an
-	// error), but WARN findings on what remains still need the
-	// acknowledgement a prompt would collect — --force is the
-	// non-interactive stand-in, exactly as in single mode.
+	// Raw / non-interactive mode: no group, no spinners — but the
+	// same bounded fan-out as the interactive path, so a large fleet
+	// gathers in parallel either way. Gather, print the static
+	// per-workspace summary card, and gate: blocked candidates are
+	// excluded (that's the sweep's posture, not an error), but WARN
+	// findings on what remains still need the acknowledgement a
+	// prompt would collect — --force is the non-interactive stand-in,
+	// exactly as in single mode.
 	if !isInteractive() {
-		for i, t := range targets {
-			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
-		}
+		ui.RunBounded(len(targets), 0, func(i int) {
+			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
+		})
 		buildBulkCleanupReadinessCard(candidates, force).Print()
 		included := includeBulkCandidates(candidates, force)
 		if !force && anyCandidateAtOrAbove(included, findingWarn) {
@@ -477,17 +479,16 @@ func emitBulkCleanupReadiness(
 		return included, nil
 	}
 
-	// Interactive: one outer card, a child spinner per workspace that
-	// resolves to its one-row summary when the probe finishes.
+	// Interactive: one outer card with every workspace's child
+	// spinner listed up front; the probes fan out concurrently and
+	// each spinner swaps to its one-row summary in place as its probe
+	// finishes, in stable workspace order.
 	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
-		for i := range targets {
-			t := targets[i]
-			_ = grp.Spinner(ui.PreserveCase(t.workspace), func() error {
-				candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
-				return nil
-			})
-			emitBulkCandidateRow(grp, candidates[i], force)
-		}
+		ui.FanOut(grp, len(targets), 0,
+			func(i int) string { return ui.PreserveCase(targets[i].workspace) },
+			func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
+			func(i int, slot ui.Reporter) { emitBulkCandidateRow(slot, candidates[i], force) },
+		)
 	})
 
 	included := includeBulkCandidates(candidates, force)

@@ -177,12 +177,7 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	indentLevel := 0
 	msgCh := make(chan groupMsg, 256)
 
-	g := &group{
-		outer:  r,
-		title:  title,
-		indent: indentLevel + 1,
-		msgCh:  msgCh,
-	}
+	g := newGroup(r, title, indentLevel+1, msgCh)
 
 	go func() {
 		start := time.Now()

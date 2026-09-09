@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -39,9 +41,28 @@ type groupMsg interface{ groupMsg() }
 type groupChildMsg struct {
 	rendered string
 	state    CardState
+	slot     int // non-zero: replace that slot's running row in place
 }
 
 func (groupChildMsg) groupMsg() {}
+
+// groupSlotStartMsg registers a concurrent child slot: a running-
+// indicator row whose position in the group is fixed now, while its
+// content resolves later — the mechanism behind FanOut's per-item
+// spinners.
+type groupSlotStartMsg struct {
+	title  string
+	indent int
+	slot   int
+}
+
+func (groupSlotStartMsg) groupMsg() {}
+
+// groupSlotDoneMsg clears a slot's running indicator once its
+// resolved rows (slot-tagged groupChildMsg) have been emitted.
+type groupSlotDoneMsg struct{ slot int }
+
+func (groupSlotDoneMsg) groupMsg() {}
 
 type groupTaskStartMsg struct {
 	title  string
@@ -78,12 +99,32 @@ func (groupDoneMsg) groupMsg() {}
 // group sends messages on msgCh; the BubbleTea model receives them
 // and manages all rendering. The callback goroutine never writes
 // directly to stdout.
+//
+// counts lives behind a pointer + mutex because slot-scoped clones
+// (see Slot) share their parent's tally: FanOut resolves slots from
+// worker goroutines, and each resolution's emissions must land on the
+// one aggregate the group finalizes with.
 type group struct {
-	outer  Reporter
-	title  string
-	indent int // children's indent depth
-	msgCh  chan<- groupMsg
-	counts groupCounts
+	outer    Reporter
+	title    string
+	indent   int // children's indent depth
+	msgCh    chan<- groupMsg
+	slot     int // non-zero: emissions resolve this slot in place
+	counts   *groupCounts
+	countsMu *sync.Mutex
+}
+
+// newGroup constructs a group reporter with its own counts. Slot
+// clones share these fields instead — see Slot.
+func newGroup(outer Reporter, title string, indent int, msgCh chan<- groupMsg) *group {
+	return &group{
+		outer:    outer,
+		title:    title,
+		indent:   indent,
+		msgCh:    msgCh,
+		counts:   &groupCounts{},
+		countsMu: &sync.Mutex{},
+	}
 }
 
 type groupCounts struct {
@@ -100,7 +141,15 @@ func (g *group) sendChild(state CardState, c *Card) {
 	// not headings themselves — render their titles without bold so
 	// the parent stays the row that carries the visual weight.
 	c.plainTitle = true
-	g.msgCh <- groupChildMsg{rendered: c.Render(), state: state}
+	g.msgCh <- groupChildMsg{rendered: c.Render(), state: state, slot: g.slot}
+	g.bumpCount(state)
+}
+
+// bumpCount tallies a child outcome into the shared aggregate.
+// Mutex-guarded because slot clones emit from worker goroutines.
+func (g *group) bumpCount(state CardState) {
+	g.countsMu.Lock()
+	defer g.countsMu.Unlock()
 	switch state {
 	case CardSuccess:
 		g.counts.success++
@@ -221,9 +270,9 @@ func (g *group) Task(title string, fn func() error) error {
 	}()
 	err := <-doneCh
 	if err != nil {
-		g.counts.failed++
+		g.bumpCount(CardFailed)
 	} else {
-		g.counts.success++
+		g.bumpCount(CardSuccess)
 	}
 	return err
 }
@@ -272,20 +321,47 @@ func (g *group) Summary(total string, segments []SummarySegment) {
 
 func (g *group) Group(title string, fn func(Reporter)) {
 	g.msgCh <- groupBeginMsg{title: title, indent: g.indent}
-	inner := &group{
-		outer:  g.outer,
-		title:  title,
-		indent: g.indent + 1,
-		msgCh:  g.msgCh,
-	}
+	inner := newGroup(g.outer, title, g.indent+1, g.msgCh)
 	fn(inner)
 	g.msgCh <- groupEndMsg{}
-	g.counts.success++ // sub-group contributes to parent aggregate
+	g.bumpCount(CardSuccess) // sub-group contributes to parent aggregate
+}
+
+// slotSeq issues slot ids. Package-global so ids stay unique across
+// nested groups sharing one message channel; 0 is reserved for
+// "no slot" in groupChildMsg.
+var slotSeq atomic.Int64
+
+// Slot starts a concurrent child slot: a running-indicator row for
+// title whose position in the group is fixed immediately, without
+// blocking the caller. The returned Reporter is slot-scoped — its
+// emissions replace the running row in place — and done clears the
+// indicator; call it exactly once, after the resolving emissions.
+//
+// Emissions on slot-scoped reporters may come from worker goroutines,
+// but each slot's resolve-then-done sequence must not interleave with
+// another's (FanOut serializes them) so multi-row resolutions stay
+// contiguous in the rendered group.
+func (g *group) Slot(title string) (Reporter, func()) {
+	id := int(slotSeq.Add(1))
+	g.msgCh <- groupSlotStartMsg{title: title, indent: g.indent, slot: id}
+	scoped := &group{
+		outer:    g.outer,
+		title:    g.title,
+		indent:   g.indent,
+		msgCh:    g.msgCh,
+		slot:     id,
+		counts:   g.counts,
+		countsMu: g.countsMu,
+	}
+	return scoped, func() { g.msgCh <- groupSlotDoneMsg{slot: id} }
 }
 
 // aggregate computes the final CardState from child outcomes.
 func (g *group) aggregate() CardState {
-	return aggregateCounts(g.counts)
+	g.countsMu.Lock()
+	defer g.countsMu.Unlock()
+	return aggregateCounts(*g.counts)
 }
 
 func aggregateCounts(c groupCounts) CardState {
@@ -321,8 +397,9 @@ type groupNode struct {
 }
 
 type groupRenderedChild struct {
-	rendered string     // pre-rendered card, or empty for sub-groups
-	node     *groupNode // non-nil for sub-group children
+	rendered string          // pre-rendered card, or empty for sub-groups
+	node     *groupNode      // non-nil for sub-group children
+	slot     *groupSlotChild // non-nil for concurrent slot children
 }
 
 type groupActiveTask struct {
@@ -330,11 +407,23 @@ type groupActiveTask struct {
 	indent int
 }
 
+// groupSlotChild is one concurrent slot's render state: a running-
+// indicator row that later resolves, in place, to the rows emitted
+// through its slot-scoped reporter.
+type groupSlotChild struct {
+	title    string
+	indent   int
+	running  bool
+	rendered []string
+	owner    *groupNode // node whose counts the slot's rows tally into
+}
+
 type groupModel struct {
 	spinner spinner.Model
 	msgCh   <-chan groupMsg
 	root    *groupNode
 	current *groupNode
+	slots   map[int]*groupSlotChild
 	done    bool
 }
 
@@ -349,6 +438,7 @@ func newGroupModel(title string, indentLevel int, msgCh <-chan groupMsg) *groupM
 		msgCh:   msgCh,
 		root:    root,
 		current: root,
+		slots:   map[int]*groupSlotChild{},
 	}
 }
 
@@ -400,16 +490,45 @@ func (m *groupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *groupModel) processMsg(msg groupMsg) {
 	switch msg := msg.(type) {
 	case groupChildMsg:
-		m.current.children = append(m.current.children, groupRenderedChild{rendered: msg.rendered})
+		target := m.current
+		if msg.slot != 0 {
+			// Slot-tagged: the row resolves an existing slot in place
+			// rather than appending at the tail. Counts tally into the
+			// slot's owning node — resolution can arrive after the
+			// current pointer has notionally moved.
+			sc := m.slots[msg.slot]
+			if sc == nil {
+				break // unknown slot — drop rather than misplace
+			}
+			sc.rendered = append(sc.rendered, msg.rendered)
+			target = sc.owner
+		} else {
+			target.children = append(target.children, groupRenderedChild{rendered: msg.rendered})
+		}
 		switch msg.state {
 		case CardSuccess:
-			m.current.counts.success++
+			target.counts.success++
 		case CardSkipped:
-			m.current.counts.skipped++
+			target.counts.skipped++
 		case CardFailed:
-			m.current.counts.failed++
+			target.counts.failed++
 		case CardInfo:
-			m.current.counts.info++
+			target.counts.info++
+		}
+
+	case groupSlotStartMsg:
+		sc := &groupSlotChild{
+			title:   msg.title,
+			indent:  msg.indent,
+			running: true,
+			owner:   m.current,
+		}
+		m.slots[msg.slot] = sc
+		m.current.children = append(m.current.children, groupRenderedChild{slot: sc})
+
+	case groupSlotDoneMsg:
+		if sc := m.slots[msg.slot]; sc != nil {
+			sc.running = false
 		}
 
 	case groupTaskStartMsg:
@@ -487,15 +606,36 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 	}
 
 	for _, child := range node.children {
-		if child.node != nil {
+		switch {
+		case child.node != nil:
 			m.renderNode(b, child.node)
-		} else {
+		case child.slot != nil:
+			m.renderSlot(b, child.slot)
+		default:
 			b.WriteString(child.rendered)
 		}
 	}
 
 	if node.activeTask != nil {
 		taskCard := NewCard(CardRunning, node.activeTask.title).Indent(node.activeTask.indent)
+		taskCard.tight = true
+		taskCard.plainTitle = true
+		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))
+	}
+}
+
+// renderSlot renders one concurrent slot: its resolved rows once
+// emitted, otherwise the running-indicator row at the slot's fixed
+// position.
+func (m *groupModel) renderSlot(b *strings.Builder, sc *groupSlotChild) {
+	if len(sc.rendered) > 0 {
+		for _, r := range sc.rendered {
+			b.WriteString(r)
+		}
+		return
+	}
+	if sc.running {
+		taskCard := NewCard(CardRunning, sc.title).Indent(sc.indent)
 		taskCard.tight = true
 		taskCard.plainTitle = true
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))

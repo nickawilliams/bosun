@@ -476,7 +476,7 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
 		close(drained)
 	}()
 
-	g := &group{outer: defaultReporter, title: title, indent: 1, msgCh: msgCh}
+	g := newGroup(defaultReporter, title, 1, msgCh)
 	start := time.Now()
 	fn(g)
 	holdSpinner(start) // display floor, as cardReporter.Group applies
