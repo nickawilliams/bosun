@@ -32,10 +32,18 @@ func TestGroupModelSlots(t *testing.T) {
 	}
 
 	// First slot resolves with a failure; counts tally per state and
-	// the group finalizes to the worst child outcome.
+	// the group finalizes to the worst child outcome. The extra
+	// skip/info rows pin the remaining count arms for slot-tagged
+	// children.
 	m.processMsg(groupChildMsg{rendered: "ROW-ALPHA\n", state: CardFailed, slot: 11})
+	m.processMsg(groupChildMsg{rendered: "ROW-ALPHA-WARN\n", state: CardSkipped, slot: 11})
+	m.processMsg(groupChildMsg{rendered: "ROW-ALPHA-INFO\n", state: CardInfo, slot: 11})
 	m.processMsg(groupSlotDoneMsg{slot: 11})
 	m.processMsg(groupDoneMsg{})
+
+	if c := m.root.counts; c.failed != 1 || c.skipped != 1 || c.info != 1 || c.success != 1 {
+		t.Errorf("counts = %+v, want one of each state", c)
+	}
 
 	view = m.viewString()
 	if a, b := strings.Index(view, "ROW-ALPHA"), strings.Index(view, "ROW-BETA"); a < 0 || b < 0 || a > b {
@@ -112,6 +120,40 @@ func TestFanOutSlots(t *testing.T) {
 	}
 	if got := g.aggregate(); got != CardSuccess {
 		t.Errorf("aggregate = %v, want CardSuccess", got)
+	}
+}
+
+// TestFanOutNothingToDo pins the empty-input no-ops: neither helper
+// may spin up machinery (or panic on empty slices) for zero items.
+func TestFanOutNothingToDo(t *testing.T) {
+	called := false
+	FanOut(NewCaptureReporter(), 0, 0,
+		func(int) string { return "" },
+		func(int) { called = true },
+		func(int, Reporter) { called = true },
+	)
+	RunBounded(0, 0, func(int) { called = true })
+	if called {
+		t.Error("zero items still invoked work or resolve")
+	}
+}
+
+// TestGroupWorkerSideCounts pins the worker-side aggregate for the
+// paths the model doesn't drive: a failed Task and a nested sub-group
+// both tally through bumpCount into the shared counts.
+func TestGroupWorkerSideCounts(t *testing.T) {
+	ch := make(chan groupMsg, 64)
+	g := newGroup(nil, "parent", 1, ch)
+
+	if err := g.Task("boom", func() error { return fmt.Errorf("boom") }); err == nil {
+		t.Fatal("Task swallowed its error")
+	}
+	g.Group("inner", func(inner Reporter) {
+		inner.Complete("child")
+	})
+
+	if got := g.aggregate(); got != CardFailed {
+		t.Errorf("aggregate = %v, want CardFailed (failed Task dominates the sub-group success)", got)
 	}
 }
 

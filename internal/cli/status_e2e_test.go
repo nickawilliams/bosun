@@ -622,6 +622,64 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
+	t.Run("project_scope/pattern_matching_nothing_is_explicit", func(t *testing.T) {
+		// A glob that selects no workspace says so and exits 0.
+		h, _ := newStatusHarness(t, "api")
+		_ = startStatusWorkspace(t, h, "EX-5", "First", "first")
+
+		if err := h.Run("status", "nomatch/*"); err != nil {
+			t.Fatalf("status 'nomatch/*': %v", err)
+		}
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, `no workspaces match "nomatch/*"`) {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty pattern result was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("workspace_scope/exact_pattern_unknown_workspace_errors", func(t *testing.T) {
+		// An exact name that matches no workspace is an explicit
+		// target that failed — an error, not an empty render.
+		h, _ := newStatusHarness(t, "api")
+		_ = startStatusWorkspace(t, h, "EX-5", "First", "first")
+
+		err := h.Run("status", "no-such-workspace")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("err = %v, want the not-found refusal", err)
+		}
+	})
+
+	t.Run("project_scope/unevaluable_workspace_reported", func(t *testing.T) {
+		// A workspace whose name carries no issue key can't be judged
+		// by --status — it surfaces as a skip with the reason instead
+		// of vanishing silently from the filtered view.
+		h, _ := newStatusHarness(t, "api")
+		_ = startStatusWorkspace(t, h, "EX-5", "First", "first")
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-5", Title: "First", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("workspace", "create", "scratch", "api"); err != nil {
+			t.Fatalf("workspace create: %v", err)
+		}
+
+		if err := h.Run("status", "--status", "done"); err != nil {
+			t.Fatalf("status --status done: %v", err)
+		}
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no issue key") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the unevaluable workspace was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
 	t.Run("project_scope/unknown_status_key_refused", func(t *testing.T) {
 		// The vocabulary validation is shared with cleanup; pin that
 		// status routes through it too.

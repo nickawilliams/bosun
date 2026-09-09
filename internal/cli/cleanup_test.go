@@ -1504,6 +1504,68 @@ func TestCleanupBulk(t *testing.T) {
 		assertBranchWorkspaceIntact(t, h, api, other)
 	})
 
+	t.Run("noninteractive/everything_blocked_leaves_nothing_to_sweep", func(t *testing.T) {
+		// Non-interactive with every candidate blocked: the sweep has
+		// nothing left, says so, and exits 0.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		wt := h.WorktreePath(cleanupBranch, api.Name)
+		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+		h.NonInteractive()
+
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces passed cleanup readiness") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty sweep was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("errors/issue_without_workspace_refuses", func(t *testing.T) {
+		// --issue maps to a workspace; a key no workspace carries is
+		// an explicit target that failed, not a fall-through to the
+		// picker or a guess.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "--issue", "EX-99", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "no workspace found for issue EX-99") {
+			t.Fatalf("err = %v, want the unmapped-issue refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("errors/ambiguous_issue_mapping_refuses", func(t *testing.T) {
+		// Two workspaces carry the same issue key: the mapping is
+		// ambiguous and the run refuses toward the pattern form
+		// rather than guessing.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		if err := h.Run("workspace", "create", "EX-1-copy", "api"); err != nil {
+			t.Fatalf("workspace create: %v", err)
+		}
+
+		err := h.Run("cleanup", "--issue", "EX-1", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "maps to 2 workspaces") {
+			t.Fatalf("err = %v, want the ambiguity refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, "EX-1-copy")
+	})
+
 	t.Run("noninteractive/warnings_require_force", func(t *testing.T) {
 		// A WARN on an included workspace needs the acknowledgment a
 		// prompt would collect; with nobody to answer, --force is the
