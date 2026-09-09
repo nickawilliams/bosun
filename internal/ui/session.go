@@ -278,18 +278,35 @@ func (s *session) send(msg tea.Msg) {
 // commitOpen commits the current open block to scrollback in
 // continuing form and clears it. The Println goes through the
 // program's message queue, so it is ordered with subsequent sends.
+//
+// The frame clear is sent BEFORE the Println, and tall blocks wait
+// for a render flush in between. Both are load-bearing: BubbleTea's
+// insertAbove scrolls the SCREEN for every inserted line that does
+// not fit below the painted frame's last row, and it consults the
+// screen — which lags the model until the next render flush — not
+// the message queue. Committing a tall open block (a bulk readiness
+// group, a data-scaled plan) while its equally tall frame is still
+// painted therefore scrolls the frame's own top rows into terminal
+// history, fossilizing a stale mid-run duplicate above the real
+// block (the #120 double "Cleanup Readiness" report; same family as
+// #94). Small blocks never scroll that far, so they keep the
+// no-pause fast path; for tall ones the settle lets a flush paint
+// the cleared tail first, after which the insert can only scroll
+// already-committed rows.
 func (s *session) commitOpen() {
 	if s.open == nil {
 		return
 	}
-	s.println(s.open.continuing)
-	s.open = nil
-	// Drop the committed block from the managed frame too, or it
-	// stays painted below its own scrollback copy. Callers that mount
-	// replacement content post their own tail immediately after, and
-	// both messages travel the same FIFO queue, so the intermediate
-	// clear never reaches the screen on those paths.
+	block := s.open.continuing
 	s.send(sesTailMsg{text: ""})
+	if lines := strings.Count(block, "\n") + 1; 2*lines+6 > TermHeight() {
+		// ~3 frames at the default 60fps framerate — enough for the
+		// cleared tail to reach the screen before insertAbove reads
+		// it.
+		time.Sleep(50 * time.Millisecond)
+	}
+	s.println(block)
+	s.open = nil
 }
 
 // println commits raw text to scrollback. Text carries its own
