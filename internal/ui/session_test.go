@@ -670,6 +670,37 @@ func TestSessionCommitClearsTail(t *testing.T) {
 	}
 }
 
+// TestSessionTallBlockCommitsOnce drives commitOpen's settle path: a
+// block tall relative to the terminal (2×lines+6 > TermHeight, which
+// tests see as the 24-row default) takes the clear-then-settle route
+// before its scrollback insert. The renderer-level stranding this
+// prevents needs a real PTY to observe (TestGroupSlotsPTYSmoke); here
+// the assertable contract is that the tall block still lands exactly
+// once and in order.
+func TestSessionTallBlockCommitsOnce(t *testing.T) {
+	out, _ := sessionTestStreams(t)
+
+	err := RunSession(func() error {
+		tall := NewCard(CardSuccess, "tallblock")
+		for i := range 12 {
+			tall.Muted(strings.Repeat("row", 1) + "-" + string(rune('a'+i)))
+		}
+		tall.Print()
+		NewCard(CardSuccess, "successor").Print()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+	text := out.String()
+	if n := strings.Count(text, "Tallblock"); n != 1 {
+		t.Errorf("tall block rendered %d times, want 1 (stale frame duplicate)", n)
+	}
+	if !strings.Contains(text, "Successor") {
+		t.Errorf("successor card missing after the settled commit\n%s", text)
+	}
+}
+
 // TestSessionTightSuppressesConnector locks the Tight contract across
 // a program-painted resolution: the gather seams end on a Tight input
 // header that an embedded form renders flush beneath, so no connector
