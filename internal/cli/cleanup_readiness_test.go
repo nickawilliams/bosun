@@ -740,30 +740,24 @@ func TestEmitBulkCleanupReadinessNonInteractive(t *testing.T) {
 		repos:     []Repository{{Name: "api", Path: t.TempDir()}}, // not a git repo → unverified WARN
 	}
 
-	t.Run("warnings error without force", func(t *testing.T) {
-		_, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
-		if err == nil || !strings.Contains(err.Error(), "--force") {
-			t.Errorf("err = %v, want the warnings-need---force refusal", err)
-		}
-	})
-
-	t.Run("blocked is excluded and the clean rest proceed", func(t *testing.T) {
-		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe}, false)
+	t.Run("returns every candidate classified", func(t *testing.T) {
+		// The gate moved to the caller (#120): the readiness pass
+		// renders and classifies but excludes nothing itself —
+		// includeBulkCandidates (non-interactive) or the picker
+		// (interactive) decide who proceeds.
+		candidates, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
 		if err != nil {
-			t.Fatalf("err = %v, want nil (exclusion is the sweep's posture, not an error)", err)
+			t.Fatalf("err = %v, want nil (classification is not a gate)", err)
 		}
-		if len(included) != 1 || included[0].target.workspace != "EX-2-safe" {
-			t.Errorf("included = %+v, want just the safe workspace", included)
+		if len(candidates) != 3 {
+			t.Fatalf("candidates = %d, want all 3", len(candidates))
 		}
-	})
-
-	t.Run("force includes blocks and acknowledges warns", func(t *testing.T) {
-		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, warned}, true)
-		if err != nil {
-			t.Fatalf("err = %v, want nil (--force is the non-interactive acknowledgement)", err)
-		}
-		if len(included) != 2 {
-			t.Errorf("included = %d candidates, want both", len(included))
+		wants := []findingSeverity{findingBlock, findingSafe, findingWarn}
+		for i, want := range wants {
+			if candidates[i].worst != want {
+				t.Errorf("candidate %d (%s) worst = %v, want %v",
+					i, candidates[i].target.workspace, candidates[i].worst, want)
+			}
 		}
 	})
 }

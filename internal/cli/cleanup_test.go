@@ -182,14 +182,15 @@ func hasRemoteBranch(t *testing.T, r *testharness.Repo, branch string) bool {
 //
 // The tree adapts the planned scenarios to the command as built.
 // Cleanup takes no --repository flag: within one workspace it is
-// all-or-nothing across that workspace's worktrees (--workspace picks
-// which workspace dies, and every repo in it goes — covered by
-// filter/). Project scope is explicit: --all sweeps every workspace,
-// narrowed by the shared filter flags (--status), with sweep
-// semantics — a blocked workspace is excluded and reported while its
-// siblings proceed (TestCleanupBulk), where the single-workspace
-// scenarios here BLOCK with an error, because an explicitly named
-// target aborting and a criteria-selected set sweeping are different
+// all-or-nothing across that workspace's worktrees (an exact-name
+// pattern — or the deprecated --workspace — picks which workspace
+// dies, and every repo in it goes — covered by filter/). Batch scope
+// is explicit: a glob pattern selects the namespace, narrowed by the
+// shared filter flags (--status), with picker/sweep semantics — a
+// blocked workspace is gated behind --force while its siblings
+// proceed (TestCleanupBulk), where the single-workspace scenarios
+// here BLOCK with an error, because an explicitly named target
+// aborting and a criteria-selected set sweeping are different
 // promises. And cleanup makes no tracker status transition, so the
 // harness README's SetStatusErr apply-failure case has no seam here;
 // errors/ covers the failure modes cleanup actually has instead.
@@ -318,13 +319,12 @@ func TestCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("filter/no_workspace_flag_prompts_picker", func(t *testing.T) {
+	t.Run("filter/issue_flag_maps_to_its_workspace", func(t *testing.T) {
 		// With no --workspace flag, no env, and a CWD outside any
-		// workspace, RequireWorkspace falls back to the interactive
-		// picker — and two workspaces make that the select list rather
-		// than the single-workspace shortcut. Accepting the first entry
-		// (EX-1-feature; List walks the root in sorted order) scopes
-		// cleanup to that workspace and leaves the sibling untouched.
+		// workspace, an explicit --issue is the selection: the pipeline
+		// maps the issue key to the one workspace whose name carries
+		// it — no picker, even with two workspaces present (#120). The
+		// sibling is untouched.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -338,9 +338,6 @@ func TestCleanup(t *testing.T) {
 		}
 		otherWorktree := h.WorktreePath(otherBranch, api.Name)
 
-		// Accept the picker's first entry.
-		h.Type("\r")
-
 		if err := h.Run("cleanup", "--issue", "EX-1", "--approve"); err != nil {
 			t.Fatalf("cleanup: %v", err)
 		}
@@ -352,6 +349,47 @@ func TestCleanup(t *testing.T) {
 		if !api.HasBranch(otherBranch) {
 			t.Errorf("sibling workspace's branch %s was deleted", otherBranch)
 		}
+	})
+
+	t.Run("filter/exact_pattern_targets_single_workspace", func(t *testing.T) {
+		// An exact-name pattern (no glob metacharacters) is single
+		// mode: the named workspace dies, the sibling survives, and no
+		// picker or batch machinery is involved (#120).
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		const otherBranch = "EX-2-other"
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+		otherWorktree := h.WorktreePath(otherBranch, api.Name)
+
+		if err := h.Run("cleanup", cleanupBranch, "--approve"); err != nil {
+			t.Fatalf("cleanup %s: %v", cleanupBranch, err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		if !api.WorktreeExists(otherWorktree) {
+			t.Errorf("sibling workspace's worktree was removed")
+		}
+	})
+
+	t.Run("filter/exact_pattern_unknown_workspace_errors", func(t *testing.T) {
+		// An exact name that matches no workspace is an explicit
+		// target that failed — a clear error, not a silent no-op.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "no-such-workspace", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("err = %v, want the not-found refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
 	})
 
 	t.Run("preview/teardown_destroys_env", func(t *testing.T) {
@@ -374,34 +412,29 @@ func TestCleanup(t *testing.T) {
 		assertWorkspaceGone(t, h, api)
 	})
 
-	t.Run("preview/picker_selection_derives_issue_for_teardown", func(t *testing.T) {
-		// The path issue #100 reported: no --workspace, no --issue, CWD
-		// outside any workspace. The silent issue chain runs at pre-run
-		// time against a still-empty workspace and derives nothing; the
-		// picker then fills the workspace, and RequireWorkspace must
-		// re-derive the issue from the selected name. Without that,
-		// cc.Issue stays empty — the teardown action is gated off and a
-		// bound env is silently left running while the worktrees and
-		// branches are destroyed. (The same empty key also degrades the
-		// preamble card, but that card is unobservable here: the
-		// harness's raw-mode reporter suppresses RunCardReplace output,
-		// so the teardown is the consequence this test can lock.)
+	t.Run("preview/bare_picker_derives_issue_for_teardown", func(t *testing.T) {
+		// No --workspace, no --issue, CWD outside any workspace: the
+		// bare invocation routes to the batch picker (#120). EX-1 is
+		// ready and arrives preselected; EX-2 (issue still In
+		// Progress) is a WARN row and arrives unselected — Enter
+		// sweeps just EX-1, and the teardown targets the issue key
+		// derived from the workspace name. Without that derivation the
+		// bound env would be silently left running while the worktrees
+		// and branches are destroyed (the failure #100 reported for
+		// the old single-select picker).
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
 		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "brave-falcon"})
 
-		// A second workspace forces the select list rather than the
-		// single-workspace shortcut — the reported scenario.
 		h.Tracker.SeedIssue(issue.Issue{
-			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+			Key: "EX-2", Title: "Other work", Type: "Story",
 		})
 		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
 			t.Fatalf("start EX-2: %v", err)
 		}
 
-		// Accept the picker's first entry (EX-1-feature; List walks
-		// the root in sorted order).
+		// Confirm the picker's preselection (the ready EX-1 row).
 		h.Type("\r")
 
 		if err := h.Run("cleanup", "--approve"); err != nil {
@@ -410,42 +443,30 @@ func TestCleanup(t *testing.T) {
 
 		want := []string{"EX-1|brave-falcon"}
 		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want[0] {
-			t.Errorf("destroyed = %v, want %v (env skipped: issue not derived from picked workspace)", got, want)
+			t.Errorf("destroyed = %v, want %v (env skipped: issue not derived from workspace name)", got, want)
 		}
 		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, "EX-2-other")
 	})
 
-	t.Run("preview/issue_flag_beats_picker_derivation", func(t *testing.T) {
-		// The counterpart guard: derivation only fills a still-empty
-		// issue. With --issue set, the flag's key must survive the
-		// picker even when the selected workspace name carries a
-		// different one — the teardown targets the flag's env, and the
-		// env bound to the derivable key is left alone. An
-		// unconditional overwrite after the picker would pass the test
-		// above and fail here.
+	t.Run("preview/issue_flag_tears_down_the_mapped_workspace_env", func(t *testing.T) {
+		// --issue is the issue→workspace mapping: cleanup targets the
+		// workspace carrying that key and tears down that issue's env,
+		// leaving the other issue's env and workspace alone.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
 		h.Preview.SeedEnv("EX-1", preview.Environment{Name: "calm-otter"})
 		h.Preview.SeedEnv("EX-2", preview.Environment{Name: "brave-falcon"})
 
-		// A second workspace forces the select list.
+		const otherBranch = "EX-2-other"
 		h.Tracker.SeedIssue(issue.Issue{
-			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
+			Key: "EX-2", Title: "Other work", Type: "Story",
 		})
 		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
 			t.Fatalf("start EX-2: %v", err)
 		}
-		// start transitioned EX-2 to In Progress; put it back in a
-		// done-like status so the readiness gate judges the flag's
-		// issue clean.
-		h.Tracker.SeedIssue(issue.Issue{
-			Key: "EX-2", Title: "Other work", Type: "Story", Status: "Done",
-		})
-
-		// Accept the picker's first entry (EX-1-feature) while the
-		// flag names EX-2.
-		h.Type("\r")
+		markMergedBranch(t, h, api, "EX-2", "Other work", otherBranch)
 
 		if err := h.Run("cleanup", "--issue", "EX-2", "--approve"); err != nil {
 			t.Fatalf("cleanup: %v", err)
@@ -453,9 +474,10 @@ func TestCleanup(t *testing.T) {
 
 		want := []string{"EX-2|brave-falcon"}
 		if got := h.Preview.Destroyed(); len(got) != 1 || got[0] != want[0] {
-			t.Errorf("destroyed = %v, want %v (the flag's issue, not the picked workspace's)", got, want)
+			t.Errorf("destroyed = %v, want %v (the mapped workspace's issue)", got, want)
 		}
-		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceGone(t, h, api, otherBranch)
+		assertWorkspaceIntact(t, h, api)
 	})
 
 	t.Run("preview/no_env_skips_teardown", func(t *testing.T) {
@@ -1077,10 +1099,17 @@ func assertBranchWorkspaceIntact(t *testing.T, h *testharness.Harness, r *testha
 	}
 }
 
-// TestCleanupBulk exercises `bosun cleanup --all` end-to-end: the
-// scope grammar, the --status filter over observed issue states, the
+// TestCleanupBulk exercises batch cleanup end-to-end: the pattern
+// grammar (and its deprecated --all alias), the --status filter over
+// observed issue states, the readiness-annotated picker, the
 // exclude-and-report sweep semantics for blocked workspaces, and the
 // combined multi-workspace plan with per-workspace failure isolation.
+//
+// The harness's injected readers always read as interactive, so the
+// batch flow here goes through the picker — the confirmation Enter
+// (h.Type("\r")) accepts its readiness-derived preselection. The
+// non-interactive sweep (no picker) is covered by the NonInteractive
+// scenarios at the bottom.
 func TestCleanupBulk(t *testing.T) {
 	t.Run("filter/status_done_cleans_only_matching_workspaces", func(t *testing.T) {
 		// Two workspaces: EX-1 done + merged, EX-2 still In Progress.
@@ -1090,17 +1119,36 @@ func TestCleanupBulk(t *testing.T) {
 		api := repos[0]
 		markMerged(t, h, api)
 		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		h.Type("\r")
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
-			t.Fatalf("cleanup --all --status done: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**' --status done: %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
 		assertBranchWorkspaceIntact(t, h, api, other)
 	})
 
-	t.Run("filter/all_without_filters_sweeps_every_workspace", func(t *testing.T) {
-		// --all with no filter is the whole project: both workspaces
+	t.Run("filter/filter_without_pattern_implies_batch_scope", func(t *testing.T) {
+		// A --status filter with no pattern implies '**' (#120): the
+		// filter names a population, so it IS the batch selection —
+		// no --all, no pattern, no grammar error.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup --status done: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, other)
+	})
+
+	t.Run("filter/doublestar_sweeps_every_workspace", func(t *testing.T) {
+		// '**' with no filter is the whole project: both workspaces
 		// are safe (done + merged) and both go, under one plan and one
 		// approval.
 		h, repos := startCleanupWorkspace(t, "api")
@@ -1108,19 +1156,91 @@ func TestCleanupBulk(t *testing.T) {
 		markMerged(t, h, api)
 		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
 		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+		h.Type("\r")
 
-		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
 		assertBranchWorkspaceGone(t, h, api, other)
 	})
 
-	t.Run("readiness/blocked_workspace_excluded_while_sweep_proceeds", func(t *testing.T) {
+	t.Run("filter/glob_selects_namespace_without_crossing_segments", func(t *testing.T) {
+		// Path-aware globbing: 'epic/*' matches the epic/ namespace
+		// and nothing else — the EX-1 workspace at the root is not
+		// touched even though '**' would have matched it.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		if err := h.Run("workspace", "create", "epic/one", "api"); err != nil {
+			t.Fatalf("workspace create epic/one: %v", err)
+		}
+		if err := h.Run("workspace", "create", "epic/two", "api"); err != nil {
+			t.Fatalf("workspace create epic/two: %v", err)
+		}
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "epic/*", "--approve"); err != nil {
+			t.Fatalf("cleanup 'epic/*': %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		assertBranchWorkspaceGone(t, h, api, "epic/one")
+		assertBranchWorkspaceGone(t, h, api, "epic/two")
+	})
+
+	t.Run("filter/pattern_matching_nothing_is_explicit", func(t *testing.T) {
+		// A pattern that selects no workspace says so and exits 0.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		if err := h.Run("cleanup", "nomatch/*", "--approve"); err != nil {
+			t.Fatalf("cleanup 'nomatch/*': %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, `no workspaces match "nomatch/*"`) {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty pattern result was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("deprecated/all_flag_still_sweeps_and_warns", func(t *testing.T) {
+		// --all survives one release cycle as an alias for '**': it
+		// still sweeps, and the run warns toward the pattern form.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Type("\r")
+
+		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
+			t.Fatalf("cleanup --all: %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		var warned bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureWarning) {
+			if strings.Contains(ev.Label, "deprecated") {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("--all did not warn as deprecated\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("readiness/blocked_workspace_not_selectable_while_sweep_proceeds", func(t *testing.T) {
 		// Both workspaces match the filter, but EX-2's worktree is
-		// dirty — a BLOCK. Sweep semantics: EX-2 is excluded and
-		// reported while EX-1 proceeds, and the run still exits 0.
+		// dirty — a BLOCK. In the picker EX-2 is listed with its
+		// reason but not preselected (and not selectable without
+		// --force); Enter sweeps the ready EX-1 and the run exits 0.
 		// (The single-workspace command aborts on the same finding —
 		// an explicitly named target and a criteria-selected set make
 		// different promises.)
@@ -1133,34 +1253,36 @@ func TestCleanupBulk(t *testing.T) {
 		if err := os.WriteFile(scratch, []byte("wip\n"), 0o644); err != nil {
 			t.Fatalf("write scratch file: %v", err)
 		}
+		h.Type("\r")
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
 		assertBranchWorkspaceIntact(t, h, api, other)
 		if _, err := os.Stat(scratch); err != nil {
-			t.Errorf("the excluded workspace's uncommitted file was destroyed: %v", err)
+			t.Errorf("the blocked workspace's uncommitted file was destroyed: %v", err)
 		}
-		// The exclusion is reported, not silent: the readiness row
-		// names the workspace and says it was excluded.
+		// The gate is reported, not silent: the readiness row names
+		// the workspace and the --force requirement.
 		var reported bool
 		for _, ev := range h.Reporter.OfKind(ui.CaptureFail) {
-			if strings.Contains(ev.Value, "excluded") {
+			if strings.Contains(ev.Value, "blocked") {
 				reported = true
 			}
 		}
 		if !reported {
-			t.Errorf("no readiness row reported the exclusion\n%s", h.Reporter.Dump())
+			t.Errorf("no readiness row reported the block\n%s", h.Reporter.Dump())
 		}
 	})
 
-	t.Run("readiness/force_includes_blocked_workspaces", func(t *testing.T) {
-		// Same shape with --force: the blocked workspace is included,
-		// the findings route through the Continue/Cancel dialog, and
-		// "y" acknowledges them — both workspaces go, dirty file and
-		// all.
+	t.Run("readiness/force_makes_blocked_selectable", func(t *testing.T) {
+		// Same shape with --force: the blocked EX-2 becomes selectable
+		// but does NOT arrive preselected — selecting it is the
+		// acknowledgment the old combined warning dialog used to
+		// collect. Down+toggle+Enter takes both workspaces, dirty
+		// file and all.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -1170,10 +1292,10 @@ func TestCleanupBulk(t *testing.T) {
 		if err := os.WriteFile(scratch, []byte("wip\n"), 0o644); err != nil {
 			t.Fatalf("write scratch file: %v", err)
 		}
-		h.Type("y")
+		h.Type("jx\r")
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--force", "--approve"); err != nil {
-			t.Fatalf("cleanup --all --force: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--force", "--approve"); err != nil {
+			t.Fatalf("cleanup '**' --force: %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
@@ -1191,9 +1313,10 @@ func TestCleanupBulk(t *testing.T) {
 		if err := h.Run("workspace", "create", "scratch", "api"); err != nil {
 			t.Fatalf("workspace create: %v", err)
 		}
+		h.Type("\r")
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
@@ -1209,20 +1332,59 @@ func TestCleanupBulk(t *testing.T) {
 		}
 	})
 
-	t.Run("readiness/warning_prompt_cancel_aborts_sweep", func(t *testing.T) {
-		// An included workspace carries a WARN (the code host is
-		// unreachable, so the PR probe silently didn't run). The
-		// sweep's findings collapse into one Continue/Cancel dialog;
-		// "n" declines and nothing anywhere is destroyed.
+	t.Run("picker/warn_row_arrives_unselected_and_enter_skips_it", func(t *testing.T) {
+		// A WARN workspace (the code host is unreachable, so the PR
+		// probe silently didn't run) arrives unselected in the picker.
+		// There is no combined warning dialog any more — a bare Enter
+		// selects nothing, the run says so, and nothing is destroyed.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
 		h.Host.GetPRErr = errStubErr("github API 503: service unavailable")
-		h.Type("n")
+		h.Type("\r")
 
-		err := h.Run("cleanup", "--all", "--status", "done", "--approve")
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces selected") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty selection was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("picker/selecting_a_warn_row_is_the_acknowledgment", func(t *testing.T) {
+		// The other half: toggling the WARN row on and confirming IS
+		// the acknowledgment the old dialog collected — the sweep
+		// proceeds with no further prompt.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Host.GetPRErr = errStubErr("github API 503: service unavailable")
+		h.Type("x\r")
+
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+		assertWorkspaceGone(t, h, api)
+	})
+
+	t.Run("picker/cancel_aborts_the_sweep", func(t *testing.T) {
+		// Ctrl+C in the picker is a cancel: ErrCancelled, nothing
+		// destroyed.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Type("\x03")
+
+		err := h.Run("cleanup", "**", "--status", "done", "--approve")
 		if err == nil || !strings.Contains(err.Error(), "cancelled") {
-			t.Fatalf("err = %v, want the declined warning gate", err)
+			t.Fatalf("err = %v, want the picker cancel", err)
 		}
 		assertWorkspaceIntact(t, h, api)
 	})
@@ -1235,8 +1397,8 @@ func TestCleanupBulk(t *testing.T) {
 		api := repos[0]
 		// EX-1 stays In Progress (as start left it).
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceIntact(t, h, api)
@@ -1252,9 +1414,9 @@ func TestCleanupBulk(t *testing.T) {
 	})
 
 	t.Run("readiness/everything_blocked_leaves_nothing_to_sweep", func(t *testing.T) {
-		// The only matching workspace is blocked (dirty): it is
-		// excluded, the sweep has nothing left, and the run reports
-		// that and exits 0.
+		// The only matching workspace is blocked (dirty): nothing is
+		// preselected, Enter selects nothing, and the run reports the
+		// empty selection and exits 0.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -1262,21 +1424,101 @@ func TestCleanupBulk(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
 			t.Fatalf("write scratch file: %v", err)
 		}
+		h.Type("\r")
 
-		if err := h.Run("cleanup", "--all", "--status", "done", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceIntact(t, h, api)
 		var reported bool
 		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
-			if strings.Contains(ev.Label, "no workspaces passed cleanup readiness") {
+			if strings.Contains(ev.Label, "no workspaces selected") {
 				reported = true
 			}
 		}
 		if !reported {
-			t.Errorf("the empty sweep was not reported\n%s", h.Reporter.Dump())
+			t.Errorf("the empty selection was not reported\n%s", h.Reporter.Dump())
 		}
+	})
+
+	t.Run("picker/blocked_selection_is_rejected_without_force", func(t *testing.T) {
+		// Toggling a blocked row on and submitting is refused by the
+		// picker's validation — the form stays open, the toggle is
+		// undone, and the empty submit exits cleanly with nothing
+		// destroyed. --force is the only door (covered above).
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		wt := h.WorktreePath(cleanupBranch, api.Name)
+		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+		// select blocked row → submit (rejected) → deselect → submit.
+		h.Type("x\rx\r")
+
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+		if _, err := os.Stat(filepath.Join(wt, "scratch.txt")); err != nil {
+			t.Errorf("the blocked workspace's uncommitted file was destroyed: %v", err)
+		}
+	})
+
+	t.Run("noninteractive/bare_invocation_requires_a_pattern", func(t *testing.T) {
+		// Piped/CI: no picker exists, so a bare destructive
+		// invocation refuses to guess a selection.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.NonInteractive()
+
+		err := h.Run("cleanup", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "pattern") {
+			t.Fatalf("err = %v, want the specify-a-pattern refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("noninteractive/pattern_sweeps_without_a_picker", func(t *testing.T) {
+		// Non-interactive sweep semantics: the pattern is the
+		// selection; blocked workspaces are excluded and reported
+		// while the rest proceed, with no picker and no prompt.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
+		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+		scratch := filepath.Join(h.WorktreePath(other, api.Name), "scratch.txt")
+		if err := os.WriteFile(scratch, []byte("wip\n"), 0o644); err != nil {
+			t.Fatalf("write scratch file: %v", err)
+		}
+		h.NonInteractive()
+
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+
+		assertWorkspaceGone(t, h, api)
+		assertBranchWorkspaceIntact(t, h, api, other)
+	})
+
+	t.Run("noninteractive/warnings_require_force", func(t *testing.T) {
+		// A WARN on an included workspace needs the acknowledgment a
+		// prompt would collect; with nobody to answer, --force is the
+		// stand-in and its absence is an error.
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Host.GetPRErr = errStubErr("github API 503: service unavailable")
+		h.NonInteractive()
+
+		err := h.Run("cleanup", "**", "--status", "done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "--force") {
+			t.Fatalf("err = %v, want the warnings-need---force refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
 	})
 
 	t.Run("errors/unmatched_repo_excludes_workspace_from_sweep", func(t *testing.T) {
@@ -1294,8 +1536,8 @@ func TestCleanupBulk(t *testing.T) {
 		h.Workspace.WriteConfig(strings.Replace(
 			cleanupConfig, `  - "repos/*"`, `  - "repos/api"`, 1))
 
-		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceIntact(t, h, api)
@@ -1313,14 +1555,16 @@ func TestCleanupBulk(t *testing.T) {
 
 	t.Run("plan_confirmation/dry_run_previews_the_sweep", func(t *testing.T) {
 		// Dry-run renders the combined destroy plan and applies
-		// nothing anywhere.
+		// nothing anywhere. The picker still runs — it is the scope
+		// gate, not the apply gate.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
 		other := startSecondCleanupWorkspace(t, h, "EX-2", "Other work", "other")
 		markMergedBranch(t, h, api, "EX-2", "Other work", other)
+		h.Type("\r")
 
-		err := h.Run("cleanup", "--all", "--dry-run")
+		err := h.Run("cleanup", "**", "--dry-run")
 		if err == nil || !strings.Contains(err.Error(), "cancelled") {
 			t.Fatalf("dry-run error = %v, want contains \"cancelled\"", err)
 		}
@@ -1330,15 +1574,15 @@ func TestCleanupBulk(t *testing.T) {
 	})
 
 	t.Run("filter/empty_project_reports_no_workspaces", func(t *testing.T) {
-		// --all in a project with no workspaces at all: nothing to
+		// '**' in a project with no workspaces at all: nothing to
 		// observe, nothing to filter — said explicitly, exit 0.
 		h := testharness.New(t)
 		h.InstallPreview()
 		h.Workspace.WriteConfig(cleanupConfig)
 		h.Workspace.AddRepo("api")
 
-		if err := h.Run("cleanup", "--all", "--approve"); err != nil {
-			t.Fatalf("cleanup --all: %v", err)
+		if err := h.Run("cleanup", "**", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		var reported bool
@@ -1364,39 +1608,29 @@ func TestCleanupBulk(t *testing.T) {
 		h.Workspace.WriteConfig(strings.Replace(
 			cleanupConfig, "  repositories:\n    - \"repos/*\"\n", "", 1))
 
-		err := h.Run("cleanup", "--all", "--status", "done", "--approve")
+		err := h.Run("cleanup", "**", "--status", "done", "--approve")
 		if err == nil || !strings.Contains(err.Error(), "no repository patterns configured") {
 			t.Fatalf("err = %v, want the missing-config refusal", err)
 		}
 		assertWorkspaceIntact(t, h, api)
 	})
 
-	t.Run("errors/all_conflicts_with_workspace_flag", func(t *testing.T) {
-		// The scope grammar: --all and --workspace name different
-		// scopes, and guessing which one wins would make the flag mean
-		// different things on different invocations.
+	t.Run("errors/pattern_conflicts_with_workspace_flag", func(t *testing.T) {
+		// The selection grammar: a pattern and --workspace both claim
+		// to be the workspace selection, and guessing which one wins
+		// would make the argument mean different things on different
+		// invocations. Same rule for the deprecated --all alias.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
 
-		err := h.Run("cleanup", "--all", "--workspace", cleanupBranch, "--approve")
+		err := h.Run("cleanup", "**", "--workspace", cleanupBranch, "--approve")
 		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 			t.Fatalf("err = %v, want the mutual-exclusion refusal", err)
 		}
-		assertWorkspaceIntact(t, h, api)
-	})
-
-	t.Run("errors/filter_requires_all", func(t *testing.T) {
-		// A filter names a population, and cleanup's default scope is
-		// one workspace — the filter without --all is ambiguous, and
-		// the error teaches the grammar rather than guessing.
-		h, repos := startCleanupWorkspace(t, "api")
-		api := repos[0]
-		markMerged(t, h, api)
-
-		err := h.Run("cleanup", "--status", "done", "--approve")
-		if err == nil || !strings.Contains(err.Error(), "--all") {
-			t.Fatalf("err = %v, want the pass---all guidance", err)
+		err = h.Run("cleanup", "**", "--all", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("err = %v, want the mutual-exclusion refusal for --all", err)
 		}
 		assertWorkspaceIntact(t, h, api)
 	})
@@ -1408,7 +1642,7 @@ func TestCleanupBulk(t *testing.T) {
 		api := repos[0]
 		markMerged(t, h, api)
 
-		err := h.Run("cleanup", "--all", "--status", "Done", "--approve")
+		err := h.Run("cleanup", "**", "--status", "Done", "--approve")
 		if err == nil || !strings.Contains(err.Error(), "unknown status key") {
 			t.Fatalf("err = %v, want the unknown-key rejection", err)
 		}

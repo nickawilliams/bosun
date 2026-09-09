@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/fsutil"
@@ -440,15 +441,12 @@ func (c bulkCleanupCandidate) worstFindingMessage() string {
 }
 
 // emitBulkCleanupReadiness runs the readiness pass across every bulk
-// candidate and returns the ones the sweep should proceed with.
-//
-// Sweep semantics — deliberately different from the single-workspace
-// gate, where an explicitly named target aborts on any BLOCK: a
-// criteria-selected workspace with BLOCK findings is excluded and
-// reported while its siblings proceed. --force includes blocked
-// workspaces. WARN findings on included workspaces collapse into one
-// Continue/Cancel prompt for the whole sweep (interactively), or
-// error without --force when there's nobody to answer it.
+// candidate — the same bounded fan-out on both paths, so a large
+// fleet gathers in parallel either way — renders the readiness card,
+// and returns ALL candidates. Which candidates proceed is the
+// caller's selection gate: the readiness-annotated picker
+// interactively, the sweep's exclude-and-report rule
+// (includeBulkCandidates) non-interactively.
 func emitBulkCleanupReadiness(
 	ctx context.Context,
 	g vcs.VCS,
@@ -459,24 +457,15 @@ func emitBulkCleanupReadiness(
 ) ([]bulkCleanupCandidate, error) {
 	candidates := make([]bulkCleanupCandidate, len(targets))
 
-	// Raw / non-interactive mode: no group, no spinners — but the
-	// same bounded fan-out as the interactive path, so a large fleet
-	// gathers in parallel either way. Gather, print the static
-	// per-workspace summary card, and gate: blocked candidates are
-	// excluded (that's the sweep's posture, not an error), but WARN
-	// findings on what remains still need the acknowledgement a
-	// prompt would collect — --force is the non-interactive stand-in,
-	// exactly as in single mode.
+	// Raw / non-interactive mode: no group, no spinners — gather and
+	// print the static per-workspace summary card, annotated with the
+	// sweep's exclusion verdicts.
 	if !isInteractive() {
 		ui.RunBounded(len(targets), 0, func(i int) {
 			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
 		})
 		buildBulkCleanupReadinessCard(candidates, force).Print()
-		included := includeBulkCandidates(candidates, force)
-		if !force && anyCandidateAtOrAbove(included, findingWarn) {
-			return nil, fmt.Errorf("cleanup readiness: warnings present and no prompt available; re-run with --force to proceed")
-		}
-		return included, nil
+		return candidates, nil
 	}
 
 	// Interactive: one outer card with every workspace's child
@@ -490,28 +479,74 @@ func emitBulkCleanupReadiness(
 			func(i int, slot ui.Reporter) { emitBulkCandidateRow(slot, candidates[i], force) },
 		)
 	})
+	return candidates, nil
+}
 
-	included := includeBulkCandidates(candidates, force)
-	if !anyCandidateAtOrAbove(included, findingWarn) {
-		return included, nil
+// pickBulkCandidates presents the readiness-annotated multi-select —
+// the interactive form of the pattern argument. Ready workspaces
+// arrive preselected (plan approval is the backstop for a bare
+// sweep-by-enter); WARN workspaces arrive unselected, and selecting
+// one IS the acknowledgment the old combined warning dialog used to
+// collect; BLOCK workspaces are listed with their reason but
+// selectable only under --force. Returns the chosen candidates in
+// listing order.
+func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool) ([]bulkCleanupCandidate, error) {
+	opts := make([]huh.Option[int], len(candidates))
+	for i, c := range candidates {
+		opts[i] = huh.NewOption(bulkPickerLabel(c, force), i).
+			Selected(c.worst == findingSafe)
 	}
 
-	// WARN findings (or --force-included BLOCKs) → one Continue /
-	// Cancel prompt for the sweep. The readiness card stays as the
-	// durable record of what was checked.
-	confirmed, err := NewDialog("Warning").
-		Description("Not all readiness checks passed, continue anyway?").
-		Affirmative("Continue").
-		Negative("Cancel").
-		Default(false).
-		Show()
-	if err != nil {
+	var picked []int
+	field := fittedMultiSelect(opts, &picked)
+	if !force {
+		field = field.Validate(func(sel []int) error {
+			for _, i := range sel {
+				if candidates[i].worst == findingBlock {
+					return fmt.Errorf("%s is blocked; re-run with --force to select it",
+						candidates[i].target.workspace)
+				}
+			}
+			return nil
+		})
+	}
+
+	slot := ui.NewSlot()
+	slot.Show(ui.NewCard(ui.CardInput, "select workspaces").Tight())
+	if err := runForm(field); err != nil {
 		return nil, err
 	}
-	if !confirmed {
-		return nil, ErrCancelled
+	slot.Clear()
+
+	sort.Ints(picked)
+	out := make([]bulkCleanupCandidate, 0, len(picked))
+	names := make([]string, 0, len(picked))
+	for _, i := range picked {
+		out = append(out, candidates[i])
+		names = append(names, candidates[i].target.workspace)
 	}
-	return included, nil
+	if len(names) > 0 {
+		ui.SelectedMulti("workspaces", names)
+	}
+	return out, nil
+}
+
+// bulkPickerLabel renders one picker row: readiness glyph, workspace
+// name, and the worst finding for WARN/BLOCK rows. Plain text only —
+// styled sequences inside huh labels wipe huh's own selection
+// styling for the rest of the line (see ui.Keyword's doc).
+func bulkPickerLabel(c bulkCleanupCandidate, force bool) string {
+	name := c.target.workspace
+	switch {
+	case c.worst == findingBlock && !force:
+		return fmt.Sprintf("%s %s · %s (--force to select)", ui.Palette.Cross, name, c.worstFindingMessage())
+	case c.worst == findingBlock:
+		return fmt.Sprintf("%s %s · %s", ui.Palette.Cross, name, c.worstFindingMessage())
+	case c.worst == findingWarn:
+		return fmt.Sprintf("%s %s · %s", ui.Palette.Attention, name, c.worstFindingMessage())
+	default:
+		return fmt.Sprintf("%s %s", ui.Palette.Check, name)
+	}
 }
 
 // includeBulkCandidates applies the sweep's exclusion rule: BLOCK
@@ -540,13 +575,16 @@ func anyCandidateAtOrAbove(candidates []bulkCleanupCandidate, severity findingSe
 
 // emitBulkCandidateRow renders one workspace's readiness summary row
 // under the interactive group: ✓ for SAFE, ▲ with the worst finding
-// for WARN, ✗ for BLOCK — annotated as excluded when the sweep will
-// drop it (no --force).
+// for WARN, ✗ for BLOCK — annotated with the --force gate when the
+// picker that follows won't let it be selected without one. (The raw
+// card's rows carry the sweep's "excluded" wording instead — there
+// the exclusion is a decision, not a picker constraint; see
+// buildBulkCleanupReadinessCard.)
 func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate, force bool) {
 	label := ui.PreserveCase(c.target.workspace)
 	switch {
 	case c.worst == findingBlock && !force:
-		grp.FailValue(label, c.worstFindingMessage()+" — excluded (re-run with --force to include)")
+		grp.FailValue(label, c.worstFindingMessage()+" — blocked (re-run with --force to select)")
 	case c.worst == findingBlock:
 		grp.FailValue(label, c.worstFindingMessage())
 	case c.worst == findingWarn:

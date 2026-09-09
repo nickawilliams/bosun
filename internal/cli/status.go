@@ -30,8 +30,17 @@ import (
 // command will actually show.
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "status [pattern]",
 		Short: "Show what wants your attention at workspace or project scope",
+		Long: `Show what wants your attention at workspace or project scope.
+
+The positional pattern selects which workspaces: an exact name shows
+that workspace's status, a glob shows project scope narrowed to the
+matches ('*' matches within a path segment, '**' crosses segments —
+quote it so the shell doesn't expand it). Without a pattern, status
+reads at the widest scope its context allows: workspace scope inside
+a workspace, project scope outside.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: shellRunE(func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -46,11 +55,12 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Status reads at the widest scope its context allows for
-			// free, so project scope is implicit outside a workspace;
-			// --all makes it explicit (the only way to get the project
-			// view from inside a workspace).
-			projectScope, err := resolveWorkspaceScope(cmd, cc.Workspace == "", query)
+			// Read-only class: bare invocations outside a workspace
+			// select everything and never prompt; a glob pattern (or
+			// the deprecated --all) makes project scope explicit from
+			// anywhere; an exact-name pattern targets one workspace
+			// the way --workspace used to.
+			sel, err := resolveWorkspaceSelection(cmd, args, query, selectionReadOnly)
 			if err != nil {
 				return err
 			}
@@ -60,18 +70,27 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			if !projectScope {
+			if !sel.batch {
+				if sel.exact != "" {
+					if err := validateWorkspaceExists(sel.exact); err != nil {
+						return err
+					}
+					cc.Workspace = sel.exact
+					if cc.Issue == "" {
+						cc.Issue = workspaceIssueKey(sel.exact)
+					}
+				}
 				return runStatusWorkspace(ctx, cc, mgr)
 			}
-			return runStatusProject(ctx, query)
+			return runStatusProject(ctx, sel.pattern, query)
 		}),
 	}
 
 	setTitleResolver(cmd, func(cc CommandContext) string {
-		if all, _ := cmd.Flags().GetBool("all"); !all && cc.Workspace != "" {
-			return "Workspace Status"
+		if selectionLooksBatch(cmd, cc) {
+			return "Project Status"
 		}
-		return "Project Status"
+		return "Workspace Status"
 	})
 
 	addProjectFlag(cmd)
@@ -189,9 +208,11 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 // runStatusProject renders the project-scope output — project
 // header card with KV body (Repos columnar list), then one card
 // per workspace (sorted by lifecycle position) with body rows for
-// Status and the Repos rollup, then a summary recap. An active query
-// narrows the cards to matching workspaces; workspaces the query
-// can't evaluate are reported as skips rather than silently dropped.
+// Status and the Repos rollup, then a summary recap. The pattern
+// narrows which workspaces are observed at all; an active query
+// further narrows the cards to matching workspaces, and workspaces
+// the query can't evaluate are reported as skips rather than
+// silently dropped.
 //
 // Loading strategy diverges from workspace scope: project uses a
 // single overall spinner during a parallel fetch of all workspaces,
@@ -200,17 +221,31 @@ func runStatusWorkspace(ctx context.Context, cc CommandContext, mgr *workspace.M
 // sorting since rendering would happen in fetch order. The trade
 // is intentional — at project scope the user wants a sorted triage
 // overview more than progressive per-workspace disclosure.
-func runStatusProject(ctx context.Context, query workspaceQuery) error {
+func runStatusProject(ctx context.Context, pattern string, query workspaceQuery) error {
 	mgr, err := newWorkspaceManager()
 	if err != nil {
 		return err
 	}
 
-	// Enumerate workspaces (cheap — local filesystem walk).
+	// Enumerate workspaces (cheap — local filesystem walk), then
+	// narrow to the pattern's matches before any observation fans
+	// out. A pattern that matches nothing is reported distinctly
+	// from a project with no workspaces at all.
 	wsNames, err := mgr.List()
 	if err != nil {
 		ui.Skip(fmt.Sprintf("listing workspaces: %v", err))
 		return nil
+	}
+	if len(wsNames) > 0 {
+		matched, err := matchWorkspaceNames(pattern, wsNames)
+		if err != nil {
+			return err
+		}
+		if len(matched) == 0 {
+			ui.Skip(fmt.Sprintf("no workspaces match %q", pattern))
+			return nil
+		}
+		wsNames = matched
 	}
 
 	// Host first: the project's repo links come off it, and it is
@@ -331,12 +366,9 @@ func fetchWorkspaceIssueState(ctx context.Context, tracker issuepkg.Tracker, wsN
 	ws := workspaceState{name: wsName}
 
 	// Issue key from workspace name (e.g., "feature/EX-30434_foo" →
-	// "EX-30434"). Try the trailing path segment first; fall back
-	// to the whole name.
-	ws.issueKey = extractIssue(filepath.Base(wsName))
-	if ws.issueKey == "" {
-		ws.issueKey = extractIssue(wsName)
-	}
+	// "EX-30434") — shared with the issue→workspace mapping in the
+	// selection pipeline so the two can't drift.
+	ws.issueKey = workspaceIssueKey(wsName)
 
 	// Tracker fetch. Skip silently if no tracker or no issue key.
 	if tracker != nil && ws.issueKey != "" {

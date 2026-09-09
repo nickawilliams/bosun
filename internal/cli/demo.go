@@ -478,6 +478,24 @@ func demoGroups() {
 		g.Complete("post-flight check")
 	})
 
+	// Concurrent slots — every child spinner listed up front, each
+	// resolving in place as its (deliberately shuffled-duration) work
+	// finishes. The mechanism behind bulk cleanup's readiness pass.
+	r.Group("group: concurrent slots (fan-out)", func(g ui.Reporter) {
+		durations := []time.Duration{1400 * time.Millisecond, 600 * time.Millisecond, 1000 * time.Millisecond}
+		ui.FanOut(g, len(durations), 0,
+			func(i int) string { return fmt.Sprintf("probe %d", i+1) },
+			func(i int) { time.Sleep(durations[i]) },
+			func(i int, slot ui.Reporter) {
+				if i == 1 {
+					slot.SkipValue(fmt.Sprintf("probe %d", i+1), "resolved second, listed second")
+					return
+				}
+				slot.Complete(fmt.Sprintf("probe %d", i+1))
+			},
+		)
+	})
+
 	// Nested groups — child is itself a group.
 	r.Group("group: nested", func(g ui.Reporter) {
 		time.Sleep(step)

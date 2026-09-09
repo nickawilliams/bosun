@@ -21,8 +21,16 @@ import (
 
 func newCleanupCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "cleanup",
+		Use:   "cleanup [pattern]",
 		Short: "Tear down workspace previews, branches, and worktrees",
+		Long: `Tear down workspace previews, branches, and worktrees.
+
+The positional pattern selects which workspaces: an exact name targets
+one workspace, a glob targets a batch ('*' matches within a path
+segment, '**' crosses segments — quote it so the shell doesn't expand
+it). Without a pattern, cleanup targets the workspace context (CWD or
+--issue), or opens the batch picker when there is none.`,
+		Args: cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			headerAnnotationTitle: "clean up workspace",
 		},
@@ -31,22 +39,19 @@ func newCleanupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Destructive command: project scope is never implicit —
-			// --all is the only door into bulk mode, and the filter
-			// flags require it.
-			bulk, err := resolveWorkspaceScope(cmd, false, query)
+			sel, err := resolveWorkspaceSelection(cmd, args, query, selectionDestructive)
 			if err != nil {
 				return err
 			}
-			if bulk {
-				return runCleanupBulk(cmd, query)
+			if sel.batch {
+				return runCleanupBulk(cmd, sel.pattern, query)
 			}
-			return runCleanupSingle(cmd)
+			return runCleanupSingle(cmd, sel.exact)
 		}),
 	}
 
-	setTitleResolver(cmd, func(CommandContext) string {
-		if all, _ := cmd.Flags().GetBool("all"); all {
+	setTitleResolver(cmd, func(cc CommandContext) string {
+		if selectionLooksBatch(cmd, cc) {
 			return "clean up workspaces"
 		}
 		return "" // fall back to the static annotation
@@ -61,11 +66,24 @@ func newCleanupCmd() *cobra.Command {
 	return cmd
 }
 
-// runCleanupSingle tears down one workspace — the resolved (or picked)
-// workspace context, all-or-nothing: any readiness BLOCK aborts the
-// run unless --force.
-func runCleanupSingle(cmd *cobra.Command) error {
+// runCleanupSingle tears down one workspace, all-or-nothing: any
+// readiness BLOCK aborts the run unless --force. The target is the
+// exact-name pattern when one was given, otherwise the resolved
+// workspace context — the selection pipeline guarantees one of the
+// two exists by the time this runs.
+func runCleanupSingle(cmd *cobra.Command, exact string) error {
 	cc := commandContext(cmd)
+	if exact != "" {
+		// Positional name wins over the resolution chain — it's an
+		// explicit on-the-line target (same rule as workspace delete).
+		if err := validateWorkspaceExists(exact); err != nil {
+			return err
+		}
+		cc.Workspace = exact
+		if cc.Issue == "" {
+			cc.Issue = workspaceIssueKey(exact)
+		}
+	}
 	if err := cc.RequireWorkspace(); err != nil {
 		return err
 	}
@@ -117,13 +135,18 @@ func runCleanupSingle(cmd *cobra.Command) error {
 	return err
 }
 
-// runCleanupBulk tears down every workspace that matches the query,
-// with sweep semantics: a workspace that can't be evaluated, can't be
-// resolved, or carries a readiness BLOCK is excluded and reported
-// while the rest of the sweep proceeds (--force includes readiness
-// blocks). One combined plan covers all included workspaces, gated by
-// a single approval.
-func runCleanupBulk(cmd *cobra.Command, query workspaceQuery) error {
+// runCleanupBulk tears down the workspaces the pattern (narrowed by
+// the query) selects. Interactively, the readiness-annotated
+// multi-select picker is the selection's interactive form: ready
+// workspaces arrive preselected, WARN workspaces unselected
+// (selecting one IS the acknowledgment), BLOCK workspaces are gated
+// behind --force. Non-interactively the pattern/filter is the
+// selection, with sweep semantics: a workspace that can't be
+// evaluated, can't be resolved, or carries a readiness BLOCK is
+// excluded and reported while the rest of the sweep proceeds
+// (--force includes readiness blocks). One combined plan covers all
+// included workspaces, gated by a single approval.
+func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) error {
 	ctx := cmd.Context()
 	force, _ := cmd.Flags().GetBool("force")
 	g := git.New()
@@ -138,6 +161,14 @@ func runCleanupBulk(cmd *cobra.Command, query workspaceQuery) error {
 	}
 	if len(names) == 0 {
 		ui.Skip("no workspaces found in project")
+		return nil
+	}
+	names, err = matchWorkspaceNames(pattern, names)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		ui.Skip(fmt.Sprintf("no workspaces match %q", pattern))
 		return nil
 	}
 
@@ -207,13 +238,37 @@ func runCleanupBulk(cmd *cobra.Command, query workspaceQuery) error {
 		return nil
 	}
 
-	included, err := emitBulkCleanupReadiness(ctx, g, host, tracker, targets, force)
+	candidates, err := emitBulkCleanupReadiness(ctx, g, host, tracker, targets, force)
 	if err != nil {
 		return err
 	}
-	if len(included) == 0 {
-		ui.Skip("no workspaces passed cleanup readiness")
-		return nil
+
+	// Selection gate. Interactive: the readiness-annotated picker is
+	// the selection — choosing a WARN (or --force-included BLOCK) row
+	// is the acknowledgment, so no combined warning dialog follows.
+	// Non-interactive: the pattern/filter was the selection; sweep
+	// the candidate set with BLOCKs excluded (--force includes them)
+	// and WARNs requiring --force as the stand-in for the
+	// acknowledgment nobody is present to give.
+	var included []bulkCleanupCandidate
+	if isInteractive() {
+		included, err = pickBulkCandidates(candidates, force)
+		if err != nil {
+			return err
+		}
+		if len(included) == 0 {
+			ui.Skip("no workspaces selected")
+			return nil
+		}
+	} else {
+		included = includeBulkCandidates(candidates, force)
+		if len(included) == 0 {
+			ui.Skip("no workspaces passed cleanup readiness")
+			return nil
+		}
+		if !force && anyCandidateAtOrAbove(included, findingWarn) {
+			return fmt.Errorf("cleanup readiness: warnings present and no prompt available; re-run with --force to proceed")
+		}
 	}
 
 	moved := &movedShell{}

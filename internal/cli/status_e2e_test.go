@@ -488,17 +488,17 @@ func TestStatus(t *testing.T) {
 		assertStatusReadOnly(t, p)
 	})
 
-	t.Run("project_scope/all_flag_forces_project_view_from_workspace_context", func(t *testing.T) {
+	t.Run("project_scope/glob_pattern_forces_project_view_from_workspace_context", func(t *testing.T) {
 		// Inside a workspace (here: CWD inside its worktree) status is
-		// locked to workspace scope — --all is the explicit door to
-		// the project view from anywhere, and before it existed there
-		// was none.
+		// locked to workspace scope — a glob pattern is the explicit
+		// door to the project view from anywhere (the deprecated --all
+		// still opens it too, with a warning).
 		h, previews := newStatusHarness(t, "api")
 		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
 		_ = startStatusWorkspace(t, h, "EX-6", "Second", "second")
 		t.Chdir(h.WorktreePath(first, "api"))
 
-		// Without --all the workspace context pins the scope: one
+		// Without a pattern the workspace context pins the scope: one
 		// issue fetched, the resolved workspace's own.
 		p := markStatus(h, previews)
 		if err := h.Run("status"); err != nil {
@@ -508,13 +508,57 @@ func TestStatus(t *testing.T) {
 			t.Errorf("workspace scope fetched %v, want [EX-5]", got)
 		}
 
-		// --all overrides it: the full project fan-out.
+		// '**' overrides it: the full project fan-out.
+		p = markStatus(h, previews)
+		if err := h.Run("status", "**"); err != nil {
+			t.Fatalf("status '**': %v", err)
+		}
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5", "EX-6"}) {
+			t.Errorf("'**' fetched %v, want [EX-5 EX-6]", got)
+		}
+
+		// The deprecated --all alias still works and warns.
 		p = markStatus(h, previews)
 		if err := h.Run("status", "--all"); err != nil {
 			t.Fatalf("status --all: %v", err)
 		}
 		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5", "EX-6"}) {
 			t.Errorf("--all fetched %v, want [EX-5 EX-6]", got)
+		}
+		var warned bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureWarning) {
+			if strings.Contains(ev.Label, "deprecated") {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("--all did not warn as deprecated\n%s", h.Reporter.Dump())
+		}
+		assertStatusReadOnly(t, p)
+	})
+
+	t.Run("project_scope/pattern_narrows_what_is_observed", func(t *testing.T) {
+		// Unlike --status (which narrows rendering after observation),
+		// the pattern narrows which workspaces are observed at all:
+		// only the matching namespace is fetched.
+		h, previews := newStatusHarness(t, "api")
+		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
+		_ = startStatusWorkspace(t, h, "EX-6", "Second", "second")
+		p := markStatus(h, previews)
+
+		if err := h.Run("status", first); err != nil {
+			t.Fatalf("status %s: %v", first, err)
+		}
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5"}) {
+			t.Errorf("exact pattern fetched %v, want [EX-5] (workspace scope)", got)
+		}
+
+		p = markStatus(h, previews)
+		if err := h.Run("status", "EX-6-*"); err != nil {
+			t.Fatalf("status 'EX-6-*': %v", err)
+		}
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-6"}) {
+			t.Errorf("glob pattern fetched %v, want [EX-6] (narrowed project scope)", got)
 		}
 		assertStatusReadOnly(t, p)
 	})
@@ -589,17 +633,30 @@ func TestStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("workspace_scope/filter_requires_project_scope", func(t *testing.T) {
-		// Inside a workspace, --status without --all is refused with
-		// the grammar's guidance — the same rule cleanup applies, so
-		// the flags mean the same thing on both commands.
-		h, _ := newStatusHarness(t, "api")
+	t.Run("workspace_scope/filter_implies_project_scope", func(t *testing.T) {
+		// Inside a workspace, --status implies batch scope (#120): the
+		// filter names a population, so it IS the project-scope
+		// selection — the same rule cleanup applies, no --all needed.
+		h, previews := newStatusHarness(t, "api")
 		first := startStatusWorkspace(t, h, "EX-5", "First", "first")
+		_ = startStatusWorkspace(t, h, "EX-6", "Second", "second")
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-5", Title: "First", Type: "Story", Status: "Done",
+		})
 		t.Chdir(h.WorktreePath(first, "api"))
+		p := markStatus(h, previews)
 
-		err := h.Run("status", "--status", "done")
-		if err == nil || !strings.Contains(err.Error(), "--all") {
-			t.Fatalf("err = %v, want the pass---all guidance", err)
+		if err := h.Run("status", "--status", "done"); err != nil {
+			t.Fatalf("status --status done: %v", err)
+		}
+
+		// Project scope: both workspaces observed, the filter narrows
+		// what renders.
+		if got := p.issueKeys(); !equalStrings(got, []string{"EX-5", "EX-6"}) {
+			t.Errorf("issue keys fetched = %v, want both (filter implies project scope)", got)
+		}
+		if got := statusSummary(t, h); !strings.HasPrefix(got, "1 workspace ·") {
+			t.Errorf("summary = %q, want it scoped to the 1 matching workspace", got)
 		}
 	})
 

@@ -24,9 +24,15 @@ type CommandContext struct {
 
 type contextKey struct{}
 
-// commandContext retrieves the CommandContext stored in PersistentPreRunE.
+// commandContext retrieves the CommandContext stored in
+// PersistentPreRunE. Nil-safe: a command that never went through
+// cobra's dispatch (unit-test constructions) has no context at all.
 func commandContext(cmd *cobra.Command) CommandContext {
-	if cc, ok := cmd.Context().Value(contextKey{}).(CommandContext); ok {
+	ctx := cmd.Context()
+	if ctx == nil {
+		return CommandContext{}
+	}
+	if cc, ok := ctx.Value(contextKey{}).(CommandContext); ok {
 		return cc
 	}
 	return CommandContext{}
