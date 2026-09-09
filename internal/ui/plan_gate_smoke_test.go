@@ -46,13 +46,18 @@ func TestPlanGatePTYSmoke(t *testing.T) {
 		plan.Add(PlanModify, "move", "status", "EX-1", "Backlog → In Progress")
 		pc := NewPlanCard(plan)
 
-		// runPlanCard's interactive gate, verbatim shape.
+		// runPlanCard's interactive gate, verbatim shape: static plan
+		// rows in scrollback, then the compact pending header +
+		// summary-titled confirm (#120 — the plan no longer embeds in
+		// the confirm field, so a data-scaled plan can't oversize the
+		// inline frame).
+		plan.Print()
 		rewind := NewCard(CardInput, "Pending").Value(plan.Summary()).Tight().PrintRewindable()
 
 		var confirmed bool
 		form := huh.NewForm(huh.NewGroup(
 			huh.NewConfirm().
-				Title(plan.RenderItems()).
+				Title("3 actions").
 				Affirmative("Approve").
 				Negative("Cancel").
 				Value(&confirmed),

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -92,19 +93,20 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 		return fmt.Errorf("confirmation required (pass --approve, or --dry-run to preview)")
 	}
 
-	// Interactive confirmation gate: show the plan as a CardInput,
-	// run huh confirm. Normal cancel: rewind prompt, show cancelled
-	// card in place. Ctrl+c interrupt: don't rewind, just bail.
+	// Interactive confirmation gate. The plan rows print as static
+	// output first — a plan scales with data, and an inline BubbleTea
+	// frame taller than the terminal drops its top rows and corrupts
+	// cursor math (the fittedSelectHeight failure mode, #69/#98), so
+	// a destructive plan must live in scrollback rather than inside
+	// the confirm field. The confirm itself stays compact: pending
+	// header + action summary + Approve/Cancel. Normal cancel: rewind
+	// prompt, show cancelled card in place. Ctrl+c interrupt: don't
+	// rewind, just bail.
+	plan.Print()
 	rewind := newPlanPendingHeader(plan).PrintRewindable()
 
 	var confirmed bool
-	err := runForm(
-		newConfirm().
-			Title(plan.RenderItems()).
-			Affirmative("Approve").
-			Negative("Cancel").
-			Value(&confirmed),
-	)
+	err := runForm(newPlanConfirm(planConfirmSummary(actions), &confirmed))
 
 	if err != nil {
 		return ErrCancelled
@@ -135,6 +137,38 @@ func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 // pending header can't visually drift from the live render.
 func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
 	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
+}
+
+// newPlanConfirm builds the compact approval field shown beneath the
+// pending header: the action summary as its title and Approve/Cancel
+// buttons. The plan rows themselves are NOT embedded here — they
+// print as static output before the gate (see runPlanCard). Both
+// runPlanCard and the demo snapshot route through this so the two
+// renders can't drift.
+func newPlanConfirm(summary string, confirmed *bool) *huh.Confirm {
+	return newConfirm().
+		Title(summary).
+		Affirmative("Approve").
+		Negative("Cancel").
+		Value(confirmed)
+}
+
+// planConfirmSummary captions the confirm with the plan's scale —
+// "n actions", plus "across m workspaces" when the queue spans more
+// than one plan group (bulk cleanup). The colored per-op breakdown
+// already sits on the pending header via plan.Summary().
+func planConfirmSummary(actions []PlanAction) string {
+	groups := map[string]bool{}
+	for _, a := range actions {
+		if a.Group != "" {
+			groups[a.Group] = true
+		}
+	}
+	s := fmt.Sprintf("%d %s", len(actions), pluralize(len(actions), "action", "actions"))
+	if len(groups) > 1 {
+		s += fmt.Sprintf(" across %d workspaces", len(groups))
+	}
+	return s
 }
 
 // isAutoApprove reports whether the run pre-approved plan
