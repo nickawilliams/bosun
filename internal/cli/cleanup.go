@@ -475,9 +475,11 @@ func removeWorkspaceDir(wsPath, wsRoot, escapeFrom, escapeTo string, moved *move
 
 // cleanupPreviewAction builds the preview-env teardown row in
 // cleanup's action plan. Assess checks whether an env is bound; no
-// env → ActionCompleted (the row still appears, marked as already
-// done). Apply tears down via the provider — idempotent on the
-// adapter side, so a stale registry entry doesn't cause failure.
+// env → ActionSkipped, omitting the row entirely — a "no change"
+// row would assert "we will not touch this subject", which
+// presupposes a subject exists. Apply tears down via the provider —
+// idempotent on the adapter side, so a stale registry entry doesn't
+// cause failure.
 //
 // The provider is asked whether it can tear down at all, the same way
 // `bosun preview` asks. This is the second of the two places that call
@@ -510,7 +512,9 @@ func cleanupPreviewAction(ctx context.Context, ready *previewReadiness, provider
 			env, err := provider.Get(ctx, issueKey)
 			if err != nil {
 				if errors.Is(err, preview.ErrNoEnvironment) {
-					return ActionCompleted, "(none)", nil
+					// Definitively no env — nothing to tear down and
+					// nothing to say about it.
+					return ActionSkipped, "", nil
 				}
 				// Probe failure (network, indeterminate) — still
 				// attempt teardown so a registry entry doesn't strand.

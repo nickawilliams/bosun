@@ -459,8 +459,10 @@ func TestCleanup(t *testing.T) {
 	})
 
 	t.Run("preview/no_env_skips_teardown", func(t *testing.T) {
-		// No env bound: the teardown row still appears in the plan but
-		// assesses as already-done, so Destroy is never called.
+		// No env bound: the teardown row is omitted from the plan
+		// entirely (ActionSkipped), so Destroy is never called. The
+		// provider is still consulted — Assess is how "no env" is
+		// learned.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
