@@ -223,6 +223,46 @@ func TestResolveWorkspaceSelection(t *testing.T) {
 		}
 	})
 
+	t.Run("exact name with a filter routes through batch", func(t *testing.T) {
+		// The filter must still apply to an exact-name selection
+		// (pattern selects the namespace — here a namespace of one —
+		// filter selects by lifecycle), so the exact name becomes a
+		// batch pattern instead of a filter-dropping single target.
+		sel, err := resolveWorkspaceSelection(newCmd(nil), []string{"feature/EX-1_slug"}, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "feature/EX-1_slug" {
+			t.Errorf("sel = %+v, want batch over the exact name", sel)
+		}
+	})
+
+	t.Run("filter conflicts with issue flag", func(t *testing.T) {
+		// An explicit single-target flag combined with a population
+		// filter is refused: silently sweeping the project past an
+		// explicitly named target would be a destructive surprise.
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"issue": "EX-1"}), nil, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
+		}
+	})
+
+	t.Run("filter conflicts with workspace flag", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"workspace": "ws"}), nil, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
+		}
+	})
+
+	t.Run("all alias conflicts name the alias", func(t *testing.T) {
+		// The conflict message must blame --all, not a pattern the
+		// user never typed.
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"all": "true", "workspace": "ws"}), nil, workspaceQuery{}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "--all") {
+			t.Errorf("err = %v, want it to name --all as the conflicting selection", err)
+		}
+	})
+
 	t.Run("bare destructive errors non-interactively", func(t *testing.T) {
 		// go test's stdin is not a TTY, so this exercises the
 		// non-interactive default: destructive commands refuse to

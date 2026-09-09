@@ -207,6 +207,12 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 // drainGroupFallback handles the case where BubbleTea can't run
 // (non-interactive terminal). It waits for the callback to finish
 // and prints all accumulated children statically.
+//
+// Slot messages degrade knowingly here: slot-tagged child rows print
+// in completion order rather than at their registered positions, and
+// start/done markers are dropped (no live render to place them in).
+// The channel still drains to groupDoneMsg, so a mid-fan-out fallback
+// cannot deadlock — only the ordering guarantee is lost.
 func drainGroupFallback(title string, indent int, g *group, msgCh <-chan groupMsg) {
 	// Callback is already running in a goroutine; drain its messages.
 	for msg := range msgCh {

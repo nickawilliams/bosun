@@ -1532,6 +1532,77 @@ func TestCleanupBulk(t *testing.T) {
 		}
 	})
 
+	t.Run("filter/exact_pattern_composes_with_status_filter", func(t *testing.T) {
+		// An exact-name pattern with --status routes through the
+		// batch flow so the filter still applies: an In Progress
+		// workspace named exactly does NOT die under --status done —
+		// the user's own guard condition holds. (Review follow-up:
+		// the first cut silently dropped the filter in single mode.)
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-1", Title: "Add feature", Type: "Story", Status: "In Progress",
+		})
+
+		if err := h.Run("cleanup", cleanupBranch, "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup %s --status done: %v", cleanupBranch, err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces match the filter") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the filtered-out target was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
+	t.Run("filter/issue_flag_beats_cwd_context", func(t *testing.T) {
+		// Standing inside workspace A, `cleanup --issue EX-2` must
+		// target EX-2's workspace — not tear down A while destroying
+		// EX-2's env and issue state (review follow-up: the first cut
+		// let implicit CWD context outrank the explicit flag).
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		const otherBranch = "EX-2-other"
+		h.Tracker.SeedIssue(issue.Issue{
+			Key: "EX-2", Title: "Other work", Type: "Story",
+		})
+		if err := h.Run("start", "--issue", "EX-2", "--slug", "other", "--approve"); err != nil {
+			t.Fatalf("start EX-2: %v", err)
+		}
+		markMergedBranch(t, h, api, "EX-2", "Other work", otherBranch)
+		t.Chdir(h.WorktreePath(cleanupBranch, api.Name))
+
+		if err := h.Run("cleanup", "--issue", "EX-2", "--approve"); err != nil {
+			t.Fatalf("cleanup --issue EX-2: %v", err)
+		}
+
+		assertBranchWorkspaceGone(t, h, api, otherBranch)
+		assertWorkspaceIntact(t, h, api)
+	})
+
+	t.Run("errors/issue_conflicts_with_status_filter", func(t *testing.T) {
+		// --issue names one target and --status names a population;
+		// combining them must refuse rather than silently sweep the
+		// project past the named target (review follow-up).
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		markMerged(t, h, api)
+
+		err := h.Run("cleanup", "--issue", "EX-1", "--status", "done", "--approve")
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("err = %v, want the mutual-exclusion refusal", err)
+		}
+		assertWorkspaceIntact(t, h, api)
+	})
+
 	t.Run("errors/issue_without_workspace_refuses", func(t *testing.T) {
 		// --issue maps to a workspace; a key no workspace carries is
 		// an explicit target that failed, not a fall-through to the
