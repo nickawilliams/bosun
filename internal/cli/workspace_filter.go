@@ -101,7 +101,19 @@ func (q workspaceQuery) match(ws workspaceState) (bool, string) {
 // no-silent-drop rule — while evaluated non-matches drop without
 // ceremony; deselecting them is what the filter is for.
 func filterWorkspaces(states []workspaceState, q workspaceQuery) []workspaceState {
-	var matched []workspaceState
+	matched, skips := partitionWorkspaces(states, q)
+	for _, s := range skips {
+		ui.Skip(s)
+	}
+	return matched
+}
+
+// partitionWorkspaces is filterWorkspaces without the printing: it
+// returns the matches plus the skip lines for unevaluable workspaces,
+// so a caller running inside a spinner card can defer the reporting
+// until the card has resolved instead of interleaving skip cards with
+// a live render.
+func partitionWorkspaces(states []workspaceState, q workspaceQuery) (matched []workspaceState, skips []string) {
 	for _, ws := range states {
 		ok, reason := q.match(ws)
 		if ok {
@@ -109,10 +121,10 @@ func filterWorkspaces(states []workspaceState, q workspaceQuery) []workspaceStat
 			continue
 		}
 		if reason != "" {
-			ui.Skip(fmt.Sprintf("%s: %s", ws.name, reason))
+			skips = append(skips, fmt.Sprintf("%s: %s", ws.name, reason))
 		}
 	}
-	return matched
+	return matched, skips
 }
 
 // resolveWorkspaceScope validates the scope grammar for a command that

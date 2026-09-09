@@ -144,47 +144,63 @@ func runCleanupBulk(cmd *cobra.Command, query workspaceQuery) error {
 	tracker, _ := newIssueTracker()
 	host, _ := newCodeHost()
 
-	// Observe — the issue-only state the filter needs, fanned out
-	// under one spinner. The full per-repo probing waits for the
-	// readiness phase, which only runs for matched workspaces.
-	var observed []workspaceState
-	rewind, err := ui.RunCardRewindable("observing workspaces", func() error {
-		observed = observeWorkspaces(ctx, names, func(ctx context.Context, name string) workspaceState {
+	// Resolving Workspaces — one card scoped over the whole
+	// pre-readiness stretch: observe issue states (the filter's
+	// input), filter, and resolve each match into a cleanup target.
+	// The card resolves in place to a standing "n workspaces found"
+	// record instead of rewinding away, so the terminal is never
+	// blank between it and the readiness card that follows (#120).
+	// Skip reporting is deferred until the card lands — a skip card
+	// printed mid-spinner would interleave with the live render.
+	//
+	// A workspace that won't resolve (unmatched repos, no worktrees)
+	// is excluded with its reason — not force-includable, since these
+	// are correctness hazards rather than acknowledged data risks.
+	var (
+		matched int
+		targets []cleanupTarget
+		skips   []string
+	)
+	err = ui.RunCardThen("Resolving Workspaces", func() error {
+		observed := observeWorkspaces(ctx, names, func(ctx context.Context, name string) workspaceState {
 			return fetchWorkspaceIssueState(ctx, tracker, name)
 		})
+
+		matches, filterSkips := partitionWorkspaces(observed, query)
+		matched = len(matches)
+		skips = filterSkips
+
+		projectRepos, err := resolveRepositories(nil)
+		if err != nil {
+			return err
+		}
+		mainPath := mainPathIndex(projectRepos)
+
+		for _, ws := range matches {
+			t, err := resolveCleanupTarget(ctx, ws.name, ws.issueKey, mainPath)
+			if err != nil {
+				skips = append(skips, fmt.Sprintf("%s: %v", ws.name, err))
+				continue
+			}
+			targets = append(targets, t)
+		}
 		return nil
+	}, func() *ui.Card {
+		found := fmt.Sprintf("%d of %d workspaces found", len(targets), len(names))
+		if len(targets) == len(names) {
+			found = fmt.Sprintf("%d %s found", len(targets), pluralize(len(targets), "workspace", "workspaces"))
+		}
+		return ui.NewCard(ui.CardSuccess, "Resolving Workspaces").Value(found)
 	})
 	if err != nil {
 		return err
 	}
-	if rewind != nil {
-		rewind()
+	for _, s := range skips {
+		ui.Skip(s)
 	}
-
-	matched := filterWorkspaces(observed, query)
-	if len(matched) == 0 {
+	if matched == 0 {
 		ui.Skip("no workspaces match the filter")
 		return nil
-	}
-
-	projectRepos, err := resolveRepositories(nil)
-	if err != nil {
-		return err
-	}
-	mainPath := mainPathIndex(projectRepos)
-
-	// Resolve each match into a cleanup target. A workspace that
-	// won't resolve (unmatched repos, no worktrees) is excluded with
-	// its reason — not force-includable, since these are correctness
-	// hazards rather than acknowledged data risks.
-	var targets []cleanupTarget
-	for _, ws := range matched {
-		t, err := resolveCleanupTarget(ctx, ws.name, ws.issueKey, mainPath)
-		if err != nil {
-			ui.Skip(fmt.Sprintf("%s: %v", ws.name, err))
-			continue
-		}
-		targets = append(targets, t)
 	}
 	if len(targets) == 0 {
 		ui.Skip("no workspaces left to clean up")
