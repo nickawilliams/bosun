@@ -238,7 +238,7 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 		return nil
 	}
 
-	candidates, err := emitBulkCleanupReadiness(ctx, g, host, tracker, targets, force)
+	candidates, rewindReadiness, err := emitBulkCleanupReadiness(ctx, g, host, tracker, targets, force)
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 	// acknowledgment nobody is present to give.
 	var included []bulkCleanupCandidate
 	if isInteractive() {
-		included, err = pickBulkCandidates(candidates, force)
+		included, err = pickBulkCandidates(candidates, force, rewindReadiness)
 		if err != nil {
 			return err
 		}

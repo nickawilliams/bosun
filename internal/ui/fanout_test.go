@@ -157,6 +157,31 @@ func TestGroupWorkerSideCounts(t *testing.T) {
 	}
 }
 
+// TestRunGroupRewindableFallback pins the non-card-reporter contract:
+// the group still runs (emitting through the reporter as usual) and
+// the rewind comes back nil — callers leave the card standing.
+func TestRunGroupRewindableFallback(t *testing.T) {
+	capture := NewCaptureReporter()
+	old := Default()
+	SetDefault(capture)
+	t.Cleanup(func() { SetDefault(old) })
+
+	ran := false
+	rewind := RunGroupRewindable("readiness", func(g Reporter) {
+		ran = true
+		g.Complete("child")
+	})
+	if !ran {
+		t.Error("group callback never ran")
+	}
+	if rewind != nil {
+		t.Error("capture reporter returned a rewind; only card renders can rewind")
+	}
+	if _, ok := capture.Find("child"); !ok {
+		t.Errorf("group child not captured\n%s", capture.Dump())
+	}
+}
+
 // TestFanOutFallback pins the degraded path for reporters that can't
 // host slots: work still completes for every item, and resolutions
 // emit in item order so piped/captured output stays deterministic.

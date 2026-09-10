@@ -34,6 +34,21 @@ func RunGroup(title string, fn func(g Reporter)) {
 	defaultReporter.Group(title, fn)
 }
 
+// RunGroupRewindable is RunGroup returning a rewind that erases the
+// finalized group card — for call sites that morph the card into
+// content derived from the same rows (bulk cleanup's readiness-
+// annotated picker; the emitDeploymentSources gather→form→record
+// pattern). Returns nil when the render can't be rewound (raw /
+// plain / capture reporters, or the non-TTY fallback); callers must
+// treat nil as "leave the card standing".
+func RunGroupRewindable(title string, fn func(g Reporter)) func() {
+	if r, ok := defaultReporter.(*cardReporter); ok {
+		return r.runGroup(title, fn)
+	}
+	defaultReporter.Group(title, fn)
+	return nil
+}
+
 // --- Message types (callback goroutine → BubbleTea model) ---
 
 type groupMsg interface{ groupMsg() }

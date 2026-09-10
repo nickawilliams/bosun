@@ -14,9 +14,11 @@ package ui
 //	tmux capture-pane -t slotsmoke -p -S -200
 //
 // Healthy output has exactly ONE "Cleanup Readiness" header in the
-// pane history, immediately followed by its child rows. BOSUN_SMOKE_N
-// overrides the workspace count (default 25 — tall enough that
-// 2×frame exceeds a 50-row terminal).
+// pane history: the group card morphs into the picker (rewound by
+// RunGroupRewindable), and after submit the record card — same
+// title, selection folded in — is the only copy that persists.
+// BOSUN_SMOKE_N overrides the workspace count (default 25 — tall
+// enough that 2×frame exceeds a 50-row terminal).
 //
 // Remaining known limitation, deliberately out of this driver's
 // scope: a live group frame TALLER than the terminal itself (e.g.
@@ -57,7 +59,7 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 			return NewCard(CardSuccess, "Resolving Workspaces").Value(fmt.Sprintf("%d workspaces found", nChildren))
 		})
 
-		RunGroup("cleanup readiness", func(grp Reporter) {
+		rewind := RunGroupRewindable("cleanup readiness", func(grp Reporter) {
 			FanOut(grp, nChildren, 0,
 				func(i int) string { return fmt.Sprintf("ws-%d", i) },
 				func(i int) { time.Sleep(time.Duration(200+(i%7)*120) * time.Millisecond) },
@@ -71,11 +73,16 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 			)
 		})
 
-		opts := make([]huh.Option[int], 6)
+		// The pickBulkCandidates morph: drop the group card, mount the
+		// picker in its place, replace both with one record on submit.
+		opts := make([]huh.Option[int], nChildren)
 		for i := range opts {
-			opts[i] = huh.NewOption(fmt.Sprintf("ws-%d", i), i).Selected(i != 2)
+			opts[i] = huh.NewOption(fmt.Sprintf("ws-%d", i), i).Selected(i%5 != 2)
 		}
 		var picked []int
+		if rewind != nil {
+			rewind()
+		}
 		slot := NewSlot()
 		slot.Show(NewCard(CardInput, "select workspaces").Tight())
 		form := huh.NewForm(huh.NewGroup(
@@ -85,7 +92,12 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 			return err
 		}
 		slot.Clear()
-		NewCard(CardSuccess, "workspaces").Value(fmt.Sprintf("%d selected", len(picked))).Print()
+		record := NewCard(CardSuccess, "cleanup readiness").
+			Value(fmt.Sprintf("%d of %d selected", len(picked), nChildren))
+		for i := range nChildren {
+			record.Muted(fmt.Sprintf("ws-%d", i))
+		}
+		record.Print()
 		return nil
 	})
 	if err != nil {

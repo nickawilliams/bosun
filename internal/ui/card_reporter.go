@@ -169,9 +169,17 @@ func (r *cardReporter) Spinner(_ string, fn func() error) error {
 // callback returns, BubbleTea exits and the final static render is
 // printed.
 func (r *cardReporter) Group(title string, fn func(g Reporter)) {
+	_ = r.runGroup(title, fn)
+}
+
+// runGroup hosts the group and returns a rewind that erases the
+// finalized card (the RunGroupRewindable seam), or nil when the
+// render can't be rewound (the non-TTY fallback printed directly to
+// scrollback).
+func (r *cardReporter) runGroup(title string, fn func(g Reporter)) func() {
 	if s := sessionActive(); s != nil {
-		s.runSessionGroup(title, fn)
-		return
+		rec := s.runSessionGroup(title, fn)
+		return s.sessionRewind(rec)
 	}
 
 	indentLevel := 0
@@ -186,7 +194,9 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 		msgCh <- groupDoneMsg{}
 	}()
 
-	fmt.Print(spacerPrefix())
+	prevSpacer := needsSpacer
+	prefix := spacerPrefix()
+	fmt.Print(prefix)
 
 	model := newGroupModel(title, indentLevel, msgCh)
 	p := tea.NewProgram(model, TeaColorProfile())
@@ -195,13 +205,22 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 	if err != nil {
 		// Non-interactive fallback: drain messages and print directly.
 		drainGroupFallback(title, indentLevel, g, msgCh)
-		return
+		return nil
 	}
 
 	// BubbleTea's final View() rendered the finalized group content
 	// in place (root finalized in groupDoneMsg handler), so the
-	// output is already on screen. No reprint needed.
-	_ = final
+	// output is already on screen. No reprint needed — the rewind
+	// erases those lines the same way PrintRewindable's legacy
+	// closure does.
+	m := final.(*groupModel)
+	lines := strings.Count(prefix+m.viewString(), "\n")
+	return func() {
+		if lines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		}
+		needsSpacer = prevSpacer
+	}
 }
 
 // drainGroupFallback handles the case where BubbleTea can't run

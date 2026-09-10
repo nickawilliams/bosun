@@ -447,6 +447,14 @@ func (c bulkCleanupCandidate) worstFindingMessage() string {
 // caller's selection gate: the readiness-annotated picker
 // interactively, the sweep's exclude-and-report rule
 // (includeBulkCandidates) non-interactively.
+//
+// The returned rewind erases the interactive readiness card so the
+// picker can take its place — the emitDeploymentSources
+// gather→form→record morph: the picker carries the same rows plus
+// selection, so the card standing above it would say everything
+// twice. Nil when there is nothing to rewind (non-interactive, or a
+// reporter without a rewindable group render); the caller leaves the
+// card standing then.
 func emitBulkCleanupReadiness(
 	ctx context.Context,
 	g vcs.VCS,
@@ -454,32 +462,33 @@ func emitBulkCleanupReadiness(
 	tracker issue.Tracker,
 	targets []cleanupTarget,
 	force bool,
-) ([]bulkCleanupCandidate, error) {
+) ([]bulkCleanupCandidate, func(), error) {
 	candidates := make([]bulkCleanupCandidate, len(targets))
 
 	// Raw / non-interactive mode: no group, no spinners — gather and
 	// print the static per-workspace summary card, annotated with the
-	// sweep's exclusion verdicts.
+	// sweep's exclusion verdicts. No picker follows, so the card is
+	// the durable record and never rewinds.
 	if !isInteractive() {
 		ui.RunBounded(len(targets), 0, func(i int) {
 			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
 		})
 		buildBulkCleanupReadinessCard(candidates, force).Print()
-		return candidates, nil
+		return candidates, nil, nil
 	}
 
 	// Interactive: one outer card with every workspace's child
 	// spinner listed up front; the probes fan out concurrently and
 	// each spinner swaps to its one-row summary in place as its probe
 	// finishes, in stable workspace order.
-	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
+	rewind := ui.RunGroupRewindable("cleanup readiness", func(grp ui.Reporter) {
 		ui.FanOut(grp, len(targets), 0,
 			func(i int) string { return ui.PreserveCase(targets[i].workspace) },
 			func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
 			func(i int, slot ui.Reporter) { emitBulkCandidateRow(slot, candidates[i], force) },
 		)
 	})
-	return candidates, nil
+	return candidates, rewind, nil
 }
 
 // pickBulkCandidates presents the readiness-annotated multi-select —
@@ -490,7 +499,15 @@ func emitBulkCleanupReadiness(
 // collect; BLOCK workspaces are listed with their reason but
 // selectable only under --force. Returns the chosen candidates in
 // listing order.
-func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool) ([]bulkCleanupCandidate, error) {
+//
+// The flow is the emitDeploymentSources morph: rewindReadiness drops
+// the readiness card (the picker carries the same rows, so stacking
+// them would say everything twice), the picker mounts under its
+// input header, and on submit one record card — the readiness rows
+// with the selection folded in — replaces both. On cancel nothing
+// further prints: the readiness rows stay on screen as the form's
+// residue, context for the cancellation card.
+func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindReadiness func()) ([]bulkCleanupCandidate, error) {
 	opts := make([]huh.Option[int], len(candidates))
 	for i, c := range candidates {
 		opts[i] = huh.NewOption(bulkPickerLabel(c, force), i).
@@ -511,24 +528,83 @@ func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool) ([]bulkCl
 		})
 	}
 
+	if rewindReadiness != nil {
+		rewindReadiness()
+	}
 	slot := ui.NewSlot()
 	slot.Show(ui.NewCard(ui.CardInput, "select workspaces").Tight())
 	if err := runForm(field); err != nil {
+		ui.RequestSpacer()
 		return nil, err
 	}
 	slot.Clear()
 
 	sort.Ints(picked)
+	pickedSet := make(map[int]bool, len(picked))
 	out := make([]bulkCleanupCandidate, 0, len(picked))
-	names := make([]string, 0, len(picked))
 	for _, i := range picked {
+		pickedSet[i] = true
 		out = append(out, candidates[i])
-		names = append(names, candidates[i].target.workspace)
 	}
-	if len(names) > 0 {
-		ui.SelectedMulti("workspaces", names)
-	}
+	buildBulkSelectionCard(candidates, pickedSet).Print()
 	return out, nil
+}
+
+// buildBulkSelectionCard renders the record that replaces both the
+// readiness card and the submitted picker: every candidate's
+// readiness row in picker order, with the selection folded in.
+// Selected rows keep their readiness glyph and colors; unselected
+// rows recede fully — the Services card's excluded-row treatment
+// (svcOff) — with their reason kept (it explains why they sat
+// unselected) but the picker's "--force to select" hint dropped (the
+// moment has passed). The card state aggregates the worst finding
+// across ALL candidates, matching the readiness card this replaces.
+func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bool) *ui.Card {
+	wsStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
+	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
+	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	glyphBlock := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
+	glyphOff := muted.Render(ui.Palette.Inactive)
+
+	state := ui.CardSuccess
+	for _, c := range candidates {
+		if c.worst == findingBlock {
+			state = ui.CardFailed
+			break
+		}
+		if c.worst == findingWarn {
+			state = ui.CardSkipped
+		}
+	}
+
+	card := ui.NewCard(state, "cleanup readiness").
+		Value(fmt.Sprintf("%d of %d selected", len(picked), len(candidates)))
+	for i, c := range candidates {
+		name := c.target.workspace
+		msg := c.worstFindingMessage()
+		if !picked[i] {
+			content := name
+			if msg != "" {
+				content += " · " + msg
+			}
+			card.Item(glyphOff, muted.Render(content))
+			continue
+		}
+		glyph := glyphOK
+		switch c.worst {
+		case findingBlock:
+			glyph = glyphBlock
+		case findingWarn:
+			glyph = glyphWarn
+		}
+		content := wsStyle.Render(name)
+		if msg != "" {
+			content += muted.Render(" · " + msg)
+		}
+		card.Item(glyph, content)
+	}
+	return card
 }
 
 // bulkPickerLabel renders one picker row: readiness glyph, workspace

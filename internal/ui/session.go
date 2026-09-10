@@ -471,8 +471,10 @@ func ensureTrailingNL(s string) string {
 // worker keeps a mirror groupModel fed by the identical message
 // stream, so it can compute the final static render (the strings all
 // originate worker-side, making the two instances deterministic
-// twins).
-func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
+// twins). Returns the finalized card's open record so
+// RunGroupRewindable can drop it before a replacement mounts.
+func (s *session) runSessionGroup(title string, fn func(g Reporter)) *sesOpenRec {
+	prevSpacer := needsSpacer
 	prefix := sessionPrefix()
 	s.commitOpen()
 
@@ -501,9 +503,10 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
 	<-drained
 
 	final := prefix + mirror.viewString()
-	rec := &sesOpenRec{open: final, continuing: final}
+	rec := &sesOpenRec{open: final, continuing: final, prevSpacer: prevSpacer}
 	s.open = rec
 	s.send(sesTailMsg{text: final})
+	return rec
 }
 
 // --- messages ---

@@ -710,6 +710,82 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 	})
 }
 
+// TestBuildBulkSelectionCard covers the post-picker record — the one
+// card that replaces both the readiness card and the submitted
+// multi-select: readiness rows in picker order with the selection
+// folded in, unselected rows fully receded, the picker's --force
+// hint dropped, and the readiness card's worst-first state kept.
+func TestBuildBulkSelectionCard(t *testing.T) {
+	safe := bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}
+	warned := bulkCleanupCandidate{
+		target:     cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
+		worst:      findingWarn,
+	}
+	blocked := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-3-blocked"},
+		repoResults: []repoCleanup{{
+			repo:     Repository{Name: "api"},
+			findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+		}},
+		worst: findingBlock,
+	}
+	candidates := []bulkCleanupCandidate{safe, warned, blocked}
+
+	// Safe and warned selected; blocked left unselected.
+	card := buildBulkSelectionCard(candidates, map[int]bool{0: true, 1: true})
+	out := stripANSI(card.Render())
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if !strings.Contains(out, "2 of 3 selected") {
+		t.Errorf("card = %q, want the selection tally in the title", out)
+	}
+
+	row := findRowContaining(t, lines, "EX-1-safe")
+	if !strings.Contains(row, ui.Palette.Check) {
+		t.Errorf("selected safe row = %q, want the check glyph", row)
+	}
+	row = findRowContaining(t, lines, "EX-2-warned")
+	if !strings.Contains(row, ui.Palette.Attention) || !strings.Contains(row, "issue is In Progress") {
+		t.Errorf("selected warn row = %q, want the warn glyph and reason", row)
+	}
+	row = findRowContaining(t, lines, "EX-3-blocked")
+	if !strings.Contains(row, ui.Palette.Inactive) {
+		t.Errorf("unselected row = %q, want the receded %q glyph", row, ui.Palette.Inactive)
+	}
+	if !strings.Contains(row, "uncommitted changes") {
+		t.Errorf("unselected row = %q, want its reason kept", row)
+	}
+	if strings.Contains(out, "--force to select") {
+		t.Errorf("card = %q, the picker's gating hint must not survive into the record", out)
+	}
+
+	// Rows stay in picker (candidate) order — the in-place swap
+	// depends on it — unlike the raw readiness card's worst-first.
+	safeIdx := -1
+	blockedIdx := -1
+	for i, l := range lines {
+		if strings.Contains(l, "EX-1-safe") {
+			safeIdx = i
+		}
+		if strings.Contains(l, "EX-3-blocked") {
+			blockedIdx = i
+		}
+	}
+	if safeIdx > blockedIdx {
+		t.Errorf("rows reordered (safe %d, blocked %d), want candidate order", safeIdx, blockedIdx)
+	}
+
+	// A selected --force-included block keeps its error glyph; the
+	// aggregate state stays worst-first like the readiness card.
+	forced := buildBulkSelectionCard(candidates, map[int]bool{2: true})
+	forcedOut := stripANSI(forced.Render())
+	row = findRowContaining(t, strings.Split(forcedOut, "\n"), "EX-3-blocked")
+	if !strings.Contains(row, ui.Palette.Cross) {
+		t.Errorf("force-selected block row = %q, want the block glyph", row)
+	}
+}
+
 // TestEmitBulkCleanupReadinessNonInteractive drives the raw-mode bulk
 // readiness path directly. Plain unit tests run with go test's
 // non-TTY stdin, so isInteractive() is false here — the same posture
@@ -745,9 +821,12 @@ func TestEmitBulkCleanupReadinessNonInteractive(t *testing.T) {
 		// renders and classifies but excludes nothing itself —
 		// includeBulkCandidates (non-interactive) or the picker
 		// (interactive) decide who proceeds.
-		candidates, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
+		candidates, rewind, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
 		if err != nil {
 			t.Fatalf("err = %v, want nil (classification is not a gate)", err)
+		}
+		if rewind != nil {
+			t.Error("non-interactive readiness returned a rewind; the raw card is the durable record and must stand")
 		}
 		if len(candidates) != 3 {
 			t.Fatalf("candidates = %d, want all 3", len(candidates))
