@@ -724,6 +724,33 @@ func TestSessionGroupSuccessor(t *testing.T) {
 	}
 }
 
+// TestSessionTallBlockBeforeGroup drives commitOpenReplaced's tall
+// arm: a group start whose preceding open block is tall must still
+// route through commitOpen's clear-and-settle (the fossil guard
+// outranks the flash optimization), and the block lands exactly
+// once.
+func TestSessionTallBlockBeforeGroup(t *testing.T) {
+	out, _ := sessionTestStreams(t)
+
+	err := RunSession(func() error {
+		tall := NewCard(CardSuccess, "tallbefore")
+		for i := range 12 {
+			tall.Muted("row-" + string(rune('a'+i)))
+		}
+		tall.Print()
+		RunGroup("after tall", func(g Reporter) {
+			g.Complete("child")
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+	if n := strings.Count(out.String(), "Tallbefore"); n != 1 {
+		t.Errorf("tall block rendered %d times, want 1", n)
+	}
+}
+
 // TestSessionTallBlockCommitsOnce drives commitOpen's settle path: a
 // block tall relative to the terminal (2×lines+6 > TermHeight, which
 // tests see as the 24-row default) takes the clear-then-settle route

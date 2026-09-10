@@ -76,8 +76,21 @@ func TestGroupBareIndent(t *testing.T) {
 	}
 	m.processMsg(groupSlotStartMsg{title: "running-slot", indent: 1, slot: 21})
 
+	// A Task in a bare group: the worker-side result card and the
+	// model's running-task row take the bare indent too.
+	ch3 := make(chan groupMsg, 16)
+	g3 := newGroup(nil, "parent", 1, ch3)
+	g3.bare = true
+	_ = g3.Task("bare-task", func() error { return nil })
+	close(ch3)
+	for msg := range ch3 {
+		m.processMsg(msg)
+	}
+	m.processMsg(groupTaskStartMsg{title: "running-task", indent: 1})
+
 	view := m.viewString()
-	if !strings.Contains(view, "Bare-child") || !strings.Contains(view, "Running-slot") {
+	if !strings.Contains(view, "Bare-child") || !strings.Contains(view, "Running-slot") ||
+		!strings.Contains(view, "Bare-task") || !strings.Contains(view, "Running-task") {
 		t.Fatalf("view missing rows:\n%s", view)
 	}
 	if strings.Contains(view, cardConnector) {
@@ -103,8 +116,17 @@ func TestGroupBareIndent(t *testing.T) {
 // trailing blank once child rows exist, so they don't crowd it),
 // and the last value set survives onto the finalized render.
 func TestGroupModelStatus(t *testing.T) {
+	// Drive the first caption through the reporter method so the
+	// worker-side seam is exercised, the rest via raw messages.
+	ch := make(chan groupMsg, 4)
+	g := newGroup(nil, "parent", 1, ch)
+	g.Status("resolving...")
+	close(ch)
+
 	m := newGroupModel("parent", 0, nil)
-	m.processMsg(groupStatusMsg{text: "resolving..."})
+	for msg := range ch {
+		m.processMsg(msg)
+	}
 	if view := m.viewString(); !strings.Contains(view, "resolving...") {
 		t.Errorf("view = %q, want the status caption", view)
 	}

@@ -1635,6 +1635,66 @@ func TestCleanupBulk(t *testing.T) {
 		assertBranchWorkspaceIntact(t, h, api, "EX-1-copy")
 	})
 
+	t.Run("noninteractive/no_filter_matches_is_explicit", func(t *testing.T) {
+		// Non-interactive discover with nothing done-like: the empty
+		// outcome and any unevaluable workspaces are still reported
+		// (no flow exists to defer them behind).
+		h, repos := startCleanupWorkspace(t, "api")
+		api := repos[0]
+		// EX-1 stays In Progress (as start left it).
+		if err := h.Run("workspace", "create", "scratch", "api"); err != nil {
+			t.Fatalf("workspace create: %v", err)
+		}
+		h.NonInteractive()
+
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		var noMatch, unevaluable bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces match the filter") {
+				noMatch = true
+			}
+			if strings.Contains(ev.Label, "no issue key") {
+				unevaluable = true
+			}
+		}
+		if !noMatch || !unevaluable {
+			t.Errorf("empty outcome underreported (noMatch=%v unevaluable=%v)\n%s",
+				noMatch, unevaluable, h.Reporter.Dump())
+		}
+	})
+
+	t.Run("noninteractive/unresolvable_targets_reported", func(t *testing.T) {
+		// Every match fails target resolution (a repo outside the
+		// project's globs): the sweep has nothing left and says so.
+		h, repos := startCleanupWorkspace(t, "api", "web")
+		api, web := repos[0], repos[1]
+		markMerged(t, h, api)
+		markMerged(t, h, web)
+		h.Workspace.WriteConfig(strings.Replace(
+			cleanupConfig, `  - "repos/*"`, `  - "repos/api"`, 1))
+		h.NonInteractive()
+
+		if err := h.Run("cleanup", "**", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
+		}
+
+		assertWorkspaceIntact(t, h, api)
+		assertWorkspaceIntact(t, h, web)
+		var reported bool
+		for _, ev := range h.Reporter.OfKind(ui.CaptureSkip) {
+			if strings.Contains(ev.Label, "no workspaces left to clean up") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("the empty target set was not reported\n%s", h.Reporter.Dump())
+		}
+	})
+
 	t.Run("noninteractive/warnings_require_force", func(t *testing.T) {
 		// A WARN on an included workspace needs the acknowledgment a
 		// prompt would collect; with nobody to answer, --force is the
