@@ -59,7 +59,11 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 			return NewCard(CardSuccess, "Resolving Workspaces").Value(fmt.Sprintf("%d workspaces found", nChildren))
 		})
 
-		rewind := RunGroupRewindable("cleanup readiness", func(grp Reporter) {
+		// The pickBulkCandidates morph: the group finalizes into the
+		// picker's input header (no empty-frame flash between them),
+		// the form mounts beneath it, and one record card replaces
+		// both on submit.
+		rewind := RunGroupThen("cleanup readiness", func(grp Reporter) {
 			FanOut(grp, nChildren, 0,
 				func(i int) string { return fmt.Sprintf("ws-%d", i) },
 				func(i int) { time.Sleep(time.Duration(200+(i%7)*120) * time.Millisecond) },
@@ -71,33 +75,33 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 					slot.Complete(fmt.Sprintf("ws-%d", i))
 				},
 			)
-		})
+		}, func() *Card { return NewCard(CardInput, "select workspaces").Tight() })
 
-		// The pickBulkCandidates morph: drop the group card, mount the
-		// picker in its place, replace both with one record on submit.
 		opts := make([]huh.Option[int], nChildren)
 		for i := range opts {
 			opts[i] = huh.NewOption(fmt.Sprintf("ws-%d", i), i).Selected(i%5 != 2)
 		}
 		var picked []int
-		if rewind != nil {
-			rewind()
-		}
-		slot := NewSlot()
-		slot.Show(NewCard(CardInput, "select workspaces").Tight())
 		form := huh.NewForm(huh.NewGroup(
 			huh.NewMultiSelect[int]().Options(opts...).Value(&picked),
 		)).WithWidth(TermWidth())
 		if err := SessionForm(form, false); err != nil {
 			return err
 		}
-		slot.Clear()
+		if rewind != nil {
+			rewind()
+		}
 		record := NewCard(CardSuccess, "cleanup readiness").
 			Value(fmt.Sprintf("%d of %d selected", len(picked), nChildren))
 		for i := range nChildren {
 			record.Muted(fmt.Sprintf("ws-%d", i))
 		}
 		record.Print()
+		// A successor block, so the tall record goes through
+		// commitOpen's clear-and-settle arm (the fossil guard) inside
+		// this same PTY run — in the real flow the assessing spinner
+		// plays this role.
+		NewCard(CardSuccess, "assessing stand-in").Print()
 		return nil
 	})
 	if err != nil {

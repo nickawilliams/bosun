@@ -157,46 +157,48 @@ func TestGroupWorkerSideCounts(t *testing.T) {
 	}
 }
 
-// TestRunGroupRewindableFallback pins the non-card-reporter contract:
-// the group still runs (emitting through the reporter as usual) and
-// the rewind comes back nil — callers leave the card standing.
-func TestRunGroupRewindableFallback(t *testing.T) {
+// TestRunGroupThenFallback pins the non-card-reporter contract: the
+// group still runs (emitting through the reporter as usual), the
+// successor is never rendered, and the rewind comes back nil —
+// callers mount their own replacement.
+func TestRunGroupThenFallback(t *testing.T) {
 	capture := NewCaptureReporter()
 	old := Default()
 	SetDefault(capture)
 	t.Cleanup(func() { SetDefault(old) })
 
 	ran := false
-	rewind := RunGroupRewindable("readiness", func(g Reporter) {
+	rewind := RunGroupThen("readiness", func(g Reporter) {
 		ran = true
 		g.Complete("child")
-	})
+	}, func() *Card { return NewCard(CardInput, "picker").Tight() })
 	if !ran {
 		t.Error("group callback never ran")
 	}
 	if rewind != nil {
-		t.Error("capture reporter returned a rewind; only card renders can rewind")
+		t.Error("capture reporter returned a rewind; only card renders can mount the successor")
 	}
 	if _, ok := capture.Find("child"); !ok {
 		t.Errorf("group child not captured\n%s", capture.Dump())
 	}
 }
 
-// TestRunGroupRewindableHeadlessFallback drives the standalone card
+// TestRunGroupThenHeadlessFallback drives the standalone card
 // reporter's group against buffer streams, where the BubbleTea
 // program can't run: the group must degrade to the drain fallback
-// (children printed, no live render) and return a nil rewind — the
-// non-TTY fallback prints straight to scrollback, so there is
-// nothing to rewind. The TTY success path (final-frame erase) is
-// exercised by the gated TestGroupSlotsPTYSmoke.
-func TestRunGroupRewindableHeadlessFallback(t *testing.T) {
+// (children printed, no live render), skip the successor, and
+// return a nil rewind — the non-TTY fallback prints straight to
+// scrollback, so there is nothing to rewind or replace. The TTY
+// success path (successor swap) is exercised by the gated
+// TestGroupSlotsPTYSmoke.
+func TestRunGroupThenHeadlessFallback(t *testing.T) {
 	sessionTestStreams(t) // card reporter + buffer streams, no session
 
 	ran := false
-	rewind := RunGroupRewindable("headless group", func(g Reporter) {
+	rewind := RunGroupThen("headless group", func(g Reporter) {
 		ran = true
 		g.Complete("child")
-	})
+	}, func() *Card { return NewCard(CardInput, "picker").Tight() })
 	if !ran {
 		t.Error("group callback never ran")
 	}

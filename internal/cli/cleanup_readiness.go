@@ -448,13 +448,15 @@ func (c bulkCleanupCandidate) worstFindingMessage() string {
 // interactively, the sweep's exclude-and-report rule
 // (includeBulkCandidates) non-interactively.
 //
-// The returned rewind erases the interactive readiness card so the
-// picker can take its place — the emitDeploymentSources
-// gather→form→record morph: the picker carries the same rows plus
-// selection, so the card standing above it would say everything
-// twice. Nil when there is nothing to rewind (non-interactive, or a
-// reporter without a rewindable group render); the caller leaves the
-// card standing then.
+// Interactively the group finalizes INTO the picker's input header
+// (RunGroupThen's successor — the emitDeploymentSources
+// gather→form→record morph): the picker carries the same rows plus
+// selection, so a readiness card standing above it would say
+// everything twice, and mounting the header in the group's final
+// repaint leaves no empty-frame flash between the two. The returned
+// rewind erases that header; nil when it wasn't mounted
+// (non-interactive, or a reporter without a live group render) —
+// the caller mounts its own header then.
 func emitBulkCleanupReadiness(
 	ctx context.Context,
 	g vcs.VCS,
@@ -481,14 +483,22 @@ func emitBulkCleanupReadiness(
 	// spinner listed up front; the probes fan out concurrently and
 	// each spinner swaps to its one-row summary in place as its probe
 	// finishes, in stable workspace order.
-	rewind := ui.RunGroupRewindable("cleanup readiness", func(grp ui.Reporter) {
+	rewindHeader := ui.RunGroupThen("cleanup readiness", func(grp ui.Reporter) {
 		ui.FanOut(grp, len(targets), 0,
 			func(i int) string { return ui.PreserveCase(targets[i].workspace) },
 			func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
 			func(i int, slot ui.Reporter) { emitBulkCandidateRow(slot, candidates[i], force) },
 		)
-	})
-	return candidates, rewind, nil
+	}, newBulkPickerHeader)
+	return candidates, rewindHeader, nil
+}
+
+// newBulkPickerHeader builds the picker's input header — the
+// successor the readiness group finalizes into, and the fallback
+// header pickBulkCandidates mounts itself when no successor was
+// rendered. One constructor so the two paths can't drift.
+func newBulkPickerHeader() *ui.Card {
+	return ui.NewCard(ui.CardInput, "select workspaces").Tight()
 }
 
 // pickBulkCandidates presents the readiness-annotated multi-select —
@@ -500,14 +510,16 @@ func emitBulkCleanupReadiness(
 // selectable only under --force. Returns the chosen candidates in
 // listing order.
 //
-// The flow is the emitDeploymentSources morph: rewindReadiness drops
-// the readiness card (the picker carries the same rows, so stacking
-// them would say everything twice), the picker mounts under its
-// input header, and on submit one record card — the readiness rows
-// with the selection folded in — replaces both. On cancel nothing
-// further prints: the readiness rows stay on screen as the form's
-// residue, context for the cancellation card.
-func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindReadiness func()) ([]bulkCleanupCandidate, error) {
+// The flow is the emitDeploymentSources morph: the readiness group
+// already finalized into the picker's input header (the picker
+// carries the same rows, so a card above it would say everything
+// twice), the form mounts beneath that header, and on submit one
+// record card — the readiness rows with the selection folded in —
+// replaces both. rewindHeader erases the mounted header; when it is
+// nil (capture / fallback renders) the picker mounts its own. On
+// cancel nothing further prints: the picker's rows stand as the
+// form's residue, context for the cancellation card.
+func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindHeader func()) ([]bulkCleanupCandidate, error) {
 	opts := make([]huh.Option[int], len(candidates))
 	for i, c := range candidates {
 		opts[i] = huh.NewOption(bulkPickerLabel(c, force), i).
@@ -528,16 +540,20 @@ func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindRea
 		})
 	}
 
-	if rewindReadiness != nil {
-		rewindReadiness()
+	var slot *ui.Slot
+	if rewindHeader == nil {
+		slot = ui.NewSlot()
+		slot.Show(newBulkPickerHeader())
 	}
-	slot := ui.NewSlot()
-	slot.Show(ui.NewCard(ui.CardInput, "select workspaces").Tight())
 	if err := runForm(field); err != nil {
 		ui.RequestSpacer()
 		return nil, err
 	}
-	slot.Clear()
+	if slot != nil {
+		slot.Clear()
+	} else {
+		rewindHeader()
+	}
 
 	sort.Ints(picked)
 	pickedSet := make(map[int]bool, len(picked))

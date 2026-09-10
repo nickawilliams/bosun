@@ -169,17 +169,17 @@ func (r *cardReporter) Spinner(_ string, fn func() error) error {
 // callback returns, BubbleTea exits and the final static render is
 // printed.
 func (r *cardReporter) Group(title string, fn func(g Reporter)) {
-	_ = r.runGroup(title, fn)
+	_ = r.runGroup(title, fn, nil)
 }
 
-// runGroup hosts the group and returns a rewind that erases the
-// finalized card (the RunGroupRewindable seam), or nil when the
-// render can't be rewound (the non-TTY fallback printed directly to
-// scrollback).
-func (r *cardReporter) runGroup(title string, fn func(g Reporter)) func() {
+// runGroup hosts the group and returns a rewind for whatever block
+// the finalized render left as the tail (the RunGroupThen seam), or
+// nil when nothing rewindable was rendered (the non-TTY fallback
+// printed directly to scrollback). A non-nil successor takes the
+// group's place as the final frame — see runSessionGroup.
+func (r *cardReporter) runGroup(title string, fn func(g Reporter), successor func() *Card) func() {
 	if s := sessionActive(); s != nil {
-		rec := s.runSessionGroup(title, fn)
-		return s.sessionRewind(rec)
+		return s.runSessionGroup(title, fn, successor)
 	}
 
 	indentLevel := 0
@@ -212,9 +212,18 @@ func (r *cardReporter) runGroup(title string, fn func(g Reporter)) func() {
 	// in place (root finalized in groupDoneMsg handler), so the
 	// output is already on screen. No reprint needed — the rewind
 	// erases those lines the same way PrintRewindable's legacy
-	// closure does.
+	// closure does. A successor erases them now and prints itself in
+	// the group's position — two back-to-back synchronous writes, no
+	// async renderer to paint a gap between them.
 	m := final.(*groupModel)
 	lines := strings.Count(prefix+m.viewString(), "\n")
+	if successor != nil {
+		if lines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		}
+		needsSpacer = prevSpacer
+		return successor().PrintRewindable()
+	}
 	return func() {
 		if lines > 0 {
 			fmt.Printf("\x1b[%dF\x1b[J", lines)

@@ -34,16 +34,24 @@ func RunGroup(title string, fn func(g Reporter)) {
 	defaultReporter.Group(title, fn)
 }
 
-// RunGroupRewindable is RunGroup returning a rewind that erases the
-// finalized group card — for call sites that morph the card into
-// content derived from the same rows (bulk cleanup's readiness-
-// annotated picker; the emitDeploymentSources gather→form→record
-// pattern). Returns nil when the render can't be rewound (raw /
-// plain / capture reporters, or the non-TTY fallback); callers must
-// treat nil as "leave the card standing".
-func RunGroupRewindable(title string, fn func(g Reporter)) func() {
+// RunGroupThen is RunGroup with a successor: when the group
+// finalizes, the successor card takes its place as the tail in the
+// same repaint — the group render is never committed, and no
+// empty-frame flash can appear between the two, which is what
+// dropping the card and printing a replacement as separate steps
+// allowed (the RunCardSteps/emitDeploymentSources gather→form
+// successor mechanic; compare RunCardThen). For call sites that
+// morph the group into content derived from the same rows — bulk
+// cleanup's readiness-annotated picker mounts its form beneath the
+// successor header.
+//
+// Returns a rewind that erases the successor, or nil when it
+// couldn't be mounted (raw / plain / capture reporters, or the
+// non-TTY fallback, which print the group straight to scrollback);
+// callers mount their own replacement then.
+func RunGroupThen(title string, fn func(g Reporter), successor func() *Card) func() {
 	if r, ok := defaultReporter.(*cardReporter); ok {
-		return r.runGroup(title, fn)
+		return r.runGroup(title, fn, successor)
 	}
 	defaultReporter.Group(title, fn)
 	return nil
