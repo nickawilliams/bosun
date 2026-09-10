@@ -238,21 +238,17 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 		return nil
 	}
 
-	candidates, rewindReadiness, err := emitBulkCleanupReadiness(ctx, g, host, tracker, targets, force)
-	if err != nil {
-		return err
-	}
-
-	// Selection gate. Interactive: the readiness-annotated picker is
-	// the selection — choosing a WARN (or --force-included BLOCK) row
-	// is the acknowledgment, so no combined warning dialog follows.
-	// Non-interactive: the pattern/filter was the selection; sweep
-	// the candidate set with BLOCKs excluded (--force includes them)
-	// and WARNs requiring --force as the stand-in for the
-	// acknowledgment nobody is present to give.
+	// Selection gate. Interactive: the readiness-informed picker (a
+	// gatherSelect flow) is the selection — choosing a WARN (or
+	// --force-included BLOCK) row is the acknowledgment, so no
+	// combined warning dialog follows. Non-interactive: the
+	// pattern/filter was the selection; sweep the candidate set with
+	// BLOCKs excluded (--force includes them) and WARNs requiring
+	// --force as the stand-in for the acknowledgment nobody is
+	// present to give.
 	var included []bulkCleanupCandidate
 	if isInteractive() {
-		included, err = pickBulkCandidates(candidates, force, rewindReadiness)
+		included, err = pickBulkCandidates(ctx, g, host, tracker, targets, force)
 		if err != nil {
 			return err
 		}
@@ -261,6 +257,7 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 			return nil
 		}
 	} else {
+		candidates := gatherBulkCandidatesRaw(ctx, g, host, tracker, targets, force)
 		included = includeBulkCandidates(candidates, force)
 		if len(included) == 0 {
 			ui.Skip("no workspaces passed cleanup readiness")

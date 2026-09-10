@@ -61,6 +61,13 @@ func newDemoCmd() *cobra.Command {
 			}
 			demoSlot()
 
+			if err := demoContinue("Gather Select", false); err != nil {
+				return err
+			}
+			if err := demoGatherSelect(); err != nil {
+				return err
+			}
+
 			if err := demoContinue("Plan Card", false); err != nil {
 				return err
 			}
@@ -406,6 +413,63 @@ func demoFormStatic() {
 }
 
 // --- Interactive sections (gated by --interactive) ---
+
+// demoGatherSelect drives the gatherSelect flow — the
+// preload-informed multi-select behind bulk cleanup's readiness
+// picker: fan-out spinners resolving in place, the group morphing
+// into the picker (ready rows preselected, a gated row rejected at
+// submit, brief annotations dimmed beside bold names), and the one
+// record card that replaces both.
+func demoGatherSelect() error {
+	warnGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	blockGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
+
+	type state struct {
+		brief, detail, glyph, gate string
+		preselected                bool
+	}
+	states := []state{
+		{preselected: true},
+		{preselected: true},
+		{brief: "needs review", detail: "review pending, selecting acknowledges it", glyph: warnGlyph},
+		{preselected: true},
+		{brief: "uncommitted changes (+1)", detail: "uncommitted changes in worktree; 1 more finding",
+			glyph: blockGlyph, gate: "demo-4 is blocked; re-run with --force to select it"},
+		{preselected: true},
+	}
+
+	_, err := gatherSelect{
+		Title:  "gather select",
+		Header: "select items",
+		N:      len(states),
+		Label:  func(i int) string { return fmt.Sprintf("demo-%d", i) },
+		Work: func(i int) {
+			time.Sleep(time.Duration(300+(i%3)*250) * time.Millisecond)
+		},
+		Resolve: func(i int, slot ui.Reporter) {
+			label := ui.PreserveCase(fmt.Sprintf("demo-%d", i))
+			switch {
+			case states[i].gate != "":
+				slot.FailValue(label, states[i].detail)
+			case states[i].brief != "":
+				slot.SkipValue(label, states[i].detail)
+			default:
+				slot.Complete(label)
+			}
+		},
+		Item: func(i int) gatherSelectItem {
+			return gatherSelectItem{
+				Name:        fmt.Sprintf("demo-%d", i),
+				Brief:       states[i].brief,
+				Detail:      states[i].detail,
+				Glyph:       states[i].glyph,
+				Preselected: states[i].preselected,
+				Gate:        states[i].gate,
+			}
+		},
+	}.run()
+	return err
+}
 
 func demoSpinners() {
 	// Fast operation — exercises the spinner timing floor. Without it,

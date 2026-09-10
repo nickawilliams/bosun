@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nickawilliams/bosun/internal/code"
 	"github.com/nickawilliams/bosun/internal/fsutil"
@@ -482,212 +481,116 @@ func (c bulkCleanupCandidate) findingSummary(text func(cleanupFinding) string, m
 	return best.text
 }
 
-// emitBulkCleanupReadiness runs the readiness pass across every bulk
-// candidate — the same bounded fan-out on both paths, so a large
-// fleet gathers in parallel either way — renders the readiness card,
-// and returns ALL candidates. Which candidates proceed is the
-// caller's selection gate: the readiness-annotated picker
-// interactively, the sweep's exclude-and-report rule
-// (includeBulkCandidates) non-interactively.
-//
-// Interactively the group finalizes INTO the picker's input header
-// (RunGroupThen's successor — the emitDeploymentSources
-// gather→form→record morph): the picker carries the same rows plus
-// selection, so a readiness card standing above it would say
-// everything twice, and mounting the header in the group's final
-// repaint leaves no empty-frame flash between the two. The returned
-// rewind erases that header; nil when it wasn't mounted
-// (non-interactive, or a reporter without a live group render) —
-// the caller mounts its own header then.
-func emitBulkCleanupReadiness(
+// gatherBulkCandidatesRaw is the non-interactive readiness pass: the
+// same bounded fan-out as the interactive flow (so a large fleet
+// gathers in parallel either way), then the static per-workspace
+// summary card annotated with the sweep's exclusion verdicts. No
+// picker follows — the pattern/filter was the selection — so the
+// card is the durable record.
+func gatherBulkCandidatesRaw(
 	ctx context.Context,
 	g vcs.VCS,
 	host code.Host,
 	tracker issue.Tracker,
 	targets []cleanupTarget,
 	force bool,
-) ([]bulkCleanupCandidate, func(), error) {
+) []bulkCleanupCandidate {
+	candidates := make([]bulkCleanupCandidate, len(targets))
+	ui.RunBounded(len(targets), 0, func(i int) {
+		candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
+	})
+	buildBulkCleanupReadinessCard(candidates, force).Print()
+	return candidates
+}
+
+// pickBulkCandidates runs the readiness-informed multi-select — the
+// interactive form of the pattern argument — as a gatherSelect flow:
+// the readiness probes fan out as the preload (verbose rows
+// resolving each spinner in place), the group morphs into the
+// picker, and one record card replaces both on submit. Ready
+// workspaces arrive preselected (plan approval is the backstop for
+// a bare sweep-by-enter); WARN workspaces arrive unselected, and
+// selecting one IS the acknowledgment the old combined warning
+// dialog used to collect; BLOCK workspaces are listed with their
+// reason but selectable only under --force (the gate teaches
+// through the validation message). Returns the chosen candidates in
+// listing order.
+func pickBulkCandidates(
+	ctx context.Context,
+	g vcs.VCS,
+	host code.Host,
+	tracker issue.Tracker,
+	targets []cleanupTarget,
+	force bool,
+) ([]bulkCleanupCandidate, error) {
 	candidates := make([]bulkCleanupCandidate, len(targets))
 
-	// Raw / non-interactive mode: no group, no spinners — gather and
-	// print the static per-workspace summary card, annotated with the
-	// sweep's exclusion verdicts. No picker follows, so the card is
-	// the durable record and never rewinds.
-	if !isInteractive() {
-		ui.RunBounded(len(targets), 0, func(i int) {
-			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
-		})
-		buildBulkCleanupReadinessCard(candidates, force).Print()
-		return candidates, nil, nil
-	}
-
-	// Interactive: one outer card with every workspace's child
-	// spinner listed up front; the probes fan out concurrently and
-	// each spinner swaps to its one-row summary in place as its probe
-	// finishes, in stable workspace order.
-	rewindHeader := ui.RunGroupThen("cleanup readiness", func(grp ui.Reporter) {
-		ui.FanOut(grp, len(targets), 0,
-			func(i int) string { return ui.PreserveCase(targets[i].workspace) },
-			func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
-			func(i int, slot ui.Reporter) { emitBulkCandidateRow(slot, candidates[i], force) },
-		)
-	}, newBulkPickerHeader)
-	return candidates, rewindHeader, nil
-}
-
-// newBulkPickerHeader builds the picker's input header — the
-// successor the readiness group finalizes into, and the fallback
-// header pickBulkCandidates mounts itself when no successor was
-// rendered. One constructor so the two paths can't drift.
-func newBulkPickerHeader() *ui.Card {
-	return ui.NewCard(ui.CardInput, "select workspaces").Tight()
-}
-
-// pickBulkCandidates presents the readiness-annotated multi-select —
-// the interactive form of the pattern argument. Ready workspaces
-// arrive preselected (plan approval is the backstop for a bare
-// sweep-by-enter); WARN workspaces arrive unselected, and selecting
-// one IS the acknowledgment the old combined warning dialog used to
-// collect; BLOCK workspaces are listed with their reason but
-// selectable only under --force. Returns the chosen candidates in
-// listing order.
-//
-// The flow is the emitDeploymentSources morph: the readiness group
-// already finalized into the picker's input header (the picker
-// carries the same rows, so a card above it would say everything
-// twice), the form mounts beneath that header, and on submit one
-// record card — the readiness rows with the selection folded in —
-// replaces both. rewindHeader erases the mounted header; when it is
-// nil (capture / fallback renders) the picker mounts its own. On
-// cancel nothing further prints: the picker's rows stand as the
-// form's residue, context for the cancellation card.
-func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindHeader func()) ([]bulkCleanupCandidate, error) {
-	opts := make([]huh.Option[int], len(candidates))
-	for i, c := range candidates {
-		opts[i] = huh.NewOption(bulkPickerLabel(c), i).
-			Selected(c.worst == findingSafe)
-	}
-
-	var picked []int
-	field := fittedMultiSelect(opts, &picked)
-	if !force {
-		field = field.Validate(func(sel []int) error {
-			for _, i := range sel {
-				if candidates[i].worst == findingBlock {
-					return fmt.Errorf("%s is blocked; re-run with --force to select it",
-						candidates[i].target.workspace)
+	selected, err := gatherSelect{
+		Title:  "cleanup readiness",
+		Header: "select workspaces",
+		N:      len(targets),
+		Label:  func(i int) string { return ui.PreserveCase(targets[i].workspace) },
+		Work:   func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
+		Resolve: func(i int, slot ui.Reporter) {
+			emitBulkCandidateRow(slot, candidates[i], force)
+		},
+		Item: func(i int) gatherSelectItem { return bulkSelectItem(candidates[i]) },
+		RecordState: func() ui.CardState {
+			state := ui.CardSuccess
+			for _, c := range candidates {
+				if c.worst == findingBlock {
+					return ui.CardFailed
+				}
+				if c.worst == findingWarn {
+					state = ui.CardSkipped
 				}
 			}
-			return nil
-		})
-	}
-
-	var slot *ui.Slot
-	if rewindHeader == nil {
-		slot = ui.NewSlot()
-		slot.Show(newBulkPickerHeader())
-	}
-	if err := runForm(field); err != nil {
-		ui.RequestSpacer()
+			return state
+		},
+		GateOpen: force,
+	}.run()
+	if err != nil {
 		return nil, err
 	}
-	if slot != nil {
-		slot.Clear()
-	} else {
-		rewindHeader()
-	}
 
-	sort.Ints(picked)
-	pickedSet := make(map[int]bool, len(picked))
-	out := make([]bulkCleanupCandidate, 0, len(picked))
-	for _, i := range picked {
-		pickedSet[i] = true
+	out := make([]bulkCleanupCandidate, 0, len(selected))
+	for _, i := range selected {
 		out = append(out, candidates[i])
 	}
-	buildBulkSelectionCard(candidates, pickedSet).Print()
 	return out, nil
 }
 
-// buildBulkSelectionCard renders the record that replaces both the
-// readiness card and the submitted picker: every candidate's
-// readiness row in picker order, with the selection folded in.
-// Selected rows keep their readiness glyph and colors; unselected
-// rows recede fully — the Services card's excluded-row treatment
-// (svcOff) — with their FULL reason kept (the record is where the
-// verbose finding lives; the picker showed only the brief form).
-// The card state aggregates the worst finding across ALL
-// candidates, matching the readiness card this replaces.
-func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bool) *ui.Card {
-	wsStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
-	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
-	glyphWarn := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
-	glyphBlock := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
-	glyphOff := muted.Render(ui.Palette.Inactive)
-
-	state := ui.CardSuccess
-	for _, c := range candidates {
-		if c.worst == findingBlock {
-			state = ui.CardFailed
-			break
-		}
-		if c.worst == findingWarn {
-			state = ui.CardSkipped
-		}
+// bulkSelectItem derives one candidate's picker/record row for the
+// gatherSelect flow: brief finding beside the name in the picker,
+// full finding in the record, readiness glyph for the record row,
+// ready rows preselected, and blocked rows gated behind --force
+// (the gate message doubles as the form's validation error).
+func bulkSelectItem(c bulkCleanupCandidate) gatherSelectItem {
+	it := gatherSelectItem{
+		Name:        c.target.workspace,
+		Brief:       c.briefFindingMessage(),
+		Detail:      c.worstFindingMessage(),
+		Glyph:       bulkCandidateGlyph(c.worst),
+		Preselected: c.worst == findingSafe,
 	}
-
-	card := ui.NewCard(state, "cleanup readiness").
-		Value(fmt.Sprintf("%d of %d selected", len(picked), len(candidates)))
-	for i, c := range candidates {
-		name := c.target.workspace
-		msg := c.worstFindingMessage()
-		if !picked[i] {
-			content := name
-			if msg != "" {
-				content += " · " + msg
-			}
-			card.Item(glyphOff, muted.Render(content))
-			continue
-		}
-		glyph := glyphOK
-		switch c.worst {
-		case findingBlock:
-			glyph = glyphBlock
-		case findingWarn:
-			glyph = glyphWarn
-		}
-		content := wsStyle.Render(name)
-		if msg != "" {
-			content += muted.Render(" · " + msg)
-		}
-		card.Item(glyph, content)
+	if c.worst == findingBlock {
+		it.Gate = fmt.Sprintf("%s is blocked; re-run with --force to select it", c.target.workspace)
 	}
-	return card
+	return it
 }
 
-// bulkPickerLabel renders one picker row: the workspace name in
-// bold, and for WARN/BLOCK rows the worst finding's brief form
-// dimmed after it. No readiness glyph — huh's own selection marker
-// occupies that column, so the label starts at the name and the
-// marker sits where the group card's glyph sat — and no --force
-// hint: toggling a blocked row teaches the gate through the
-// validation message, and the full verbose finding lives on in the
-// readiness/record cards.
-//
-// The emphasis uses raw SGR intensity toggles (bold on/off 1/22,
-// dim on/off 2/22), NOT lipgloss — the emitDeploymentSources
-// precedent: a lipgloss render closes with a full SGR reset that
-// wipes huh's own selection/focus styling for the rest of the line,
-// while attribute toggles compose with whatever foreground huh's
-// option styles apply. Foreground color stays off-limits here for
-// the same reason — there is no "restore huh's color" code, only
-// reset-to-default.
-func bulkPickerLabel(c bulkCleanupCandidate) string {
-	name := "\x1b[1m" + c.target.workspace + "\x1b[22m"
-	if brief := c.briefFindingMessage(); brief != "" {
-		return fmt.Sprintf("%s\x1b[2m · %s\x1b[22m", name, brief)
+// bulkCandidateGlyph maps a candidate's worst severity to its
+// pre-styled record-row glyph — the same mapping the readiness
+// cards use.
+func bulkCandidateGlyph(worst findingSeverity) string {
+	switch worst {
+	case findingBlock:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
+	case findingWarn:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
+	default:
+		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
 	}
-	return name
 }
 
 // includeBulkCandidates applies the sweep's exclusion rule: BLOCK
