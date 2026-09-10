@@ -416,25 +416,27 @@ func demoFormStatic() {
 
 // demoGatherSelect drives the gatherSelect flow — the
 // preload-informed multi-select behind bulk cleanup's readiness
-// picker: fan-out spinners resolving in place, the group morphing
-// into the picker (ready rows preselected, a gated row rejected at
-// submit, brief annotations dimmed beside bold names), and the one
-// record card that replaces both.
+// picker: a discover phase and status captions under one title,
+// fan-out spinners resolving in place, the group morphing into the
+// picker (ready rows preselected, every row selectable — checking
+// an annotated row is the override — brief annotations dimmed
+// beside bold names), and the one record card that replaces
+// everything.
 func demoGatherSelect() error {
 	warnGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
 	blockGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
 
 	type state struct {
-		brief, glyph, gate string
-		preselected        bool
+		brief, glyph string
+		blocked      bool
+		preselected  bool
 	}
 	states := []state{
 		{preselected: true},
 		{preselected: true},
 		{brief: "needs review", glyph: warnGlyph},
 		{preselected: true},
-		{brief: "uncommitted changes (+1)", glyph: blockGlyph,
-			gate: "demo-4 is blocked; re-run with --force to select it"},
+		{brief: "uncommitted changes (+1)", glyph: blockGlyph, blocked: true},
 		{preselected: true},
 	}
 
@@ -458,7 +460,7 @@ func demoGatherSelect() error {
 		Resolve: func(i int, slot ui.Reporter) {
 			label := ui.PreserveCase(fmt.Sprintf("demo-%d", i))
 			switch {
-			case states[i].gate != "":
+			case states[i].blocked:
 				slot.FailValue(label, states[i].brief)
 			case states[i].brief != "":
 				slot.SkipValue(label, states[i].brief)
@@ -472,7 +474,6 @@ func demoGatherSelect() error {
 				Brief:       states[i].brief,
 				Glyph:       states[i].glyph,
 				Preselected: states[i].preselected,
-				Gate:        states[i].gate,
 			}
 		},
 	}.run()

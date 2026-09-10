@@ -713,8 +713,9 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 // TestBulkSelectItem pins cleanup's mapping into the gatherSelect
 // flow: the brief finding as the row annotation (the flow's one
 // vocabulary — verbose findings stay on the raw readiness card),
-// readiness glyph, ready-preselected posture, and the --force gate
-// on blocked rows (the label styling contract itself lives with
+// readiness glyph, and the preselection posture — ready rows
+// checked, WARN/BLOCK rows unchecked but never gated: selecting one
+// is the override (the label styling contract itself lives with
 // gatherSelectLabel's own tests).
 func TestBulkSelectItem(t *testing.T) {
 	warned := bulkCleanupCandidate{
@@ -739,13 +740,13 @@ func TestBulkSelectItem(t *testing.T) {
 	}
 
 	safe := bulkSelectItem(bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}})
-	if !safe.Preselected || safe.Gate != "" || safe.Brief != "" {
-		t.Errorf("safe item = %+v, want preselected, ungated, no annotation", safe)
+	if !safe.Preselected || safe.Brief != "" {
+		t.Errorf("safe item = %+v, want preselected with no annotation", safe)
 	}
 
 	warn := bulkSelectItem(warned)
-	if warn.Preselected || warn.Gate != "" {
-		t.Errorf("warn item = %+v, want unselected and ungated (selection is the acknowledgment)", warn)
+	if warn.Preselected {
+		t.Errorf("warn item = %+v, want unselected (selection is the acknowledgment)", warn)
 	}
 	if warn.Brief != "Ready for Release" {
 		t.Errorf("warn brief = %q, want the compact finding", warn.Brief)
@@ -754,9 +755,6 @@ func TestBulkSelectItem(t *testing.T) {
 	block := bulkSelectItem(blocked)
 	if block.Preselected {
 		t.Errorf("block item = %+v, must not arrive preselected", block)
-	}
-	if !strings.Contains(block.Gate, "--force") {
-		t.Errorf("block gate = %q, want the --force validation message", block.Gate)
 	}
 	if block.Brief != "api: uncommitted changes (+1)" {
 		t.Errorf("block brief = %q, want the lead finding with the terse tally", block.Brief)

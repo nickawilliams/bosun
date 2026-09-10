@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 
@@ -24,8 +23,10 @@ import (
 //  3. Select — the group finalizes INTO the picker's input header
 //     (ui.RunGroupThen's successor, so no empty-frame flash),
 //     captioned by StatusPicker, and a multi-select mounts beneath
-//     it whose rows the preload informed: what is preselected, what
-//     is gated, what each row says.
+//     it whose rows the preload informed: what arrives preselected
+//     and what each row says. Every row is selectable — checking
+//     one that didn't arrive preselected is the user's override,
+//     never a gated action.
 //  4. Record — on submit, one card replaces everything: the rows
 //     with the selection folded in. Selected rows keep their glyph
 //     and colors; unselected rows recede fully (the Services card's
@@ -58,15 +59,13 @@ type gatherSelectItem struct {
 	// ○). Empty defaults to the success check.
 	Glyph string
 
-	// Preselected marks the row checked when the picker opens.
+	// Preselected marks the row checked when the picker opens —
+	// the safe-by-default set a bare Enter accepts. Every row is
+	// selectable regardless: checking a row that didn't arrive
+	// preselected IS the user's acknowledgment of whatever its
+	// annotation warns about, and the caller treats that selection
+	// as the override.
 	Preselected bool
-
-	// Gate, when non-empty, rejects a submission that selects this
-	// row while the flow's gate is closed — the message renders as
-	// the form's validation error. The row stays listed and
-	// toggleable either way: seeing what is gated (and why) is part
-	// of the selection surface.
-	Gate string
 }
 
 // gatherSelect describes one flow. All callbacks are indexed by
@@ -126,10 +125,6 @@ type gatherSelect struct {
 	// record time (after the preload, so it can aggregate what the
 	// probes found). Nil defaults to CardSuccess.
 	RecordState func() ui.CardState
-
-	// GateOpen opens gated rows for selection (the caller's --force
-	// posture).
-	GateOpen bool
 }
 
 // run executes the flow and returns the selected item indices in
@@ -198,16 +193,6 @@ func (gs gatherSelect) run() ([]int, error) {
 
 	var picked []int
 	field := fittedMultiSelect(opts, &picked)
-	if !gs.GateOpen {
-		field = field.Validate(func(sel []int) error {
-			for _, i := range sel {
-				if items[i].Gate != "" {
-					return errors.New(items[i].Gate)
-				}
-			}
-			return nil
-		})
-	}
 
 	// The header normally mounted as the group's successor; when it
 	// couldn't (capture / fallback renders), mount our own so the

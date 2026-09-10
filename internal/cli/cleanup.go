@@ -188,7 +188,7 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 	// nobody is present to give.
 	var included []bulkCleanupCandidate
 	if isInteractive() {
-		included, err = pickBulkCandidates(ctx, g, host, tracker, names, query, force)
+		included, err = pickBulkCandidates(ctx, g, host, tracker, names, query)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,15 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 		for _, p := range c.probes {
 			actualBranch[p.repo.Name] = p.branch
 		}
-		actions = append(actions, buildCleanupActions(ctx, g, c.target, actualBranch, force, moved)...)
+		// A BLOCK candidate is only in the included set because the
+		// user overrode it — the picker selection interactively, or
+		// --force non-interactively (includeBulkCandidates drops
+		// blocks otherwise). Either way the override carries the
+		// force consent for this workspace's own apply, so a dirty
+		// worktree the user chose to destroy doesn't fail at
+		// `git worktree remove`.
+		wsForce := force || c.worst == findingBlock
+		actions = append(actions, buildCleanupActions(ctx, g, c.target, actualBranch, wsForce, moved)...)
 	}
 
 	err = runActions(cmd, ctx, actions)

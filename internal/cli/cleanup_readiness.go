@@ -548,11 +548,13 @@ func resolveBulkTargets(
 // resolving each spinner in place), the picker the group morphs
 // into, and the record card that replaces everything on submit.
 // Ready workspaces arrive preselected (plan approval is the
-// backstop for a bare sweep-by-enter); WARN workspaces arrive
-// unselected, and selecting one IS the acknowledgment the old
-// combined warning dialog used to collect; BLOCK workspaces are
-// listed with their reason but selectable only under --force (the
-// gate teaches through the validation message).
+// backstop for a bare sweep-by-enter); WARN and BLOCK workspaces
+// arrive unselected but are always selectable — checking one IS the
+// acknowledgment the old combined warning dialog used to collect,
+// and for a BLOCK the caller treats that selection as the force
+// consent for the workspace's own apply. --force deliberately has
+// no effect here: the picker's default selection stays the safe
+// set, and the override is always one keypress away.
 //
 // Returns the chosen candidates in listing order. Empty-outcome
 // reporting (discover skips, no matches, nothing selected) is
@@ -565,7 +567,6 @@ func pickBulkCandidates(
 	tracker issue.Tracker,
 	names []string,
 	query workspaceQuery,
-	force bool,
 ) ([]bulkCleanupCandidate, error) {
 	var (
 		targets    []cleanupTarget
@@ -611,7 +612,6 @@ func pickBulkCandidates(
 			}
 			return state
 		},
-		GateOpen: force,
 	}.run()
 
 	// Discover diagnostics print after the flow so skip cards don't
@@ -646,20 +646,18 @@ func pickBulkCandidates(
 // bulkSelectItem derives one candidate's picker/record row for the
 // gatherSelect flow: the brief finding beside the name (the flow's
 // one vocabulary — the verbose form lives on the raw readiness
-// card), the readiness glyph for the record row, ready rows
-// preselected, and blocked rows gated behind --force (the gate
-// message doubles as the form's validation error).
+// card), the readiness glyph for the record row, and ready rows
+// preselected. WARN and BLOCK rows arrive unselected but are always
+// selectable — checking one is the user's acknowledgment of the
+// displayed finding, and for a BLOCK it carries the force consent
+// through to that workspace's apply (see runCleanupBulk).
 func bulkSelectItem(c bulkCleanupCandidate) gatherSelectItem {
-	it := gatherSelectItem{
+	return gatherSelectItem{
 		Name:        c.target.workspace,
 		Brief:       c.briefFindingMessage(),
 		Glyph:       bulkCandidateGlyph(c.worst),
 		Preselected: c.worst == findingSafe,
 	}
-	if c.worst == findingBlock {
-		it.Gate = fmt.Sprintf("%s is blocked; re-run with --force to select it", c.target.workspace)
-	}
-	return it
 }
 
 // bulkCandidateGlyph maps a candidate's worst severity to its

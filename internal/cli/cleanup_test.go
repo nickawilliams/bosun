@@ -1278,12 +1278,12 @@ func TestCleanupBulk(t *testing.T) {
 		}
 	})
 
-	t.Run("readiness/force_makes_blocked_selectable", func(t *testing.T) {
-		// Same shape with --force: the blocked EX-2 becomes selectable
-		// but does NOT arrive preselected — selecting it is the
-		// acknowledgment the old combined warning dialog used to
-		// collect. Down+toggle+Enter takes both workspaces, dirty
-		// file and all.
+	t.Run("readiness/selecting_blocked_is_the_override", func(t *testing.T) {
+		// The blocked EX-2 does NOT arrive preselected, but no gate
+		// stands between the user and it: down+toggle+Enter — with no
+		// --force anywhere — takes both workspaces, and the selection
+		// carries the force consent through to EX-2's own apply (the
+		// dirty worktree still needs `git worktree remove --force`).
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -1295,8 +1295,8 @@ func TestCleanupBulk(t *testing.T) {
 		}
 		h.Type("jx\r")
 
-		if err := h.Run("cleanup", "**", "--status", "done", "--force", "--approve"); err != nil {
-			t.Fatalf("cleanup '**' --force: %v", err)
+		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
+			t.Fatalf("cleanup '**': %v", err)
 		}
 
 		assertWorkspaceGone(t, h, api)
@@ -1443,11 +1443,12 @@ func TestCleanupBulk(t *testing.T) {
 		}
 	})
 
-	t.Run("picker/blocked_selection_is_rejected_without_force", func(t *testing.T) {
-		// Toggling a blocked row on and submitting is refused by the
-		// picker's validation — the form stays open, the toggle is
-		// undone, and the empty submit exits cleanly with nothing
-		// destroyed. --force is the only door (covered above).
+	t.Run("picker/selected_blocked_dirty_worktree_is_destroyed", func(t *testing.T) {
+		// The single blocked (dirty) workspace: toggle+Enter selects
+		// it with no --force flag, and the selection-implied force
+		// carries the apply through git's own dirty-worktree refusal —
+		// the uncommitted file is destroyed, which is exactly what the
+		// user chose with the reason on screen.
 		h, repos := startCleanupWorkspace(t, "api")
 		api := repos[0]
 		markMerged(t, h, api)
@@ -1455,16 +1456,12 @@ func TestCleanupBulk(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
 			t.Fatalf("write scratch file: %v", err)
 		}
-		// select blocked row → submit (rejected) → deselect → submit.
-		h.Type("x\rx\r")
+		h.Type("x\r")
 
 		if err := h.Run("cleanup", "**", "--status", "done", "--approve"); err != nil {
 			t.Fatalf("cleanup '**': %v", err)
 		}
-		assertWorkspaceIntact(t, h, api)
-		if _, err := os.Stat(filepath.Join(wt, "scratch.txt")); err != nil {
-			t.Errorf("the blocked workspace's uncommitted file was destroyed: %v", err)
-		}
+		assertWorkspaceGone(t, h, api)
 	})
 
 	t.Run("noninteractive/bare_invocation_requires_a_pattern", func(t *testing.T) {
