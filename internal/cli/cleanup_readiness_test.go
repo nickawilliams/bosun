@@ -710,42 +710,66 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 	})
 }
 
-// TestBulkPickerLabel pins the picker rows' styling contract: bold
-// name and dimmed reason via raw SGR intensity toggles, and — the
-// part that breaks huh if violated — no lipgloss-style full SGR
-// reset (\x1b[0m or bare \x1b[m), which would wipe huh's own
-// selection/focus styling for the rest of the line.
+// TestBulkPickerLabel pins the picker rows' contract: bold name and
+// dimmed BRIEF reason via raw SGR intensity toggles; no --force hint
+// (the validation message teaches the gate); a terse "(+N)" tally;
+// and — the part that breaks huh if violated — no lipgloss-style
+// full SGR reset (\x1b[0m or bare \x1b[m), which would wipe huh's
+// own selection/focus styling for the rest of the line.
 func TestBulkPickerLabel(t *testing.T) {
 	warned := bulkCleanupCandidate{
-		target:     cleanupTarget{workspace: "EX-2-warned"},
-		wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
-		worst:      findingWarn,
+		target: cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{
+			severity: findingWarn, code: "issue-not-done",
+			message: "issue is Ready for Release, not in a done-like status",
+			brief:   "Ready for Release",
+		}},
+		worst: findingWarn,
 	}
 	blocked := bulkCleanupCandidate{
 		target: cleanupTarget{workspace: "EX-3-blocked"},
 		repoResults: []repoCleanup{{
-			repo:     Repository{Name: "api"},
-			findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+			repo: Repository{Name: "api"},
+			findings: []cleanupFinding{
+				{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree", brief: "uncommitted changes"},
+				{severity: findingWarn, code: "open-pr", message: "PR #8 is open", brief: "PR #8 open"},
+			},
 		}},
 		worst: findingBlock,
 	}
 
-	safe := bulkPickerLabel(bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}, false)
+	safe := bulkPickerLabel(bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}})
 	if safe != "\x1b[1mEX-1-safe\x1b[22m" {
 		t.Errorf("safe label = %q, want the bare bolded name", safe)
 	}
 
-	warn := bulkPickerLabel(warned, false)
-	if !strings.Contains(warn, "\x1b[2m") || !strings.Contains(warn, "issue is In Progress") {
-		t.Errorf("warn label = %q, want the dimmed reason", warn)
+	warn := bulkPickerLabel(warned)
+	if !strings.Contains(warn, "\x1b[2m") || !strings.Contains(warn, "Ready for Release") {
+		t.Errorf("warn label = %q, want the dimmed brief reason", warn)
+	}
+	if strings.Contains(warn, "done-like status") {
+		t.Errorf("warn label = %q, the verbose message leaked into the picker", warn)
 	}
 
-	block := bulkPickerLabel(blocked, false)
-	if !strings.Contains(block, "(--force to select)") {
-		t.Errorf("block label = %q, want the --force hint", block)
+	block := bulkPickerLabel(blocked)
+	if !strings.Contains(block, "api: uncommitted changes") || !strings.Contains(block, "(+1)") {
+		t.Errorf("block label = %q, want the brief lead finding and the terse tally", block)
 	}
-	if forced := bulkPickerLabel(blocked, true); strings.Contains(forced, "--force") {
-		t.Errorf("forced label = %q, the hint must drop under --force", forced)
+	if strings.Contains(block, "--force") {
+		t.Errorf("block label = %q, the --force hint must not appear (validation teaches the gate)", block)
+	}
+	if strings.Contains(block, "in worktree") {
+		t.Errorf("block label = %q, the verbose message leaked into the picker", block)
+	}
+
+	// A finding without a brief falls back to its message.
+	fallback := bulkPickerLabel(bulkCleanupCandidate{
+		target:     cleanupTarget{workspace: "EX-4"},
+		wsFindings: []cleanupFinding{{severity: findingWarn, code: "x", message: "only message"}},
+		worst:      findingWarn,
+	})
+	if !strings.Contains(fallback, "only message") {
+		t.Errorf("fallback label = %q, want the message when brief is empty", fallback)
 	}
 
 	for _, label := range []string{safe, warn, block} {

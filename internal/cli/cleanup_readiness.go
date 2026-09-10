@@ -41,6 +41,12 @@ type cleanupFinding struct {
 	severity findingSeverity
 	code     string
 	message  string
+
+	// brief is the compact form for the picker rows, where the
+	// finding sits beside many siblings and must stay scannable
+	// without wrapping; empty falls back to message. The full
+	// message remains the vocabulary of the readiness/record cards.
+	brief string
 }
 
 // repoCleanupProbe is the raw signal set classify() consumes for one
@@ -92,6 +98,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "dirty",
 			message:  "uncommitted changes in worktree",
+			brief:    "uncommitted changes",
 		})
 	}
 
@@ -117,24 +124,28 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  "branch was never pushed and commits aren't in base",
+			brief:    "unmerged work",
 		})
 	case p.syncKnown && !p.branchSync.HasRemote && !p.isMergedKnown:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unverified-work",
 			message:  "branch was never pushed and merge status couldn't be verified",
+			brief:    "unverified work",
 		})
 	case p.branchSync.HasRemote && p.pr == nil && p.isMergedKnown && !p.isMerged:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  "branch is pushed but has no PR and isn't in base",
+			brief:    "unmerged work",
 		})
 	case prClosedNoMerge && p.isMergedKnown && !p.isMerged:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  fmt.Sprintf("PR #%d was closed without merge and commits aren't in base", p.pr.Number),
+			brief:    "unmerged work",
 		})
 	}
 	unmergedFired := len(out) > preBlocks
@@ -150,6 +161,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unpushed-commits",
 			message:  fmt.Sprintf("%d local commit(s) aren't on the remote branch", p.branchSync.Ahead),
+			brief:    "unpushed commits",
 		})
 	}
 
@@ -169,6 +181,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "post-merge-commits",
 			message:  "local HEAD has commits past the merged PR; deleting the branch would lose them",
+			brief:    "post-merge commits",
 		})
 	}
 
@@ -178,6 +191,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "open-pr",
 			message:  fmt.Sprintf("PR #%d is %s", p.pr.Number, p.pr.State),
+			brief:    fmt.Sprintf("PR #%d %s", p.pr.Number, p.pr.State),
 		})
 	}
 	if prClosedNoMerge && p.isMergedKnown && p.isMerged {
@@ -189,6 +203,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "closed-pr",
 			message:  fmt.Sprintf("PR #%d was closed without merge (commits are in base)", p.pr.Number),
+			brief:    fmt.Sprintf("PR #%d closed unmerged", p.pr.Number),
 		})
 	}
 	if p.hostErr != nil {
@@ -196,6 +211,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "host-unreachable",
 			message:  "couldn't reach the code host to check PR state",
+			brief:    "host unreachable",
 		})
 	}
 
@@ -225,6 +241,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "unverified",
 			message:  fmt.Sprintf("couldn't verify %s; findings may be incomplete", strings.Join(unverified, ", ")),
+			brief:    "checks incomplete",
 		})
 	}
 
@@ -245,6 +262,7 @@ func classifyWorkspace(p workspaceCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "stray-files",
 			message:  strayFilesMessage(p.strayFiles),
+			brief:    fmt.Sprintf("%d stray file(s)", len(p.strayFiles)),
 		})
 	}
 	if p.issueStatus != "" && !p.issueDoneLike {
@@ -252,6 +270,7 @@ func classifyWorkspace(p workspaceCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "issue-not-done",
 			message:  fmt.Sprintf("issue is %s, not in a done-like status", p.issueStatus),
+			brief:    p.issueStatus,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -412,17 +431,40 @@ func gatherBulkCandidate(ctx context.Context, g vcs.VCS, host code.Host, tracker
 // findings carry the repo name), with a count of what else fired.
 // Empty when the candidate is fully SAFE.
 func (c bulkCleanupCandidate) worstFindingMessage() string {
+	return c.findingSummary(func(f cleanupFinding) string { return f.message }, " (+%d more)")
+}
+
+// briefFindingMessage is worstFindingMessage in the picker rows'
+// compact vocabulary: the finding's brief form (falling back to the
+// message) and a terser "(+N)" tally, so a row stays scannable
+// beside its siblings instead of wrapping.
+func (c bulkCleanupCandidate) briefFindingMessage() string {
+	return c.findingSummary(func(f cleanupFinding) string {
+		if f.brief != "" {
+			return f.brief
+		}
+		return f.message
+	}, " (+%d)")
+}
+
+// findingSummary picks the most severe finding across the workspace
+// and repo scopes — repo findings carry the repo name — rendered
+// through text, with moreFmt tallying whatever else fired. Empty
+// when the candidate is fully SAFE. The shared engine behind the
+// verbose (cards) and brief (picker) summaries, so the two can't
+// disagree about which finding leads.
+func (c bulkCleanupCandidate) findingSummary(text func(cleanupFinding) string, moreFmt string) string {
 	type labeled struct {
 		severity findingSeverity
 		text     string
 	}
 	var all []labeled
 	for _, f := range c.wsFindings {
-		all = append(all, labeled{f.severity, f.message})
+		all = append(all, labeled{f.severity, text(f)})
 	}
 	for _, rc := range c.repoResults {
 		for _, f := range rc.findings {
-			all = append(all, labeled{f.severity, rc.repo.Name + ": " + f.message})
+			all = append(all, labeled{f.severity, rc.repo.Name + ": " + text(f)})
 		}
 	}
 	if len(all) == 0 {
@@ -435,7 +477,7 @@ func (c bulkCleanupCandidate) worstFindingMessage() string {
 		}
 	}
 	if len(all) > 1 {
-		return fmt.Sprintf("%s (+%d more)", best.text, len(all)-1)
+		return best.text + fmt.Sprintf(moreFmt, len(all)-1)
 	}
 	return best.text
 }
@@ -522,7 +564,7 @@ func newBulkPickerHeader() *ui.Card {
 func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindHeader func()) ([]bulkCleanupCandidate, error) {
 	opts := make([]huh.Option[int], len(candidates))
 	for i, c := range candidates {
-		opts[i] = huh.NewOption(bulkPickerLabel(c, force), i).
+		opts[i] = huh.NewOption(bulkPickerLabel(c), i).
 			Selected(c.worst == findingSafe)
 	}
 
@@ -571,10 +613,10 @@ func pickBulkCandidates(candidates []bulkCleanupCandidate, force bool, rewindHea
 // readiness row in picker order, with the selection folded in.
 // Selected rows keep their readiness glyph and colors; unselected
 // rows recede fully — the Services card's excluded-row treatment
-// (svcOff) — with their reason kept (it explains why they sat
-// unselected) but the picker's "--force to select" hint dropped (the
-// moment has passed). The card state aggregates the worst finding
-// across ALL candidates, matching the readiness card this replaces.
+// (svcOff) — with their FULL reason kept (the record is where the
+// verbose finding lives; the picker showed only the brief form).
+// The card state aggregates the worst finding across ALL
+// candidates, matching the readiness card this replaces.
 func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bool) *ui.Card {
 	wsStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -624,11 +666,13 @@ func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bo
 }
 
 // bulkPickerLabel renders one picker row: the workspace name in
-// bold, and for WARN/BLOCK rows the worst finding dimmed after it.
-// No readiness glyph — huh's own selection marker occupies that
-// column, so the label starts at the name and the marker sits where
-// the group card's glyph sat; the readiness state still reads
-// through the preselection, the reason text, and the --force hint.
+// bold, and for WARN/BLOCK rows the worst finding's brief form
+// dimmed after it. No readiness glyph — huh's own selection marker
+// occupies that column, so the label starts at the name and the
+// marker sits where the group card's glyph sat — and no --force
+// hint: toggling a blocked row teaches the gate through the
+// validation message, and the full verbose finding lives on in the
+// readiness/record cards.
 //
 // The emphasis uses raw SGR intensity toggles (bold on/off 1/22,
 // dim on/off 2/22), NOT lipgloss — the emitDeploymentSources
@@ -638,16 +682,12 @@ func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bo
 // option styles apply. Foreground color stays off-limits here for
 // the same reason — there is no "restore huh's color" code, only
 // reset-to-default.
-func bulkPickerLabel(c bulkCleanupCandidate, force bool) string {
+func bulkPickerLabel(c bulkCleanupCandidate) string {
 	name := "\x1b[1m" + c.target.workspace + "\x1b[22m"
-	switch {
-	case c.worst == findingBlock && !force:
-		return fmt.Sprintf("%s\x1b[2m · %s (--force to select)\x1b[22m", name, c.worstFindingMessage())
-	case c.worst == findingBlock, c.worst == findingWarn:
-		return fmt.Sprintf("%s\x1b[2m · %s\x1b[22m", name, c.worstFindingMessage())
-	default:
-		return name
+	if brief := c.briefFindingMessage(); brief != "" {
+		return fmt.Sprintf("%s\x1b[2m · %s\x1b[22m", name, brief)
 	}
+	return name
 }
 
 // includeBulkCandidates applies the sweep's exclusion rule: BLOCK
