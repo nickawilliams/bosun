@@ -759,9 +759,6 @@ func TestBulkSelectItem(t *testing.T) {
 	if block.Brief != "api: uncommitted changes (+1)" {
 		t.Errorf("block brief = %q, want the lead finding with the terse tally", block.Brief)
 	}
-	if !strings.Contains(block.Glyph, ui.Palette.Cross) {
-		t.Errorf("block glyph = %q, want the block cross", block.Glyph)
-	}
 
 	// A finding without a brief falls back to its message.
 	fallback := bulkSelectItem(bulkCleanupCandidate{
@@ -777,29 +774,13 @@ func TestBulkSelectItem(t *testing.T) {
 // TestBulkSelectionRecord covers cleanup's record card through the
 // gatherSelect flow's renderer: brief readiness annotations in
 // picker order with the selection folded in, unselected rows fully
-// receded, the picker's gate message absent, and the readiness
-// card's worst-first state kept. (The generic renderer's own
-// contract is pinned in gatherselect_test.go; this locks the
-// cleanup-side wiring.)
+// receded, and the picker's gate-era wording absent. (The generic
+// renderer's own contract is pinned in gatherselect_test.go; this
+// locks the cleanup-side wiring.)
 func TestBulkSelectionRecord(t *testing.T) {
 	record := func(candidates []bulkCleanupCandidate, picked []int) *ui.Card {
 		items := make([]gatherSelectItem, len(candidates))
-		gs := gatherSelect{
-			Title: "select workspaces",
-			N:     len(candidates),
-			RecordState: func() ui.CardState {
-				state := ui.CardSuccess
-				for _, c := range candidates {
-					if c.worst == findingBlock {
-						return ui.CardFailed
-					}
-					if c.worst == findingWarn {
-						state = ui.CardSkipped
-					}
-				}
-				return state
-			},
-		}
+		gs := gatherSelect{Title: "select workspaces", N: len(candidates)}
 		for i, c := range candidates {
 			items[i] = bulkSelectItem(c)
 		}
@@ -840,11 +821,14 @@ func TestBulkSelectionRecord(t *testing.T) {
 
 	row := findRowContaining(t, lines, "EX-1-safe")
 	if !strings.Contains(row, ui.Palette.Check) {
-		t.Errorf("selected safe row = %q, want the check glyph", row)
+		t.Errorf("selected safe row = %q, want the selection check", row)
 	}
 	row = findRowContaining(t, lines, "EX-2-warned")
-	if !strings.Contains(row, ui.Palette.Attention) || !strings.Contains(row, "In Progress") {
-		t.Errorf("selected warn row = %q, want the warn glyph and brief reason", row)
+	if !strings.Contains(row, ui.Palette.Check) || !strings.Contains(row, "In Progress") {
+		t.Errorf("selected warn row = %q, want the selection check and brief reason", row)
+	}
+	if strings.Contains(row, ui.Palette.Attention) {
+		t.Errorf("selected warn row = %q, readiness glyphs must not replace the selection history", row)
 	}
 	if strings.Contains(row, "done-like status") {
 		t.Errorf("selected warn row = %q, the verbose message leaked into the record", row)
@@ -879,13 +863,13 @@ func TestBulkSelectionRecord(t *testing.T) {
 		t.Errorf("rows reordered (safe %d, blocked %d), want candidate order", safeIdx, blockedIdx)
 	}
 
-	// A selected --force-included block keeps its error glyph; the
-	// aggregate state stays worst-first like the readiness card.
+	// A selected block row also reads as selected — the override the
+	// user made — not as its readiness state.
 	forced := record(candidates, []int{2})
 	forcedOut := stripANSI(forced.Render())
 	row = findRowContaining(t, strings.Split(forcedOut, "\n"), "EX-3-blocked")
-	if !strings.Contains(row, ui.Palette.Cross) {
-		t.Errorf("force-selected block row = %q, want the block glyph", row)
+	if !strings.Contains(row, ui.Palette.Check) || strings.Contains(row, ui.Palette.Cross) {
+		t.Errorf("selected block row = %q, want the selection check, not the readiness cross", row)
 	}
 }
 

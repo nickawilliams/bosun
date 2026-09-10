@@ -600,18 +600,6 @@ func pickBulkCandidates(
 			emitBulkCandidateRow(slot, candidates[i])
 		},
 		Item: func(i int) gatherSelectItem { return bulkSelectItem(candidates[i]) },
-		RecordState: func() ui.CardState {
-			state := ui.CardSuccess
-			for _, c := range candidates {
-				if c.worst == findingBlock {
-					return ui.CardFailed
-				}
-				if c.worst == findingWarn {
-					state = ui.CardSkipped
-				}
-			}
-			return state
-		},
 	}.run()
 
 	// Discover diagnostics print after the flow so skip cards don't
@@ -646,31 +634,16 @@ func pickBulkCandidates(
 // bulkSelectItem derives one candidate's picker/record row for the
 // gatherSelect flow: the brief finding beside the name (the flow's
 // one vocabulary — the verbose form lives on the raw readiness
-// card), the readiness glyph for the record row, and ready rows
-// preselected. WARN and BLOCK rows arrive unselected but are always
-// selectable — checking one is the user's acknowledgment of the
-// displayed finding, and for a BLOCK it carries the force consent
-// through to that workspace's apply (see runCleanupBulk).
+// card), and ready rows preselected. WARN and BLOCK rows arrive
+// unselected but are always selectable — checking one is the user's
+// acknowledgment of the displayed finding, and for a BLOCK it
+// carries the force consent through to that workspace's apply (see
+// runCleanupBulk).
 func bulkSelectItem(c bulkCleanupCandidate) gatherSelectItem {
 	return gatherSelectItem{
 		Name:        c.target.workspace,
 		Brief:       c.briefFindingMessage(),
-		Glyph:       bulkCandidateGlyph(c.worst),
 		Preselected: c.worst == findingSafe,
-	}
-}
-
-// bulkCandidateGlyph maps a candidate's worst severity to its
-// pre-styled record-row glyph — the same mapping the readiness
-// cards use.
-func bulkCandidateGlyph(worst findingSeverity) string {
-	switch worst {
-	case findingBlock:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
-	case findingWarn:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
-	default:
-		return lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
 	}
 }
 

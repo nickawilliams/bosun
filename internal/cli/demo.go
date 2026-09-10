@@ -423,20 +423,17 @@ func demoFormStatic() {
 // beside bold names), and the one record card that replaces
 // everything.
 func demoGatherSelect() error {
-	warnGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Warning).Render(ui.Palette.Attention)
-	blockGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
-
 	type state struct {
-		brief, glyph string
-		blocked      bool
-		preselected  bool
+		brief       string
+		blocked     bool
+		preselected bool
 	}
 	states := []state{
 		{preselected: true},
 		{preselected: true},
-		{brief: "needs review", glyph: warnGlyph},
+		{brief: "needs review"},
 		{preselected: true},
-		{brief: "uncommitted changes (+1)", glyph: blockGlyph, blocked: true},
+		{brief: "uncommitted changes (+1)", blocked: true},
 		{preselected: true},
 	}
 
@@ -472,7 +469,6 @@ func demoGatherSelect() error {
 			return gatherSelectItem{
 				Name:        fmt.Sprintf("demo-%d", i),
 				Brief:       states[i].brief,
-				Glyph:       states[i].glyph,
 				Preselected: states[i].preselected,
 			}
 		},

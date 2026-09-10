@@ -53,12 +53,6 @@ type gatherSelectItem struct {
 	// card, say). Empty renders the bare name.
 	Brief string
 
-	// Glyph is the pre-styled record-row glyph for a selected row
-	// (the picker shows huh's selection marker in that column
-	// instead, and unselected record rows recede to the inactive
-	// ○). Empty defaults to the success check.
-	Glyph string
-
 	// Preselected marks the row checked when the picker opens —
 	// the safe-by-default set a bare Enter accepts. Every row is
 	// selectable regardless: checking a row that didn't arrive
@@ -120,11 +114,6 @@ type gatherSelect struct {
 	// Item derives item i's picker/record presentation. Called after
 	// the whole preload completed.
 	Item func(i int) gatherSelectItem
-
-	// RecordState supplies the record card's state, evaluated at
-	// record time (after the preload, so it can aggregate what the
-	// probes found). Nil defaults to CardSuccess.
-	RecordState func() ui.CardState
 }
 
 // run executes the flow and returns the selected item indices in
@@ -249,13 +238,17 @@ func gatherSelectLabel(it gatherSelectItem) string {
 
 // recordCard renders the flow's final phase: every row in picker
 // order with the selection folded in, beneath the selection tally.
-// Selected rows keep their glyph and colors; unselected rows recede
-// fully — glyph, name, and annotation all muted behind the inactive
-// ○.
+// The whole card speaks selection, not any per-item vocabulary —
+// the card state is the success of the completed selection, and the
+// glyph column freezes the picker's final state (✓ selected, the
+// inactive ○ unselected) so the visual history of what the user
+// chose survives in scrollback; the brief annotation still says why
+// an unselected row sat unchecked. Unselected rows recede fully —
+// glyph, name, and annotation all muted.
 func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Card {
 	nameStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
-	glyphOK := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
+	glyphOn := lipgloss.NewStyle().Foreground(ui.Palette.Success).Render(ui.Palette.Check)
 	glyphOff := muted.Render(ui.Palette.Inactive)
 
 	pickedSet := make(map[int]bool, len(picked))
@@ -263,12 +256,7 @@ func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Ca
 		pickedSet[i] = true
 	}
 
-	state := ui.CardSuccess
-	if gs.RecordState != nil {
-		state = gs.RecordState()
-	}
-
-	card := ui.NewCard(state, gs.Title).
+	card := ui.NewCard(ui.CardSuccess, gs.Title).
 		Muted(fmt.Sprintf("%d of %d selected", len(picked), len(items)), "")
 	for i, it := range items {
 		if !pickedSet[i] {
@@ -279,15 +267,11 @@ func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Ca
 			card.Item(glyphOff, muted.Render(content))
 			continue
 		}
-		glyph := it.Glyph
-		if glyph == "" {
-			glyph = glyphOK
-		}
 		content := nameStyle.Render(it.Name)
 		if it.Brief != "" {
 			content += muted.Render(" · " + it.Brief)
 		}
-		card.Item(glyph, content)
+		card.Item(glyphOn, content)
 	}
 	return card
 }

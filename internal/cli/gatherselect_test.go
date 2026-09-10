@@ -35,16 +35,17 @@ func TestGatherSelectLabel(t *testing.T) {
 	}
 }
 
-// TestGatherSelectRecordCard pins the generic record renderer:
-// selection tally in the title, rows in item order, selected rows
-// with their glyph (defaulting to the success check) and brief
-// annotation — the flow's one vocabulary — and unselected rows
-// fully receded behind the inactive glyph.
+// TestGatherSelectRecordCard pins the generic record renderer: the
+// selection tally beneath the title, rows in item order, and the
+// glyph column freezing the picker's final state — every selected
+// row gets the selection check, every unselected row the inactive
+// glyph — so the visual history of the choice survives; the brief
+// annotation rides along in both cases.
 func TestGatherSelectRecordCard(t *testing.T) {
 	items := []gatherSelectItem{
 		{Name: "one"},
 		{Name: "two", Brief: "brief-two"},
-		{Name: "three", Brief: "brief-three", Glyph: "X"},
+		{Name: "three", Brief: "brief-three"},
 	}
 	gs := gatherSelect{Title: "things", N: len(items)}
 
@@ -57,15 +58,15 @@ func TestGatherSelectRecordCard(t *testing.T) {
 	}
 	row := findRowContaining(t, lines, "one")
 	if !strings.Contains(row, ui.Palette.Check) {
-		t.Errorf("selected default-glyph row = %q, want the success check", row)
+		t.Errorf("selected row = %q, want the selection check", row)
 	}
 	row = findRowContaining(t, lines, "two")
 	if !strings.Contains(row, ui.Palette.Inactive) || !strings.Contains(row, "brief-two") {
 		t.Errorf("unselected row = %q, want the inactive glyph and its brief", row)
 	}
 	row = findRowContaining(t, lines, "three")
-	if !strings.Contains(row, "X") || !strings.Contains(row, "brief-three") {
-		t.Errorf("selected custom-glyph row = %q, want the caller's glyph and its brief", row)
+	if !strings.Contains(row, ui.Palette.Check) || !strings.Contains(row, "brief-three") {
+		t.Errorf("selected annotated row = %q, want the selection check and its brief", row)
 	}
 
 	// Item order holds regardless of selection.
@@ -83,11 +84,13 @@ func TestGatherSelectRecordCard(t *testing.T) {
 		t.Errorf("rows reordered (one %d, three %d), want item order", oneIdx, threeIdx)
 	}
 
-	// RecordState drives the card state; nil defaults to success —
-	// pin the wired case.
-	gs.RecordState = func() ui.CardState { return ui.CardFailed }
+	// The card state is the completed selection's success — never a
+	// readiness aggregate — and an empty selection still records.
 	stateOut := stripANSI(gs.recordCard(items, nil).Render())
 	if !strings.Contains(stateOut, "0 of 3 selected") {
 		t.Errorf("empty-selection card = %q, want the zero tally", stateOut)
+	}
+	if !strings.HasPrefix(strings.TrimLeft(stateOut, " "), ui.Palette.Check) {
+		t.Errorf("record card = %q, want it led by the success state", stateOut)
 	}
 }
