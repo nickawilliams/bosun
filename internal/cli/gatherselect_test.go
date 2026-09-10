@@ -37,14 +37,14 @@ func TestGatherSelectLabel(t *testing.T) {
 
 // TestGatherSelectRecordCard pins the generic record renderer:
 // selection tally in the title, rows in item order, selected rows
-// with their glyph (defaulting to the success check) and detail,
-// unselected rows fully receded behind the inactive glyph, and
-// Detail falling back to Brief.
+// with their glyph (defaulting to the success check) and brief
+// annotation — the flow's one vocabulary — and unselected rows
+// fully receded behind the inactive glyph.
 func TestGatherSelectRecordCard(t *testing.T) {
 	items := []gatherSelectItem{
 		{Name: "one"},
-		{Name: "two", Brief: "brief-two"}, // no Detail → Brief in the record
-		{Name: "three", Brief: "brief-three", Detail: "detail-three", Glyph: "X"},
+		{Name: "two", Brief: "brief-two"},
+		{Name: "three", Brief: "brief-three", Glyph: "X"},
 	}
 	gs := gatherSelect{Title: "things", N: len(items)}
 
@@ -61,14 +61,11 @@ func TestGatherSelectRecordCard(t *testing.T) {
 	}
 	row = findRowContaining(t, lines, "two")
 	if !strings.Contains(row, ui.Palette.Inactive) || !strings.Contains(row, "brief-two") {
-		t.Errorf("unselected row = %q, want the inactive glyph and the Brief fallback", row)
+		t.Errorf("unselected row = %q, want the inactive glyph and its brief", row)
 	}
 	row = findRowContaining(t, lines, "three")
-	if !strings.Contains(row, "X") || !strings.Contains(row, "detail-three") {
-		t.Errorf("selected custom-glyph row = %q, want the caller's glyph and Detail", row)
-	}
-	if strings.Contains(out, "brief-three") {
-		t.Errorf("card = %q, Brief leaked into a row that has a Detail", out)
+	if !strings.Contains(row, "X") || !strings.Contains(row, "brief-three") {
+		t.Errorf("selected custom-glyph row = %q, want the caller's glyph and its brief", row)
 	}
 
 	// Item order holds regardless of selection.

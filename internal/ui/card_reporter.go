@@ -186,6 +186,10 @@ func (r *cardReporter) runGroup(title string, fn func(g Reporter), successor fun
 	msgCh := make(chan groupMsg, 256)
 
 	g := newGroup(r, title, indentLevel+1, msgCh)
+	// A successor flow's render is transient (the successor replaces
+	// it), so its rows indent without the timeline spine — the spine
+	// belongs to the committed record. See Card.BareIndent.
+	g.bare = successor != nil
 
 	go func() {
 		start := time.Now()
@@ -199,6 +203,7 @@ func (r *cardReporter) runGroup(title string, fn func(g Reporter), successor fun
 	fmt.Print(prefix)
 
 	model := newGroupModel(title, indentLevel, msgCh)
+	model.bare = g.bare
 	p := tea.NewProgram(model, TeaColorProfile())
 	final, err := p.Run()
 
@@ -218,11 +223,15 @@ func (r *cardReporter) runGroup(title string, fn func(g Reporter), successor fun
 	m := final.(*groupModel)
 	lines := strings.Count(prefix+m.viewString(), "\n")
 	if successor != nil {
-		if lines > 0 {
-			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		// A declining successor (nil) keeps the finalized group card
+		// standing — see runSessionGroup.
+		if c := successor(); c != nil {
+			if lines > 0 {
+				fmt.Printf("\x1b[%dF\x1b[J", lines)
+			}
+			needsSpacer = prevSpacer
+			return c.PrintRewindable()
 		}
-		needsSpacer = prevSpacer
-		return successor().PrintRewindable()
 	}
 	return func() {
 		if lines > 0 {

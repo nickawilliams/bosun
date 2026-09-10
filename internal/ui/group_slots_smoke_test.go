@@ -13,12 +13,13 @@ package ui
 //	sleep 8; tmux send-keys -t slotsmoke Enter; sleep 2
 //	tmux capture-pane -t slotsmoke -p -S -200
 //
-// Healthy output has exactly ONE "Cleanup Readiness" header in the
-// pane history: the group card morphs into the picker (rewound by
-// RunGroupRewindable), and after submit the record card — same
-// title, selection folded in — is the only copy that persists.
-// BOSUN_SMOKE_N overrides the workspace count (default 25 — tall
-// enough that 2×frame exceeds a 50-row terminal).
+// Healthy output has exactly ONE "Select Workspaces" block in the
+// pane history: the live group (status captions swapping from
+// resolving to checking) morphs into the picker header, and after
+// submit the record card — same title, selection folded in — is the
+// only copy that persists. BOSUN_SMOKE_N overrides the workspace
+// count (default 25 — tall enough that 2×frame exceeds a 50-row
+// terminal).
 //
 // Remaining known limitation, deliberately out of this driver's
 // scope: a live group frame TALLER than the terminal itself (e.g.
@@ -49,33 +50,35 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 	}
 
 	err := RunSession(func() error {
-		// Mirror runCleanupBulk's shape: a RunCardThen spinner that
-		// resolves to the standing Resolving card, then the fan-out
-		// group, then the picker form.
-		_ = RunCardThen("Resolving Workspaces", func() error {
-			time.Sleep(400 * time.Millisecond)
-			return nil
-		}, func() *Card {
-			return NewCard(CardSuccess, "Resolving Workspaces").Value(fmt.Sprintf("%d workspaces found", nChildren))
-		})
-
-		// The pickBulkCandidates morph: the group finalizes into the
-		// picker's input header (no empty-frame flash between them),
-		// the form mounts beneath it, and one record card replaces
-		// both on submit.
-		rewind := RunGroupThen("cleanup readiness", func(grp Reporter) {
+		// Mirror pickBulkCandidates' unified flow: one "Select
+		// Workspaces" block whose status captions the discover and
+		// preload phases, finalizing into the picker's input header
+		// (no empty-frame flash), the form beneath it, and one record
+		// card replacing everything on submit.
+		rewind := RunGroupThen("select workspaces", func(grp Reporter) {
+			if sr, ok := grp.(StatusReporter); ok {
+				sr.Status("Resolving workspaces...")
+			}
+			time.Sleep(600 * time.Millisecond)
+			if sr, ok := grp.(StatusReporter); ok {
+				sr.Status(fmt.Sprintf("%d found, checking readiness...", nChildren))
+			}
 			FanOut(grp, nChildren, 0,
 				func(i int) string { return fmt.Sprintf("ws-%d", i) },
 				func(i int) { time.Sleep(time.Duration(200+(i%7)*120) * time.Millisecond) },
 				func(i int, slot Reporter) {
 					if i%5 == 2 {
-						slot.FailValue(fmt.Sprintf("ws-%d", i), "blocked (re-run with --force to select)")
+						slot.FailValue(fmt.Sprintf("ws-%d", i), "uncommitted changes (+1)")
 						return
 					}
 					slot.Complete(fmt.Sprintf("ws-%d", i))
 				},
 			)
-		}, func() *Card { return NewCard(CardInput, "select workspaces").Tight() })
+		}, func() *Card {
+			ready := nChildren - (nChildren+2)/5
+			return NewCard(CardInput, "select workspaces").
+				Muted(fmt.Sprintf("%d found, %d ready", nChildren, ready))
+		})
 
 		// Labels mirror bulkPickerLabel's raw SGR toggles (bold name,
 		// dimmed brief reason) so the smoke shows the composed styling.
@@ -97,8 +100,8 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 		if rewind != nil {
 			rewind()
 		}
-		record := NewCard(CardSuccess, "cleanup readiness").
-			Value(fmt.Sprintf("%d of %d selected", len(picked), nChildren))
+		record := NewCard(CardSuccess, "select workspaces").
+			Muted(fmt.Sprintf("%d of %d selected", len(picked), nChildren), "")
 		for i := range nChildren {
 			record.Muted(fmt.Sprintf("ws-%d", i))
 		}

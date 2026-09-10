@@ -175,88 +175,42 @@ func runCleanupBulk(cmd *cobra.Command, pattern string, query workspaceQuery) er
 	tracker, _ := newIssueTracker()
 	host, _ := newCodeHost()
 
-	// Resolving Workspaces — one card scoped over the whole
-	// pre-readiness stretch: observe issue states (the filter's
-	// input), filter, and resolve each match into a cleanup target.
-	// The card resolves in place to a standing "n workspaces found"
-	// record instead of rewinding away, so the terminal is never
-	// blank between it and the readiness card that follows (#120).
-	// Skip reporting is deferred until the card lands — a skip card
-	// printed mid-spinner would interleave with the live render.
-	//
-	// A workspace that won't resolve (unmatched repos, no worktrees)
-	// is excluded with its reason — not force-includable, since these
-	// are correctness hazards rather than acknowledged data risks.
-	var (
-		matched int
-		targets []cleanupTarget
-		skips   []string
-	)
-	err = ui.RunCardThen("Resolving Workspaces", func() error {
-		observed := observeWorkspaces(ctx, names, func(ctx context.Context, name string) workspaceState {
-			return fetchWorkspaceIssueState(ctx, tracker, name)
-		})
-
-		matches, filterSkips := partitionWorkspaces(observed, query)
-		matched = len(matches)
-		skips = filterSkips
-
-		projectRepos, err := resolveRepositories(nil)
-		if err != nil {
-			return err
-		}
-		mainPath := mainPathIndex(projectRepos)
-
-		for _, ws := range matches {
-			t, err := resolveCleanupTarget(ctx, ws.name, ws.issueKey, mainPath)
-			if err != nil {
-				skips = append(skips, fmt.Sprintf("%s: %v", ws.name, err))
-				continue
-			}
-			targets = append(targets, t)
-		}
-		return nil
-	}, func() *ui.Card {
-		found := fmt.Sprintf("%d of %d workspaces found", len(targets), len(names))
-		if len(targets) == len(names) {
-			found = fmt.Sprintf("%d %s found", len(targets), pluralize(len(targets), "workspace", "workspaces"))
-		}
-		return ui.NewCard(ui.CardSuccess, "Resolving Workspaces").Value(found)
-	})
-	if err != nil {
-		return err
-	}
-	for _, s := range skips {
-		ui.Skip(s)
-	}
-	if matched == 0 {
-		ui.Skip("no workspaces match the filter")
-		return nil
-	}
-	if len(targets) == 0 {
-		ui.Skip("no workspaces left to clean up")
-		return nil
-	}
-
-	// Selection gate. Interactive: the readiness-informed picker (a
-	// gatherSelect flow) is the selection — choosing a WARN (or
+	// Selection gate. Interactive: the whole discover → readiness →
+	// pick sequence runs as one gatherSelect flow under a single
+	// "Select Workspaces" title (#120) — choosing a WARN (or
 	// --force-included BLOCK) row is the acknowledgment, so no
-	// combined warning dialog follows. Non-interactive: the
-	// pattern/filter was the selection; sweep the candidate set with
-	// BLOCKs excluded (--force includes them) and WARNs requiring
-	// --force as the stand-in for the acknowledgment nobody is
-	// present to give.
+	// combined warning dialog follows, and every empty outcome is
+	// reported inside pickBulkCandidates. Non-interactive: the
+	// pattern/filter was the selection; the same discover stretch
+	// runs without a render, then the sweep gates the candidate set
+	// with BLOCKs excluded (--force includes them) and WARNs
+	// requiring --force as the stand-in for the acknowledgment
+	// nobody is present to give.
 	var included []bulkCleanupCandidate
 	if isInteractive() {
-		included, err = pickBulkCandidates(ctx, g, host, tracker, targets, force)
+		included, err = pickBulkCandidates(ctx, g, host, tracker, names, query, force)
 		if err != nil {
 			return err
 		}
 		if len(included) == 0 {
-			ui.Skip("no workspaces selected")
 			return nil
 		}
 	} else {
+		targets, matched, skips, err := resolveBulkTargets(ctx, tracker, names, query)
+		if err != nil {
+			return err
+		}
+		for _, s := range skips {
+			ui.Skip(s)
+		}
+		if matched == 0 {
+			ui.Skip("no workspaces match the filter")
+			return nil
+		}
+		if len(targets) == 0 {
+			ui.Skip("no workspaces left to clean up")
+			return nil
+		}
 		candidates := gatherBulkCandidatesRaw(ctx, g, host, tracker, targets, force)
 		included = includeBulkCandidates(candidates, force)
 		if len(included) == 0 {

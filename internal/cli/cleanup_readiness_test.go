@@ -711,10 +711,11 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 }
 
 // TestBulkSelectItem pins cleanup's mapping into the gatherSelect
-// flow: brief finding in the picker label, verbose finding in the
-// record detail, readiness glyph, ready-preselected posture, and
-// the --force gate on blocked rows (the label styling contract
-// itself lives with gatherSelectLabel's own tests).
+// flow: the brief finding as the row annotation (the flow's one
+// vocabulary — verbose findings stay on the raw readiness card),
+// readiness glyph, ready-preselected posture, and the --force gate
+// on blocked rows (the label styling contract itself lives with
+// gatherSelectLabel's own tests).
 func TestBulkSelectItem(t *testing.T) {
 	warned := bulkCleanupCandidate{
 		target: cleanupTarget{workspace: "EX-2-warned"},
@@ -749,9 +750,6 @@ func TestBulkSelectItem(t *testing.T) {
 	if warn.Brief != "Ready for Release" {
 		t.Errorf("warn brief = %q, want the compact finding", warn.Brief)
 	}
-	if !strings.Contains(warn.Detail, "done-like status") {
-		t.Errorf("warn detail = %q, want the verbose finding for the record", warn.Detail)
-	}
 
 	block := bulkSelectItem(blocked)
 	if block.Preselected {
@@ -779,16 +777,17 @@ func TestBulkSelectItem(t *testing.T) {
 }
 
 // TestBulkSelectionRecord covers cleanup's record card through the
-// gatherSelect flow's renderer: readiness rows in picker order with
-// the selection folded in, unselected rows fully receded, the
-// picker's gate message absent, and the readiness card's worst-first
-// state kept. (The generic renderer's own contract is pinned in
-// gatherselect_test.go; this locks the cleanup-side wiring.)
+// gatherSelect flow's renderer: brief readiness annotations in
+// picker order with the selection folded in, unselected rows fully
+// receded, the picker's gate message absent, and the readiness
+// card's worst-first state kept. (The generic renderer's own
+// contract is pinned in gatherselect_test.go; this locks the
+// cleanup-side wiring.)
 func TestBulkSelectionRecord(t *testing.T) {
 	record := func(candidates []bulkCleanupCandidate, picked []int) *ui.Card {
 		items := make([]gatherSelectItem, len(candidates))
 		gs := gatherSelect{
-			Title: "cleanup readiness",
+			Title: "select workspaces",
 			N:     len(candidates),
 			RecordState: func() ui.CardState {
 				state := ui.CardSuccess
@@ -810,15 +809,23 @@ func TestBulkSelectionRecord(t *testing.T) {
 	}
 	safe := bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}
 	warned := bulkCleanupCandidate{
-		target:     cleanupTarget{workspace: "EX-2-warned"},
-		wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
-		worst:      findingWarn,
+		target: cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{
+			severity: findingWarn, code: "issue-not-done",
+			message: "issue is In Progress, not in a done-like status",
+			brief:   "In Progress",
+		}},
+		worst: findingWarn,
 	}
 	blocked := bulkCleanupCandidate{
 		target: cleanupTarget{workspace: "EX-3-blocked"},
 		repoResults: []repoCleanup{{
-			repo:     Repository{Name: "api"},
-			findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+			repo: Repository{Name: "api"},
+			findings: []cleanupFinding{{
+				severity: findingBlock, code: "dirty",
+				message: "uncommitted changes in worktree",
+				brief:   "uncommitted changes",
+			}},
 		}},
 		worst: findingBlock,
 	}
@@ -838,15 +845,21 @@ func TestBulkSelectionRecord(t *testing.T) {
 		t.Errorf("selected safe row = %q, want the check glyph", row)
 	}
 	row = findRowContaining(t, lines, "EX-2-warned")
-	if !strings.Contains(row, ui.Palette.Attention) || !strings.Contains(row, "issue is In Progress") {
-		t.Errorf("selected warn row = %q, want the warn glyph and reason", row)
+	if !strings.Contains(row, ui.Palette.Attention) || !strings.Contains(row, "In Progress") {
+		t.Errorf("selected warn row = %q, want the warn glyph and brief reason", row)
+	}
+	if strings.Contains(row, "done-like status") {
+		t.Errorf("selected warn row = %q, the verbose message leaked into the record", row)
 	}
 	row = findRowContaining(t, lines, "EX-3-blocked")
 	if !strings.Contains(row, ui.Palette.Inactive) {
 		t.Errorf("unselected row = %q, want the receded %q glyph", row, ui.Palette.Inactive)
 	}
 	if !strings.Contains(row, "uncommitted changes") {
-		t.Errorf("unselected row = %q, want its reason kept", row)
+		t.Errorf("unselected row = %q, want its brief reason kept", row)
+	}
+	if strings.Contains(row, "in worktree") {
+		t.Errorf("unselected row = %q, the verbose message leaked into the record", row)
 	}
 	if strings.Contains(out, "--force to select") {
 		t.Errorf("card = %q, the picker's gating hint must not survive into the record", out)

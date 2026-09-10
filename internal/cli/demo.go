@@ -425,24 +425,33 @@ func demoGatherSelect() error {
 	blockGlyph := lipgloss.NewStyle().Foreground(ui.Palette.Error).Render(ui.Palette.Cross)
 
 	type state struct {
-		brief, detail, glyph, gate string
-		preselected                bool
+		brief, glyph, gate string
+		preselected        bool
 	}
 	states := []state{
 		{preselected: true},
 		{preselected: true},
-		{brief: "needs review", detail: "review pending, selecting acknowledges it", glyph: warnGlyph},
+		{brief: "needs review", glyph: warnGlyph},
 		{preselected: true},
-		{brief: "uncommitted changes (+1)", detail: "uncommitted changes in worktree; 1 more finding",
-			glyph: blockGlyph, gate: "demo-4 is blocked; re-run with --force to select it"},
+		{brief: "uncommitted changes (+1)", glyph: blockGlyph,
+			gate: "demo-4 is blocked; re-run with --force to select it"},
 		{preselected: true},
 	}
 
 	_, err := gatherSelect{
-		Title:  "gather select",
-		Header: "select items",
-		N:      len(states),
-		Label:  func(i int) string { return fmt.Sprintf("demo-%d", i) },
+		Title: "gather select",
+		Discover: func() (int, error) {
+			time.Sleep(600 * time.Millisecond)
+			return len(states), nil
+		},
+		StatusResolving: "Resolving items...",
+		StatusChecking: func(n int) string {
+			return fmt.Sprintf("%d items found, checking readiness...", n)
+		},
+		StatusPicker: func(n, ready int) string {
+			return fmt.Sprintf("%d items found, %d items ready", n, ready)
+		},
+		Label: func(i int) string { return fmt.Sprintf("demo-%d", i) },
 		Work: func(i int) {
 			time.Sleep(time.Duration(300+(i%3)*250) * time.Millisecond)
 		},
@@ -450,9 +459,9 @@ func demoGatherSelect() error {
 			label := ui.PreserveCase(fmt.Sprintf("demo-%d", i))
 			switch {
 			case states[i].gate != "":
-				slot.FailValue(label, states[i].detail)
+				slot.FailValue(label, states[i].brief)
 			case states[i].brief != "":
-				slot.SkipValue(label, states[i].detail)
+				slot.SkipValue(label, states[i].brief)
 			default:
 				slot.Complete(label)
 			}
@@ -461,7 +470,6 @@ func demoGatherSelect() error {
 			return gatherSelectItem{
 				Name:        fmt.Sprintf("demo-%d", i),
 				Brief:       states[i].brief,
-				Detail:      states[i].detail,
 				Glyph:       states[i].glyph,
 				Preselected: states[i].preselected,
 				Gate:        states[i].gate,

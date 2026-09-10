@@ -87,6 +87,13 @@ type groupSlotDoneMsg struct{ slot int }
 
 func (groupSlotDoneMsg) groupMsg() {}
 
+// groupStatusMsg replaces the group's status caption — a mutable
+// muted line under the title for phase progress ("Resolving
+// workspaces...") that isn't a child row.
+type groupStatusMsg struct{ text string }
+
+func (groupStatusMsg) groupMsg() {}
+
 type groupTaskStartMsg struct {
 	title  string
 	indent int
@@ -130,7 +137,8 @@ func (groupDoneMsg) groupMsg() {}
 type group struct {
 	outer    Reporter
 	title    string
-	indent   int // children's indent depth
+	indent   int  // children's indent depth
+	bare     bool // children indent without the spine (successor flows)
 	msgCh    chan<- groupMsg
 	slot     int // non-zero: emissions resolve this slot in place
 	counts   *groupCounts
@@ -158,7 +166,11 @@ type groupCounts struct {
 }
 
 func (g *group) sendChild(state CardState, c *Card) {
-	c.Indent(g.indent)
+	if g.bare {
+		c.BareIndent(g.indent)
+	} else {
+		c.Indent(g.indent)
+	}
 	c.tight = true
 	// Children are list entries under the group's bold parent title,
 	// not headings themselves — render their titles without bold so
@@ -275,6 +287,9 @@ func (g *group) Task(title string, fn func() error) error {
 		holdSpinner(start)
 
 		card := NewCard(CardSuccess, title).Indent(g.indent)
+		if g.bare {
+			card.BareIndent(g.indent)
+		}
 		card.tight = true
 		card.plainTitle = true
 		state := CardSuccess
@@ -345,9 +360,27 @@ func (g *group) Summary(total string, segments []SummarySegment) {
 func (g *group) Group(title string, fn func(Reporter)) {
 	g.msgCh <- groupBeginMsg{title: title, indent: g.indent}
 	inner := newGroup(g.outer, title, g.indent+1, g.msgCh)
+	inner.bare = g.bare
 	fn(inner)
 	g.msgCh <- groupEndMsg{}
 	g.bumpCount(CardSuccess) // sub-group contributes to parent aggregate
+}
+
+// StatusReporter is the optional status-caption half of the group
+// reporter contract: a mutable muted line under the group's title
+// for phase progress that isn't a child row. Implemented by the
+// live group reporter; callers type-assert and skip when absent
+// (raw / plain / capture renders have no line to update).
+type StatusReporter interface {
+	Status(text string)
+}
+
+// Status replaces the group's status caption. Each call overwrites
+// the previous one; the last value set also renders on the
+// finalized card, so end a phase-progress caption with a resolved
+// wording (or a successor) rather than leaving "…ing" text behind.
+func (g *group) Status(text string) {
+	g.msgCh <- groupStatusMsg{text: text}
 }
 
 // slotSeq issues slot ids. Package-global so ids stay unique across
@@ -372,6 +405,7 @@ func (g *group) Slot(title string) (Reporter, func()) {
 		outer:    g.outer,
 		title:    g.title,
 		indent:   g.indent,
+		bare:     g.bare,
 		msgCh:    g.msgCh,
 		slot:     id,
 		counts:   g.counts,
@@ -411,6 +445,7 @@ func aggregateCounts(c groupCounts) CardState {
 type groupNode struct {
 	title      string
 	indent     int
+	status     string // mutable caption under the title (groupStatusMsg)
 	children   []groupRenderedChild
 	activeTask *groupActiveTask
 	counts     groupCounts
@@ -447,6 +482,7 @@ type groupModel struct {
 	root    *groupNode
 	current *groupNode
 	slots   map[int]*groupSlotChild
+	bare    bool // running rows indent without the spine (successor flows)
 	done    bool
 }
 
@@ -554,6 +590,9 @@ func (m *groupModel) processMsg(msg groupMsg) {
 			sc.running = false
 		}
 
+	case groupStatusMsg:
+		m.current.status = msg.text
+
 	case groupTaskStartMsg:
 		m.current.activeTask = &groupActiveTask{title: msg.title, indent: msg.indent}
 
@@ -621,6 +660,16 @@ func (m *groupModel) View() tea.View {
 
 func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 	parentCard := NewCard(CardPending, node.title).Indent(node.indent)
+	if node.status != "" {
+		// The caption sits between the title and any child rows; a
+		// trailing blank keeps the rows from crowding it when they
+		// exist.
+		if len(node.children) > 0 || node.activeTask != nil {
+			parentCard.Muted(node.status, "")
+		} else {
+			parentCard.Muted(node.status)
+		}
+	}
 	if node.finalized {
 		parentCard.state = node.finalState
 		b.WriteString(parentCard.Render())
@@ -641,6 +690,9 @@ func (m *groupModel) renderNode(b *strings.Builder, node *groupNode) {
 
 	if node.activeTask != nil {
 		taskCard := NewCard(CardRunning, node.activeTask.title).Indent(node.activeTask.indent)
+		if m.bare {
+			taskCard.BareIndent(node.activeTask.indent)
+		}
 		taskCard.tight = true
 		taskCard.plainTitle = true
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))
@@ -659,6 +711,9 @@ func (m *groupModel) renderSlot(b *strings.Builder, sc *groupSlotChild) {
 	}
 	if sc.running {
 		taskCard := NewCard(CardRunning, sc.title).Indent(sc.indent)
+		if m.bare {
+			taskCard.BareIndent(sc.indent)
+		}
 		taskCard.tight = true
 		taskCard.plainTitle = true
 		b.WriteString(taskCard.renderWithGlyph(m.spinner.View()))

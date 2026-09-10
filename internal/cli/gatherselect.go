@@ -12,20 +12,24 @@ import (
 
 // This file holds gatherSelect, the preload-informed multi-select
 // flow (#120's readiness-informed picker, carved out of the cleanup
-// command). Three phases, one timeline position:
+// command). One title, one timeline position, four phases:
 //
-//  1. Preload — a fan-out under a group card: every item's spinner
-//     listed up front, each resolving in place to the caller's
-//     verbose row(s) as its probe finishes (ui.FanOut).
-//  2. Select — the group finalizes INTO the picker's input header
-//     (ui.RunGroupThen's successor, so no empty-frame flash), and a
-//     multi-select mounts beneath it whose rows the preload
-//     informed: what is preselected, what is gated, what each row
-//     says.
-//  3. Record — on submit, one card replaces both: the preload's
-//     rows with the selection folded in. Selected rows keep their
-//     glyph and colors; unselected rows recede fully (the Services
-//     card's excluded-row treatment).
+//  1. Discover (optional) — resolve the item set under the flow's
+//     header, captioned by StatusResolving. Zero items (or an
+//     error) ends the flow with the group card standing.
+//  2. Preload — a fan-out under the same card, captioned by
+//     StatusChecking: every item's spinner listed up front, each
+//     resolving in place to the caller's row(s) as its probe
+//     finishes (ui.FanOut).
+//  3. Select — the group finalizes INTO the picker's input header
+//     (ui.RunGroupThen's successor, so no empty-frame flash),
+//     captioned by StatusPicker, and a multi-select mounts beneath
+//     it whose rows the preload informed: what is preselected, what
+//     is gated, what each row says.
+//  4. Record — on submit, one card replaces everything: the rows
+//     with the selection folded in. Selected rows keep their glyph
+//     and colors; unselected rows recede fully (the Services card's
+//     excluded-row treatment).
 //
 // It lives in cli rather than ui because the form plumbing does
 // (runForm, fittedMultiSelect, the huh theme) — the same layering
@@ -40,14 +44,13 @@ type gatherSelectItem struct {
 	// colored in the record.
 	Name string
 
-	// Brief is the compact annotation dimmed beside the name in the
-	// picker. Keep it scannable — the row sits beside many siblings
-	// and must not wrap. Empty renders the bare name.
+	// Brief is the compact annotation beside the name — dimmed in
+	// the picker, muted in the record. The flow speaks one
+	// vocabulary across all phases, so keep it scannable: the row
+	// sits beside many siblings and must not wrap. Verbose forms
+	// belong to surfaces outside the flow (cleanup's raw readiness
+	// card, say). Empty renders the bare name.
 	Brief string
-
-	// Detail is the full annotation for the record card, where the
-	// verbose form lives; empty falls back to Brief.
-	Detail string
 
 	// Glyph is the pre-styled record-row glyph for a selected row
 	// (the picker shows huh's selection marker in that column
@@ -70,15 +73,40 @@ type gatherSelectItem struct {
 // item; Work runs concurrently (bounded by ui.FanOut's pool),
 // Resolve and Item run after the item's Work completed.
 type gatherSelect struct {
-	// Title is the preload group's title and the record card's.
+	// Title names every phase: the live group card, the picker's
+	// input header, and the record card.
 	Title string
 
-	// Header is the input header the group finalizes into and the
-	// form mounts beneath.
-	Header string
+	// Discover, when set, resolves the item set as the flow's first
+	// phase and returns the item count (N is ignored then). Zero
+	// items — or an error, which run returns — ends the flow before
+	// the picker: the group card stands (captioned by StatusEmpty)
+	// and run returns a nil selection. The closure typically stores
+	// its own detail (targets, skip diagnostics) for the caller to
+	// use and report after run returns.
+	Discover func() (int, error)
 
-	// N is the item count.
+	// N is the item count when Discover is nil.
 	N int
+
+	// StatusResolving captions the discover phase (e.g. "Resolving
+	// workspaces..."). Empty leaves the title bare.
+	StatusResolving string
+
+	// StatusChecking captions the preload phase, evaluated once the
+	// item count is known (e.g. "25 workspaces found, checking
+	// readiness...").
+	StatusChecking func(n int) string
+
+	// StatusEmpty captions the standing group card when Discover
+	// finds nothing — a resolved wording replacing the in-progress
+	// StatusResolving caption.
+	StatusEmpty string
+
+	// StatusPicker captions the picker header and is evaluated after
+	// the preload, with the item count and how many arrived
+	// preselected (e.g. "25 workspaces found, 16 workspaces ready").
+	StatusPicker func(n, preselected int) string
 
 	// Label names item i's preload spinner row.
 	Label func(i int) string
@@ -86,8 +114,8 @@ type gatherSelect struct {
 	// Work is item i's probe. Runs on a worker goroutine.
 	Work func(i int)
 
-	// Resolve emits item i's verbose preload row(s) through the
-	// group reporter, replacing its spinner in place.
+	// Resolve emits item i's row(s) through the group reporter,
+	// replacing its spinner in place.
 	Resolve func(i int, r ui.Reporter)
 
 	// Item derives item i's picker/record presentation. Called after
@@ -105,18 +133,65 @@ type gatherSelect struct {
 }
 
 // run executes the flow and returns the selected item indices in
-// listing order. A cancelled picker returns the form's error with
-// the picker rows left on screen as residue — context for the
-// caller's cancellation card.
+// listing order. A discover phase that found nothing returns
+// (nil, nil) — the caller reports why from its own discover detail.
+// A cancelled picker returns the form's error with the picker rows
+// left on screen as residue — context for the caller's cancellation
+// card.
 func (gs gatherSelect) run() ([]int, error) {
-	rewindHeader := ui.RunGroupThen(gs.Title, func(grp ui.Reporter) {
-		ui.FanOut(grp, gs.N, 0, gs.Label, gs.Work, gs.Resolve)
-	}, func() *ui.Card { return ui.NewCard(ui.CardInput, gs.Header).Tight() })
+	n := gs.N
+	var discoverErr error
+	var items []gatherSelectItem
+	preselected := 0
 
-	items := make([]gatherSelectItem, gs.N)
-	opts := make([]huh.Option[int], gs.N)
+	rewindHeader := ui.RunGroupThen(gs.Title, func(grp ui.Reporter) {
+		status := func(text string) {
+			if text == "" {
+				return
+			}
+			if sr, ok := grp.(ui.StatusReporter); ok {
+				sr.Status(text)
+			}
+		}
+		if gs.Discover != nil {
+			status(gs.StatusResolving)
+			n, discoverErr = gs.Discover()
+		}
+		if discoverErr != nil {
+			// The returned error is the authority on what went
+			// wrong; the card keeps its last caption.
+			return
+		}
+		if n == 0 {
+			status(gs.StatusEmpty)
+			return
+		}
+		if gs.StatusChecking != nil {
+			status(gs.StatusChecking(n))
+		}
+		ui.FanOut(grp, n, 0, gs.Label, gs.Work, gs.Resolve)
+		items = make([]gatherSelectItem, n)
+		for i := range items {
+			items[i] = gs.Item(i)
+			if items[i].Preselected {
+				preselected++
+			}
+		}
+	}, func() *ui.Card {
+		if items == nil {
+			return nil // nothing to pick — the group card stands
+		}
+		return gs.pickerHeader(n, preselected)
+	})
+	if discoverErr != nil {
+		return nil, discoverErr
+	}
+	if items == nil {
+		return nil, nil
+	}
+
+	opts := make([]huh.Option[int], n)
 	for i := range opts {
-		items[i] = gs.Item(i)
 		opts[i] = huh.NewOption(gatherSelectLabel(items[i]), i).
 			Selected(items[i].Preselected)
 	}
@@ -140,7 +215,7 @@ func (gs gatherSelect) run() ([]int, error) {
 	var slot *ui.Slot
 	if rewindHeader == nil {
 		slot = ui.NewSlot()
-		slot.Show(ui.NewCard(ui.CardInput, gs.Header).Tight())
+		slot.Show(gs.pickerHeader(n, preselected))
 	}
 	if err := runForm(field); err != nil {
 		ui.RequestSpacer()
@@ -155,6 +230,17 @@ func (gs gatherSelect) run() ([]int, error) {
 	sort.Ints(picked)
 	gs.recordCard(items, picked).Print()
 	return picked, nil
+}
+
+// pickerHeader builds the input header the form mounts beneath —
+// the successor the group finalizes into, and the fallback header
+// for renders without one. One constructor so the two can't drift.
+func (gs gatherSelect) pickerHeader(n, preselected int) *ui.Card {
+	header := ui.NewCard(ui.CardInput, gs.Title)
+	if gs.StatusPicker != nil {
+		header.Muted(gs.StatusPicker(n, preselected))
+	}
+	return header
 }
 
 // gatherSelectLabel renders one picker row: the item name in bold
@@ -176,10 +262,11 @@ func gatherSelectLabel(it gatherSelectItem) string {
 	return fmt.Sprintf("%s\x1b[2m · %s\x1b[22m", name, it.Brief)
 }
 
-// recordCard renders the flow's third phase: every row in picker
-// order with the selection folded in. Selected rows keep their glyph
-// and colors with the full detail; unselected rows recede fully —
-// glyph, name, and detail all muted behind the inactive ○.
+// recordCard renders the flow's final phase: every row in picker
+// order with the selection folded in, beneath the selection tally.
+// Selected rows keep their glyph and colors; unselected rows recede
+// fully — glyph, name, and annotation all muted behind the inactive
+// ○.
 func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Card {
 	nameStyle := lipgloss.NewStyle().Foreground(ui.Palette.Primary)
 	muted := lipgloss.NewStyle().Foreground(ui.Palette.Muted)
@@ -197,16 +284,12 @@ func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Ca
 	}
 
 	card := ui.NewCard(state, gs.Title).
-		Value(fmt.Sprintf("%d of %d selected", len(picked), len(items)))
+		Muted(fmt.Sprintf("%d of %d selected", len(picked), len(items)), "")
 	for i, it := range items {
-		detail := it.Detail
-		if detail == "" {
-			detail = it.Brief
-		}
 		if !pickedSet[i] {
 			content := it.Name
-			if detail != "" {
-				content += " · " + detail
+			if it.Brief != "" {
+				content += " · " + it.Brief
 			}
 			card.Item(glyphOff, muted.Render(content))
 			continue
@@ -216,8 +299,8 @@ func (gs gatherSelect) recordCard(items []gatherSelectItem, picked []int) *ui.Ca
 			glyph = glyphOK
 		}
 		content := nameStyle.Render(it.Name)
-		if detail != "" {
-			content += muted.Render(" · " + detail)
+		if it.Brief != "" {
+			content += muted.Render(" · " + it.Brief)
 		}
 		card.Item(glyph, content)
 	}

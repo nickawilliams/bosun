@@ -522,6 +522,10 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter), successor f
 
 	mirror := newGroupModel(title, 0, nil)
 	gb := &sesGroupBlock{gm: newGroupModel(title, 0, nil), prefix: prefix}
+	// Successor flows render transiently, so their rows indent
+	// without the timeline spine — see Card.BareIndent.
+	mirror.bare = successor != nil
+	gb.gm.bare = successor != nil
 	s.send(sesGroupStartMsg{gb: gb})
 
 	msgCh := make(chan groupMsg, 256)
@@ -538,6 +542,7 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter), successor f
 	}()
 
 	g := newGroup(defaultReporter, title, 1, msgCh)
+	g.bare = successor != nil
 	start := time.Now()
 	fn(g)
 	holdSpinner(start) // display floor, as cardReporter.Group applies
@@ -545,11 +550,18 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter), successor f
 	<-drained
 
 	if successor != nil {
-		// Restore the spacer state the group's own prefix consumed so
-		// the successor's print computes the identical prefix — it
-		// takes the group's position, not a new one below it.
-		needsSpacer = prevSpacer
-		return successor().PrintRewindable()
+		// A successor closure may still decline (return nil) once it
+		// sees what the group produced — a discover phase that found
+		// nothing has no picker to morph into — in which case the
+		// finalized group card stands as usual.
+		if c := successor(); c != nil {
+			// Restore the spacer state the group's own prefix
+			// consumed so the successor's print computes the
+			// identical prefix — it takes the group's position, not
+			// a new one below it.
+			needsSpacer = prevSpacer
+			return c.PrintRewindable()
+		}
 	}
 
 	final := prefix + mirror.viewString()

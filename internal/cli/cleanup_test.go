@@ -1264,16 +1264,17 @@ func TestCleanupBulk(t *testing.T) {
 		if _, err := os.Stat(scratch); err != nil {
 			t.Errorf("the blocked workspace's uncommitted file was destroyed: %v", err)
 		}
-		// The gate is reported, not silent: the readiness row names
-		// the workspace and the --force requirement.
+		// The gate is reported, not silent: the block surfaces as a
+		// ✗ preload row carrying the brief reason (the --force
+		// teaching lives in the picker's validation message).
 		var reported bool
 		for _, ev := range h.Reporter.OfKind(ui.CaptureFail) {
-			if strings.Contains(ev.Value, "blocked") {
+			if strings.Contains(ev.Value, "uncommitted changes") {
 				reported = true
 			}
 		}
 		if !reported {
-			t.Errorf("no readiness row reported the block\n%s", h.Reporter.Dump())
+			t.Errorf("no readiness row reported the block's reason\n%s", h.Reporter.Dump())
 		}
 	})
 

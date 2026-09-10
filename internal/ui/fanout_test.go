@@ -57,6 +57,76 @@ func TestGroupModelSlots(t *testing.T) {
 	}
 }
 
+// TestGroupBareIndent pins the successor-flow indent contract: a
+// bare group's rows — resolved children and running slot rows alike
+// — indent with whitespace only, no timeline spine. The transient
+// render never joins the timeline; the spine belongs to the
+// committed record that replaces it.
+func TestGroupBareIndent(t *testing.T) {
+	ch := make(chan groupMsg, 16)
+	g := newGroup(nil, "parent", 1, ch)
+	g.bare = true
+	g.Complete("bare-child")
+	close(ch)
+
+	m := newGroupModel("parent", 0, nil)
+	m.bare = true
+	for msg := range ch {
+		m.processMsg(msg)
+	}
+	m.processMsg(groupSlotStartMsg{title: "running-slot", indent: 1, slot: 21})
+
+	view := m.viewString()
+	if !strings.Contains(view, "Bare-child") || !strings.Contains(view, "Running-slot") {
+		t.Fatalf("view missing rows:\n%s", view)
+	}
+	if strings.Contains(view, cardConnector) {
+		t.Errorf("bare group rendered the timeline spine:\n%s", view)
+	}
+
+	// The default (spined) mode is unchanged.
+	ch2 := make(chan groupMsg, 16)
+	g2 := newGroup(nil, "parent", 1, ch2)
+	g2.Complete("spined-child")
+	close(ch2)
+	m2 := newGroupModel("parent", 0, nil)
+	for msg := range ch2 {
+		m2.processMsg(msg)
+	}
+	if view := m2.viewString(); !strings.Contains(view, cardConnector) {
+		t.Errorf("classic group lost its spine:\n%s", view)
+	}
+}
+
+// TestGroupModelStatus pins the status caption: each Status message
+// overwrites the last, the caption renders under the title (with a
+// trailing blank once child rows exist, so they don't crowd it),
+// and the last value set survives onto the finalized render.
+func TestGroupModelStatus(t *testing.T) {
+	m := newGroupModel("parent", 0, nil)
+	m.processMsg(groupStatusMsg{text: "resolving..."})
+	if view := m.viewString(); !strings.Contains(view, "resolving...") {
+		t.Errorf("view = %q, want the status caption", view)
+	}
+
+	m.processMsg(groupStatusMsg{text: "3 found, checking..."})
+	m.processMsg(groupChildMsg{rendered: "ROW\n", state: CardSuccess})
+	view := m.viewString()
+	if strings.Contains(view, "resolving...") {
+		t.Errorf("view = %q, stale caption survived an overwrite", view)
+	}
+	statusAt := strings.Index(view, "3 found, checking...")
+	rowAt := strings.Index(view, "ROW")
+	if statusAt < 0 || rowAt < 0 || statusAt > rowAt {
+		t.Errorf("caption not rendered above the rows (status %d, row %d):\n%s", statusAt, rowAt, view)
+	}
+
+	m.processMsg(groupDoneMsg{})
+	if view := m.viewString(); !strings.Contains(view, "3 found, checking...") {
+		t.Errorf("finalized view = %q, want the last caption kept", view)
+	}
+}
+
 // TestGroupModelSlotUnknownDropped pins the defensive branch: a
 // slot-tagged child for a slot the model never saw is dropped rather
 // than misplaced at the tail.

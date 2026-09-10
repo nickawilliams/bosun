@@ -503,36 +503,100 @@ func gatherBulkCandidatesRaw(
 	return candidates
 }
 
-// pickBulkCandidates runs the readiness-informed multi-select — the
-// interactive form of the pattern argument — as a gatherSelect flow:
-// the readiness probes fan out as the preload (verbose rows
-// resolving each spinner in place), the group morphs into the
-// picker, and one record card replaces both on submit. Ready
-// workspaces arrive preselected (plan approval is the backstop for
-// a bare sweep-by-enter); WARN workspaces arrive unselected, and
-// selecting one IS the acknowledgment the old combined warning
-// dialog used to collect; BLOCK workspaces are listed with their
-// reason but selectable only under --force (the gate teaches
-// through the validation message). Returns the chosen candidates in
-// listing order.
+// resolveBulkTargets is the discover stretch shared by both bulk
+// paths: observe the issue states the filter needs, narrow to the
+// query's matches, and resolve each match into a cleanup target. A
+// workspace that won't resolve (unmatched repos, no worktrees) is
+// excluded with its reason in skips — not force-includable, since
+// these are correctness hazards rather than acknowledged data
+// risks. skips defer to the caller so a flow running this under a
+// live render can report them once the render has settled.
+func resolveBulkTargets(
+	ctx context.Context,
+	tracker issue.Tracker,
+	names []string,
+	query workspaceQuery,
+) (targets []cleanupTarget, matched int, skips []string, err error) {
+	observed := observeWorkspaces(ctx, names, func(ctx context.Context, name string) workspaceState {
+		return fetchWorkspaceIssueState(ctx, tracker, name)
+	})
+
+	matches, skips := partitionWorkspaces(observed, query)
+	matched = len(matches)
+
+	projectRepos, err := resolveRepositories(nil)
+	if err != nil {
+		return nil, matched, skips, err
+	}
+	mainPath := mainPathIndex(projectRepos)
+
+	for _, ws := range matches {
+		t, err := resolveCleanupTarget(ctx, ws.name, ws.issueKey, mainPath)
+		if err != nil {
+			skips = append(skips, fmt.Sprintf("%s: %v", ws.name, err))
+			continue
+		}
+		targets = append(targets, t)
+	}
+	return targets, matched, skips, nil
+}
+
+// pickBulkCandidates runs the whole interactive batch selection as
+// one gatherSelect flow under a single "Select Workspaces" title:
+// discover (observe → filter → resolve targets, "Resolving
+// workspaces..."), preload (readiness probes fanned out, brief rows
+// resolving each spinner in place), the picker the group morphs
+// into, and the record card that replaces everything on submit.
+// Ready workspaces arrive preselected (plan approval is the
+// backstop for a bare sweep-by-enter); WARN workspaces arrive
+// unselected, and selecting one IS the acknowledgment the old
+// combined warning dialog used to collect; BLOCK workspaces are
+// listed with their reason but selectable only under --force (the
+// gate teaches through the validation message).
+//
+// Returns the chosen candidates in listing order. Empty-outcome
+// reporting (discover skips, no matches, nothing selected) is
+// emitted here, after the flow has left the screen — the caller
+// just stops on an empty result.
 func pickBulkCandidates(
 	ctx context.Context,
 	g vcs.VCS,
 	host code.Host,
 	tracker issue.Tracker,
-	targets []cleanupTarget,
+	names []string,
+	query workspaceQuery,
 	force bool,
 ) ([]bulkCleanupCandidate, error) {
-	candidates := make([]bulkCleanupCandidate, len(targets))
+	var (
+		targets    []cleanupTarget
+		matched    int
+		skips      []string
+		candidates []bulkCleanupCandidate
+	)
 
 	selected, err := gatherSelect{
-		Title:  "cleanup readiness",
-		Header: "select workspaces",
-		N:      len(targets),
-		Label:  func(i int) string { return ui.PreserveCase(targets[i].workspace) },
-		Work:   func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
+		Title: "select workspaces",
+		Discover: func() (int, error) {
+			var derr error
+			targets, matched, skips, derr = resolveBulkTargets(ctx, tracker, names, query)
+			if derr != nil {
+				return 0, derr
+			}
+			candidates = make([]bulkCleanupCandidate, len(targets))
+			return len(targets), nil
+		},
+		StatusResolving: "Resolving workspaces...",
+		StatusEmpty:     "no workspaces to select",
+		StatusChecking: func(n int) string {
+			return fmt.Sprintf("%d found, checking readiness...", n)
+		},
+		StatusPicker: func(n, ready int) string {
+			return fmt.Sprintf("%d found, %d ready", n, ready)
+		},
+		Label: func(i int) string { return ui.PreserveCase(targets[i].workspace) },
+		Work:  func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
 		Resolve: func(i int, slot ui.Reporter) {
-			emitBulkCandidateRow(slot, candidates[i], force)
+			emitBulkCandidateRow(slot, candidates[i])
 		},
 		Item: func(i int) gatherSelectItem { return bulkSelectItem(candidates[i]) },
 		RecordState: func() ui.CardState {
@@ -549,8 +613,27 @@ func pickBulkCandidates(
 		},
 		GateOpen: force,
 	}.run()
+
+	// Discover diagnostics print after the flow so skip cards don't
+	// interleave with the live render — and before the error check,
+	// so a cancelled picker still discloses them.
+	for _, s := range skips {
+		ui.Skip(s)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if matched == 0 {
+		ui.Skip("no workspaces match the filter")
+		return nil, nil
+	}
+	if len(targets) == 0 {
+		ui.Skip("no workspaces left to clean up")
+		return nil, nil
+	}
+	if len(selected) == 0 {
+		ui.Skip("no workspaces selected")
+		return nil, nil
 	}
 
 	out := make([]bulkCleanupCandidate, 0, len(selected))
@@ -561,15 +644,15 @@ func pickBulkCandidates(
 }
 
 // bulkSelectItem derives one candidate's picker/record row for the
-// gatherSelect flow: brief finding beside the name in the picker,
-// full finding in the record, readiness glyph for the record row,
-// ready rows preselected, and blocked rows gated behind --force
-// (the gate message doubles as the form's validation error).
+// gatherSelect flow: the brief finding beside the name (the flow's
+// one vocabulary — the verbose form lives on the raw readiness
+// card), the readiness glyph for the record row, ready rows
+// preselected, and blocked rows gated behind --force (the gate
+// message doubles as the form's validation error).
 func bulkSelectItem(c bulkCleanupCandidate) gatherSelectItem {
 	it := gatherSelectItem{
 		Name:        c.target.workspace,
 		Brief:       c.briefFindingMessage(),
-		Detail:      c.worstFindingMessage(),
 		Glyph:       bulkCandidateGlyph(c.worst),
 		Preselected: c.worst == findingSafe,
 	}
@@ -618,21 +701,22 @@ func anyCandidateAtOrAbove(candidates []bulkCleanupCandidate, severity findingSe
 }
 
 // emitBulkCandidateRow renders one workspace's readiness summary row
-// under the interactive group: ✓ for SAFE, ▲ with the worst finding
-// for WARN, ✗ for BLOCK — annotated with the --force gate when the
-// picker that follows won't let it be selected without one. (The raw
-// card's rows carry the sweep's "excluded" wording instead — there
-// the exclusion is a decision, not a picker constraint; see
+// under the interactive preload: ✓ for SAFE, ▲ with the worst
+// finding for WARN, ✗ for BLOCK. The row speaks the flow's brief
+// vocabulary — the same compact text the picker and record show, so
+// the morph reads as one surface — and carries no --force
+// annotation: the picker's validation message teaches the gate.
+// (The raw card keeps the verbose findings and the sweep's
+// "excluded" wording instead — there the card IS the durable record
+// and the exclusion is a decision, not a picker constraint; see
 // buildBulkCleanupReadinessCard.)
-func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate, force bool) {
+func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate) {
 	label := ui.PreserveCase(c.target.workspace)
-	switch {
-	case c.worst == findingBlock && !force:
-		grp.FailValue(label, c.worstFindingMessage()+" — blocked (re-run with --force to select)")
-	case c.worst == findingBlock:
-		grp.FailValue(label, c.worstFindingMessage())
-	case c.worst == findingWarn:
-		grp.SkipValue(label, c.worstFindingMessage())
+	switch c.worst {
+	case findingBlock:
+		grp.FailValue(label, c.briefFindingMessage())
+	case findingWarn:
+		grp.SkipValue(label, c.briefFindingMessage())
 	default:
 		grp.Complete(label)
 	}
