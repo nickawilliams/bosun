@@ -442,5 +442,45 @@ func TestPlan_SkippedRowRendering(t *testing.T) {
 	}
 }
 
+// TestPlanCardCompact pins the post-gate render contract: Compact
+// suppresses the plan's item rows (they live in the committed
+// Pending record), a fully successful apply keeps the card compact,
+// and any imperfect outcome restores the rows — skip and failure
+// marks are per-row news the Pending record can't show.
+func TestPlanCardCompact(t *testing.T) {
+	newCard := func() *PlanCard {
+		plan := NewPlan().Add(PlanCreate, "deploy", "repo", "api-row", "")
+		return NewPlanCard(plan)
+	}
+
+	pc := newCard()
+	if !strings.Contains(pc.Render(), "api-row") {
+		t.Fatalf("full render = %q, want the plan row", pc.Render())
+	}
+	pc.Compact()
+	if strings.Contains(pc.Render(), "api-row") {
+		t.Errorf("compact render = %q, want the row suppressed", pc.Render())
+	}
+
+	pc.setFinalState(planApplyResult{succeeded: 1})
+	if strings.Contains(pc.Render(), "api-row") {
+		t.Errorf("compact success render = %q, want it to stay compact", pc.Render())
+	}
+
+	pc = newCard()
+	pc.Compact()
+	pc.setFinalState(planApplyResult{err: errSentinel, failed: 1})
+	if !strings.Contains(pc.Render(), "api-row") {
+		t.Errorf("failed render = %q, want the rows back", pc.Render())
+	}
+
+	pc = newCard()
+	pc.Compact()
+	pc.setFinalState(planApplyResult{succeeded: 1, skipped: 1})
+	if !strings.Contains(pc.Render(), "api-row") {
+		t.Errorf("partial render = %q, want the rows back", pc.Render())
+	}
+}
+
 // errSentinel is a reusable non-nil error for tests.
 var errSentinel = fmt.Errorf("test error")
