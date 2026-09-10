@@ -670,6 +670,60 @@ func TestSessionCommitClearsTail(t *testing.T) {
 	}
 }
 
+// TestSessionGroupSuccessor drives runSessionGroup's two finishes
+// inside a real (buffer-hosted) session: a RunGroupThen successor
+// replaces the group as the tail and hands back a usable rewind,
+// while a plain RunGroup finalizes to the group card itself. Also
+// walks commitOpenReplaced (the group start commits the preceding
+// card through it).
+func TestSessionGroupSuccessor(t *testing.T) {
+	out, _ := sessionTestStreams(t)
+
+	err := RunSession(func() error {
+		NewCard(CardSuccess, "before").Print()
+
+		// Successor left standing: the next print commits it, so its
+		// text reaches scrollback where the buffer can see it.
+		rewind := RunGroupThen("readiness", func(g Reporter) {
+			g.Complete("child-row")
+		}, func() *Card { return NewCard(CardInput, "picker header").Tight() })
+		if rewind == nil {
+			return errors.New("session group returned no successor rewind")
+		}
+		NewCard(CardSuccess, "mid").Print()
+
+		// Successor rewound: the drop path — the header vanishes
+		// without ever committing (its text may still appear in raw
+		// frame writes, so absence isn't assertable against a buffer).
+		rewind2 := RunGroupThen("readiness two", func(g Reporter) {
+			g.Complete("child-two")
+		}, func() *Card { return NewCard(CardInput, "second header").Tight() })
+		if rewind2 == nil {
+			return errors.New("second session group returned no successor rewind")
+		}
+		rewind2()
+
+		// The nil-successor arm: the group card itself finalizes as
+		// the tail.
+		RunGroup("plain group", func(g Reporter) {
+			g.Complete("plain-child")
+		})
+
+		NewCard(CardSuccess, "after").Print()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunSession error: %v", err)
+	}
+
+	text := out.String()
+	for _, want := range []string{"Before", "Picker Header", "Mid", "Plain Group", "Plain-child", "After"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output missing %q\n%s", want, text)
+		}
+	}
+}
+
 // TestSessionTallBlockCommitsOnce drives commitOpen's settle path: a
 // block tall relative to the terminal (2×lines+6 > TermHeight, which
 // tests see as the 24-row default) takes the clear-then-settle route
