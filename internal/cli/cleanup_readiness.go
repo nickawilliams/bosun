@@ -623,21 +623,23 @@ func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bo
 	return card
 }
 
-// bulkPickerLabel renders one picker row: readiness glyph, workspace
-// name, and the worst finding for WARN/BLOCK rows. Plain text only —
-// styled sequences inside huh labels wipe huh's own selection
-// styling for the rest of the line (see ui.Keyword's doc).
+// bulkPickerLabel renders one picker row: the workspace name and the
+// worst finding for WARN/BLOCK rows. No readiness glyph — huh's own
+// selection marker occupies that column, so the label starts at the
+// name and the marker sits where the group card's glyph sat; the
+// readiness state still reads through the preselection, the reason
+// text, and the --force hint. Plain text only — styled sequences
+// inside huh labels wipe huh's own selection styling for the rest of
+// the line (see ui.Keyword's doc).
 func bulkPickerLabel(c bulkCleanupCandidate, force bool) string {
 	name := c.target.workspace
 	switch {
 	case c.worst == findingBlock && !force:
-		return fmt.Sprintf("%s %s · %s (--force to select)", ui.Palette.Cross, name, c.worstFindingMessage())
-	case c.worst == findingBlock:
-		return fmt.Sprintf("%s %s · %s", ui.Palette.Cross, name, c.worstFindingMessage())
-	case c.worst == findingWarn:
-		return fmt.Sprintf("%s %s · %s", ui.Palette.Attention, name, c.worstFindingMessage())
+		return fmt.Sprintf("%s · %s (--force to select)", name, c.worstFindingMessage())
+	case c.worst == findingBlock, c.worst == findingWarn:
+		return fmt.Sprintf("%s · %s", name, c.worstFindingMessage())
 	default:
-		return fmt.Sprintf("%s %s", ui.Palette.Check, name)
+		return name
 	}
 }
 
