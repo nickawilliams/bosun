@@ -710,6 +710,51 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 	})
 }
 
+// TestBulkPickerLabel pins the picker rows' styling contract: bold
+// name and dimmed reason via raw SGR intensity toggles, and — the
+// part that breaks huh if violated — no lipgloss-style full SGR
+// reset (\x1b[0m or bare \x1b[m), which would wipe huh's own
+// selection/focus styling for the rest of the line.
+func TestBulkPickerLabel(t *testing.T) {
+	warned := bulkCleanupCandidate{
+		target:     cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{severity: findingWarn, code: "issue-not-done", message: "issue is In Progress"}},
+		worst:      findingWarn,
+	}
+	blocked := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-3-blocked"},
+		repoResults: []repoCleanup{{
+			repo:     Repository{Name: "api"},
+			findings: []cleanupFinding{{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree"}},
+		}},
+		worst: findingBlock,
+	}
+
+	safe := bulkPickerLabel(bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}, false)
+	if safe != "\x1b[1mEX-1-safe\x1b[22m" {
+		t.Errorf("safe label = %q, want the bare bolded name", safe)
+	}
+
+	warn := bulkPickerLabel(warned, false)
+	if !strings.Contains(warn, "\x1b[2m") || !strings.Contains(warn, "issue is In Progress") {
+		t.Errorf("warn label = %q, want the dimmed reason", warn)
+	}
+
+	block := bulkPickerLabel(blocked, false)
+	if !strings.Contains(block, "(--force to select)") {
+		t.Errorf("block label = %q, want the --force hint", block)
+	}
+	if forced := bulkPickerLabel(blocked, true); strings.Contains(forced, "--force") {
+		t.Errorf("forced label = %q, the hint must drop under --force", forced)
+	}
+
+	for _, label := range []string{safe, warn, block} {
+		if strings.Contains(label, "\x1b[0m") || strings.Contains(label, "\x1b[m") {
+			t.Errorf("label %q carries a full SGR reset, which wipes huh's line styling", label)
+		}
+	}
+}
+
 // TestBuildBulkSelectionCard covers the post-picker record — the one
 // card that replaces both the readiness card and the submitted
 // multi-select: readiness rows in picker order with the selection

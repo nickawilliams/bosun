@@ -77,9 +77,15 @@ func TestGroupSlotsPTYSmoke(t *testing.T) {
 			)
 		}, func() *Card { return NewCard(CardInput, "select workspaces").Tight() })
 
+		// Labels mirror bulkPickerLabel's raw SGR toggles (bold name,
+		// dimmed reason) so the smoke shows the composed styling.
 		opts := make([]huh.Option[int], nChildren)
 		for i := range opts {
-			opts[i] = huh.NewOption(fmt.Sprintf("ws-%d", i), i).Selected(i%5 != 2)
+			label := fmt.Sprintf("\x1b[1mws-%d\x1b[22m", i)
+			if i%5 == 2 {
+				label += "\x1b[2m · blocked reason (--force to select)\x1b[22m"
+			}
+			opts[i] = huh.NewOption(label, i).Selected(i%5 != 2)
 		}
 		var picked []int
 		form := huh.NewForm(huh.NewGroup(

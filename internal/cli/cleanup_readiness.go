@@ -623,21 +623,28 @@ func buildBulkSelectionCard(candidates []bulkCleanupCandidate, picked map[int]bo
 	return card
 }
 
-// bulkPickerLabel renders one picker row: the workspace name and the
-// worst finding for WARN/BLOCK rows. No readiness glyph — huh's own
-// selection marker occupies that column, so the label starts at the
-// name and the marker sits where the group card's glyph sat; the
-// readiness state still reads through the preselection, the reason
-// text, and the --force hint. Plain text only — styled sequences
-// inside huh labels wipe huh's own selection styling for the rest of
-// the line (see ui.Keyword's doc).
+// bulkPickerLabel renders one picker row: the workspace name in
+// bold, and for WARN/BLOCK rows the worst finding dimmed after it.
+// No readiness glyph — huh's own selection marker occupies that
+// column, so the label starts at the name and the marker sits where
+// the group card's glyph sat; the readiness state still reads
+// through the preselection, the reason text, and the --force hint.
+//
+// The emphasis uses raw SGR intensity toggles (bold on/off 1/22,
+// dim on/off 2/22), NOT lipgloss — the emitDeploymentSources
+// precedent: a lipgloss render closes with a full SGR reset that
+// wipes huh's own selection/focus styling for the rest of the line,
+// while attribute toggles compose with whatever foreground huh's
+// option styles apply. Foreground color stays off-limits here for
+// the same reason — there is no "restore huh's color" code, only
+// reset-to-default.
 func bulkPickerLabel(c bulkCleanupCandidate, force bool) string {
-	name := c.target.workspace
+	name := "\x1b[1m" + c.target.workspace + "\x1b[22m"
 	switch {
 	case c.worst == findingBlock && !force:
-		return fmt.Sprintf("%s · %s (--force to select)", name, c.worstFindingMessage())
+		return fmt.Sprintf("%s\x1b[2m · %s (--force to select)\x1b[22m", name, c.worstFindingMessage())
 	case c.worst == findingBlock, c.worst == findingWarn:
-		return fmt.Sprintf("%s · %s", name, c.worstFindingMessage())
+		return fmt.Sprintf("%s\x1b[2m · %s\x1b[22m", name, c.worstFindingMessage())
 	default:
 		return name
 	}
