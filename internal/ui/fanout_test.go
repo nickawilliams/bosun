@@ -182,6 +182,29 @@ func TestRunGroupRewindableFallback(t *testing.T) {
 	}
 }
 
+// TestRunGroupRewindableHeadlessFallback drives the standalone card
+// reporter's group against buffer streams, where the BubbleTea
+// program can't run: the group must degrade to the drain fallback
+// (children printed, no live render) and return a nil rewind — the
+// non-TTY fallback prints straight to scrollback, so there is
+// nothing to rewind. The TTY success path (final-frame erase) is
+// exercised by the gated TestGroupSlotsPTYSmoke.
+func TestRunGroupRewindableHeadlessFallback(t *testing.T) {
+	sessionTestStreams(t) // card reporter + buffer streams, no session
+
+	ran := false
+	rewind := RunGroupRewindable("headless group", func(g Reporter) {
+		ran = true
+		g.Complete("child")
+	})
+	if !ran {
+		t.Error("group callback never ran")
+	}
+	if rewind != nil {
+		t.Error("headless fallback returned a rewind; its output went straight to scrollback")
+	}
+}
+
 // TestFanOutFallback pins the degraded path for reporters that can't
 // host slots: work still completes for every item, and resolutions
 // emit in item order so piped/captured output stays deterministic.
