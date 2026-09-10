@@ -281,21 +281,18 @@ func demoWorkspaceMeta() {
 }
 
 func demoPlanCardStates() {
-	// Static snapshot of the plan confirmation flow — the plan rows
-	// as static scrollback, then the compact gate: pending header
-	// card + summary-titled confirm with buttons. Routes through
-	// newPlanPendingHeader and newPlanConfirm so the static rendering
-	// matches what runPlanCard produces when the user actually runs a
-	// plan. The fake action queue mirrors the demo plan's four
-	// actionable rows so the summary reads the same scale.
+	// Static snapshot of the plan confirmation flow — the house
+	// single-card morph: one Pending card carrying the plan rows,
+	// with the bare Approve/Cancel buttons beneath it. Routes
+	// through NewPlanCard and newPlanConfirm so the static
+	// rendering matches what runPlanCard produces when the user
+	// actually runs a plan.
 	plan := buildDemoPlan()
-	actions := make([]PlanAction, 4)
 	var confirmed bool
 
-	plan.Print()
-	newPlanPendingHeader(plan).Print()
+	ui.NewPlanCard(plan).Print()
 
-	snapshotForm(newPlanConfirm(planConfirmSummary(actions), &confirmed))
+	snapshotForm(newPlanConfirm(&confirmed))
 }
 
 // demoSummary renders one Reporter.Summary card with a mixed

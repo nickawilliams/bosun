@@ -93,35 +93,39 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 		return fmt.Errorf("confirmation required (pass --approve, or --dry-run to preview)")
 	}
 
-	// Interactive confirmation gate. The plan rows print as static
-	// output first — a plan scales with data, and an inline BubbleTea
-	// frame taller than the terminal drops its top rows and corrupts
-	// cursor math (the fittedSelectHeight failure mode, #69/#98), so
-	// a destructive plan must live in scrollback rather than inside
-	// the confirm field. The confirm itself stays compact: pending
-	// header + action summary + Approve/Cancel. Normal cancel: rewind
-	// prompt, show cancelled card in place. Ctrl+c interrupt: don't
-	// rewind, just bail.
-	plan.Print()
-	rewind := newPlanPendingHeader(plan).PrintRewindable()
+	// Interactive confirmation gate — the house single-card morph:
+	// one Pending card carries the plan rows, and only the
+	// Approve/Cancel buttons are live beneath it. The rows can't sit
+	// inside the live form frame — a plan scales with data, and an
+	// inline BubbleTea frame taller than the terminal drops its top
+	// rows and corrupts cursor math (the fittedSelectHeight failure
+	// mode, #69/#98) — so the card commits straight to scrollback
+	// and the live frame stays a few rows regardless of plan size.
+	// Ctrl+c interrupt: bail; HandleError owns the record.
+	pc.PrintCommitted()
 
 	var confirmed bool
-	err := runForm(newPlanConfirm(planConfirmSummary(actions), &confirmed))
-
-	if err != nil {
+	if err := runForm(newPlanConfirm(&confirmed)); err != nil {
 		return ErrCancelled
 	}
 
-	rewind()
-
 	if !confirmed {
-		// The Cancelled plan card IS the cancellation record —
-		// errPlanCancelled tells HandleError not to add another.
+		// The committed Pending rows above plus this compact card
+		// ARE the cancellation record — errPlanCancelled tells
+		// HandleError not to add another. Compact survives SetState
+		// (only setFinalState clears it): a cancel changes no rows,
+		// so none need repeating.
+		pc.Compact()
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
 		return errPlanCancelled
 	}
 
+	// The apply continues the cycle compactly in the buttons'
+	// position — the Pending record above already lists every row.
+	// An imperfect outcome brings the rows back (see
+	// PlanCard.Compact).
+	pc.Compact()
 	return applyPlanCard(pc, actions)
 }
 
@@ -131,44 +135,16 @@ func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 	return pc.RunApply(actions)
 }
 
-// newPlanPendingHeader builds the title-bar-only card shown above
-// the confirmation form during runPlanCard's interactive gate. Both
-// runPlanCard and the demo snapshot route through this so the
-// pending header can't visually drift from the live render.
-func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
-	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
-}
-
-// newPlanConfirm builds the compact approval field shown beneath the
-// pending header: the action summary as its title and Approve/Cancel
-// buttons. The plan rows themselves are NOT embedded here — they
-// print as static output before the gate (see runPlanCard). Both
-// runPlanCard and the demo snapshot route through this so the two
-// renders can't drift.
-func newPlanConfirm(summary string, confirmed *bool) *huh.Confirm {
+// newPlanConfirm builds the bare Approve/Cancel field mounted
+// beneath the committed Pending card. No title: the card's title row
+// already carries the plan's scale and its rows sit directly above.
+// Both runPlanCard and the demo snapshot route through this so the
+// two renders can't drift.
+func newPlanConfirm(confirmed *bool) *huh.Confirm {
 	return newConfirm().
-		Title(summary).
 		Affirmative("Approve").
 		Negative("Cancel").
 		Value(confirmed)
-}
-
-// planConfirmSummary captions the confirm with the plan's scale —
-// "n actions", plus "across m workspaces" when the queue spans more
-// than one plan group (bulk cleanup). The colored per-op breakdown
-// already sits on the pending header via plan.Summary().
-func planConfirmSummary(actions []PlanAction) string {
-	groups := map[string]bool{}
-	for _, a := range actions {
-		if a.Group != "" {
-			groups[a.Group] = true
-		}
-	}
-	s := fmt.Sprintf("%d %s", len(actions), pluralize(len(actions), "action", "actions"))
-	if len(groups) > 1 {
-		s += fmt.Sprintf(" across %d workspaces", len(groups))
-	}
-	return s
 }
 
 // isAutoApprove reports whether the run pre-approved plan

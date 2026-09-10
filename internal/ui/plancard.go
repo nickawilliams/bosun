@@ -81,11 +81,23 @@ type PlanCard struct {
 	succeeded int
 	failed    int
 	skipped   int
+	compact   bool
 }
 
 // NewPlanCard creates a plan card in the Proposed state.
 func NewPlanCard(plan *Plan) *PlanCard {
 	return &PlanCard{plan: plan, state: PlanProposed}
+}
+
+// Compact suppresses the plan's item rows in subsequent renders —
+// the confirmation gate's post-approve mode, where the committed
+// Pending card above already lists every row and an apply card
+// repeating them would say the plan twice. An outcome that carries
+// per-row news the Pending record can't show (a partial or failed
+// apply marks skipped rows) turns the rows back on: setFinalState
+// clears the flag for anything but full success.
+func (pc *PlanCard) Compact() {
+	pc.compact = true
 }
 
 // SetState transitions the card to a new state.
@@ -127,6 +139,26 @@ func (pc *PlanCard) Print() {
 	recordOpenCard(rendered, pc.renderContinuing())
 }
 
+// PrintCommitted writes the card straight to scrollback in
+// continuing form, bypassing the open-tail phase. For the
+// confirmation gate, where a live form mounts immediately beneath
+// and the card must never be the live frame: a plan scales with
+// data, and an inline BubbleTea frame taller than the terminal
+// drops its top rows and corrupts cursor math (#69/#98). Session
+// mode routes through printCommitted's tall-insert guard so the
+// scrollback insert can only move already-committed rows.
+// Suppressed in raw mode.
+func (pc *PlanCard) PrintCommitted() {
+	if IsRaw() {
+		return
+	}
+	if s := sessionActive(); s != nil {
+		s.printCommitted(sessionPrefix() + pc.renderContinuing())
+		return
+	}
+	fmt.Print(spacerPrefix() + pc.renderContinuing())
+}
+
 // PrintRewindable writes the card to stdout and returns a function that
 // erases it via ANSI cursor movement.
 func (pc *PlanCard) PrintRewindable() func() {
@@ -161,7 +193,9 @@ func (pc *PlanCard) renderWithGlyph(glyph string) string {
 // and Plan.Render().
 func (pc *PlanCard) renderFormWithGlyph(glyph string, form timelineForm) string {
 	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
-	pc.plan.AppendItemsToCard(card)
+	if !pc.compact {
+		pc.plan.AppendItemsToCard(card)
+	}
 	return card.renderStyled(glyph, strings.Repeat(" ", GlyphGap), form)
 }
 
@@ -438,5 +472,12 @@ func (pc *PlanCard) setFinalState(result planApplyResult) {
 		pc.SetState(PlanPartial)
 	default:
 		pc.SetState(PlanSuccess)
+	}
+	// A compact card's rows live in the committed Pending record
+	// above it — but that record can't show which rows an imperfect
+	// apply skipped or failed past, so any outcome short of full
+	// success brings the rows (and their marks) back.
+	if pc.state != PlanSuccess {
+		pc.compact = false
 	}
 }
