@@ -367,27 +367,6 @@ func (s *session) print(open, continuing string, tight bool) *sesOpenRec {
 	return rec
 }
 
-// printCommitted commits a block straight to scrollback, skipping
-// the open-tail phase. For blocks whose very next mount replaces the
-// tail with live content (the plan gate's Pending card, which a form
-// mounts beneath): routing a tall block through the tail only to
-// commit it one message later would force commitOpen's clear-and-
-// settle blank onto the screen, while committing it directly needs
-// only the tall-insert guard — the tail is already empty, so the
-// settle has nothing visible to blank. Small blocks insert safely
-// against whatever frame is painted.
-func (s *session) printCommitted(block string) {
-	s.commitOpen()
-	if lines := strings.Count(block, "\n") + 1; 2*lines+6 > TermHeight() {
-		// The tail is empty (commitOpen, or the rewind that preceded
-		// us), but the screen lags the model until the next render
-		// flush — wait for the clear to land before insertAbove
-		// reads it (commitOpen's tall arm, same hazard).
-		time.Sleep(50 * time.Millisecond)
-	}
-	s.println(block)
-}
-
 // drop rewinds a block: if rec is still the tail, it vanishes from
 // the view (it was never committed). The session-mode analog of the
 // PrintRewindable cursor-up erase.

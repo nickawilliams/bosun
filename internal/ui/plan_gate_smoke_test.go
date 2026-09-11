@@ -17,12 +17,16 @@ package ui
 //	sleep 4; tmux send-keys -t smoke Enter; sleep 3
 //	tmux capture-pane -t smoke -p
 //
-// Healthy output has the Pending card (with its rows) standing above
-// the Success card, one blank connector row between blocks, and no
-// confirm buttons left behind.
+// Healthy output has exactly ONE plan card in scrollback — the
+// Success (or Cancelled) card in the position the Pending prompt
+// occupied — with no Pending header and no confirm buttons left
+// behind, and one blank connector row above it.
 
 import (
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"charm.land/huh/v2"
@@ -39,19 +43,34 @@ func TestPlanGatePTYSmoke(t *testing.T) {
 		// Stand-in for the record card above the gate.
 		NewCard(CardSuccess, "repositories").Value("host-ui").Print()
 
-		// The plan to confirm and apply: 2 creates + 1 modify.
+		// The plan to confirm and apply: 2 creates + 1 modify, or
+		// BOSUN_SMOKE_ROWS filler rows to drive the oversized-plan
+		// fallback.
 		plan := NewPlan()
-		plan.Add(PlanCreate, "add", "branch", "host-ui", "feature/EX-1_slug")
-		plan.Add(PlanCreate, "add", "worktree", "host-ui", "_workspaces/feature")
-		plan.Add(PlanModify, "move", "status", "EX-1", "Backlog → In Progress")
+		if n, _ := strconv.Atoi(os.Getenv("BOSUN_SMOKE_ROWS")); n > 0 {
+			for i := range n {
+				plan.Add(PlanCreate, "add", "worktree", "host-ui", fmt.Sprintf("feature/EX-%d_slug", i))
+			}
+		} else {
+			plan.Add(PlanCreate, "add", "branch", "host-ui", "feature/EX-1_slug")
+			plan.Add(PlanCreate, "add", "worktree", "host-ui", "_workspaces/feature")
+			plan.Add(PlanModify, "move", "status", "EX-1", "Backlog → In Progress")
+		}
 		pc := NewPlanCard(plan)
 
-		// runPlanCard's interactive gate, verbatim shape: one Pending
-		// card carrying the plan rows committed straight to
-		// scrollback, with only the bare Approve/Cancel buttons live
-		// beneath it (#120 — the plan never enters the live frame, so
-		// a data-scaled plan can't oversize it).
-		pc.PrintCommitted()
+		// runPlanCard's interactive gate, verbatim shape: the plan
+		// card IS the prompt, rewindable so every stage cycles in
+		// its one position, with only the bare Approve/Cancel
+		// buttons live beneath it (#120). A plan too tall for the
+		// live frame commits its rows first and cycles compactly —
+		// planGateFits' bound, mirrored here (the constant itself
+		// lives in the cli layer with the form plumbing).
+		lines := strings.Count(strings.TrimSuffix(pc.Render(), "\n"), "\n") + 1
+		if lines+5 > TermHeight() {
+			plan.Print()
+			pc.Compact()
+		}
+		rewind := pc.PrintRewindable()
 
 		var confirmed bool
 		form := huh.NewForm(huh.NewGroup(
@@ -65,9 +84,16 @@ func TestPlanGatePTYSmoke(t *testing.T) {
 			return err
 		}
 
-		// Post-approve the cycle continues compactly — the Pending
-		// record above carries the rows (runPlanCard's shape).
-		pc.Compact()
+		// Either answer cycles the card in place (runPlanCard's
+		// shape).
+		rewind()
+
+		if !confirmed {
+			pc.SetState(PlanCancelled)
+			pc.Print()
+			return nil
+		}
+
 		return pc.RunApply([]PlanAction{
 			{Run: func() error { return nil }},
 			{Run: func() error { return nil }},

@@ -442,11 +442,11 @@ func TestPlan_SkippedRowRendering(t *testing.T) {
 	}
 }
 
-// TestPlanCardCompact pins the post-gate render contract: Compact
-// suppresses the plan's item rows (they live in the committed
-// Pending record), a fully successful apply keeps the card compact,
-// and any imperfect outcome restores the rows — skip and failure
-// marks are per-row news the Pending record can't show.
+// TestPlanCardCompact pins the oversized-plan render contract:
+// Compact suppresses the plan's item rows (they live in the block
+// committed above the card), a fully successful apply keeps the card
+// compact, and any imperfect outcome restores the rows — skip and
+// failure marks are per-row news that block can't show.
 func TestPlanCardCompact(t *testing.T) {
 	newCard := func() *PlanCard {
 		plan := NewPlan().Add(PlanCreate, "deploy", "repo", "api-row", "")
