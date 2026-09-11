@@ -141,11 +141,13 @@ func TestWorkspaceQueryMatch(t *testing.T) {
 	}
 }
 
-// TestResolveWorkspaceScope locks the shared scope grammar: --all is
-// mutually exclusive with single-workspace targeting, and filters
-// require project scope — implicit (status outside a workspace) or
-// explicit (--all).
-func TestResolveWorkspaceScope(t *testing.T) {
+// TestResolveWorkspaceSelection locks the unified selection pipeline
+// (#120): the positional pattern is the one selection grammar, the
+// deprecated flags map onto it, and the unspecified-selection default
+// varies only by command class. The interactive bare-picker branch
+// and the issue→workspace mapping need a project on disk and are
+// covered end-to-end in cleanup_test.go.
+func TestResolveWorkspaceSelection(t *testing.T) {
 	newCmd := func(flagValues map[string]string) *cobra.Command {
 		cmd := &cobra.Command{Use: "t"}
 		addWorkspaceFlag(cmd)
@@ -160,53 +162,131 @@ func TestResolveWorkspaceScope(t *testing.T) {
 		return cmd
 	}
 
-	t.Run("all conflicts with workspace", func(t *testing.T) {
-		cmd := newCmd(map[string]string{"all": "true", "workspace": "ws"})
-		_, err := resolveWorkspaceScope(cmd, false, workspaceQuery{})
+	t.Run("exact name is single mode", func(t *testing.T) {
+		sel, err := resolveWorkspaceSelection(newCmd(nil), []string{"feature/EX-1_slug"}, workspaceQuery{}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if sel.batch || sel.exact != "feature/EX-1_slug" {
+			t.Errorf("sel = %+v, want single mode targeting the exact name", sel)
+		}
+	})
+
+	t.Run("glob is batch mode", func(t *testing.T) {
+		sel, err := resolveWorkspaceSelection(newCmd(nil), []string{"feature/*"}, workspaceQuery{}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "feature/*" {
+			t.Errorf("sel = %+v, want batch over the glob", sel)
+		}
+	})
+
+	t.Run("deprecated all aliases the everything pattern", func(t *testing.T) {
+		sel, err := resolveWorkspaceSelection(newCmd(map[string]string{"all": "true"}), nil, workspaceQuery{}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "**" {
+			t.Errorf("sel = %+v, want batch over '**'", sel)
+		}
+	})
+
+	t.Run("all conflicts with a pattern", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"all": "true"}), []string{"**"}, workspaceQuery{}, selectionDestructive)
 		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
 		}
 	})
 
-	t.Run("all conflicts with issue", func(t *testing.T) {
-		cmd := newCmd(map[string]string{"all": "true", "issue": "EX-1"})
-		_, err := resolveWorkspaceScope(cmd, false, workspaceQuery{})
+	t.Run("pattern conflicts with workspace flag", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"workspace": "ws"}), []string{"**"}, workspaceQuery{}, selectionDestructive)
 		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
 		}
 	})
 
-	t.Run("filters without project scope error toward --all", func(t *testing.T) {
-		cmd := newCmd(nil)
-		_, err := resolveWorkspaceScope(cmd, false, workspaceQuery{statuses: []string{"done"}})
+	t.Run("pattern conflicts with issue flag", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"issue": "EX-1"}), []string{"**"}, workspaceQuery{}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
+		}
+	})
+
+	t.Run("filter with no pattern implies batch scope", func(t *testing.T) {
+		sel, err := resolveWorkspaceSelection(newCmd(nil), nil, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "**" {
+			t.Errorf("sel = %+v, want batch over '**'", sel)
+		}
+	})
+
+	t.Run("exact name with a filter routes through batch", func(t *testing.T) {
+		// The filter must still apply to an exact-name selection
+		// (pattern selects the namespace — here a namespace of one —
+		// filter selects by lifecycle), so the exact name becomes a
+		// batch pattern instead of a filter-dropping single target.
+		sel, err := resolveWorkspaceSelection(newCmd(nil), []string{"feature/EX-1_slug"}, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "feature/EX-1_slug" {
+			t.Errorf("sel = %+v, want batch over the exact name", sel)
+		}
+	})
+
+	t.Run("filter conflicts with issue flag", func(t *testing.T) {
+		// An explicit single-target flag combined with a population
+		// filter is refused: silently sweeping the project past an
+		// explicitly named target would be a destructive surprise.
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"issue": "EX-1"}), nil, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
+		}
+	})
+
+	t.Run("filter conflicts with workspace flag", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"workspace": "ws"}), nil, workspaceQuery{statuses: []string{"done"}}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("err = %v, want the mutual-exclusion refusal", err)
+		}
+	})
+
+	t.Run("all alias conflicts name the alias", func(t *testing.T) {
+		// The conflict message must blame --all, not a pattern the
+		// user never typed.
+		_, err := resolveWorkspaceSelection(newCmd(map[string]string{"all": "true", "workspace": "ws"}), nil, workspaceQuery{}, selectionDestructive)
 		if err == nil || !strings.Contains(err.Error(), "--all") {
-			t.Errorf("err = %v, want the pass---all guidance", err)
+			t.Errorf("err = %v, want it to name --all as the conflicting selection", err)
 		}
 	})
 
-	t.Run("filters ride implicit project scope", func(t *testing.T) {
-		cmd := newCmd(nil)
-		project, err := resolveWorkspaceScope(cmd, true, workspaceQuery{statuses: []string{"done"}})
-		if err != nil || !project {
-			t.Errorf("(project, err) = (%v, %v), want (true, nil)", project, err)
+	t.Run("bare destructive errors non-interactively", func(t *testing.T) {
+		// go test's stdin is not a TTY, so this exercises the
+		// non-interactive default: destructive commands refuse to
+		// guess a selection.
+		_, err := resolveWorkspaceSelection(newCmd(nil), nil, workspaceQuery{}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "pattern") {
+			t.Errorf("err = %v, want the specify-a-pattern refusal", err)
 		}
 	})
 
-	t.Run("all alone is project scope", func(t *testing.T) {
-		cmd := newCmd(map[string]string{"all": "true"})
-		project, err := resolveWorkspaceScope(cmd, false, workspaceQuery{})
-		if err != nil || !project {
-			t.Errorf("(project, err) = (%v, %v), want (true, nil)", project, err)
+	t.Run("bare read-only selects everything", func(t *testing.T) {
+		sel, err := resolveWorkspaceSelection(newCmd(nil), nil, workspaceQuery{}, selectionReadOnly)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !sel.batch || sel.pattern != "**" {
+			t.Errorf("sel = %+v, want batch over '**'", sel)
 		}
 	})
 
-	t.Run("no flags passes the implicit scope through", func(t *testing.T) {
-		for _, implicit := range []bool{true, false} {
-			cmd := newCmd(nil)
-			project, err := resolveWorkspaceScope(cmd, implicit, workspaceQuery{})
-			if err != nil || project != implicit {
-				t.Errorf("implicit=%v: (project, err) = (%v, %v), want (%v, nil)", implicit, project, err, implicit)
-			}
+	t.Run("empty pattern is refused", func(t *testing.T) {
+		_, err := resolveWorkspaceSelection(newCmd(nil), []string{""}, workspaceQuery{}, selectionDestructive)
+		if err == nil || !strings.Contains(err.Error(), "empty workspace pattern") {
+			t.Errorf("err = %v, want the empty-pattern refusal", err)
 		}
 	})
 }

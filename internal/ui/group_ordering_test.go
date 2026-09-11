@@ -27,7 +27,7 @@ func TestGroupTaskDoneOrdering(t *testing.T) {
 
 	t.Run("Spinner", func(t *testing.T) {
 		ch := make(chan groupMsg, 8)
-		g := &group{msgCh: chan<- groupMsg(ch)}
+		g := newGroup(nil, "", 1, ch)
 		if err := g.Spinner("probe", func() error { return nil }); err != nil {
 			t.Fatalf("Spinner: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestGroupTaskDoneOrdering(t *testing.T) {
 
 	t.Run("Task", func(t *testing.T) {
 		ch := make(chan groupMsg, 8)
-		g := &group{msgCh: chan<- groupMsg(ch)}
+		g := newGroup(nil, "", 1, ch)
 		if err := g.Task("probe", func() error { return nil }); err != nil {
 			t.Fatalf("Task: %v", err)
 		}

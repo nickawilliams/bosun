@@ -710,8 +710,171 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 	})
 }
 
-// TestEmitBulkCleanupReadinessNonInteractive drives the raw-mode bulk
-// readiness path directly. Plain unit tests run with go test's
+// TestBulkSelectItem pins cleanup's mapping into the gatherSelect
+// flow: the brief finding as the row annotation (the flow's one
+// vocabulary — verbose findings stay on the raw readiness card),
+// readiness glyph, and the preselection posture — ready rows
+// checked, WARN/BLOCK rows unchecked but never gated: selecting one
+// is the override (the label styling contract itself lives with
+// gatherSelectLabel's own tests).
+func TestBulkSelectItem(t *testing.T) {
+	warned := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{
+			severity: findingWarn, code: "issue-not-done",
+			message: "issue is Ready for Release, not in a done-like status",
+			brief:   "Ready for Release",
+		}},
+		worst: findingWarn,
+	}
+	blocked := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-3-blocked"},
+		repoResults: []repoCleanup{{
+			repo: Repository{Name: "api"},
+			findings: []cleanupFinding{
+				{severity: findingBlock, code: "dirty", message: "uncommitted changes in worktree", brief: "uncommitted changes"},
+				{severity: findingWarn, code: "open-pr", message: "PR #8 is open", brief: "PR #8 open"},
+			},
+		}},
+		worst: findingBlock,
+	}
+
+	safe := bulkSelectItem(bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}})
+	if !safe.Preselected || safe.Brief != "" {
+		t.Errorf("safe item = %+v, want preselected with no annotation", safe)
+	}
+
+	warn := bulkSelectItem(warned)
+	if warn.Preselected {
+		t.Errorf("warn item = %+v, want unselected (selection is the acknowledgment)", warn)
+	}
+	if warn.Brief != "Ready for Release" {
+		t.Errorf("warn brief = %q, want the compact finding", warn.Brief)
+	}
+
+	block := bulkSelectItem(blocked)
+	if block.Preselected {
+		t.Errorf("block item = %+v, must not arrive preselected", block)
+	}
+	if block.Brief != "api: uncommitted changes (+1)" {
+		t.Errorf("block brief = %q, want the lead finding with the terse tally", block.Brief)
+	}
+
+	// A finding without a brief falls back to its message.
+	fallback := bulkSelectItem(bulkCleanupCandidate{
+		target:     cleanupTarget{workspace: "EX-4"},
+		wsFindings: []cleanupFinding{{severity: findingWarn, code: "x", message: "only message"}},
+		worst:      findingWarn,
+	})
+	if fallback.Brief != "only message" {
+		t.Errorf("fallback brief = %q, want the message when brief is empty", fallback.Brief)
+	}
+}
+
+// TestBulkSelectionRecord covers cleanup's record card through the
+// gatherSelect flow's renderer: brief readiness annotations in
+// picker order with the selection folded in, unselected rows fully
+// receded, and the picker's gate-era wording absent. (The generic
+// renderer's own contract is pinned in gatherselect_test.go; this
+// locks the cleanup-side wiring.)
+func TestBulkSelectionRecord(t *testing.T) {
+	record := func(candidates []bulkCleanupCandidate, picked []int) *ui.Card {
+		items := make([]gatherSelectItem, len(candidates))
+		gs := gatherSelect{Title: "select workspaces", N: len(candidates)}
+		for i, c := range candidates {
+			items[i] = bulkSelectItem(c)
+		}
+		return gs.recordCard(items, picked)
+	}
+	safe := bulkCleanupCandidate{target: cleanupTarget{workspace: "EX-1-safe"}}
+	warned := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-2-warned"},
+		wsFindings: []cleanupFinding{{
+			severity: findingWarn, code: "issue-not-done",
+			message: "issue is In Progress, not in a done-like status",
+			brief:   "In Progress",
+		}},
+		worst: findingWarn,
+	}
+	blocked := bulkCleanupCandidate{
+		target: cleanupTarget{workspace: "EX-3-blocked"},
+		repoResults: []repoCleanup{{
+			repo: Repository{Name: "api"},
+			findings: []cleanupFinding{{
+				severity: findingBlock, code: "dirty",
+				message: "uncommitted changes in worktree",
+				brief:   "uncommitted changes",
+			}},
+		}},
+		worst: findingBlock,
+	}
+	candidates := []bulkCleanupCandidate{safe, warned, blocked}
+
+	// Safe and warned selected; blocked left unselected.
+	card := record(candidates, []int{0, 1})
+	out := stripANSI(card.Render())
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if !strings.Contains(out, "2 of 3 selected") {
+		t.Errorf("card = %q, want the selection tally in the title", out)
+	}
+
+	row := findRowContaining(t, lines, "EX-1-safe")
+	if !strings.Contains(row, ui.Palette.Check) {
+		t.Errorf("selected safe row = %q, want the selection check", row)
+	}
+	row = findRowContaining(t, lines, "EX-2-warned")
+	if !strings.Contains(row, ui.Palette.Check) || !strings.Contains(row, "In Progress") {
+		t.Errorf("selected warn row = %q, want the selection check and brief reason", row)
+	}
+	if strings.Contains(row, ui.Palette.Attention) {
+		t.Errorf("selected warn row = %q, readiness glyphs must not replace the selection history", row)
+	}
+	if strings.Contains(row, "done-like status") {
+		t.Errorf("selected warn row = %q, the verbose message leaked into the record", row)
+	}
+	row = findRowContaining(t, lines, "EX-3-blocked")
+	if !strings.Contains(row, ui.Palette.Inactive) {
+		t.Errorf("unselected row = %q, want the receded %q glyph", row, ui.Palette.Inactive)
+	}
+	if !strings.Contains(row, "uncommitted changes") {
+		t.Errorf("unselected row = %q, want its brief reason kept", row)
+	}
+	if strings.Contains(row, "in worktree") {
+		t.Errorf("unselected row = %q, the verbose message leaked into the record", row)
+	}
+	if strings.Contains(out, "--force to select") {
+		t.Errorf("card = %q, the picker's gating hint must not survive into the record", out)
+	}
+
+	// Rows stay in picker (candidate) order — the in-place swap
+	// depends on it — unlike the raw readiness card's worst-first.
+	safeIdx := -1
+	blockedIdx := -1
+	for i, l := range lines {
+		if strings.Contains(l, "EX-1-safe") {
+			safeIdx = i
+		}
+		if strings.Contains(l, "EX-3-blocked") {
+			blockedIdx = i
+		}
+	}
+	if safeIdx > blockedIdx {
+		t.Errorf("rows reordered (safe %d, blocked %d), want candidate order", safeIdx, blockedIdx)
+	}
+
+	// A selected block row also reads as selected — the override the
+	// user made — not as its readiness state.
+	forced := record(candidates, []int{2})
+	forcedOut := stripANSI(forced.Render())
+	row = findRowContaining(t, strings.Split(forcedOut, "\n"), "EX-3-blocked")
+	if !strings.Contains(row, ui.Palette.Check) || strings.Contains(row, ui.Palette.Cross) {
+		t.Errorf("selected block row = %q, want the selection check, not the readiness cross", row)
+	}
+}
+
+// TestGatherBulkCandidatesRaw drives the raw-mode bulk readiness
+// path directly. Plain unit tests run with go test's
 // non-TTY stdin, so isInteractive() is false here — the same posture
 // a piped/CI bosun run has, which the interactive e2e harness (whose
 // injected readers always read as interactive) structurally can't
@@ -721,7 +884,7 @@ func TestBuildBulkCleanupReadinessCard(t *testing.T) {
 // disk state: a stray file in the workspace dir is a BLOCK, an empty
 // dir is SAFE, and a repo path that isn't a git repository yields the
 // probe-integrity WARN (nothing could be verified).
-func TestEmitBulkCleanupReadinessNonInteractive(t *testing.T) {
+func TestGatherBulkCandidatesRaw(t *testing.T) {
 	if isInteractive() {
 		t.Fatal("test requires go test's non-TTY stdin; the raw-mode branch is the subject")
 	}
@@ -740,30 +903,21 @@ func TestEmitBulkCleanupReadinessNonInteractive(t *testing.T) {
 		repos:     []Repository{{Name: "api", Path: t.TempDir()}}, // not a git repo → unverified WARN
 	}
 
-	t.Run("warnings error without force", func(t *testing.T) {
-		_, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
-		if err == nil || !strings.Contains(err.Error(), "--force") {
-			t.Errorf("err = %v, want the warnings-need---force refusal", err)
+	t.Run("returns every candidate classified", func(t *testing.T) {
+		// The gate moved to the caller (#120): the readiness pass
+		// renders and classifies but excludes nothing itself —
+		// includeBulkCandidates (non-interactive) or the picker
+		// (interactive) decide who proceeds.
+		candidates := gatherBulkCandidatesRaw(ctx, g, nil, nil, []cleanupTarget{blocked, safe, warned}, false)
+		if len(candidates) != 3 {
+			t.Fatalf("candidates = %d, want all 3", len(candidates))
 		}
-	})
-
-	t.Run("blocked is excluded and the clean rest proceed", func(t *testing.T) {
-		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, safe}, false)
-		if err != nil {
-			t.Fatalf("err = %v, want nil (exclusion is the sweep's posture, not an error)", err)
-		}
-		if len(included) != 1 || included[0].target.workspace != "EX-2-safe" {
-			t.Errorf("included = %+v, want just the safe workspace", included)
-		}
-	})
-
-	t.Run("force includes blocks and acknowledges warns", func(t *testing.T) {
-		included, err := emitBulkCleanupReadiness(ctx, g, nil, nil, []cleanupTarget{blocked, warned}, true)
-		if err != nil {
-			t.Fatalf("err = %v, want nil (--force is the non-interactive acknowledgement)", err)
-		}
-		if len(included) != 2 {
-			t.Errorf("included = %d candidates, want both", len(included))
+		wants := []findingSeverity{findingBlock, findingSafe, findingWarn}
+		for i, want := range wants {
+			if candidates[i].worst != want {
+				t.Errorf("candidate %d (%s) worst = %v, want %v",
+					i, candidates[i].target.workspace, candidates[i].worst, want)
+			}
 		}
 	})
 }

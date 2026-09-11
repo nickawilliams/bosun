@@ -40,6 +40,12 @@ type cleanupFinding struct {
 	severity findingSeverity
 	code     string
 	message  string
+
+	// brief is the compact form for the picker rows, where the
+	// finding sits beside many siblings and must stay scannable
+	// without wrapping; empty falls back to message. The full
+	// message remains the vocabulary of the readiness/record cards.
+	brief string
 }
 
 // repoCleanupProbe is the raw signal set classify() consumes for one
@@ -91,6 +97,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "dirty",
 			message:  "uncommitted changes in worktree",
+			brief:    "uncommitted changes",
 		})
 	}
 
@@ -116,24 +123,28 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  "branch was never pushed and commits aren't in base",
+			brief:    "unmerged work",
 		})
 	case p.syncKnown && !p.branchSync.HasRemote && !p.isMergedKnown:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unverified-work",
 			message:  "branch was never pushed and merge status couldn't be verified",
+			brief:    "unverified work",
 		})
 	case p.branchSync.HasRemote && p.pr == nil && p.isMergedKnown && !p.isMerged:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  "branch is pushed but has no PR and isn't in base",
+			brief:    "unmerged work",
 		})
 	case prClosedNoMerge && p.isMergedKnown && !p.isMerged:
 		out = append(out, cleanupFinding{
 			severity: findingBlock,
 			code:     "unmerged-work",
 			message:  fmt.Sprintf("PR #%d was closed without merge and commits aren't in base", p.pr.Number),
+			brief:    "unmerged work",
 		})
 	}
 	unmergedFired := len(out) > preBlocks
@@ -149,6 +160,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "unpushed-commits",
 			message:  fmt.Sprintf("%d local commit(s) aren't on the remote branch", p.branchSync.Ahead),
+			brief:    "unpushed commits",
 		})
 	}
 
@@ -168,6 +180,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "post-merge-commits",
 			message:  "local HEAD has commits past the merged PR; deleting the branch would lose them",
+			brief:    "post-merge commits",
 		})
 	}
 
@@ -177,6 +190,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "open-pr",
 			message:  fmt.Sprintf("PR #%d is %s", p.pr.Number, p.pr.State),
+			brief:    fmt.Sprintf("PR #%d %s", p.pr.Number, p.pr.State),
 		})
 	}
 	if prClosedNoMerge && p.isMergedKnown && p.isMerged {
@@ -188,6 +202,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "closed-pr",
 			message:  fmt.Sprintf("PR #%d was closed without merge (commits are in base)", p.pr.Number),
+			brief:    fmt.Sprintf("PR #%d closed unmerged", p.pr.Number),
 		})
 	}
 	if p.hostErr != nil {
@@ -195,6 +210,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "host-unreachable",
 			message:  "couldn't reach the code host to check PR state",
+			brief:    "host unreachable",
 		})
 	}
 
@@ -224,6 +240,7 @@ func classifyRepo(p repoCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "unverified",
 			message:  fmt.Sprintf("couldn't verify %s; findings may be incomplete", strings.Join(unverified, ", ")),
+			brief:    "checks incomplete",
 		})
 	}
 
@@ -244,6 +261,7 @@ func classifyWorkspace(p workspaceCleanupProbe) []cleanupFinding {
 			severity: findingBlock,
 			code:     "stray-files",
 			message:  strayFilesMessage(p.strayFiles),
+			brief:    fmt.Sprintf("%d stray file(s)", len(p.strayFiles)),
 		})
 	}
 	if p.issueStatus != "" && !p.issueDoneLike {
@@ -251,6 +269,7 @@ func classifyWorkspace(p workspaceCleanupProbe) []cleanupFinding {
 			severity: findingWarn,
 			code:     "issue-not-done",
 			message:  fmt.Sprintf("issue is %s, not in a done-like status", p.issueStatus),
+			brief:    p.issueStatus,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -411,17 +430,40 @@ func gatherBulkCandidate(ctx context.Context, g vcs.VCS, host code.Host, tracker
 // findings carry the repo name), with a count of what else fired.
 // Empty when the candidate is fully SAFE.
 func (c bulkCleanupCandidate) worstFindingMessage() string {
+	return c.findingSummary(func(f cleanupFinding) string { return f.message }, " (+%d more)")
+}
+
+// briefFindingMessage is worstFindingMessage in the picker rows'
+// compact vocabulary: the finding's brief form (falling back to the
+// message) and a terser "(+N)" tally, so a row stays scannable
+// beside its siblings instead of wrapping.
+func (c bulkCleanupCandidate) briefFindingMessage() string {
+	return c.findingSummary(func(f cleanupFinding) string {
+		if f.brief != "" {
+			return f.brief
+		}
+		return f.message
+	}, " (+%d)")
+}
+
+// findingSummary picks the most severe finding across the workspace
+// and repo scopes — repo findings carry the repo name — rendered
+// through text, with moreFmt tallying whatever else fired. Empty
+// when the candidate is fully SAFE. The shared engine behind the
+// verbose (cards) and brief (picker) summaries, so the two can't
+// disagree about which finding leads.
+func (c bulkCleanupCandidate) findingSummary(text func(cleanupFinding) string, moreFmt string) string {
 	type labeled struct {
 		severity findingSeverity
 		text     string
 	}
 	var all []labeled
 	for _, f := range c.wsFindings {
-		all = append(all, labeled{f.severity, f.message})
+		all = append(all, labeled{f.severity, text(f)})
 	}
 	for _, rc := range c.repoResults {
 		for _, f := range rc.findings {
-			all = append(all, labeled{f.severity, rc.repo.Name + ": " + f.message})
+			all = append(all, labeled{f.severity, rc.repo.Name + ": " + text(f)})
 		}
 	}
 	if len(all) == 0 {
@@ -434,83 +476,175 @@ func (c bulkCleanupCandidate) worstFindingMessage() string {
 		}
 	}
 	if len(all) > 1 {
-		return fmt.Sprintf("%s (+%d more)", best.text, len(all)-1)
+		return best.text + fmt.Sprintf(moreFmt, len(all)-1)
 	}
 	return best.text
 }
 
-// emitBulkCleanupReadiness runs the readiness pass across every bulk
-// candidate and returns the ones the sweep should proceed with.
-//
-// Sweep semantics — deliberately different from the single-workspace
-// gate, where an explicitly named target aborts on any BLOCK: a
-// criteria-selected workspace with BLOCK findings is excluded and
-// reported while its siblings proceed. --force includes blocked
-// workspaces. WARN findings on included workspaces collapse into one
-// Continue/Cancel prompt for the whole sweep (interactively), or
-// error without --force when there's nobody to answer it.
-func emitBulkCleanupReadiness(
+// gatherBulkCandidatesRaw is the non-interactive readiness pass: the
+// same bounded fan-out as the interactive flow (so a large fleet
+// gathers in parallel either way), then the static per-workspace
+// summary card annotated with the sweep's exclusion verdicts. No
+// picker follows — the pattern/filter was the selection — so the
+// card is the durable record.
+func gatherBulkCandidatesRaw(
 	ctx context.Context,
 	g vcs.VCS,
 	host code.Host,
 	tracker issue.Tracker,
 	targets []cleanupTarget,
 	force bool,
-) ([]bulkCleanupCandidate, error) {
+) []bulkCleanupCandidate {
 	candidates := make([]bulkCleanupCandidate, len(targets))
+	ui.RunBounded(len(targets), 0, func(i int) {
+		candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i])
+	})
+	buildBulkCleanupReadinessCard(candidates, force).Print()
+	return candidates
+}
 
-	// Raw / non-interactive mode: no group, no spinners. Gather,
-	// print the static per-workspace summary card, and gate: blocked
-	// candidates are excluded (that's the sweep's posture, not an
-	// error), but WARN findings on what remains still need the
-	// acknowledgement a prompt would collect — --force is the
-	// non-interactive stand-in, exactly as in single mode.
-	if !isInteractive() {
-		for i, t := range targets {
-			candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
-		}
-		buildBulkCleanupReadinessCard(candidates, force).Print()
-		included := includeBulkCandidates(candidates, force)
-		if !force && anyCandidateAtOrAbove(included, findingWarn) {
-			return nil, fmt.Errorf("cleanup readiness: warnings present and no prompt available; re-run with --force to proceed")
-		}
-		return included, nil
-	}
-
-	// Interactive: one outer card, a child spinner per workspace that
-	// resolves to its one-row summary when the probe finishes.
-	ui.RunGroup("cleanup readiness", func(grp ui.Reporter) {
-		for i := range targets {
-			t := targets[i]
-			_ = grp.Spinner(ui.PreserveCase(t.workspace), func() error {
-				candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, t)
-				return nil
-			})
-			emitBulkCandidateRow(grp, candidates[i], force)
-		}
+// resolveBulkTargets is the discover stretch shared by both bulk
+// paths: observe the issue states the filter needs, narrow to the
+// query's matches, and resolve each match into a cleanup target. A
+// workspace that won't resolve (unmatched repos, no worktrees) is
+// excluded with its reason in skips — not force-includable, since
+// these are correctness hazards rather than acknowledged data
+// risks. skips defer to the caller so a flow running this under a
+// live render can report them once the render has settled.
+func resolveBulkTargets(
+	ctx context.Context,
+	tracker issue.Tracker,
+	names []string,
+	query workspaceQuery,
+) (targets []cleanupTarget, matched int, skips []string, err error) {
+	observed := observeWorkspaces(ctx, names, func(ctx context.Context, name string) workspaceState {
+		return fetchWorkspaceIssueState(ctx, tracker, name)
 	})
 
-	included := includeBulkCandidates(candidates, force)
-	if !anyCandidateAtOrAbove(included, findingWarn) {
-		return included, nil
-	}
+	matches, skips := partitionWorkspaces(observed, query)
+	matched = len(matches)
 
-	// WARN findings (or --force-included BLOCKs) → one Continue /
-	// Cancel prompt for the sweep. The readiness card stays as the
-	// durable record of what was checked.
-	confirmed, err := NewDialog("Warning").
-		Description("Not all readiness checks passed, continue anyway?").
-		Affirmative("Continue").
-		Negative("Cancel").
-		Default(false).
-		Show()
+	projectRepos, err := resolveRepositories(nil)
+	if err != nil {
+		return nil, matched, skips, err
+	}
+	mainPath := mainPathIndex(projectRepos)
+
+	for _, ws := range matches {
+		t, err := resolveCleanupTarget(ctx, ws.name, ws.issueKey, mainPath)
+		if err != nil {
+			skips = append(skips, fmt.Sprintf("%s: %v", ws.name, err))
+			continue
+		}
+		targets = append(targets, t)
+	}
+	return targets, matched, skips, nil
+}
+
+// pickBulkCandidates runs the whole interactive batch selection as
+// one gatherSelect flow under a single "Select Workspaces" title:
+// discover (observe → filter → resolve targets, "Resolving
+// workspaces..."), preload (readiness probes fanned out, brief rows
+// resolving each spinner in place), the picker the group morphs
+// into, and the record card that replaces everything on submit.
+// Ready workspaces arrive preselected (plan approval is the
+// backstop for a bare sweep-by-enter); WARN and BLOCK workspaces
+// arrive unselected but are always selectable — checking one IS the
+// acknowledgment the old combined warning dialog used to collect,
+// and for a BLOCK the caller treats that selection as the force
+// consent for the workspace's own apply. --force deliberately has
+// no effect here: the picker's default selection stays the safe
+// set, and the override is always one keypress away.
+//
+// Returns the chosen candidates in listing order. Empty-outcome
+// reporting (discover skips, no matches, nothing selected) is
+// emitted here, after the flow has left the screen — the caller
+// just stops on an empty result.
+func pickBulkCandidates(
+	ctx context.Context,
+	g vcs.VCS,
+	host code.Host,
+	tracker issue.Tracker,
+	names []string,
+	query workspaceQuery,
+) ([]bulkCleanupCandidate, error) {
+	var (
+		targets    []cleanupTarget
+		matched    int
+		skips      []string
+		candidates []bulkCleanupCandidate
+	)
+
+	selected, err := gatherSelect{
+		Title: "select workspaces",
+		Discover: func() (int, error) {
+			var derr error
+			targets, matched, skips, derr = resolveBulkTargets(ctx, tracker, names, query)
+			if derr != nil {
+				return 0, derr
+			}
+			candidates = make([]bulkCleanupCandidate, len(targets))
+			return len(targets), nil
+		},
+		StatusResolving: "Resolving workspaces...",
+		StatusEmpty:     "no workspaces to select",
+		StatusChecking: func(n int) string {
+			return fmt.Sprintf("%d found, checking readiness...", n)
+		},
+		StatusPicker: func(n, ready int) string {
+			return fmt.Sprintf("%d found, %d ready", n, ready)
+		},
+		Label: func(i int) string { return ui.PreserveCase(targets[i].workspace) },
+		Work:  func(i int) { candidates[i] = gatherBulkCandidate(ctx, g, host, tracker, targets[i]) },
+		Resolve: func(i int, slot ui.Reporter) {
+			emitBulkCandidateRow(slot, candidates[i])
+		},
+		Item: func(i int) gatherSelectItem { return bulkSelectItem(candidates[i]) },
+	}.run()
+
+	// Discover diagnostics print after the flow so skip cards don't
+	// interleave with the live render — and before the error check,
+	// so a cancelled picker still discloses them.
+	for _, s := range skips {
+		ui.Skip(s)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if !confirmed {
-		return nil, ErrCancelled
+	if matched == 0 {
+		ui.Skip("no workspaces match the filter")
+		return nil, nil
 	}
-	return included, nil
+	if len(targets) == 0 {
+		ui.Skip("no workspaces left to clean up")
+		return nil, nil
+	}
+	if len(selected) == 0 {
+		ui.Skip("no workspaces selected")
+		return nil, nil
+	}
+
+	out := make([]bulkCleanupCandidate, 0, len(selected))
+	for _, i := range selected {
+		out = append(out, candidates[i])
+	}
+	return out, nil
+}
+
+// bulkSelectItem derives one candidate's picker/record row for the
+// gatherSelect flow: the brief finding beside the name (the flow's
+// one vocabulary — the verbose form lives on the raw readiness
+// card), and ready rows preselected. WARN and BLOCK rows arrive
+// unselected but are always selectable — checking one is the user's
+// acknowledgment of the displayed finding, and for a BLOCK it
+// carries the force consent through to that workspace's apply (see
+// runCleanupBulk).
+func bulkSelectItem(c bulkCleanupCandidate) gatherSelectItem {
+	return gatherSelectItem{
+		Name:        c.target.workspace,
+		Brief:       c.briefFindingMessage(),
+		Preselected: c.worst == findingSafe,
+	}
 }
 
 // includeBulkCandidates applies the sweep's exclusion rule: BLOCK
@@ -538,18 +672,22 @@ func anyCandidateAtOrAbove(candidates []bulkCleanupCandidate, severity findingSe
 }
 
 // emitBulkCandidateRow renders one workspace's readiness summary row
-// under the interactive group: ✓ for SAFE, ▲ with the worst finding
-// for WARN, ✗ for BLOCK — annotated as excluded when the sweep will
-// drop it (no --force).
-func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate, force bool) {
+// under the interactive preload: ✓ for SAFE, ▲ with the worst
+// finding for WARN, ✗ for BLOCK. The row speaks the flow's brief
+// vocabulary — the same compact text the picker and record show, so
+// the morph reads as one surface — and carries no --force
+// annotation: the picker's validation message teaches the gate.
+// (The raw card keeps the verbose findings and the sweep's
+// "excluded" wording instead — there the card IS the durable record
+// and the exclusion is a decision, not a picker constraint; see
+// buildBulkCleanupReadinessCard.)
+func emitBulkCandidateRow(grp ui.Reporter, c bulkCleanupCandidate) {
 	label := ui.PreserveCase(c.target.workspace)
-	switch {
-	case c.worst == findingBlock && !force:
-		grp.FailValue(label, c.worstFindingMessage()+" — excluded (re-run with --force to include)")
-	case c.worst == findingBlock:
-		grp.FailValue(label, c.worstFindingMessage())
-	case c.worst == findingWarn:
-		grp.SkipValue(label, c.worstFindingMessage())
+	switch c.worst {
+	case findingBlock:
+		grp.FailValue(label, c.briefFindingMessage())
+	case findingWarn:
+		grp.SkipValue(label, c.briefFindingMessage())
 	default:
 		grp.Complete(label)
 	}

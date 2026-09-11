@@ -81,11 +81,25 @@ type PlanCard struct {
 	succeeded int
 	failed    int
 	skipped   int
+	compact   bool
 }
 
 // NewPlanCard creates a plan card in the Proposed state.
 func NewPlanCard(plan *Plan) *PlanCard {
 	return &PlanCard{plan: plan, state: PlanProposed}
+}
+
+// Compact suppresses the plan's item rows in subsequent renders,
+// leaving the card a title row that still cycles through every
+// state. For the confirmation gate's oversized-plan path, where the
+// rows are committed to scrollback as their own block (they can't
+// fit the live frame) and a card repeating them would say the plan
+// twice. An outcome that carries per-row news that block can't show
+// — a partial or failed apply marks skipped rows — turns the rows
+// back on: setFinalState clears the flag for anything but full
+// success.
+func (pc *PlanCard) Compact() {
+	pc.compact = true
 }
 
 // SetState transitions the card to a new state.
@@ -161,7 +175,9 @@ func (pc *PlanCard) renderWithGlyph(glyph string) string {
 // and Plan.Render().
 func (pc *PlanCard) renderFormWithGlyph(glyph string, form timelineForm) string {
 	card := NewCard(CardInfo, pc.titleWord()).Value(pc.summary())
-	pc.plan.AppendItemsToCard(card)
+	if !pc.compact {
+		pc.plan.AppendItemsToCard(card)
+	}
 	return card.renderStyled(glyph, strings.Repeat(" ", GlyphGap), form)
 }
 
@@ -438,5 +454,12 @@ func (pc *PlanCard) setFinalState(result planApplyResult) {
 		pc.SetState(PlanPartial)
 	default:
 		pc.SetState(PlanSuccess)
+	}
+	// A compact card's rows live in the committed block above it —
+	// but that block can't show which rows an imperfect apply
+	// skipped or failed past, so any outcome short of full success
+	// brings the rows (and their marks) back.
+	if pc.state != PlanSuccess {
+		pc.compact = false
 	}
 }

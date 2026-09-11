@@ -3,7 +3,9 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strings"
 
+	"charm.land/huh/v2"
 	"github.com/nickawilliams/bosun/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -92,29 +94,39 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 		return fmt.Errorf("confirmation required (pass --approve, or --dry-run to preview)")
 	}
 
-	// Interactive confirmation gate: show the plan as a CardInput,
-	// run huh confirm. Normal cancel: rewind prompt, show cancelled
-	// card in place. Ctrl+c interrupt: don't rewind, just bail.
-	rewind := newPlanPendingHeader(plan).PrintRewindable()
+	// Interactive confirmation gate. The gate is not a card of its
+	// own: the plan card IS the prompt, holding its position while
+	// its title row cycles Pending → Applying → outcome, with only
+	// the Approve/Cancel buttons live beneath it. Rewinding the card
+	// before the next state prints is what keeps every stage in the
+	// one position.
+	//
+	// A plan taller than the screen can't cycle with its rows inside
+	// the live frame: bubbletea's inline renderer drops the top of
+	// an oversized frame and cursor math over it lands offset (the
+	// fittedSelectHeight failure mode, #69/#98). There the rows
+	// commit to scrollback as their own block and the same card
+	// cycles compactly beneath them — the title row still carries
+	// every stage.
+	if !planGateFits(pc) {
+		plan.Print()
+		pc.Compact()
+	}
+	rewind := pc.PrintRewindable()
 
+	// Ctrl+c interrupt: don't rewind — the abandoned question stays
+	// on screen and HandleError owns the record.
 	var confirmed bool
-	err := runForm(
-		newConfirm().
-			Title(plan.RenderItems()).
-			Affirmative("Approve").
-			Negative("Cancel").
-			Value(&confirmed),
-	)
-
-	if err != nil {
+	if err := runForm(newPlanConfirm(&confirmed)); err != nil {
 		return ErrCancelled
 	}
 
 	rewind()
 
 	if !confirmed {
-		// The Cancelled plan card IS the cancellation record —
-		// errPlanCancelled tells HandleError not to add another.
+		// The Cancelled card IS the cancellation record, in the
+		// prompt's own position — errPlanCancelled tells HandleError
+		// not to add another.
 		pc.SetState(ui.PlanCancelled)
 		pc.Print()
 		return errPlanCancelled
@@ -123,18 +135,42 @@ func runPlanCard(cmd *cobra.Command, plan *ui.Plan, actions []PlanAction, opts P
 	return applyPlanCard(pc, actions)
 }
 
+// planGateChrome is how many terminal rows the confirmation gate
+// occupies beyond the plan card itself: the three rows huh's confirm
+// paints (the button row, a separator, and the help line), the
+// connector row above them, and one row of slack so an off-by-one in
+// any of them still leaves the whole frame on screen. Measured
+// against formFirstFrame — see TestPlanGateChromeFitsTheFrame, which
+// fails if huh's chrome ever grows.
+const planGateChrome = 5
+
+// planGateFits reports whether the plan card can carry its rows
+// through the gate's live frame — the in-place cycle — or whether
+// the plan is tall enough that the rows must commit to scrollback
+// first and the card cycle compactly. Mirrors fittedSelectHeight's
+// bound: the whole frame has to fit on screen or the inline renderer
+// corrupts it.
+func planGateFits(pc *ui.PlanCard) bool {
+	lines := strings.Count(strings.TrimSuffix(pc.Render(), "\n"), "\n") + 1
+	return lines+planGateChrome <= ui.TermHeight()
+}
+
 // applyPlanCard runs actions with an animated spinner, transitioning the
 // card through applying → success/partial/failure.
 func applyPlanCard(pc *ui.PlanCard, actions []PlanAction) error {
 	return pc.RunApply(actions)
 }
 
-// newPlanPendingHeader builds the title-bar-only card shown above
-// the confirmation form during runPlanCard's interactive gate. Both
-// runPlanCard and the demo snapshot route through this so the
-// pending header can't visually drift from the live render.
-func newPlanPendingHeader(plan *ui.Plan) *ui.Card {
-	return ui.NewCard(ui.CardInput, "Pending").Value(plan.Summary()).Tight()
+// newPlanConfirm builds the bare Approve/Cancel field mounted
+// beneath the plan card while it waits in Pending. No title: the
+// card's title row directly above already carries the plan's scale.
+// Both runPlanCard and the demo snapshot route through this so the
+// two renders can't drift.
+func newPlanConfirm(confirmed *bool) *huh.Confirm {
+	return newConfirm().
+		Affirmative("Approve").
+		Negative("Cancel").
+		Value(confirmed)
 }
 
 // isAutoApprove reports whether the run pre-approved plan

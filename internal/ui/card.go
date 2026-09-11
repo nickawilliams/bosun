@@ -135,6 +135,7 @@ type Card struct {
 	tight         bool // suppress comfy spacing (e.g. single-field prompts)
 	indent        int  // additional left-margin depth (1 = +4 spaces); used by Group children
 	preserveTitle bool // skip the default titleCase transform on the title
+	indentBare    bool // whitespace-only indent prefix, no spine (BareIndent)
 	plainTitle    bool // render the title without bold (group children)
 	alignWidth    int  // pad styled title to this visual width before " · " when Value is set; 0 = natural
 	accentBody    bool // render body-line connectors in Palette.Accent rather than the default Palette.Recessed
@@ -197,6 +198,18 @@ func (c *Card) Tight() *Card {
 // Group to nest children under a parent's spine.
 func (c *Card) Indent(n int) *Card {
 	c.indent = n
+	return c
+}
+
+// BareIndent is Indent without the timeline spine: the prefix is
+// whitespace only. Used by successor-flow groups (gatherSelect),
+// whose live render is transient — the spine belongs to the
+// committed record that replaces it, so drawing it under a flush
+// open-form parent would tie throwaway rows to a timeline they
+// never join.
+func (c *Card) BareIndent(n int) *Card {
+	c.indent = n
+	c.indentBare = true
 	return c
 }
 
@@ -561,11 +574,16 @@ func (c *Card) renderStyled(glyph, gap string, form timelineForm) string {
 	// Build an indent prefix that continues the parent's timeline
 	// spine at each nesting level: " │  " per level. This keeps
 	// the vertical connector visible through nested children
-	// instead of leaving a blank gap.
+	// instead of leaving a blank gap. Bare indent (see BareIndent)
+	// substitutes plain whitespace of the same width.
 	connStyle := lipgloss.NewStyle().Foreground(Palette.Recessed)
 	var prefix string
 	for range c.indent {
-		prefix += " " + connStyle.Render(cardConnector) + "  "
+		if c.indentBare {
+			prefix += "    "
+		} else {
+			prefix += " " + connStyle.Render(cardConnector) + "  "
+		}
 	}
 	trimmed := strings.TrimSuffix(out, "\n")
 	lines := strings.Split(trimmed, "\n")

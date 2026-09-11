@@ -101,7 +101,19 @@ func (q workspaceQuery) match(ws workspaceState) (bool, string) {
 // no-silent-drop rule — while evaluated non-matches drop without
 // ceremony; deselecting them is what the filter is for.
 func filterWorkspaces(states []workspaceState, q workspaceQuery) []workspaceState {
-	var matched []workspaceState
+	matched, skips := partitionWorkspaces(states, q)
+	for _, s := range skips {
+		ui.Skip(s)
+	}
+	return matched
+}
+
+// partitionWorkspaces is filterWorkspaces without the printing: it
+// returns the matches plus the skip lines for unevaluable workspaces,
+// so a caller running inside a spinner card can defer the reporting
+// until the card has resolved instead of interleaving skip cards with
+// a live render.
+func partitionWorkspaces(states []workspaceState, q workspaceQuery) (matched []workspaceState, skips []string) {
 	for _, ws := range states {
 		ok, reason := q.match(ws)
 		if ok {
@@ -109,43 +121,10 @@ func filterWorkspaces(states []workspaceState, q workspaceQuery) []workspaceStat
 			continue
 		}
 		if reason != "" {
-			ui.Skip(fmt.Sprintf("%s: %s", ws.name, reason))
+			skips = append(skips, fmt.Sprintf("%s: %s", ws.name, reason))
 		}
 	}
-	return matched
-}
-
-// resolveWorkspaceScope validates the scope grammar for a command that
-// registered --all, and reports whether this run is project-scoped.
-//
-// The grammar, shared by every carrier so the same flags mean the same
-// things everywhere:
-//
-//   - --all is explicit project scope, mutually exclusive with the
-//     single-workspace targeting flags (--workspace, --issue).
-//   - The filter flags require project scope. implicitProject reports
-//     whether the command already operates at project scope without
-//     --all (status outside a workspace); destructive commands pass
-//     false so project scope is always an explicit ask.
-func resolveWorkspaceScope(cmd *cobra.Command, implicitProject bool, q workspaceQuery) (bool, error) {
-	all := false
-	if f := cmd.Flags().Lookup("all"); f != nil {
-		all, _ = cmd.Flags().GetBool("all")
-	}
-	if all {
-		for _, name := range []string{"workspace", "issue"} {
-			if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
-				return false, fmt.Errorf(
-					"--all and --%s are mutually exclusive: --all operates across every workspace in the project",
-					name)
-			}
-		}
-	}
-	if q.active() && !all && !implicitProject {
-		return false, fmt.Errorf(
-			"workspace filters apply at project scope: pass --all to filter across the project's workspaces")
-	}
-	return all || implicitProject, nil
+	return matched, skips
 }
 
 // observeWorkspaces fans fetch out across the named workspaces

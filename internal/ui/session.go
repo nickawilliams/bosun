@@ -278,18 +278,67 @@ func (s *session) send(msg tea.Msg) {
 // commitOpen commits the current open block to scrollback in
 // continuing form and clears it. The Println goes through the
 // program's message queue, so it is ordered with subsequent sends.
+//
+// The order of the Println and the frame clear differs by block
+// height, and both arms are load-bearing. BubbleTea's insertAbove
+// scrolls the SCREEN for every inserted line that does not fit
+// below the painted frame's last row, and it consults the screen —
+// which lags the model until the next render flush — not the
+// message queue. The scroll pushes the top screen rows into
+// terminal history, which becomes a visible stale duplicate exactly
+// when those rows belong to the still-painted frame: insert height
+// + frame height reaching the terminal height (the #120 double
+// "Cleanup Readiness" report; same family as #94).
+//
+//   - Tall blocks (2×lines+6 > terminal height) hit that condition,
+//     so they clear the frame first and settle for a render flush
+//     before the insert — after which the scroll can only move
+//     already-committed rows.
+//   - Small blocks can't reach the painted frame's rows, so they
+//     keep the original println-then-clear order: the insert lands
+//     against the still-painted frame (no empty-tail moment), and
+//     the trailing clear is immediately followed by the caller's
+//     replacement tail, so it never paints. Clearing first here
+//     would open a blank-frame window across the insert's I/O — a
+//     visible flash at every block boundary.
 func (s *session) commitOpen() {
 	if s.open == nil {
 		return
 	}
-	s.println(s.open.continuing)
+	block := s.open.continuing
+	if lines := strings.Count(block, "\n") + 1; 2*lines+6 > TermHeight() {
+		s.send(sesTailMsg{text: ""})
+		// ~3 frames at the default 60fps framerate — enough for the
+		// cleared tail to reach the screen before insertAbove reads
+		// it.
+		time.Sleep(50 * time.Millisecond)
+		s.println(block)
+	} else {
+		s.println(block)
+		s.send(sesTailMsg{text: ""})
+	}
 	s.open = nil
-	// Drop the committed block from the managed frame too, or it
-	// stays painted below its own scrollback copy. Callers that mount
-	// replacement content post their own tail immediately after, and
-	// both messages travel the same FIFO queue, so the intermediate
-	// clear never reaches the screen on those paths.
-	s.send(sesTailMsg{text: ""})
+}
+
+// commitOpenReplaced is commitOpen for callers whose immediately
+// following message mounts replacement tail content (a group start,
+// a form): the mount's own clearActive swaps the frame in the same
+// repaint, so the trailing clear is skipped — the Println's flush
+// can paint whatever frame follows it, and an intermediate empty
+// tail there shows as a one-frame blank flash. Tall blocks still
+// take commitOpen's clear-and-settle arm; the fossil hazard trumps
+// the flash.
+func (s *session) commitOpenReplaced() {
+	if s.open == nil {
+		return
+	}
+	block := s.open.continuing
+	if lines := strings.Count(block, "\n") + 1; 2*lines+6 > TermHeight() {
+		s.commitOpen()
+		return
+	}
+	s.println(block)
+	s.open = nil
 }
 
 // println commits raw text to scrollback. Text carries its own
@@ -455,12 +504,28 @@ func ensureTrailingNL(s string) string {
 // stream, so it can compute the final static render (the strings all
 // originate worker-side, making the two instances deterministic
 // twins).
-func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
+//
+// A non-nil successor replaces the finalized group as the tail in
+// the SAME repaint (the RunCardSteps successor mechanic): the live
+// frame swaps straight to the successor card, the group render is
+// never committed, and no empty-tail frame can flash in between —
+// which is exactly what dropping the group and printing a
+// replacement as separate messages allowed. Returns a rewind for
+// whichever block became the tail (the group card, or the
+// successor).
+func (s *session) runSessionGroup(title string, fn func(g Reporter), successor func() *Card) func() {
+	prevSpacer := needsSpacer
 	prefix := sessionPrefix()
-	s.commitOpen()
+	// The group-start message mounts the replacement tail, so the
+	// commit skips its trailing clear — see commitOpenReplaced.
+	s.commitOpenReplaced()
 
 	mirror := newGroupModel(title, 0, nil)
 	gb := &sesGroupBlock{gm: newGroupModel(title, 0, nil), prefix: prefix}
+	// Successor flows render transiently, so their rows indent
+	// without the timeline spine — see Card.BareIndent.
+	mirror.bare = successor != nil
+	gb.gm.bare = successor != nil
 	s.send(sesGroupStartMsg{gb: gb})
 
 	msgCh := make(chan groupMsg, 256)
@@ -476,17 +541,34 @@ func (s *session) runSessionGroup(title string, fn func(g Reporter)) {
 		close(drained)
 	}()
 
-	g := &group{outer: defaultReporter, title: title, indent: 1, msgCh: msgCh}
+	g := newGroup(defaultReporter, title, 1, msgCh)
+	g.bare = successor != nil
 	start := time.Now()
 	fn(g)
 	holdSpinner(start) // display floor, as cardReporter.Group applies
 	msgCh <- groupDoneMsg{}
 	<-drained
 
+	if successor != nil {
+		// A successor closure may still decline (return nil) once it
+		// sees what the group produced — a discover phase that found
+		// nothing has no picker to morph into — in which case the
+		// finalized group card stands as usual.
+		if c := successor(); c != nil {
+			// Restore the spacer state the group's own prefix
+			// consumed so the successor's print computes the
+			// identical prefix — it takes the group's position, not
+			// a new one below it.
+			needsSpacer = prevSpacer
+			return c.PrintRewindable()
+		}
+	}
+
 	final := prefix + mirror.viewString()
-	rec := &sesOpenRec{open: final, continuing: final}
+	rec := &sesOpenRec{open: final, continuing: final, prevSpacer: prevSpacer}
 	s.open = rec
 	s.send(sesTailMsg{text: final})
+	return s.sessionRewind(rec)
 }
 
 // --- messages ---

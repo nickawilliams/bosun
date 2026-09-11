@@ -61,6 +61,13 @@ func newDemoCmd() *cobra.Command {
 			}
 			demoSlot()
 
+			if err := demoContinue("Gather Select", false); err != nil {
+				return err
+			}
+			if err := demoGatherSelect(); err != nil {
+				return err
+			}
+
 			if err := demoContinue("Plan Card", false); err != nil {
 				return err
 			}
@@ -274,23 +281,18 @@ func demoWorkspaceMeta() {
 }
 
 func demoPlanCardStates() {
-	// Static snapshot of the plan confirmation flow — pending header
-	// card + confirm form with plan items as its content + buttons.
-	// Routes through newPlanPendingHeader and snapshotForm so the
-	// static rendering matches what runPlanCard produces when the
-	// user actually runs a plan.
+	// Static snapshot of the plan confirmation flow — the house
+	// single-card morph: one Pending card carrying the plan rows,
+	// with the bare Approve/Cancel buttons beneath it. Routes
+	// through NewPlanCard and newPlanConfirm so the static
+	// rendering matches what runPlanCard produces when the user
+	// actually runs a plan.
 	plan := buildDemoPlan()
 	var confirmed bool
 
-	newPlanPendingHeader(plan).Print()
+	ui.NewPlanCard(plan).Print()
 
-	snapshotForm(
-		newConfirm().
-			Title(plan.RenderItems()).
-			Affirmative("Approve").
-			Negative("Cancel").
-			Value(&confirmed),
-	)
+	snapshotForm(newPlanConfirm(&confirmed))
 }
 
 // demoSummary renders one Reporter.Summary card with a mixed
@@ -409,6 +411,68 @@ func demoFormStatic() {
 
 // --- Interactive sections (gated by --interactive) ---
 
+// demoGatherSelect drives the gatherSelect flow — the
+// preload-informed multi-select behind bulk cleanup's readiness
+// picker: a discover phase and status captions under one title,
+// fan-out spinners resolving in place, the group morphing into the
+// picker (ready rows preselected, every row selectable — checking
+// an annotated row is the override — brief annotations dimmed
+// beside bold names), and the one record card that replaces
+// everything.
+func demoGatherSelect() error {
+	type state struct {
+		brief       string
+		blocked     bool
+		preselected bool
+	}
+	states := []state{
+		{preselected: true},
+		{preselected: true},
+		{brief: "needs review"},
+		{preselected: true},
+		{brief: "uncommitted changes (+1)", blocked: true},
+		{preselected: true},
+	}
+
+	_, err := gatherSelect{
+		Title: "gather select",
+		Discover: func() (int, error) {
+			time.Sleep(600 * time.Millisecond)
+			return len(states), nil
+		},
+		StatusResolving: "Resolving items...",
+		StatusChecking: func(n int) string {
+			return fmt.Sprintf("%d items found, checking readiness...", n)
+		},
+		StatusPicker: func(n, ready int) string {
+			return fmt.Sprintf("%d items found, %d items ready", n, ready)
+		},
+		Label: func(i int) string { return fmt.Sprintf("demo-%d", i) },
+		Work: func(i int) {
+			time.Sleep(time.Duration(300+(i%3)*250) * time.Millisecond)
+		},
+		Resolve: func(i int, slot ui.Reporter) {
+			label := ui.PreserveCase(fmt.Sprintf("demo-%d", i))
+			switch {
+			case states[i].blocked:
+				slot.FailValue(label, states[i].brief)
+			case states[i].brief != "":
+				slot.SkipValue(label, states[i].brief)
+			default:
+				slot.Complete(label)
+			}
+		},
+		Item: func(i int) gatherSelectItem {
+			return gatherSelectItem{
+				Name:        fmt.Sprintf("demo-%d", i),
+				Brief:       states[i].brief,
+				Preselected: states[i].preselected,
+			}
+		},
+	}.run()
+	return err
+}
+
 func demoSpinners() {
 	// Fast operation — exercises the spinner timing floor. Without it,
 	// BubbleTea v2 escape sequences leak into stdout when the program
@@ -478,6 +542,24 @@ func demoGroups() {
 		})
 		time.Sleep(step)
 		g.Complete("post-flight check")
+	})
+
+	// Concurrent slots — every child spinner listed up front, each
+	// resolving in place as its (deliberately shuffled-duration) work
+	// finishes. The mechanism behind bulk cleanup's readiness pass.
+	r.Group("group: concurrent slots (fan-out)", func(g ui.Reporter) {
+		durations := []time.Duration{1400 * time.Millisecond, 600 * time.Millisecond, 1000 * time.Millisecond}
+		ui.FanOut(g, len(durations), 0,
+			func(i int) string { return fmt.Sprintf("probe %d", i+1) },
+			func(i int) { time.Sleep(durations[i]) },
+			func(i int, slot ui.Reporter) {
+				if i == 1 {
+					slot.SkipValue(fmt.Sprintf("probe %d", i+1), "resolved second, listed second")
+					return
+				}
+				slot.Complete(fmt.Sprintf("probe %d", i+1))
+			},
+		)
 	})
 
 	// Nested groups — child is itself a group.

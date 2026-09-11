@@ -169,20 +169,27 @@ func (r *cardReporter) Spinner(_ string, fn func() error) error {
 // callback returns, BubbleTea exits and the final static render is
 // printed.
 func (r *cardReporter) Group(title string, fn func(g Reporter)) {
+	_ = r.runGroup(title, fn, nil)
+}
+
+// runGroup hosts the group and returns a rewind for whatever block
+// the finalized render left as the tail (the RunGroupThen seam), or
+// nil when nothing rewindable was rendered (the non-TTY fallback
+// printed directly to scrollback). A non-nil successor takes the
+// group's place as the final frame — see runSessionGroup.
+func (r *cardReporter) runGroup(title string, fn func(g Reporter), successor func() *Card) func() {
 	if s := sessionActive(); s != nil {
-		s.runSessionGroup(title, fn)
-		return
+		return s.runSessionGroup(title, fn, successor)
 	}
 
 	indentLevel := 0
 	msgCh := make(chan groupMsg, 256)
 
-	g := &group{
-		outer:  r,
-		title:  title,
-		indent: indentLevel + 1,
-		msgCh:  msgCh,
-	}
+	g := newGroup(r, title, indentLevel+1, msgCh)
+	// A successor flow's render is transient (the successor replaces
+	// it), so its rows indent without the timeline spine — the spine
+	// belongs to the committed record. See Card.BareIndent.
+	g.bare = successor != nil
 
 	go func() {
 		start := time.Now()
@@ -191,27 +198,58 @@ func (r *cardReporter) Group(title string, fn func(g Reporter)) {
 		msgCh <- groupDoneMsg{}
 	}()
 
-	fmt.Print(spacerPrefix())
+	prevSpacer := needsSpacer
+	prefix := spacerPrefix()
+	fmt.Print(prefix)
 
 	model := newGroupModel(title, indentLevel, msgCh)
+	model.bare = g.bare
 	p := tea.NewProgram(model, TeaColorProfile())
 	final, err := p.Run()
 
 	if err != nil {
 		// Non-interactive fallback: drain messages and print directly.
 		drainGroupFallback(title, indentLevel, g, msgCh)
-		return
+		return nil
 	}
 
 	// BubbleTea's final View() rendered the finalized group content
 	// in place (root finalized in groupDoneMsg handler), so the
-	// output is already on screen. No reprint needed.
-	_ = final
+	// output is already on screen. No reprint needed — the rewind
+	// erases those lines the same way PrintRewindable's legacy
+	// closure does. A successor erases them now and prints itself in
+	// the group's position — two back-to-back synchronous writes, no
+	// async renderer to paint a gap between them.
+	m := final.(*groupModel)
+	lines := strings.Count(prefix+m.viewString(), "\n")
+	if successor != nil {
+		// A declining successor (nil) keeps the finalized group card
+		// standing — see runSessionGroup.
+		if c := successor(); c != nil {
+			if lines > 0 {
+				fmt.Printf("\x1b[%dF\x1b[J", lines)
+			}
+			needsSpacer = prevSpacer
+			return c.PrintRewindable()
+		}
+	}
+	return func() {
+		if lines > 0 {
+			fmt.Printf("\x1b[%dF\x1b[J", lines)
+		}
+		needsSpacer = prevSpacer
+	}
 }
 
 // drainGroupFallback handles the case where BubbleTea can't run
 // (non-interactive terminal). It waits for the callback to finish
 // and prints all accumulated children statically.
+//
+// Slot messages degrade knowingly here: slot-tagged child rows print
+// in completion order rather than at their registered positions, and
+// start/done markers are dropped (no live render to place them in).
+// The channel still drains to groupDoneMsg, so a mid-fan-out fallback
+// cannot deadlock — only the ordering guarantee is lost.
 func drainGroupFallback(title string, indent int, g *group, msgCh <-chan groupMsg) {
 	// Callback is already running in a goroutine; drain its messages.
 	for msg := range msgCh {
